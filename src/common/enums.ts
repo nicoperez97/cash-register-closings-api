@@ -52,6 +52,6 @@ export const ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     'reports.export',
     'shops.manage',
   ],
-  [GlobalRole.CASHIER]: ['closings.create', 'closings.read', 'closings.update'],
+  [GlobalRole.CASHIER]: ['closings.create'],
   [GlobalRole.VIEWER]: ['closings.read', 'reports.view', 'reports.export'],
 };

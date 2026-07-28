@@ -18,6 +18,6 @@ INSERT INTO role_permissions (role, permissionCode) VALUES
   ('ADMIN','reports.view'),('ADMIN','reports.export'),('ADMIN','shops.manage'),('ADMIN','users.manage'),
   ('MANAGER','closings.create'),('MANAGER','closings.read'),('MANAGER','closings.update'),('MANAGER','closings.lock'),
   ('MANAGER','reports.view'),('MANAGER','reports.export'),('MANAGER','shops.manage'),
-  ('CASHIER','closings.create'),('CASHIER','closings.read'),('CASHIER','closings.update'),
+  ('CASHIER','closings.create'),
   ('VIEWER','closings.read'),('VIEWER','reports.view'),('VIEWER','reports.export')
 ON DUPLICATE KEY UPDATE permissionCode = VALUES(permissionCode);

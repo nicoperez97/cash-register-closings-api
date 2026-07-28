@@ -26,7 +26,6 @@ export class ShopsController {
   }
 
   @Get(':id/users')
-  @RequirePermissions('closings.read')
   listUsers(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.shops.listUsers(user, id);
   }
