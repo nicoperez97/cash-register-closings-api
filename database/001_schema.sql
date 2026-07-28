@@ -1,0 +1,116 @@
+-- Cash Register Closings — schema
+-- MySQL 8+
+
+CREATE DATABASE IF NOT EXISTS cash_register_closings
+  CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE cash_register_closings;
+
+CREATE TABLE IF NOT EXISTS shops (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  name VARCHAR(120) NOT NULL,
+  slug VARCHAR(120) NOT NULL UNIQUE,
+  timezone VARCHAR(64) NOT NULL DEFAULT 'America/Montevideo',
+  currency VARCHAR(8) NOT NULL DEFAULT 'UYU',
+  unitsLabel VARCHAR(64) NULL,
+  coversEnabled TINYINT NOT NULL DEFAULT 0,
+  defaultChangeAmount DECIMAL(12,2) NOT NULL DEFAULT 0,
+  logoUrl VARCHAR(500) NULL,
+  accentColor VARCHAR(16) NULL,
+  createdAt DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updatedAt DATETIME(6) NULL,
+  deletedAt DATETIME(6) NULL,
+  active TINYINT NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS users (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  fullName VARCHAR(160) NOT NULL,
+  email VARCHAR(160) NOT NULL UNIQUE,
+  passwordHash VARCHAR(255) NOT NULL,
+  globalRole ENUM('OWNER','ADMIN','MANAGER','CASHIER','VIEWER') NOT NULL DEFAULT 'CASHIER',
+  createdAt DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updatedAt DATETIME(6) NULL,
+  deletedAt DATETIME(6) NULL,
+  active TINYINT NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS user_shops (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  userId CHAR(36) NOT NULL,
+  shopId CHAR(36) NOT NULL,
+  shopRole ENUM('OWNER','ADMIN','MANAGER','CASHIER','VIEWER') NULL,
+  UNIQUE KEY uq_user_shop (userId, shopId),
+  CONSTRAINT fk_us_user FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_us_shop FOREIGN KEY (shopId) REFERENCES shops(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS permissions (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  code VARCHAR(64) NOT NULL UNIQUE,
+  description VARCHAR(255) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS role_permissions (
+  role ENUM('OWNER','ADMIN','MANAGER','CASHIER','VIEWER') NOT NULL,
+  permissionCode VARCHAR(64) NOT NULL,
+  PRIMARY KEY (role, permissionCode),
+  CONSTRAINT fk_rp_perm FOREIGN KEY (permissionCode) REFERENCES permissions(code) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS cash_closings (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  shopId CHAR(36) NOT NULL,
+  businessDate DATE NOT NULL,
+  posSystemAmount DECIMAL(12,2) NOT NULL DEFAULT 0,
+  cardAmount DECIMAL(12,2) NOT NULL DEFAULT 0,
+  cashAmount DECIMAL(12,2) NOT NULL DEFAULT 0,
+  mercadoPagoAmount DECIMAL(12,2) NOT NULL DEFAULT 0,
+  deliveryAppsAmount DECIMAL(12,2) NOT NULL DEFAULT 0,
+  transferAmount DECIMAL(12,2) NOT NULL DEFAULT 0,
+  accountDniAmount DECIMAL(12,2) NOT NULL DEFAULT 0,
+  otherAmount DECIMAL(12,2) NOT NULL DEFAULT 0,
+  unitsSold INT NULL,
+  coversCount INT NULL,
+  averageTicket DECIMAL(12,2) NULL,
+  cashLeftInRegister DECIMAL(12,2) NOT NULL DEFAULT 0,
+  cashPendingPickup DECIMAL(12,2) NOT NULL DEFAULT 0,
+  cashWithdrawn DECIMAL(12,2) NOT NULL DEFAULT 0,
+  cashWithdrawnByUserId CHAR(36) NULL,
+  cashWithdrawnByName VARCHAR(160) NULL,
+  tipsAmount DECIMAL(12,2) NOT NULL DEFAULT 0,
+  declaredTotal DECIMAL(12,2) NOT NULL DEFAULT 0,
+  calculatedTotal DECIMAL(12,2) NOT NULL DEFAULT 0,
+  difference DECIMAL(12,2) NOT NULL DEFAULT 0,
+  differenceReason VARCHAR(500) NULL,
+  notes TEXT NULL,
+  evidenceUrl VARCHAR(500) NULL,
+  status ENUM('DRAFT','SUBMITTED','LOCKED') NOT NULL DEFAULT 'DRAFT',
+  createdByUserId CHAR(36) NOT NULL,
+  submittedAt DATETIME(6) NULL,
+  createdAt DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updatedAt DATETIME(6) NULL,
+  deletedAt DATETIME(6) NULL,
+  active TINYINT NOT NULL DEFAULT 1,
+  UNIQUE KEY uq_shop_date (shopId, businessDate),
+  CONSTRAINT fk_cc_shop FOREIGN KEY (shopId) REFERENCES shops(id),
+  CONSTRAINT fk_cc_user FOREIGN KEY (createdByUserId) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS closing_expenses (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  closingId CHAR(36) NOT NULL,
+  label VARCHAR(160) NOT NULL,
+  amount DECIMAL(12,2) NOT NULL,
+  category ENUM('SUPPLIES','SERVICES','TRANSFER_SHOP','OTHER') NOT NULL DEFAULT 'OTHER',
+  CONSTRAINT fk_ce_closing FOREIGN KEY (closingId) REFERENCES cash_closings(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS closing_extra_lines (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  closingId CHAR(36) NOT NULL,
+  type ENUM('STUDENT_CASH','TIP_ALLOCATION','PVS_BREAKDOWN','ADJUSTMENT','OTHER') NOT NULL,
+  label VARCHAR(160) NOT NULL,
+  amount DECIMAL(12,2) NOT NULL,
+  meta TEXT NULL,
+  CONSTRAINT fk_cel_closing FOREIGN KEY (closingId) REFERENCES cash_closings(id) ON DELETE CASCADE
+);
