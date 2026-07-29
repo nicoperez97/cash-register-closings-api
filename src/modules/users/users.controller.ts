@@ -14,9 +14,12 @@ import {
   IsBoolean,
   IsEmail,
   IsEnum,
+  IsArray,
   IsOptional,
   IsString,
+  IsUUID,
   MinLength,
+  ValidateIf,
 } from 'class-validator';
 import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
@@ -29,6 +32,16 @@ class CreateUserDto {
   @ApiProperty() @IsString() @MinLength(4) password: string;
   @ApiProperty({ enum: GlobalRole }) @IsEnum(GlobalRole) globalRole: GlobalRole;
   @ApiPropertyOptional({ type: [String] }) @IsOptional() shopIds?: string[];
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('4', { each: true })
+  ledgerAccountIds?: string[];
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  ledgerAccountId?: string | null;
 }
 
 class UpdateUserDto {
@@ -39,6 +52,16 @@ class UpdateUserDto {
   @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
   @ApiPropertyOptional({ type: [String] }) @IsOptional() shopIds?: string[];
   @ApiPropertyOptional({ enum: GlobalRole }) @IsOptional() @IsEnum(GlobalRole) shopRole?: GlobalRole;
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('4', { each: true })
+  ledgerAccountIds?: string[];
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  ledgerAccountId?: string | null;
 }
 
 @ApiTags('users')

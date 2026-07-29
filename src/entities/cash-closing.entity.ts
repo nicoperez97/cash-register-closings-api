@@ -68,6 +68,9 @@ export class CashClosing extends BaseEntity {
   cashWithdrawnByUserId?: string | null;
 
   @Column({ type: 'varchar', nullable: true })
+  cashWithdrawnByEmployeeId?: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
   cashWithdrawnByName?: string | null;
 
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })

@@ -1,0 +1,274 @@
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { Movement } from '../../entities/movement.entity';
+import { LedgerAccount } from '../../entities/ledger-account.entity';
+import { Concept } from '../../entities/concept.entity';
+import { AuthUser } from '../../common/decorators';
+import { ShopsService } from '../shops/shops.service';
+import { CatalogSeedService } from '../../common/catalog-seed.service';
+
+const n = (v?: string | number | null) => Number(v ?? 0);
+const money = (v: number) => v.toFixed(2);
+
+export interface MovementFilters {
+  from?: string;
+  to?: string;
+  fromAccountId?: string;
+  toAccountId?: string;
+  conceptId?: string;
+  closingId?: string;
+  q?: string;
+}
+
+export interface UpsertMovementDto {
+  businessDate: string;
+  fromAccountId: string;
+  toAccountId: string;
+  description?: string | null;
+  amountUyu: number;
+  usdRate?: number | null;
+  amountUsd?: number | null;
+  conceptId?: string | null;
+  invoiced?: boolean;
+  invoiceNumber?: string | null;
+  employeeId?: string | null;
+}
+
+@Injectable()
+export class MovementsService {
+  constructor(
+    @InjectRepository(Movement) private readonly movements: Repository<Movement>,
+    @InjectRepository(LedgerAccount)
+    private readonly accounts: Repository<LedgerAccount>,
+    @InjectRepository(Concept) private readonly concepts: Repository<Concept>,
+    private readonly shops: ShopsService,
+    private readonly catalogSeed: CatalogSeedService,
+  ) {}
+
+  private toDto(m: Movement) {
+    return {
+      id: m.id,
+      shopId: m.shopId,
+      businessDate: m.businessDate,
+      fromAccountId: m.fromAccountId,
+      toAccountId: m.toAccountId,
+      fromAccountName: m.fromAccount?.name ?? null,
+      toAccountName: m.toAccount?.name ?? null,
+      description: m.description ?? null,
+      amountUyu: n(m.amountUyu),
+      usdRate: m.usdRate != null ? n(m.usdRate) : null,
+      amountUsd: m.amountUsd != null ? n(m.amountUsd) : null,
+      conceptId: m.conceptId ?? null,
+      conceptName: m.concept?.name ?? null,
+      conceptKind: m.concept?.kind ?? null,
+      invoiced: !!m.invoiced,
+      invoiceNumber: m.invoiceNumber ?? null,
+      closingId: m.closingId ?? null,
+      employeeId: m.employeeId ?? null,
+      active: !!m.active,
+    };
+  }
+
+  async list(user: AuthUser, shopId: string, filters: MovementFilters = {}) {
+    this.shops.assertShopAccess(user, shopId);
+    await this.catalogSeed.ensureShopCatalogs(shopId);
+
+    const qb = this.movements
+      .createQueryBuilder('m')
+      .leftJoinAndSelect('m.fromAccount', 'fromAccount')
+      .leftJoinAndSelect('m.toAccount', 'toAccount')
+      .leftJoinAndSelect('m.concept', 'concept')
+      .where('m.shopId = :shopId', { shopId })
+      .andWhere('m.active = true');
+
+    if (filters.from) qb.andWhere('m.businessDate >= :from', { from: filters.from });
+    if (filters.to) qb.andWhere('m.businessDate <= :to', { to: filters.to });
+    if (filters.fromAccountId) {
+      qb.andWhere('m.fromAccountId = :fromAccountId', {
+        fromAccountId: filters.fromAccountId,
+      });
+    }
+    if (filters.toAccountId) {
+      qb.andWhere('m.toAccountId = :toAccountId', { toAccountId: filters.toAccountId });
+    }
+    if (filters.conceptId) {
+      qb.andWhere('m.conceptId = :conceptId', { conceptId: filters.conceptId });
+    }
+    if (filters.closingId) {
+      qb.andWhere('m.closingId = :closingId', { closingId: filters.closingId });
+    }
+    if (filters.q?.trim()) {
+      qb.andWhere('m.description LIKE :q', { q: `%${filters.q.trim()}%` });
+    }
+
+    qb.orderBy('m.businessDate', 'DESC').addOrderBy('m.createdAt', 'DESC');
+    const rows = await qb.getMany();
+    return rows.map((r) => this.toDto(r));
+  }
+
+  private async assertAccounts(shopId: string, fromId: string, toId: string) {
+    const from = await this.accounts.findOne({ where: { id: fromId, shopId, active: true } });
+    const to = await this.accounts.findOne({ where: { id: toId, shopId, active: true } });
+    if (!from || !to) throw new BadRequestException('Cuenta emisora o receptora inválida');
+  }
+
+  async create(user: AuthUser, shopId: string, dto: UpsertMovementDto) {
+    this.shops.assertShopAccess(user, shopId);
+    await this.assertAccounts(shopId, dto.fromAccountId, dto.toAccountId);
+    if (dto.conceptId) {
+      const c = await this.concepts.findOne({
+        where: { id: dto.conceptId, shopId, active: true },
+      });
+      if (!c) throw new BadRequestException('Concepto inválido');
+    }
+    const amountUsd =
+      dto.amountUsd != null
+        ? dto.amountUsd
+        : dto.usdRate && dto.amountUyu
+          ? dto.amountUyu / dto.usdRate
+          : null;
+
+    const row = await this.movements.save(
+      this.movements.create({
+        shopId,
+        businessDate: dto.businessDate,
+        fromAccountId: dto.fromAccountId,
+        toAccountId: dto.toAccountId,
+        description: dto.description?.trim() || null,
+        amountUyu: money(n(dto.amountUyu)),
+        usdRate: dto.usdRate != null ? String(dto.usdRate) : null,
+        amountUsd: amountUsd != null ? String(amountUsd) : null,
+        conceptId: dto.conceptId ?? null,
+        invoiced: dto.invoiced ?? false,
+        invoiceNumber: dto.invoiceNumber ?? null,
+        employeeId: dto.employeeId ?? null,
+        closingId: null,
+        active: true,
+      }),
+    );
+    return this.one(user, shopId, row.id);
+  }
+
+  async one(user: AuthUser, shopId: string, id: string) {
+    this.shops.assertShopAccess(user, shopId);
+    const row = await this.movements.findOne({
+      where: { id, shopId },
+      relations: ['fromAccount', 'toAccount', 'concept'],
+    });
+    if (!row) throw new NotFoundException('Movimiento no encontrado');
+    return this.toDto(row);
+  }
+
+  async update(user: AuthUser, shopId: string, id: string, dto: Partial<UpsertMovementDto>) {
+    this.shops.assertShopAccess(user, shopId);
+    const row = await this.movements.findOne({ where: { id, shopId } });
+    if (!row) throw new NotFoundException('Movimiento no encontrado');
+    if (row.closingId) {
+      throw new BadRequestException(
+        'Este movimiento fue generado por un cierre; editá el cierre',
+      );
+    }
+
+    const fromId = dto.fromAccountId ?? row.fromAccountId;
+    const toId = dto.toAccountId ?? row.toAccountId;
+    await this.assertAccounts(shopId, fromId, toId);
+
+    if (dto.businessDate !== undefined) row.businessDate = dto.businessDate;
+    if (dto.fromAccountId !== undefined) row.fromAccountId = dto.fromAccountId;
+    if (dto.toAccountId !== undefined) row.toAccountId = dto.toAccountId;
+    if (dto.description !== undefined) row.description = dto.description?.trim() || null;
+    if (dto.amountUyu !== undefined) row.amountUyu = money(n(dto.amountUyu));
+    if (dto.usdRate !== undefined) {
+      row.usdRate = dto.usdRate != null ? String(dto.usdRate) : null;
+    }
+    if (dto.amountUsd !== undefined) {
+      row.amountUsd = dto.amountUsd != null ? String(dto.amountUsd) : null;
+    } else if (dto.usdRate != null && dto.amountUyu != null) {
+      row.amountUsd = String(dto.amountUyu / dto.usdRate);
+    }
+    if (dto.conceptId !== undefined) row.conceptId = dto.conceptId;
+    if (dto.invoiced !== undefined) row.invoiced = dto.invoiced;
+    if (dto.invoiceNumber !== undefined) row.invoiceNumber = dto.invoiceNumber;
+    if (dto.employeeId !== undefined) row.employeeId = dto.employeeId;
+
+    await this.movements.save(row);
+    return this.one(user, shopId, id);
+  }
+
+  async remove(user: AuthUser, shopId: string, id: string) {
+    this.shops.assertShopAccess(user, shopId);
+    const row = await this.movements.findOne({ where: { id, shopId } });
+    if (!row) throw new NotFoundException('Movimiento no encontrado');
+    if (row.closingId) {
+      throw new BadRequestException(
+        'Este movimiento fue generado por un cierre; editá el cierre',
+      );
+    }
+    await this.movements.softRemove(row);
+    return { ok: true };
+  }
+
+  async expensesByConcept(user: AuthUser, shopId: string, filters: MovementFilters = {}) {
+    this.shops.assertShopAccess(user, shopId);
+    const rows = await this.list(user, shopId, filters);
+    const expenseRows = rows.filter(
+      (r) => r.conceptKind === 'EXPENSE' || r.toAccountName === '2. Egreso',
+    );
+    const map = new Map<string, { conceptId: string | null; conceptName: string; total: number }>();
+    for (const r of expenseRows) {
+      const key = r.conceptId ?? r.conceptName ?? 'Sin concepto';
+      const cur = map.get(key) ?? {
+        conceptId: r.conceptId,
+        conceptName: r.conceptName ?? 'Sin concepto',
+        total: 0,
+      };
+      cur.total += r.amountUyu;
+      map.set(key, cur);
+    }
+    const items = [...map.values()].sort((a, b) => b.total - a.total);
+    const sum = items.reduce((s, i) => s + i.total, 0);
+    return {
+      shopId,
+      from: filters.from ?? null,
+      to: filters.to ?? null,
+      total: sum,
+      items: items.map((i) => ({
+        ...i,
+        share: sum > 0 ? i.total / sum : 0,
+      })),
+    };
+  }
+
+  async balances(user: AuthUser, shopId: string, filters: MovementFilters = {}) {
+    this.shops.assertShopAccess(user, shopId);
+    const rows = await this.list(user, shopId, filters);
+    const accounts = await this.accounts.find({
+      where: { shopId, active: true },
+      order: { name: 'ASC' },
+    });
+    const bal = new Map<string, { accountId: string; name: string; income: number; expense: number }>();
+    for (const a of accounts) {
+      bal.set(a.id, { accountId: a.id, name: a.name, income: 0, expense: 0 });
+    }
+    for (const r of rows) {
+      const from = bal.get(r.fromAccountId);
+      const to = bal.get(r.toAccountId);
+      if (from) from.expense += r.amountUyu;
+      if (to) to.income += r.amountUyu;
+    }
+    return {
+      shopId,
+      from: filters.from ?? null,
+      to: filters.to ?? null,
+      accounts: [...bal.values()].map((a) => ({
+        ...a,
+        balance: a.income - a.expense,
+      })),
+    };
+  }
+}

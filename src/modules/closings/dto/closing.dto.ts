@@ -68,6 +68,7 @@ export class CreateClosingDto {
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) cashPendingPickup?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) cashWithdrawn?: number;
   @ApiPropertyOptional() @IsOptional() @IsUUID() cashWithdrawnByUserId?: string;
+  @ApiPropertyOptional() @IsOptional() @IsUUID() cashWithdrawnByEmployeeId?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() cashWithdrawnByName?: string;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) tipsAmount?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() declaredTotal?: number;

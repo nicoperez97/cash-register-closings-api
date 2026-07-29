@@ -16,6 +16,8 @@ export type AuthUser = {
   shopIds: string[];
   /** Rol efectivo por local (shopRole o globalRole). */
   shopRoles: Record<string, string>;
+  /** Cuentas contables asociadas por local (N:N). */
+  shopAccountIds: Record<string, string[]>;
   permissions: Permission[];
 };
 

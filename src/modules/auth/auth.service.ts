@@ -9,6 +9,7 @@ import { UserShop } from '../../entities/user-shop.entity';
 import { CashClosing } from '../../entities/cash-closing.entity';
 import { ClosingExpense } from '../../entities/closing-expense.entity';
 import { ClosingExtraLine } from '../../entities/closing-extra-line.entity';
+import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
 import { LoginDto } from './dto/login.dto';
 import {
   ClosingStatus,
@@ -36,6 +37,8 @@ export class AuthService implements OnModuleInit {
     @InjectRepository(CashClosing) private readonly closings: Repository<CashClosing>,
     @InjectRepository(ClosingExpense) private readonly expenses: Repository<ClosingExpense>,
     @InjectRepository(ClosingExtraLine) private readonly extras: Repository<ClosingExtraLine>,
+    @InjectRepository(LedgerAccountUser)
+    private readonly accountLinks: Repository<LedgerAccountUser>,
     private readonly jwt: JwtService,
   ) {}
 
@@ -319,6 +322,17 @@ export class AuthService implements OnModuleInit {
       const link = links.find((l) => l.shopId === id);
       shopRoles[id] = link?.shopRole ?? role;
     }
+    const linked = shopIds.length
+      ? await this.accountLinks.find({
+          where: { userId, shopId: In(shopIds) },
+        })
+      : [];
+    const shopAccountIds: Record<string, string[]> = {};
+    for (const l of linked) {
+      const arr = shopAccountIds[l.shopId] ?? [];
+      arr.push(l.accountId);
+      shopAccountIds[l.shopId] = arr;
+    }
     return {
       id: user.id,
       email: user.email,
@@ -326,6 +340,7 @@ export class AuthService implements OnModuleInit {
       globalRole: role,
       shopIds,
       shopRoles,
+      shopAccountIds,
       permissions: resolvePermissions(role),
     };
   }
@@ -348,6 +363,7 @@ export class AuthService implements OnModuleInit {
         currency: s.currency,
         logoUrl: s.logoUrl ?? null,
         accentColor: s.accentColor ?? null,
+        salesSystemId: s.salesSystemId ?? null,
       })),
     };
   }

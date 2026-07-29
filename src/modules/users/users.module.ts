@@ -2,11 +2,13 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
+import { LedgerAccount } from '../../entities/ledger-account.entity';
+import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([User, UserShop])],
+  imports: [TypeOrmModule.forFeature([User, UserShop, LedgerAccount, LedgerAccountUser])],
   controllers: [UsersController],
   providers: [UsersService],
   exports: [UsersService],

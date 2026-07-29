@@ -9,6 +9,8 @@ import { In, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
+import { LedgerAccount } from '../../entities/ledger-account.entity';
+import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
 import { AuthUser } from '../../common/decorators';
 import { GlobalRole } from '../../common/enums';
 import { isGlobalAdmin } from '../../common/guards';
@@ -20,6 +22,7 @@ const ASSIGNABLE_BY_SHOP_ADMIN = new Set([
   GlobalRole.MANAGER,
   GlobalRole.CASHIER,
   GlobalRole.VIEWER,
+  GlobalRole.PARTNER,
 ]);
 
 export class CreateUserBody {
@@ -28,6 +31,9 @@ export class CreateUserBody {
   password: string;
   globalRole: GlobalRole;
   shopIds?: string[];
+  ledgerAccountIds?: string[] | null;
+  /** Compat 1 cuenta. */
+  ledgerAccountId?: string | null;
 }
 
 export class UpdateUserBody {
@@ -38,6 +44,8 @@ export class UpdateUserBody {
   active?: boolean;
   shopIds?: string[];
   shopRole?: GlobalRole;
+  ledgerAccountIds?: string[] | null;
+  ledgerAccountId?: string | null;
 }
 
 @Injectable()
@@ -45,6 +53,10 @@ export class UsersService {
   constructor(
     @InjectRepository(User) private readonly users: Repository<User>,
     @InjectRepository(UserShop) private readonly userShops: Repository<UserShop>,
+    @InjectRepository(LedgerAccount)
+    private readonly accounts: Repository<LedgerAccount>,
+    @InjectRepository(LedgerAccountUser)
+    private readonly accountLinks: Repository<LedgerAccountUser>,
   ) {}
 
   /** Admin global o admin/owner del local. */
@@ -112,10 +124,35 @@ export class UsersService {
       order: { fullName: 'ASC' },
     });
     const allLinks = await this.userShops.find({ where: { userId: In(ids) } });
+    const accountLinks = await this.accountLinks.find({
+      where: { shopId, userId: In(ids) },
+    });
+    const accountIds = [...new Set(accountLinks.map((l) => l.accountId))];
+    const accounts = accountIds.length
+      ? await this.accounts.find({ where: { id: In(accountIds), active: true } })
+      : [];
+    const nameByAccount = new Map(accounts.map((a) => [a.id, a.name]));
+    const accountsByUser = new Map<string, string[]>();
+    for (const l of accountLinks) {
+      const arr = accountsByUser.get(l.userId) ?? [];
+      arr.push(l.accountId);
+      accountsByUser.set(l.userId, arr);
+    }
     return rows.map((u) => {
       const dto = this.toDto(u, allLinks);
       const link = links.find((l) => l.userId === u.id);
-      return { ...dto, shopRole: link?.shopRole ?? u.globalRole };
+      const ledgerAccountIds = accountsByUser.get(u.id) ?? [];
+      const ledgerAccountNames = ledgerAccountIds
+        .map((id) => nameByAccount.get(id))
+        .filter(Boolean) as string[];
+      return {
+        ...dto,
+        shopRole: link?.shopRole ?? u.globalRole,
+        ledgerAccountIds,
+        ledgerAccountNames,
+        ledgerAccountId: ledgerAccountIds[0] ?? null,
+        ledgerAccountName: ledgerAccountNames.join(', ') || null,
+      };
     });
   }
 
@@ -160,7 +197,11 @@ export class UsersService {
       );
     }
 
-    return this.one(actor, user.id);
+    if (defaultShopId && (dto.ledgerAccountIds !== undefined || dto.ledgerAccountId !== undefined)) {
+      await this.replaceAccountLinks(defaultShopId, user.id, this.normalizeAccountIds(dto));
+    }
+
+    return this.one(actor, user.id, defaultShopId);
   }
 
   async update(actor: AuthUser, id: string, dto: UpdateUserBody, shopId?: string) {
@@ -273,10 +314,14 @@ export class UsersService {
       }
     }
 
-    return this.one(actor, id);
+    if (shopId && (dto.ledgerAccountIds !== undefined || dto.ledgerAccountId !== undefined)) {
+      await this.replaceAccountLinks(shopId, id, this.normalizeAccountIds(dto));
+    }
+
+    return this.one(actor, id, shopId);
   }
 
-  async one(actor: AuthUser, id: string) {
+  async one(actor: AuthUser, id: string, shopId?: string) {
     if (!this.canManageUsersSomewhere(actor)) {
       throw new ForbiddenException('Sin permiso');
     }
@@ -288,7 +333,53 @@ export class UsersService {
       const overlap = links.some((l) => scope.includes(l.shopId));
       if (!overlap) throw new ForbiddenException('Sin acceso a este usuario');
     }
-    return this.toDto(u, links);
+    const dto = this.toDto(u, links);
+    if (!shopId) return dto;
+    const accountLinks = await this.accountLinks.find({
+      where: { shopId, userId: id },
+    });
+    const accountIds = accountLinks.map((l) => l.accountId);
+    const accounts = accountIds.length
+      ? await this.accounts.find({ where: { id: In(accountIds), active: true } })
+      : [];
+    const names = accounts.map((a) => a.name);
+    const link = links.find((l) => l.shopId === shopId);
+    return {
+      ...dto,
+      shopRole: link?.shopRole ?? u.globalRole,
+      ledgerAccountIds: accountIds,
+      ledgerAccountNames: names,
+      ledgerAccountId: accountIds[0] ?? null,
+      ledgerAccountName: names.join(', ') || null,
+    };
+  }
+
+  private normalizeAccountIds(dto: {
+    ledgerAccountIds?: string[] | null;
+    ledgerAccountId?: string | null;
+  }): string[] {
+    if (dto.ledgerAccountIds !== undefined) {
+      return [...new Set((dto.ledgerAccountIds ?? []).filter(Boolean))];
+    }
+    if (dto.ledgerAccountId) return [dto.ledgerAccountId];
+    return [];
+  }
+
+  /** Reemplaza las cuentas asociadas al usuario en el local (N:N). */
+  private async replaceAccountLinks(shopId: string, userId: string, accountIds: string[]) {
+    for (const accountId of accountIds) {
+      const account = await this.accounts.findOne({ where: { id: accountId, shopId, active: true } });
+      if (!account) {
+        throw new BadRequestException('Cuenta no encontrada en este local');
+      }
+    }
+    await this.accountLinks.delete({ shopId, userId });
+    if (!accountIds.length) return;
+    await this.accountLinks.save(
+      accountIds.map((accountId) =>
+        this.accountLinks.create({ shopId, accountId, userId }),
+      ),
+    );
   }
 
   private assertAssignableRole(actor: AuthUser, role: GlobalRole) {
@@ -300,7 +391,7 @@ export class UsersService {
     }
     if (!ASSIGNABLE_BY_SHOP_ADMIN.has(role)) {
       throw new ForbiddenException(
-        'Como admin del local solo podés asignar Gerente, Cajero o Visor',
+        'Como admin del local solo podés asignar Gerente, Cajero, Visor o Socio',
       );
     }
   }

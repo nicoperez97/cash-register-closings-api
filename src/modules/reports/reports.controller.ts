@@ -24,6 +24,26 @@ export class ReportsController {
     return this.reports.summary(user, shopId, parseClosingFilters(query));
   }
 
+  @Get('movements/summary')
+  @RequirePermissions('reports.view')
+  movementsSummary(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Query() query: Record<string, string | undefined>,
+  ) {
+    return this.reports.movementsSummary(user, shopId, parseClosingFilters(query));
+  }
+
+  @Get('expenses-by-concept')
+  @RequirePermissions('reports.view')
+  expensesByConcept(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Query() query: Record<string, string | undefined>,
+  ) {
+    return this.reports.expensesByConcept(user, shopId, parseClosingFilters(query));
+  }
+
   @Get('export.xlsx')
   @RequirePermissions('reports.export')
   async export(

@@ -1,4 +1,13 @@
-import { IsBoolean, IsNumber, IsOptional, IsString, MinLength } from 'class-validator';
+import {
+  IsBoolean,
+  IsNumber,
+  IsObject,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MinLength,
+  ValidateIf,
+} from 'class-validator';
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 
 export class CreateShopDto {
@@ -49,6 +58,19 @@ export class CreateShopDto {
   @IsOptional()
   @IsString()
   accentColor?: string;
+
+  @ApiPropertyOptional({ description: 'Sistema de ventas / POS (Restosoft, etc.)' })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  salesSystemId?: string | null;
+
+  @ApiPropertyOptional({
+    description: 'Mapa código FormaDePago → cash|card|mercadoPago|delivery|transfer|accountDni|other',
+  })
+  @IsOptional()
+  @IsObject()
+  posPaymentMap?: Record<string, string> | null;
 }
 
 export class UpdateShopDto extends PartialType(CreateShopDto) {

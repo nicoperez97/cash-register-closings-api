@@ -1,7 +1,11 @@
-import { Column, Entity, OneToMany } from 'typeorm';
+import { Column, Entity, JoinColumn, ManyToOne, OneToMany } from 'typeorm';
 import { BaseEntity } from './base.entity';
 import { UserShop } from './user-shop.entity';
 import { CashClosing } from './cash-closing.entity';
+import { SalesSystem } from './sales-system.entity';
+
+/** Mapa código POS → campo de cierre (cash|card|mercadoPago|delivery|transfer|accountDni|other). */
+export type PosPaymentMap = Record<string, string>;
 
 @Entity({ name: 'shops' })
 export class Shop extends BaseEntity {
@@ -33,6 +37,21 @@ export class Shop extends BaseEntity {
   /** Color de énfasis del local (hex, p.ej. #E65100). */
   @Column({ type: 'varchar', length: 16, nullable: true })
   accentColor?: string | null;
+
+  /** Sistema de ventas / POS del local (Restosoft, etc.). */
+  @Column({ type: 'uuid', nullable: true })
+  salesSystemId?: string | null;
+
+  /**
+   * Mapa de códigos de forma de pago del POS → campos del cierre.
+   * Si es null se usan los defaults del parser/sistema.
+   */
+  @Column({ type: 'simple-json', nullable: true })
+  posPaymentMap?: PosPaymentMap | null;
+
+  @ManyToOne(() => SalesSystem, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'salesSystemId' })
+  salesSystem?: SalesSystem | null;
 
   @OneToMany(() => UserShop, (us) => us.shop)
   userShops?: UserShop[];

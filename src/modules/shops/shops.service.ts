@@ -104,6 +104,8 @@ export class ShopsService {
         currency: dto.currency ?? 'UYU',
         logoUrl: normalizeLogoUrl(dto.logoUrl),
         accentColor: this.normalizeAccent(dto.accentColor),
+        salesSystemId: dto.salesSystemId ?? null,
+        posPaymentMap: dto.posPaymentMap ?? null,
         active: true,
       }),
     );
@@ -131,6 +133,12 @@ export class ShopsService {
     if (dto.accentColor !== undefined) {
       shop.accentColor = this.normalizeAccent(dto.accentColor);
     }
+    if (dto.salesSystemId !== undefined) {
+      shop.salesSystemId = dto.salesSystemId || null;
+    }
+    if (dto.posPaymentMap !== undefined) {
+      shop.posPaymentMap = dto.posPaymentMap;
+    }
 
     await this.shops.save(shop);
     return this.toDto(shop);
@@ -157,6 +165,8 @@ export class ShopsService {
       defaultChangeAmount: Number(s.defaultChangeAmount),
       logoUrl: s.logoUrl ?? null,
       accentColor: s.accentColor ?? null,
+      salesSystemId: s.salesSystemId ?? null,
+      posPaymentMap: s.posPaymentMap ?? null,
       active: !!s.active,
     };
   }

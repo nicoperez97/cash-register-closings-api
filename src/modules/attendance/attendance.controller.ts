@@ -1,0 +1,148 @@
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  Res,
+  UploadedFile,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
+  ApiProperty,
+  ApiPropertyOptional,
+  ApiTags,
+} from '@nestjs/swagger';
+import { AuthGuard } from '@nestjs/passport';
+import { FileInterceptor } from '@nestjs/platform-express';
+import type { Response } from 'express';
+import {
+  IsArray,
+  IsBoolean,
+  IsDateString,
+  IsNumber,
+  IsOptional,
+  IsUUID,
+  Min,
+  ValidateNested,
+} from 'class-validator';
+import { Type } from 'class-transformer';
+import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
+import { PermissionsGuard } from '../../common/guards';
+import { AttendanceService } from './attendance.service';
+import { AttendanceExcelImportService } from './attendance-excel-import.service';
+
+class UpsertAttendanceDto {
+  @ApiProperty() @IsUUID() employeeId: string;
+  @ApiProperty() @IsDateString() date: string;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() isPresent?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() isHoliday?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) overtimeHours?: number;
+}
+
+class BulkAttendanceDto {
+  @ApiProperty({ type: [UpsertAttendanceDto] })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => UpsertAttendanceDto)
+  items: UpsertAttendanceDto[];
+}
+
+@ApiTags('attendance')
+@ApiBearerAuth()
+@UseGuards(AuthGuard('jwt'), PermissionsGuard)
+@Controller('shops/:shopId/attendance')
+export class AttendanceController {
+  constructor(
+    private readonly attendance: AttendanceService,
+    private readonly excelImport: AttendanceExcelImportService,
+  ) {}
+
+  @Get()
+  @RequirePermissions('attendance.read')
+  month(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Query('year') year: string,
+    @Query('month') month: string,
+  ) {
+    const y = Number(year) || new Date().getFullYear();
+    const m = Number(month) || new Date().getMonth() + 1;
+    return this.attendance.getMonth(user, shopId, y, m);
+  }
+
+  @Get('import-template.xlsx')
+  @RequirePermissions('attendance.manage')
+  async importTemplate(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Res() res: Response,
+  ) {
+    const { buffer, filename } = await this.excelImport.buildTemplate(user, shopId);
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
+  }
+
+  @Post('import-excel')
+  @RequirePermissions('attendance.manage')
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+        commit: { type: 'boolean' },
+      },
+      required: ['file'],
+    },
+  })
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
+  importExcel(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Query('commit') commit?: string,
+    @Body('commit') commitBody?: string | boolean,
+  ) {
+    if (!file) throw new BadRequestException('Adjuntá el Excel (.xlsx)');
+    const doCommit =
+      commit === 'true' ||
+      commit === '1' ||
+      commitBody === true ||
+      commitBody === 'true' ||
+      commitBody === '1';
+    return doCommit
+      ? this.excelImport.commit(user, shopId, file)
+      : this.excelImport.preview(user, shopId, file);
+  }
+
+  @Post()
+  @RequirePermissions('attendance.manage')
+  upsert(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: UpsertAttendanceDto,
+  ) {
+    return this.attendance.upsertDay(user, shopId, dto);
+  }
+
+  @Post('bulk')
+  @RequirePermissions('attendance.manage')
+  bulk(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: BulkAttendanceDto,
+  ) {
+    return this.attendance.bulkUpsert(user, shopId, dto.items ?? []);
+  }
+}

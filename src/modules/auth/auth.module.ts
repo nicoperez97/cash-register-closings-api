@@ -9,6 +9,7 @@ import { UserShop } from '../../entities/user-shop.entity';
 import { CashClosing } from '../../entities/cash-closing.entity';
 import { ClosingExpense } from '../../entities/closing-expense.entity';
 import { ClosingExtraLine } from '../../entities/closing-extra-line.entity';
+import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
@@ -31,6 +32,7 @@ import { JwtStrategy } from './jwt.strategy';
       CashClosing,
       ClosingExpense,
       ClosingExtraLine,
+      LedgerAccountUser,
     ]),
   ],
   controllers: [AuthController],
