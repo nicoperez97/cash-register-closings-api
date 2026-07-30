@@ -22,7 +22,7 @@ services:
 
   api:
     build:
-      context: .
+      context: ./api
       dockerfile: Dockerfile
     restart: unless-stopped
     depends_on:
