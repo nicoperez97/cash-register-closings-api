@@ -1,0 +1,14 @@
+node_modules
+dist
+.git
+.gitignore
+.github
+.env
+.env.*
+!.env.example
+npm-debug.log*
+*.log
+.DS_Store
+.vscode
+backups
+deploy/*.sh
