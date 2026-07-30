@@ -89,8 +89,12 @@ export class PayrollService {
       where: { shopId, year, month },
       relations: ['lines'],
     });
-    if (period?.status === PayrollStatus.LOCKED && !isGlobalAdmin(user.globalRole as GlobalRole)) {
-      throw new BadRequestException('La liquidación está cerrada');
+    if (period?.status === PayrollStatus.LOCKED) {
+      if (!isGlobalAdmin(user.globalRole as GlobalRole)) {
+        throw new BadRequestException('La liquidación está cerrada');
+      }
+      period.status = PayrollStatus.DRAFT;
+      await this.periods.save(period);
     }
 
     if (!period) {

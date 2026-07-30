@@ -1,10 +1,15 @@
 export default () => {
   const env = process.env;
+  const isProd = (env.NODE_ENV ?? 'development') === 'production';
+  const jwtSecret = env.JWT_SECRET ?? 'change-me-crc-dev';
+  if (isProd && (!env.JWT_SECRET || env.JWT_SECRET === 'change-me-crc-dev')) {
+    throw new Error('JWT_SECRET debe configurarse en production');
+  }
   return {
     environment: env.NODE_ENV ?? 'development',
     api: {
       port: parseInt(env.PORT ?? '3000', 10),
-      secret: env.JWT_SECRET ?? 'change-me-crc-dev',
+      secret: jwtSecret,
     },
     database: {
       type: 'mysql' as const,
@@ -13,7 +18,7 @@ export default () => {
       database: env.DB_NAME ?? 'cash_register_closings',
       username: env.DB_USER ?? 'root',
       password: env.DB_PASSWORD ?? 'root',
-      synchronize: (env.DB_SYNC ?? 'true') === 'true',
+      synchronize: (env.DB_SYNC ?? (isProd ? 'false' : 'true')) === 'true',
       autoLoadEntities: true,
     },
     cors: {

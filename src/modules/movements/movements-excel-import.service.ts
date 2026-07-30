@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import * as ExcelJS from 'exceljs';
 import { Movement } from '../../entities/movement.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
@@ -28,6 +28,7 @@ export interface MovementImportItem {
   willCreateFromAccount: boolean;
   willCreateToAccount: boolean;
   willCreateConcept: boolean;
+  alreadyExists: boolean;
   valid: boolean;
   error?: string;
 }
@@ -76,6 +77,7 @@ export class MovementsExcelImportService {
     ]);
     info.addRow(['Columnas clave: Fecha, Cuenta Emisora, Cuenta Receptora, Descripción, Importe $, Concepto validado.']);
     info.addRow(['Si la cuenta o el concepto no existen en el local, se crean al confirmar la importación.']);
+    info.addRow(['Filas ya existentes (misma fecha, cuentas, monto y descripción) se omiten.']);
     info.addRow(['No cambies los nombres de las columnas de la fila 1 en la hoja Movimientos.']);
 
     const ws = wb.addWorksheet('Movimientos');
@@ -122,8 +124,24 @@ export class MovementsExcelImportService {
     this.shops.assertShopAccess(user, shopId);
     await this.catalogSeed.ensureShopCatalogs(shopId);
     const items = await this.enrich(shopId, await this.parseWorkbook(file));
-    const valid = items.filter((i) => i.valid);
+    const valid = items.filter((i) => i.valid && !i.alreadyExists);
+    const skipped = items.filter((i) => i.alreadyExists);
     if (!valid.length) {
+      if (skipped.length) {
+        return {
+          createdCount: 0,
+          skippedCount: skipped.length,
+          createdIds: [] as string[],
+          createdAccounts: [] as string[],
+          createdConcepts: [] as string[],
+          skipped: skipped.map((i) => ({
+            rowNumber: i.rowNumber,
+            businessDate: i.businessDate,
+            reason: 'Ya existe un movimiento igual',
+          })),
+          preview: items,
+        };
+      }
       throw new BadRequestException('No hay filas válidas para importar');
     }
 
@@ -137,6 +155,11 @@ export class MovementsExcelImportService {
     const created: string[] = [];
     const createdAccounts: string[] = [];
     const createdConcepts: string[] = [];
+    const skipList = skipped.map((i) => ({
+      rowNumber: i.rowNumber,
+      businessDate: i.businessDate,
+      reason: 'Ya existe un movimiento igual',
+    }));
 
     for (const item of valid) {
       let from = accountCache.get(this.norm(item.fromAccountName));
@@ -210,11 +233,35 @@ export class MovementsExcelImportService {
 
     return {
       createdCount: created.length,
+      skippedCount: skipList.length,
       createdIds: created,
       createdAccounts: [...new Set(createdAccounts)],
       createdConcepts: [...new Set(createdConcepts)],
+      skipped: skipList,
       preview: items,
     };
+  }
+
+  private movementFingerprint(input: {
+    businessDate: string;
+    fromAccountName: string;
+    toAccountName: string;
+    description: string | null;
+    amountUyu: number;
+    amountUsd: number | null;
+    conceptName: string | null;
+    invoiceNumber: string | null;
+  }): string {
+    return [
+      input.businessDate,
+      this.norm(input.fromAccountName),
+      this.norm(input.toAccountName),
+      (input.description || '').trim().toLowerCase(),
+      money(n(input.amountUyu)),
+      input.amountUsd != null ? money(n(input.amountUsd)) : '',
+      this.norm(input.conceptName || ''),
+      (input.invoiceNumber || '').trim().toLowerCase(),
+    ].join('|');
   }
 
   private async enrich(
@@ -227,6 +274,7 @@ export class MovementsExcelImportService {
       | 'willCreateFromAccount'
       | 'willCreateToAccount'
       | 'willCreateConcept'
+      | 'alreadyExists'
       | 'valid'
       | 'error'
     >>,
@@ -235,6 +283,29 @@ export class MovementsExcelImportService {
     const concepts = await this.concepts.find({ where: { shopId, active: true } });
     const byAccount = new Map(accounts.map((a) => [this.norm(a.name), a]));
     const byConcept = new Map(concepts.map((c) => [this.norm(c.name), c]));
+
+    const dates = [...new Set(drafts.map((d) => d.businessDate).filter(Boolean))];
+    const existingRows = dates.length
+      ? await this.movements.find({
+          where: { shopId, businessDate: In(dates), active: true },
+          relations: ['fromAccount', 'toAccount', 'concept'],
+        })
+      : [];
+    const existingFingerprints = new Set(
+      existingRows.map((m) =>
+        this.movementFingerprint({
+          businessDate: m.businessDate,
+          fromAccountName: m.fromAccount?.name ?? '',
+          toAccountName: m.toAccount?.name ?? '',
+          description: m.description ?? null,
+          amountUyu: n(m.amountUyu),
+          amountUsd: m.amountUsd != null ? n(m.amountUsd) : null,
+          conceptName: m.concept?.name ?? null,
+          invoiceNumber: m.invoiceNumber ?? null,
+        }),
+      ),
+    );
+    const seenInFile = new Set<string>();
 
     return drafts.map((d) => {
       const from = byAccount.get(this.norm(d.fromAccountName));
@@ -249,6 +320,11 @@ export class MovementsExcelImportService {
       if (!(d.amountUyu > 0 || (d.amountUsd != null && d.amountUsd > 0))) {
         errors.push('Sin importe');
       }
+      const fp = this.movementFingerprint(d);
+      const alreadyExists = existingFingerprints.has(fp) || seenInFile.has(fp);
+      if (d.businessDate && d.fromAccountName && d.toAccountName) {
+        seenInFile.add(fp);
+      }
       return {
         ...d,
         fromAccountId: from?.id ?? null,
@@ -257,6 +333,7 @@ export class MovementsExcelImportService {
         willCreateFromAccount: !!d.fromAccountName && !from,
         willCreateToAccount: !!d.toAccountName && !to,
         willCreateConcept: !!d.conceptName && !concept,
+        alreadyExists,
         valid: errors.length === 0,
         error: errors.length ? errors.join('; ') : undefined,
       };

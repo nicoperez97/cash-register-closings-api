@@ -10,6 +10,7 @@ import { AuthUser } from '../../common/decorators';
 import { ConceptKind } from '../../common/enums';
 import { ShopsService } from '../shops/shops.service';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
+import { markDeletedUnique } from '../../common/soft-delete.util';
 
 @Injectable()
 export class ConceptsService {
@@ -91,6 +92,9 @@ export class ConceptsService {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.concepts.findOne({ where: { id, shopId } });
     if (!row) throw new NotFoundException('Concepto no encontrado');
+    row.name = markDeletedUnique(row.name, row.id);
+    row.active = false;
+    await this.concepts.save(row);
     await this.concepts.softRemove(row);
     return { ok: true };
   }
