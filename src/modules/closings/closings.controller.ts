@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -174,5 +175,25 @@ export class ClosingsController {
     @Param('id') id: string,
   ) {
     return this.closings.lock(user, shopId, id);
+  }
+
+  @Post(':id/unlock')
+  @RequirePermissions('closings.lock')
+  unlock(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+  ) {
+    return this.closings.unlock(user, shopId, id);
+  }
+
+  @Delete(':id')
+  @RequirePermissions('closings.update')
+  remove(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+  ) {
+    return this.closings.remove(user, shopId, id);
   }
 }

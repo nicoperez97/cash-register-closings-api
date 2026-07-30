@@ -9,6 +9,8 @@ import { Movement } from '../../entities/movement.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { Concept } from '../../entities/concept.entity';
 import { AuthUser } from '../../common/decorators';
+import { GlobalRole } from '../../common/enums';
+import { isGlobalAdmin } from '../../common/guards';
 import { ShopsService } from '../shops/shops.service';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
 
@@ -168,7 +170,7 @@ export class MovementsService {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.movements.findOne({ where: { id, shopId } });
     if (!row) throw new NotFoundException('Movimiento no encontrado');
-    if (row.closingId) {
+    if (row.closingId && !isGlobalAdmin(user.globalRole as GlobalRole)) {
       throw new BadRequestException(
         'Este movimiento fue generado por un cierre; editá el cierre',
       );
@@ -204,7 +206,7 @@ export class MovementsService {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.movements.findOne({ where: { id, shopId } });
     if (!row) throw new NotFoundException('Movimiento no encontrado');
-    if (row.closingId) {
+    if (row.closingId && !isGlobalAdmin(user.globalRole as GlobalRole)) {
       throw new BadRequestException(
         'Este movimiento fue generado por un cierre; editá el cierre',
       );

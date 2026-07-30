@@ -5,9 +5,13 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { AuthUser } from '../../common/decorators';
-import { ClosingStatus } from '../../common/enums';
+import { ClosingStatus, GlobalRole } from '../../common/enums';
+import { isGlobalAdmin } from '../../common/guards';
 import {
   DEFAULT_RESTOSOFT_PAYMENT_MAP,
+  DEFAULT_WEMENU_PAYMENT_MAP,
+  RESTOSOFT_PARSER_KEY,
+  WEMENU_PARSER_KEY,
   SalesSystemsSeedService,
 } from '../../common/sales-systems-seed.service';
 import { CashClosing } from '../../entities/cash-closing.entity';
@@ -259,11 +263,12 @@ export class SalesReportImportService {
 
   private async prepare(shopId: string, file: Express.Multer.File) {
     await this.seed.ensureRestosoft();
+    await this.seed.ensureWeMenu();
     const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
     if (!shop) throw new BadRequestException('Local no encontrado');
     if (!shop.salesSystemId) {
       throw new BadRequestException(
-        'El local no tiene sistema de ventas configurado. Asigná Restosoft (u otro) en Administrar local.',
+        'El local no tiene sistema de ventas configurado. Asigná Restosoft / WeMenu (u otro) en Administrar local.',
       );
     }
     const system = await this.systems.findOne({ where: { id: shop.salesSystemId, active: true } });
@@ -275,9 +280,15 @@ export class SalesReportImportService {
         `El archivo no parece un reporte de ${system.name}. Verificá el formato.`,
       );
     }
-    const parsed = parser.parse(file);
+    const parsed = await parser.parse(file);
+    const defaults =
+      system.parserKey === WEMENU_PARSER_KEY
+        ? DEFAULT_WEMENU_PAYMENT_MAP
+        : system.parserKey === RESTOSOFT_PARSER_KEY
+          ? DEFAULT_RESTOSOFT_PAYMENT_MAP
+          : { ...DEFAULT_RESTOSOFT_PAYMENT_MAP, ...DEFAULT_WEMENU_PAYMENT_MAP };
     const paymentMap = {
-      ...DEFAULT_RESTOSOFT_PAYMENT_MAP,
+      ...defaults,
       ...(shop.posPaymentMap ?? {}),
     };
     return { shop, system, parsed, paymentMap };
@@ -420,7 +431,9 @@ export class SalesReportImportService {
       return;
     }
 
-    if (row.status === ClosingStatus.LOCKED) return;
+    if (row.status === ClosingStatus.LOCKED && !isGlobalAdmin(user.globalRole as GlobalRole)) {
+      return;
+    }
 
     row.posSystemAmount = money(day.totalAmount);
     row.cardAmount = money(day.cardAmount);

@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -9,7 +10,8 @@ import { PayrollPeriod } from '../../entities/payroll-period.entity';
 import { PayrollLine } from '../../entities/payroll-line.entity';
 import { Employee } from '../../entities/employee.entity';
 import { AuthUser } from '../../common/decorators';
-import { PayrollStatus } from '../../common/enums';
+import { GlobalRole, PayrollStatus } from '../../common/enums';
+import { isGlobalAdmin } from '../../common/guards';
 import { ShopsService } from '../shops/shops.service';
 import { AttendanceService } from '../attendance/attendance.service';
 
@@ -87,7 +89,7 @@ export class PayrollService {
       where: { shopId, year, month },
       relations: ['lines'],
     });
-    if (period?.status === PayrollStatus.LOCKED) {
+    if (period?.status === PayrollStatus.LOCKED && !isGlobalAdmin(user.globalRole as GlobalRole)) {
       throw new BadRequestException('La liquidación está cerrada');
     }
 
@@ -156,6 +158,18 @@ export class PayrollService {
     const period = await this.periods.findOne({ where: { shopId, year, month } });
     if (!period) throw new NotFoundException('No hay liquidación para ese período');
     period.status = PayrollStatus.LOCKED;
+    await this.periods.save(period);
+    return this.get(user, shopId, year, month);
+  }
+
+  async unlock(user: AuthUser, shopId: string, year: number, month: number) {
+    if (!isGlobalAdmin(user.globalRole as GlobalRole)) {
+      throw new ForbiddenException('Solo un super admin puede reabrir liquidaciones');
+    }
+    this.shops.assertShopAccess(user, shopId);
+    const period = await this.periods.findOne({ where: { shopId, year, month } });
+    if (!period) throw new NotFoundException('No hay liquidación para ese período');
+    period.status = PayrollStatus.DRAFT;
     await this.periods.save(period);
     return this.get(user, shopId, year, month);
   }

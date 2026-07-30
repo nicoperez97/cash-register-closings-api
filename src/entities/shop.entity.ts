@@ -15,10 +15,10 @@ export class Shop extends BaseEntity {
   @Column({ unique: true })
   slug: string;
 
-  @Column({ default: 'America/Montevideo' })
+  @Column({ default: 'America/Argentina/Buenos_Aires' })
   timezone: string;
 
-  @Column({ default: 'UYU' })
+  @Column({ default: 'ARS' })
   currency: string;
 
   @Column({ type: 'varchar', nullable: true })
