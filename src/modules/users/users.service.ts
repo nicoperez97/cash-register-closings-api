@@ -19,6 +19,7 @@ import {
   ModulePermissionsMap,
   sanitizeModulePermissions,
 } from '../../common/module-permissions';
+import { isEntityActive } from '../../common/active.util';
 
 const SHOP_ADMIN_ROLES = new Set([GlobalRole.OWNER, GlobalRole.ADMIN]);
 
@@ -270,7 +271,13 @@ export class UsersService {
       }
       user.email = email;
     }
-    if (dto.active !== undefined) user.active = dto.active;
+    if (dto.active !== undefined) {
+      const nextActive = isEntityActive(dto.active);
+      if (!nextActive && actor.id === id) {
+        throw new BadRequestException('No podés desactivar tu propio usuario');
+      }
+      user.active = nextActive;
+    }
     if (dto.password?.trim()) {
       user.passwordHash = await bcrypt.hash(dto.password.trim(), 10);
     }
@@ -492,7 +499,7 @@ export class UsersService {
       fullName: u.fullName,
       email: u.email,
       globalRole: u.globalRole,
-      active: !!u.active,
+      active: isEntityActive(u.active),
       shopIds: links.filter((l) => l.userId === u.id).map((l) => l.shopId),
     };
   }

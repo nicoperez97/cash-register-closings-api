@@ -11,7 +11,8 @@ import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
 import { Shop } from '../../entities/shop.entity';
 import { User } from '../../entities/user.entity';
 import { AuthUser } from '../../common/decorators';
-import { LedgerAccountType, LinkedPaymentMethod } from '../../common/enums';
+import { GlobalRole, LedgerAccountType, LinkedPaymentMethod } from '../../common/enums';
+import { isGlobalAdmin } from '../../common/guards';
 import { ShopsService } from '../shops/shops.service';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
 
@@ -166,7 +167,7 @@ export class AccountsService implements OnModuleInit {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.accounts.findOne({ where: { id, shopId } });
     if (!row) throw new NotFoundException('Cuenta no encontrada');
-    if (row.type === LedgerAccountType.SYSTEM) {
+    if (row.type === LedgerAccountType.SYSTEM && !isGlobalAdmin(user.globalRole as GlobalRole)) {
       throw new BadRequestException('No se pueden eliminar cuentas de sistema');
     }
     await this.links.delete({ accountId: id });

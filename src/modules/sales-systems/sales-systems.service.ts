@@ -40,20 +40,26 @@ export class SalesSystemsService {
 
   async listActive() {
     await this.seed.ensureRestosoft();
+    await this.seed.ensureWeMenu();
     const rows = await this.seed.listActive();
     return rows.map((s) => this.toDto(s));
   }
 
   async listAll() {
     await this.seed.ensureRestosoft();
+    await this.seed.ensureWeMenu();
     const rows = await this.systems.find({ order: { name: 'ASC' } });
     return rows.map((s) => this.toDto(s));
   }
 
   listParsers() {
+    const labels: Record<string, string> = {
+      restosoft: 'Restosoft',
+      wemenu: 'WeMenu',
+    };
     return this.parsers.keys().map((key) => ({
       key,
-      label: key === 'restosoft' ? 'Restosoft' : key,
+      label: labels[key] ?? key,
     }));
   }
 

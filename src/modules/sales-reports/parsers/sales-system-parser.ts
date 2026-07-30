@@ -39,5 +39,5 @@ export interface ParsedSalesReport {
 export interface SalesSystemParser {
   readonly key: string;
   canParse(file: Express.Multer.File, sheetPreview?: string[][]): boolean;
-  parse(file: Express.Multer.File): ParsedSalesReport;
+  parse(file: Express.Multer.File): ParsedSalesReport | Promise<ParsedSalesReport>;
 }

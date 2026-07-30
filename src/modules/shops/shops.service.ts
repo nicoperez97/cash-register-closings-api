@@ -1,10 +1,11 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, Not, Repository } from 'typeorm';
 import { Shop } from '../../entities/shop.entity';
 import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
@@ -12,6 +13,7 @@ import { AuthUser } from '../../common/decorators';
 import { GlobalRole } from '../../common/enums';
 import { isGlobalAdmin } from '../../common/guards';
 import { normalizeLogoUrl } from '../../common/drive-url';
+import { isEntityActive } from '../../common/active.util';
 import { CreateShopDto, UpdateShopDto } from './dto/shop.dto';
 
 const SHOP_ADMIN_ROLES = new Set([
@@ -91,17 +93,19 @@ export class ShopsService {
 
   async create(user: AuthUser, dto: CreateShopDto) {
     if (!isGlobalAdmin(user.globalRole as GlobalRole)) {
-      throw new ForbiddenException('Solo un admin global puede crear locales');
+      throw new ForbiddenException('Solo un administrador puede crear locales');
     }
+    const slug = this.normalizeSlug(dto.slug || dto.name);
+    await this.assertSlugFree(slug);
     const shop = await this.shops.save(
       this.shops.create({
-        name: dto.name,
-        slug: dto.slug,
+        name: dto.name.trim(),
+        slug,
         unitsLabel: dto.unitsLabel ?? null,
         coversEnabled: dto.coversEnabled ?? false,
         defaultChangeAmount: String(dto.defaultChangeAmount ?? 0),
-        timezone: dto.timezone ?? 'America/Montevideo',
-        currency: dto.currency ?? 'UYU',
+        timezone: dto.timezone ?? 'America/Argentina/Buenos_Aires',
+        currency: dto.currency ?? 'ARS',
         logoUrl: normalizeLogoUrl(dto.logoUrl),
         accentColor: this.normalizeAccent(dto.accentColor),
         salesSystemId: dto.salesSystemId ?? null,
@@ -117,13 +121,17 @@ export class ShopsService {
     const shop = await this.shops.findOne({ where: { id } });
     if (!shop) throw new NotFoundException('Local no encontrado');
 
-    if (dto.name !== undefined) shop.name = dto.name;
-    if (dto.slug !== undefined) shop.slug = dto.slug;
+    if (dto.name !== undefined) shop.name = dto.name.trim();
+    if (dto.slug !== undefined) {
+      const slug = this.normalizeSlug(dto.slug);
+      await this.assertSlugFree(slug, id);
+      shop.slug = slug;
+    }
     if (dto.unitsLabel !== undefined) shop.unitsLabel = dto.unitsLabel || null;
     if (dto.coversEnabled !== undefined) shop.coversEnabled = dto.coversEnabled;
     if (dto.timezone !== undefined) shop.timezone = dto.timezone;
     if (dto.currency !== undefined) shop.currency = dto.currency;
-    if (dto.active !== undefined) shop.active = dto.active;
+    if (dto.active !== undefined) shop.active = isEntityActive(dto.active);
     if (dto.defaultChangeAmount !== undefined) {
       shop.defaultChangeAmount = String(dto.defaultChangeAmount);
     }
@@ -142,6 +150,27 @@ export class ShopsService {
 
     await this.shops.save(shop);
     return this.toDto(shop);
+  }
+
+  private normalizeSlug(raw: string): string {
+    const s = raw
+      .trim()
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    if (s.length < 2) {
+      throw new BadRequestException('Slug inválido (mínimo 2 caracteres)');
+    }
+    return s;
+  }
+
+  private async assertSlugFree(slug: string, exceptId?: string) {
+    const clash = await this.shops.findOne({
+      where: exceptId ? { slug, id: Not(exceptId) } : { slug },
+    });
+    if (clash) throw new BadRequestException('Ya existe un local con ese slug');
   }
 
   private normalizeAccent(raw?: string | null): string | null {
@@ -167,7 +196,7 @@ export class ShopsService {
       accentColor: s.accentColor ?? null,
       salesSystemId: s.salesSystemId ?? null,
       posPaymentMap: s.posPaymentMap ?? null,
-      active: !!s.active,
+      active: isEntityActive(s.active),
     };
   }
 }

@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { SalesSystemParser } from './sales-system-parser';
 import { RestosoftParser } from './restosoft.parser';
+import { WemenuParser } from './wemenu.parser';
 
 @Injectable()
 export class SalesParserRegistry {
@@ -8,7 +9,11 @@ export class SalesParserRegistry {
 
   constructor() {
     const restosoft = new RestosoftParser();
-    this.parsers = new Map([[restosoft.key, restosoft]]);
+    const wemenu = new WemenuParser();
+    this.parsers = new Map<string, SalesSystemParser>([
+      [restosoft.key, restosoft],
+      [wemenu.key, wemenu],
+    ]);
   }
 
   get(parserKey: string): SalesSystemParser {

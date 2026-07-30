@@ -61,4 +61,15 @@ export class PayrollController {
   ) {
     return this.payroll.lock(user, shopId, Number(year), Number(month));
   }
+
+  @Post(':year/:month/unlock')
+  @RequirePermissions('payroll.manage')
+  unlock(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('year') year: string,
+    @Param('month') month: string,
+  ) {
+    return this.payroll.unlock(user, shopId, Number(year), Number(month));
+  }
 }

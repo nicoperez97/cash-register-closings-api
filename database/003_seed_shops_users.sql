@@ -9,10 +9,10 @@ ON DUPLICATE KEY UPDATE name = VALUES(name), accentColor = COALESCE(shops.accent
 
 
 INSERT INTO users (id, fullName, email, passwordHash, globalRole, active) VALUES
-  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'Admin Cierres', 'admin@cierres.com', @pwd, 'ADMIN', 1),
+  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'Super Admin', 'admin@cierres.com', @pwd, 'OWNER', 1),
   ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'Manager Multi', 'manager@cierres.com', @pwd, 'MANAGER', 1),
   ('cccccccc-cccc-cccc-cccc-cccccccccccc', 'Cajero Panino', 'cashier@cierres.com', @pwd, 'CASHIER', 1)
-ON DUPLICATE KEY UPDATE fullName = VALUES(fullName);
+ON DUPLICATE KEY UPDATE fullName = VALUES(fullName), globalRole = VALUES(globalRole);
 
 INSERT INTO user_shops (id, userId, shopId) VALUES
   (UUID(), 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '11111111-1111-1111-1111-111111111111'),

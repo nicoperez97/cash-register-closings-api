@@ -26,6 +26,7 @@ import {
   ModulePermissionsMap,
 } from '../../common/module-permissions';
 import { Permission } from '../../common/enums';
+import { isEntityActive } from '../../common/active.util';
 
 const IDS = {
   panino: '11111111-1111-1111-1111-111111111111',
@@ -50,6 +51,9 @@ export class AuthService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
+    if (process.env.NODE_ENV === 'production' && process.env.ENABLE_DEMO_SEED !== 'true') {
+      return;
+    }
     try {
       await this.ensureSeed();
     } catch (err) {
@@ -101,10 +105,10 @@ export class AuthService implements OnModuleInit {
     const seedUsers: Array<Partial<User> & { shopIds: string[] }> = [
       {
         id: IDS.admin,
-        fullName: 'Admin Cierres',
+        fullName: 'Super Admin',
         email: 'admin@cierres.com',
         passwordHash,
-        globalRole: GlobalRole.ADMIN,
+        globalRole: GlobalRole.OWNER,
         shopIds: [IDS.panino, IDS.tutto],
       },
       {
@@ -127,7 +131,18 @@ export class AuthService implements OnModuleInit {
 
     for (const su of seedUsers) {
       const existing = await this.users.findOne({ where: { email: su.email } });
-      if (existing) continue;
+      if (existing) {
+        // Promover admin demo a Super admin (OWNER) si quedó como ADMIN.
+        if (
+          su.email === 'admin@cierres.com' &&
+          existing.globalRole !== GlobalRole.OWNER
+        ) {
+          existing.globalRole = GlobalRole.OWNER;
+          existing.fullName = su.fullName ?? existing.fullName;
+          await this.users.save(existing);
+        }
+        continue;
+      }
       const { shopIds, ...userData } = su;
       const user = await this.users.save(this.users.create({ ...userData, active: true }));
       for (const shopId of shopIds) {
@@ -299,7 +314,12 @@ export class AuthService implements OnModuleInit {
       where: { email: dto.email.toLowerCase().trim() },
       select: ['id', 'email', 'fullName', 'globalRole', 'passwordHash', 'active'],
     });
-    if (!user?.active) throw new UnauthorizedException('Credenciales inválidas');
+    if (!user) throw new UnauthorizedException('Credenciales inválidas');
+    if (!isEntityActive(user.active)) {
+      throw new UnauthorizedException(
+        'Usuario desactivado. Contactá a un administrador.',
+      );
+    }
     const ok = await bcrypt.compare(dto.password, user.passwordHash);
     if (!ok) throw new UnauthorizedException('Credenciales inválidas');
 
@@ -314,7 +334,9 @@ export class AuthService implements OnModuleInit {
 
   async buildAuthUser(userId: string): Promise<AuthUser> {
     const user = await this.users.findOne({ where: { id: userId } });
-    if (!user?.active) throw new UnauthorizedException();
+    if (!user || !isEntityActive(user.active)) {
+      throw new UnauthorizedException('Usuario desactivado');
+    }
     const role = user.globalRole;
     const links = await this.userShops.find({ where: { userId } });
     let shopIds: string[];

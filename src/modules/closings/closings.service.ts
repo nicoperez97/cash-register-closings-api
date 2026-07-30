@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CashClosing } from '../../entities/cash-closing.entity';
@@ -9,7 +9,8 @@ import { Employee } from '../../entities/employee.entity';
 import { ShopsService } from '../shops/shops.service';
 import { ClosingMovementsSyncService } from '../movements/closing-movements-sync.service';
 import { AuthUser } from '../../common/decorators';
-import { ClosingStatus, ExpenseCategory, ExtraLineType } from '../../common/enums';
+import { ClosingStatus, ExpenseCategory, ExtraLineType, GlobalRole } from '../../common/enums';
+import { isGlobalAdmin } from '../../common/guards';
 import { CreateClosingDto, UpdateClosingDto } from './dto/closing.dto';
 import { applyClosingFilters, ClosingListFilters } from './closing-filters';
 
@@ -150,7 +151,9 @@ export class ClosingsService {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.closings.findOne({ where: { id, shopId }, relations: ['expenses', 'extraLines'] });
     if (!row) throw new NotFoundException('Cierre no encontrado');
-    if (row.status === ClosingStatus.LOCKED) throw new BadRequestException('El cierre está bloqueado');
+    if (row.status === ClosingStatus.LOCKED && !isGlobalAdmin(user.globalRole as GlobalRole)) {
+      throw new BadRequestException('El cierre está bloqueado');
+    }
     if (dto.businessDate && dto.businessDate !== row.businessDate) {
       const clash = await this.closings.findOne({ where: { shopId, businessDate: dto.businessDate } });
       if (clash) throw new ConflictException('Ya existe un cierre para esa fecha');
@@ -221,6 +224,32 @@ export class ClosingsService {
     await this.closings.save(row);
     await this.syncMovements(row.id);
     return this.getOne(user, shopId, id);
+  }
+
+  async unlock(user: AuthUser, shopId: string, id: string) {
+    if (!isGlobalAdmin(user.globalRole as GlobalRole)) {
+      throw new ForbiddenException('Solo un super admin puede desbloquear cierres');
+    }
+    this.shops.assertShopAccess(user, shopId);
+    const row = await this.closings.findOne({ where: { id, shopId }, relations: ['expenses', 'extraLines'] });
+    if (!row) throw new NotFoundException('Cierre no encontrado');
+    row.status = ClosingStatus.SUBMITTED;
+    await this.closings.save(row);
+    return this.getOne(user, shopId, id);
+  }
+
+  async remove(user: AuthUser, shopId: string, id: string) {
+    if (!isGlobalAdmin(user.globalRole as GlobalRole)) {
+      throw new ForbiddenException('Solo un super admin puede eliminar cierres');
+    }
+    this.shops.assertShopAccess(user, shopId);
+    const row = await this.closings.findOne({ where: { id, shopId }, relations: ['expenses', 'extraLines'] });
+    if (!row) throw new NotFoundException('Cierre no encontrado');
+    await this.closingMovements.syncFromClosing({ ...row, expenses: [], extraLines: [] } as CashClosing);
+    await this.expenses.delete({ closingId: id });
+    await this.extras.delete({ closingId: id });
+    await this.closings.softRemove(row);
+    return { ok: true };
   }
 
   private async replaceChildren(
