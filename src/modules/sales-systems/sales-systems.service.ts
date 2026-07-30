@@ -9,6 +9,7 @@ import { SalesSystem } from '../../entities/sales-system.entity';
 import { Shop } from '../../entities/shop.entity';
 import { SalesSystemsSeedService } from '../../common/sales-systems-seed.service';
 import { SalesParserRegistry } from '../sales-reports/parsers/parser-registry';
+import { markDeletedUnique } from '../../common/soft-delete.util';
 
 export class UpsertSalesSystemDto {
   code: string;
@@ -120,6 +121,9 @@ export class SalesSystemsService {
         `No se puede eliminar: ${inUse} local(es) lo tienen asignado. Desasignalo primero.`,
       );
     }
+    row.code = markDeletedUnique(row.code, row.id, 64);
+    row.active = false;
+    await this.systems.save(row);
     await this.systems.softRemove(row);
     return { ok: true };
   }

@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS cash_closings (
   id CHAR(36) NOT NULL PRIMARY KEY,
   shopId CHAR(36) NOT NULL,
   businessDate DATE NOT NULL,
+  businessDateKey VARCHAR(80) NOT NULL,
   posSystemAmount DECIMAL(12,2) NOT NULL DEFAULT 0,
   cardAmount DECIMAL(12,2) NOT NULL DEFAULT 0,
   cashAmount DECIMAL(12,2) NOT NULL DEFAULT 0,
@@ -91,7 +92,7 @@ CREATE TABLE IF NOT EXISTS cash_closings (
   updatedAt DATETIME(6) NULL,
   deletedAt DATETIME(6) NULL,
   active TINYINT NOT NULL DEFAULT 1,
-  UNIQUE KEY uq_shop_date (shopId, businessDate),
+  UNIQUE KEY uq_shop_date_key (shopId, businessDateKey),
   CONSTRAINT fk_cc_shop FOREIGN KEY (shopId) REFERENCES shops(id),
   CONSTRAINT fk_cc_user FOREIGN KEY (createdByUserId) REFERENCES users(id)
 );

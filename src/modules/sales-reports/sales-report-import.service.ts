@@ -26,6 +26,7 @@ import { SalesParserRegistry } from './parsers/parser-registry';
 import { ParsedTicket } from './parsers/sales-system-parser';
 import type { PosPaymentField } from './parsers/sales-system-parser';
 import { SalesProductsAnalyticsService } from './sales-products-analytics.service';
+import { closingDateKey } from '../../common/soft-delete.util';
 
 const money = (n: number) => Number(n ?? 0).toFixed(2);
 const n = (v?: string | number | null) => Number(v ?? 0);
@@ -403,6 +404,7 @@ export class SalesReportImportService {
       row = this.closings.create({
         shopId,
         businessDate: day.businessDate,
+        businessDateKey: closingDateKey(day.businessDate),
         posSystemAmount: money(day.totalAmount),
         cardAmount: money(day.cardAmount),
         cashAmount: money(day.cashAmount),

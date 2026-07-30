@@ -333,6 +333,7 @@ export class ExcelImportService {
     const links = await this.userShops.find({ where: { shopId } });
     const shopUserIds = new Set(links.map((l) => l.userId));
     const createdCache = new Map<string, User>();
+    const seenInFile = new Set<string>();
 
     const items: ExcelImportItem[] = [];
     for (const d of drafts) {
@@ -354,11 +355,14 @@ export class ExcelImportService {
         shopUserIds.add(matched.id);
       }
 
+      const dupInFile = seenInFile.has(d.businessDate);
+      seenInFile.add(d.businessDate);
+
       items.push({
         ...d,
         cashWithdrawnByName: matched?.fullName ?? name,
         cashWithdrawnByUserId: matched?.id ?? null,
-        alreadyExists: existingSet.has(d.businessDate),
+        alreadyExists: existingSet.has(d.businessDate) || dupInFile,
         willCreateUser,
       });
     }

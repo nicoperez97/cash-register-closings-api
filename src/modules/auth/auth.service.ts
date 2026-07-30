@@ -27,6 +27,7 @@ import {
 } from '../../common/module-permissions';
 import { Permission } from '../../common/enums';
 import { isEntityActive } from '../../common/active.util';
+import { closingDateKey } from '../../common/soft-delete.util';
 
 const IDS = {
   panino: '11111111-1111-1111-1111-111111111111',
@@ -51,7 +52,8 @@ export class AuthService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
-    if (process.env.NODE_ENV === 'production' && process.env.ENABLE_DEMO_SEED !== 'true') {
+    // Seed demo solo si se pide explícitamente (nunca por defecto en prod/local limpio).
+    if (process.env.ENABLE_DEMO_SEED !== 'true') {
       return;
     }
     try {
@@ -268,6 +270,7 @@ export class AuthService implements OnModuleInit {
       const row = await this.closings.save(
         this.closings.create({
           ...s.data,
+          businessDateKey: closingDateKey(String(s.data.businessDate)),
           mercadoPagoAmount: s.data.mercadoPagoAmount ?? '0.00',
           deliveryAppsAmount: s.data.deliveryAppsAmount ?? '0.00',
           transferAmount: s.data.transferAmount ?? '0.00',

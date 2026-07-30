@@ -11,10 +11,10 @@ import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
 import { Shop } from '../../entities/shop.entity';
 import { User } from '../../entities/user.entity';
 import { AuthUser } from '../../common/decorators';
-import { GlobalRole, LedgerAccountType, LinkedPaymentMethod } from '../../common/enums';
-import { isGlobalAdmin } from '../../common/guards';
+import { LedgerAccountType, LinkedPaymentMethod } from '../../common/enums';
 import { ShopsService } from '../shops/shops.service';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
+import { markDeletedUnique } from '../../common/soft-delete.util';
 
 export class UpsertAccountDto {
   name: string;
@@ -167,10 +167,13 @@ export class AccountsService implements OnModuleInit {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.accounts.findOne({ where: { id, shopId } });
     if (!row) throw new NotFoundException('Cuenta no encontrada');
-    if (row.type === LedgerAccountType.SYSTEM && !isGlobalAdmin(user.globalRole as GlobalRole)) {
+    if (row.type === LedgerAccountType.SYSTEM) {
       throw new BadRequestException('No se pueden eliminar cuentas de sistema');
     }
     await this.links.delete({ accountId: id });
+    row.code = markDeletedUnique(row.code, row.id);
+    row.active = false;
+    await this.accounts.save(row);
     await this.accounts.softRemove(row);
     return { ok: true };
   }

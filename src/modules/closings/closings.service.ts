@@ -1,4 +1,12 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleInit,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CashClosing } from '../../entities/cash-closing.entity';
@@ -11,6 +19,7 @@ import { ClosingMovementsSyncService } from '../movements/closing-movements-sync
 import { AuthUser } from '../../common/decorators';
 import { ClosingStatus, ExpenseCategory, ExtraLineType, GlobalRole } from '../../common/enums';
 import { isGlobalAdmin } from '../../common/guards';
+import { closingDateKey, markDeletedUnique } from '../../common/soft-delete.util';
 import { CreateClosingDto, UpdateClosingDto } from './dto/closing.dto';
 import { applyClosingFilters, ClosingListFilters } from './closing-filters';
 
@@ -18,7 +27,9 @@ const n = (v?: number | string | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
 
 @Injectable()
-export class ClosingsService {
+export class ClosingsService implements OnModuleInit {
+  private readonly logger = new Logger(ClosingsService.name);
+
   constructor(
     @InjectRepository(CashClosing) private readonly closings: Repository<CashClosing>,
     @InjectRepository(ClosingExpense) private readonly expenses: Repository<ClosingExpense>,
@@ -28,6 +39,18 @@ export class ClosingsService {
     private readonly shops: ShopsService,
     private readonly closingMovements: ClosingMovementsSyncService,
   ) {}
+
+  async onModuleInit() {
+    try {
+      await this.closings.query(`
+        UPDATE cash_closings
+        SET businessDateKey = DATE_FORMAT(businessDate, '%Y-%m-%d')
+        WHERE businessDateKey IS NULL OR businessDateKey = ''
+      `);
+    } catch (err) {
+      this.logger.warn(`No se pudo backfill businessDateKey: ${(err as Error)?.message}`);
+    }
+  }
 
   private async resolveWithdrawnBy(
     shopId: string,
@@ -117,7 +140,8 @@ export class ClosingsService {
 
   async create(user: AuthUser, shopId: string, dto: CreateClosingDto) {
     this.shops.assertShopAccess(user, shopId);
-    const exists = await this.closings.findOne({ where: { shopId, businessDate: dto.businessDate } });
+    const dateKey = closingDateKey(dto.businessDate);
+    const exists = await this.closings.findOne({ where: { shopId, businessDateKey: dateKey } });
     if (exists) throw new ConflictException('Ya existe un cierre para esa fecha');
     const incomeExtras = (dto.extraLines ?? [])
       .filter((e) => e.type === ExtraLineType.STUDENT_CASH || e.type === ExtraLineType.ADJUSTMENT)
@@ -125,7 +149,7 @@ export class ClosingsService {
     const totals = this.calc(dto, incomeExtras);
     const withdrawn = await this.resolveWithdrawnBy(shopId, dto.cashWithdrawnByUserId, dto.cashWithdrawnByName, dto.cashWithdrawnByEmployeeId);
     const closing = await this.closings.save(this.closings.create({
-      shopId, businessDate: dto.businessDate,
+      shopId, businessDate: dto.businessDate, businessDateKey: dateKey,
       posSystemAmount: money(n(dto.posSystemAmount)), cardAmount: money(n(dto.cardAmount)),
       cashAmount: money(n(dto.cashAmount)), mercadoPagoAmount: money(n(dto.mercadoPagoAmount)),
       deliveryAppsAmount: money(n(dto.deliveryAppsAmount)), transferAmount: money(n(dto.transferAmount)),
@@ -140,7 +164,7 @@ export class ClosingsService {
       tipsAmount: money(n(dto.tipsAmount)), declaredTotal: money(totals.declaredTotal),
       calculatedTotal: money(totals.calculatedTotal), difference: money(totals.difference),
       differenceReason: dto.differenceReason ?? null, notes: dto.notes ?? null, evidenceUrl: dto.evidenceUrl ?? null,
-      status: dto.status ?? ClosingStatus.SUBMITTED, createdByUserId: user.id, submittedAt: new Date(), active: true,
+      status: ClosingStatus.SUBMITTED, createdByUserId: user.id, submittedAt: new Date(), active: true,
     }));
     await this.replaceChildren(closing.id, dto);
     await this.syncMovements(closing.id);
@@ -155,7 +179,9 @@ export class ClosingsService {
       throw new BadRequestException('El cierre está bloqueado');
     }
     if (dto.businessDate && dto.businessDate !== row.businessDate) {
-      const clash = await this.closings.findOne({ where: { shopId, businessDate: dto.businessDate } });
+      const clash = await this.closings.findOne({
+        where: { shopId, businessDateKey: closingDateKey(dto.businessDate) },
+      });
       if (clash) throw new ConflictException('Ya existe un cierre para esa fecha');
     }
     const merged: CreateClosingDto = {
@@ -189,6 +215,7 @@ export class ClosingsService {
     const withdrawn = await this.resolveWithdrawnBy(shopId, merged.cashWithdrawnByUserId, merged.cashWithdrawnByName, merged.cashWithdrawnByEmployeeId);
     Object.assign(row, {
       businessDate: merged.businessDate,
+      businessDateKey: closingDateKey(merged.businessDate),
       posSystemAmount: money(n(merged.posSystemAmount)), cardAmount: money(n(merged.cardAmount)),
       cashAmount: money(n(merged.cashAmount)), mercadoPagoAmount: money(n(merged.mercadoPagoAmount)),
       deliveryAppsAmount: money(n(merged.deliveryAppsAmount)), transferAmount: money(n(merged.transferAmount)),
@@ -203,7 +230,7 @@ export class ClosingsService {
       tipsAmount: money(n(merged.tipsAmount)), declaredTotal: money(totals.declaredTotal),
       calculatedTotal: money(totals.calculatedTotal), difference: money(totals.difference),
       differenceReason: merged.differenceReason ?? null, notes: merged.notes ?? null,
-      evidenceUrl: merged.evidenceUrl ?? null, status: dto.status ?? row.status,
+      evidenceUrl: merged.evidenceUrl ?? null, status: row.status,
     });
     await this.closings.save(row);
     if (dto.expenses || dto.extraLines) {
@@ -248,6 +275,13 @@ export class ClosingsService {
     await this.closingMovements.syncFromClosing({ ...row, expenses: [], extraLines: [] } as CashClosing);
     await this.expenses.delete({ closingId: id });
     await this.extras.delete({ closingId: id });
+    row.businessDateKey = markDeletedUnique(
+      row.businessDateKey || closingDateKey(row.businessDate),
+      row.id,
+      80,
+    );
+    row.active = false;
+    await this.closings.save(row);
     await this.closings.softRemove(row);
     return { ok: true };
   }

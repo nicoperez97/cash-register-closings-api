@@ -1,6 +1,7 @@
 import {
   Column,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   OneToMany,
@@ -14,13 +15,18 @@ import { ClosingExpense } from './closing-expense.entity';
 import { ClosingExtraLine } from './closing-extra-line.entity';
 
 @Entity({ name: 'cash_closings' })
-@Unique(['shopId', 'businessDate'])
+@Index('IDX_cash_closings_shopId', ['shopId'])
+@Unique('uq_shop_date_key', ['shopId', 'businessDateKey'])
 export class CashClosing extends BaseEntity {
   @Column()
   shopId: string;
 
   @Column({ type: 'date' })
   businessDate: string;
+
+  /** Clave única (YYYY-MM-DD); en soft-delete pasa a `fecha__DELETED__{id}`. */
+  @Column({ type: 'varchar', length: 80, nullable: true })
+  businessDateKey: string | null;
 
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
   posSystemAmount: string;
