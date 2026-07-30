@@ -17,8 +17,15 @@ import {
   ExtraLineType,
   GlobalRole,
 } from '../../common/enums';
-import { isGlobalAdmin, resolvePermissions } from '../../common/guards';
+import { isGlobalAdmin } from '../../common/guards';
 import { AuthUser } from '../../common/decorators';
+import {
+  ALL_PERMISSIONS_LIST,
+  deriveModulesFromRole,
+  expandModulePermissions,
+  ModulePermissionsMap,
+} from '../../common/module-permissions';
+import { Permission } from '../../common/enums';
 
 const IDS = {
   panino: '11111111-1111-1111-1111-111111111111',
@@ -318,10 +325,34 @@ export class AuthService implements OnModuleInit {
       shopIds = links.map((l) => l.shopId);
     }
     const shopRoles: Record<string, string> = {};
+    const shopPermissions: Record<string, Permission[]> = {};
+    const shopModulePermissions: Record<string, Record<string, string>> = {};
+
     for (const id of shopIds) {
       const link = links.find((l) => l.shopId === id);
-      shopRoles[id] = link?.shopRole ?? role;
+      const effectiveRole = (link?.shopRole ?? role) as GlobalRole;
+      shopRoles[id] = effectiveRole;
+
+      if (isGlobalAdmin(role)) {
+        shopPermissions[id] = [...ALL_PERMISSIONS_LIST];
+        shopModulePermissions[id] = deriveModulesFromRole(GlobalRole.OWNER) as Record<
+          string,
+          string
+        >;
+        continue;
+      }
+
+      let modules: ModulePermissionsMap;
+      // null = legacy (derivar del rol); objeto (aunque vacío) = explícito.
+      if (link?.modulePermissions != null) {
+        modules = link.modulePermissions as ModulePermissionsMap;
+      } else {
+        modules = deriveModulesFromRole(effectiveRole);
+      }
+      shopModulePermissions[id] = modules as Record<string, string>;
+      shopPermissions[id] = expandModulePermissions(modules);
     }
+
     const linked = shopIds.length
       ? await this.accountLinks.find({
           where: { userId, shopId: In(shopIds) },
@@ -333,6 +364,17 @@ export class AuthService implements OnModuleInit {
       arr.push(l.accountId);
       shopAccountIds[l.shopId] = arr;
     }
+
+    const permissions = isGlobalAdmin(role)
+      ? [...ALL_PERMISSIONS_LIST]
+      : (() => {
+          const set = new Set<Permission>();
+          for (const list of Object.values(shopPermissions)) {
+            for (const p of list) set.add(p);
+          }
+          return [...set];
+        })();
+
     return {
       id: user.id,
       email: user.email,
@@ -341,7 +383,9 @@ export class AuthService implements OnModuleInit {
       shopIds,
       shopRoles,
       shopAccountIds,
-      permissions: resolvePermissions(role),
+      shopPermissions,
+      shopModulePermissions,
+      permissions,
     };
   }
 

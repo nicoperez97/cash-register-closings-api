@@ -133,7 +133,7 @@ export class SalesReportImportService {
     );
 
     const allLineItems = parsed.tickets.flatMap((t) => t.lines);
-    const categoryByCode = await this.productsAnalytics.upsertFromLines(shopId, allLineItems);
+    const labelsByCode = await this.productsAnalytics.upsertFromLines(shopId, allLineItems);
 
     // Upsert tickets + lines
     for (const t of parsed.tickets) {
@@ -183,12 +183,21 @@ export class SalesReportImportService {
       if (t.lines.length) {
         await this.lines.save(
           t.lines.map((l) => {
-            const code = (l.productCode || l.productName || '').trim();
+            const rawCode = (l.productCode || l.productName || '').trim();
+            const code = /^\d+\.0+$/.test(rawCode)
+              ? String(parseInt(rawCode, 10))
+              : rawCode.replace(/\.0+$/, '');
+            const labels = code ? labelsByCode.get(code) : null;
             return this.lines.create({
               ticketId: ticket!.id,
-              productCode: l.productCode,
+              productCode: l.productCode
+                ? (/^\d+\.0+$/.test(String(l.productCode).trim())
+                    ? String(parseInt(String(l.productCode), 10))
+                    : String(l.productCode).trim().replace(/\.0+$/, ''))
+                : l.productCode,
               productName: l.productName,
-              category: code ? (categoryByCode.get(code) ?? null) : null,
+              category: labels?.category ?? null,
+              subcategory: labels?.subcategory ?? null,
               qty: String(l.qty),
               amount: money(l.amount),
               active: true,

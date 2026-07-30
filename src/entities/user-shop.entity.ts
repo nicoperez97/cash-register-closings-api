@@ -25,6 +25,14 @@ export class UserShop {
   @Column({ type: 'enum', enum: GlobalRole, nullable: true })
   shopRole?: GlobalRole | null;
 
+  /**
+   * Niveles por módulo para este local.
+   * Ej. { closings: 'create', movements: 'manage' }
+   * null = migrar desde shopRole en runtime.
+   */
+  @Column({ type: 'simple-json', nullable: true })
+  modulePermissions?: Record<string, string> | null;
+
   @ManyToOne(() => User, (u) => u.userShops, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'userId' })
   user: User;

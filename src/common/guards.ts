@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AuthGuard } from '@nestjs/passport';
-import { IS_PUBLIC_KEY, PERMISSIONS_KEY } from './decorators';
+import { AuthUser, IS_PUBLIC_KEY, PERMISSIONS_KEY } from './decorators';
 import { GlobalRole, Permission, ROLE_PERMISSIONS } from './enums';
 
 @Injectable()
@@ -42,18 +42,61 @@ export class PermissionsGuard implements CanActivate {
       context.getClass(),
     ]);
     if (!required?.length) return true;
-    const user = context.switchToHttp().getRequest().user;
+
+    const req = context.switchToHttp().getRequest();
+    const user = req.user as AuthUser | undefined;
     if (!user) throw new UnauthorizedException();
-    const ok = required.every((p) => user.permissions?.includes(p));
+
+    const shopId = extractShopId(req);
+    const perms = resolveUserPermissions(user, shopId);
+    const ok = required.every((p) => perms.includes(p));
     if (!ok) throw new ForbiddenException('Sin permiso');
     return true;
   }
+}
+
+function extractShopId(req: {
+  params?: Record<string, string>;
+  query?: Record<string, string>;
+  body?: Record<string, unknown>;
+}): string | null {
+  const fromParams = req.params?.shopId;
+  if (fromParams) return fromParams;
+  const fromQuery = req.query?.shopId;
+  if (typeof fromQuery === 'string' && fromQuery) return fromQuery;
+  const bodyShop = req.body?.shopId;
+  if (typeof bodyShop === 'string' && bodyShop) return bodyShop;
+  return null;
+}
+
+/** Permisos efectivos para un local (o unión si no hay shopId). */
+export function resolveUserPermissions(
+  user: AuthUser,
+  shopId?: string | null,
+): Permission[] {
+  if (isGlobalAdmin(user.globalRole as GlobalRole)) {
+    return user.permissions?.length ? user.permissions : [...(ROLE_PERMISSIONS[GlobalRole.OWNER] ?? [])];
+  }
+  if (shopId && user.shopPermissions?.[shopId]) {
+    return user.shopPermissions[shopId];
+  }
+  if (shopId) {
+    // sin mapa para ese shop → denegar
+    return [];
+  }
+  // sin shopId: unión de todos los shops del usuario
+  const set = new Set<Permission>();
+  for (const list of Object.values(user.shopPermissions ?? {})) {
+    for (const p of list) set.add(p);
+  }
+  if (set.size) return [...set];
+  return user.permissions ?? [];
 }
 
 export function resolvePermissions(role: GlobalRole): Permission[] {
   return ROLE_PERMISSIONS[role] ?? [];
 }
 
-export function isGlobalAdmin(role: GlobalRole): boolean {
+export function isGlobalAdmin(role: GlobalRole | string): boolean {
   return role === GlobalRole.OWNER || role === GlobalRole.ADMIN;
 }

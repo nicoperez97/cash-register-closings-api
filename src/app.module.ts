@@ -13,6 +13,7 @@ import { EmployeesModule } from './modules/employees/employees.module';
 import { MovementsModule } from './modules/movements/movements.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
 import { PayrollModule } from './modules/payroll/payroll.module';
+import { CommissionsModule } from './modules/commissions/commissions.module';
 import { SalesReportsModule } from './modules/sales-reports/sales-reports.module';
 import { SalesSystemsModule } from './modules/sales-systems/sales-systems.module';
 import { JwtAuthGuard, PermissionsGuard } from './common/guards';
@@ -32,6 +33,7 @@ import { JwtAuthGuard, PermissionsGuard } from './common/guards';
     MovementsModule,
     AttendanceModule,
     PayrollModule,
+    CommissionsModule,
     SalesSystemsModule,
     SalesReportsModule,
   ],

@@ -12,6 +12,7 @@ export interface SalesProductsFilters {
   to: string;
   q?: string | null;
   category?: string | null;
+  subcategory?: string | null;
   paymentCode?: string | null;
   salesSystemId?: string | null;
 }
@@ -20,6 +21,7 @@ export interface SalesProductRow {
   productCode: string | null;
   productName: string | null;
   category: string | null;
+  subcategory: string | null;
   qty: number;
   amount: number;
   ticketCount: number;
@@ -36,6 +38,31 @@ export interface SalesCategoryRow {
   share: number;
 }
 
+export interface SalesSubcategoryRow {
+  category: string;
+  subcategory: string;
+  productCount: number;
+  qty: number;
+  amount: number;
+  ticketCount: number;
+  share: number;
+}
+
+export interface SalesDayRow {
+  date: string;
+  qty: number;
+  amount: number;
+  ticketCount: number;
+}
+
+export interface SalesPaymentRow {
+  paymentCode: string;
+  qty: number;
+  amount: number;
+  ticketCount: number;
+  share: number;
+}
+
 export interface SalesProductsSummary {
   shopId: string;
   from: string;
@@ -46,13 +73,20 @@ export interface SalesProductsSummary {
     lineCount: number;
     productCount: number;
     categoryCount: number;
+    subcategoryCount: number;
     ticketCount: number;
     avgTicketAmount: number;
   };
   products: SalesProductRow[];
   categories: SalesCategoryRow[];
+  subcategories: SalesSubcategoryRow[];
+  /** Serie diaria (importe / unidades / tickets). */
+  byDay: SalesDayRow[];
+  /** Desglose por forma de pago POS. */
+  byPayment: SalesPaymentRow[];
   filterOptions: {
     categories: string[];
+    subcategories: string[];
     paymentCodes: string[];
   };
 }
@@ -97,6 +131,7 @@ export class SalesProductsAnalyticsService {
       .select('l.productCode', 'productCode')
       .addSelect('l.productName', 'productName')
       .addSelect('MAX(l.category)', 'category')
+      .addSelect('MAX(l.subcategory)', 'subcategory')
       .addSelect('SUM(l.qty)', 'qty')
       .addSelect('SUM(l.amount)', 'amount')
       .addSelect('COUNT(DISTINCT t.id)', 'ticketCount')
@@ -116,6 +151,19 @@ export class SalesProductsAnalyticsService {
       .orderBy('amount', 'DESC')
       .getRawMany();
 
+    const subcategoryRaw = await base
+      .clone()
+      .select("COALESCE(NULLIF(TRIM(l.category), ''), 'Sin rubro')", 'category')
+      .addSelect("COALESCE(NULLIF(TRIM(l.subcategory), ''), 'Sin subrubro')", 'subcategory')
+      .addSelect('COUNT(DISTINCT CONCAT(COALESCE(l.productCode, \'\'), \'|\', COALESCE(l.productName, \'\')))', 'productCount')
+      .addSelect('SUM(l.qty)', 'qty')
+      .addSelect('SUM(l.amount)', 'amount')
+      .addSelect('COUNT(DISTINCT t.id)', 'ticketCount')
+      .groupBy("COALESCE(NULLIF(TRIM(l.category), ''), 'Sin rubro')")
+      .addGroupBy("COALESCE(NULLIF(TRIM(l.subcategory), ''), 'Sin subrubro')")
+      .orderBy('amount', 'DESC')
+      .getRawMany();
+
     const totalsRaw = await base
       .clone()
       .select('SUM(l.qty)', 'qty')
@@ -123,6 +171,26 @@ export class SalesProductsAnalyticsService {
       .addSelect('COUNT(l.id)', 'lineCount')
       .addSelect('COUNT(DISTINCT t.id)', 'ticketCount')
       .getRawOne();
+
+    const dayRaw = await base
+      .clone()
+      .select('t.businessDate', 'date')
+      .addSelect('SUM(l.qty)', 'qty')
+      .addSelect('SUM(l.amount)', 'amount')
+      .addSelect('COUNT(DISTINCT t.id)', 'ticketCount')
+      .groupBy('t.businessDate')
+      .orderBy('t.businessDate', 'ASC')
+      .getRawMany();
+
+    const paymentRaw = await base
+      .clone()
+      .select("COALESCE(NULLIF(TRIM(t.paymentCode), ''), 'Sin pago')", 'paymentCode')
+      .addSelect('SUM(l.qty)', 'qty')
+      .addSelect('SUM(l.amount)', 'amount')
+      .addSelect('COUNT(DISTINCT t.id)', 'ticketCount')
+      .groupBy("COALESCE(NULLIF(TRIM(t.paymentCode), ''), 'Sin pago')")
+      .orderBy('amount', 'DESC')
+      .getRawMany();
 
     const totalAmount = n(totalsRaw?.amount);
     const ticketCount = n(totalsRaw?.ticketCount);
@@ -134,6 +202,7 @@ export class SalesProductsAnalyticsService {
         productCode: r.productCode ?? null,
         productName: r.productName ?? null,
         category: r.category ?? null,
+        subcategory: r.subcategory ?? null,
         qty: n(r.qty),
         amount,
         ticketCount: tc,
@@ -154,6 +223,37 @@ export class SalesProductsAnalyticsService {
       };
     });
 
+    const subcategories: SalesSubcategoryRow[] = subcategoryRaw.map((r) => {
+      const amount = n(r.amount);
+      return {
+        category: String(r.category ?? 'Sin rubro'),
+        subcategory: String(r.subcategory ?? 'Sin subrubro'),
+        productCount: n(r.productCount),
+        qty: n(r.qty),
+        amount,
+        ticketCount: n(r.ticketCount),
+        share: totalAmount > 0 ? amount / totalAmount : 0,
+      };
+    });
+
+    const byDay: SalesDayRow[] = dayRaw.map((r) => ({
+      date: String(r.date).slice(0, 10),
+      qty: n(r.qty),
+      amount: n(r.amount),
+      ticketCount: n(r.ticketCount),
+    }));
+
+    const byPayment: SalesPaymentRow[] = paymentRaw.map((r) => {
+      const amount = n(r.amount);
+      return {
+        paymentCode: String(r.paymentCode ?? 'Sin pago'),
+        qty: n(r.qty),
+        amount,
+        ticketCount: n(r.ticketCount),
+        share: totalAmount > 0 ? amount / totalAmount : 0,
+      };
+    });
+
     const filterOptions = await this.filterOptions(shopId, filters.from, filters.to);
 
     return {
@@ -166,11 +266,15 @@ export class SalesProductsAnalyticsService {
         lineCount: n(totalsRaw?.lineCount),
         productCount: products.length,
         categoryCount: categories.filter((c) => c.category !== 'Sin rubro').length,
+        subcategoryCount: subcategories.filter((s) => s.subcategory !== 'Sin subrubro').length,
         ticketCount,
         avgTicketAmount: ticketCount > 0 ? totalAmount / ticketCount : 0,
       },
       products,
       categories,
+      subcategories,
+      byDay,
+      byPayment,
       filterOptions,
     };
   }
@@ -185,7 +289,7 @@ export class SalesProductsAnalyticsService {
       .orderBy('p.productName', 'ASC');
     if (q?.trim()) {
       qb.andWhere(
-        '(p.productName LIKE :q OR p.productCode LIKE :q OR p.category LIKE :q)',
+        '(p.productName LIKE :q OR p.productCode LIKE :q OR p.category LIKE :q OR p.subcategory LIKE :q)',
         { q: `%${q.trim()}%` },
       );
     }
@@ -220,45 +324,95 @@ export class SalesProductsAnalyticsService {
     user: AuthUser,
     shopId: string,
     id: string,
-    dto: { productName?: string | null; category?: string | null; active?: boolean },
+    dto: {
+      productName?: string | null;
+      category?: string | null;
+      subcategory?: string | null;
+      categoryId?: string | null;
+      subcategoryId?: string | null;
+      active?: boolean;
+    },
   ) {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.products.findOne({ where: { id, shopId } });
     if (!row) throw new NotFoundException('Producto no encontrado');
 
     if (dto.productName !== undefined) row.productName = dto.productName;
-    if (dto.category !== undefined) row.category = dto.category?.trim() || null;
     if (dto.active !== undefined) row.active = dto.active;
+
+    // Prefer IDs when provided; sync denormalized names.
+    if (dto.categoryId !== undefined || dto.subcategoryId !== undefined) {
+      if (dto.categoryId !== undefined) row.categoryId = dto.categoryId || null;
+      if (dto.subcategoryId !== undefined) row.subcategoryId = dto.subcategoryId || null;
+
+      if (row.categoryId) {
+        const cat = await this.products.query(
+          `SELECT name FROM pos_categories WHERE id = ? AND shopId = ? LIMIT 1`,
+          [row.categoryId, shopId],
+        );
+        row.category = cat?.[0]?.name ?? null;
+      } else if (dto.categoryId === null) {
+        row.category = null;
+      }
+
+      if (row.subcategoryId) {
+        const sub = await this.products.query(
+          `SELECT name, categoryId FROM pos_subcategories WHERE id = ? AND shopId = ? LIMIT 1`,
+          [row.subcategoryId, shopId],
+        );
+        row.subcategory = sub?.[0]?.name ?? null;
+        if (sub?.[0]?.categoryId && !row.categoryId) {
+          row.categoryId = sub[0].categoryId;
+          const cat = await this.products.query(
+            `SELECT name FROM pos_categories WHERE id = ? AND shopId = ? LIMIT 1`,
+            [row.categoryId, shopId],
+          );
+          row.category = cat?.[0]?.name ?? row.category;
+        }
+      } else if (dto.subcategoryId === null) {
+        row.subcategory = null;
+      }
+    } else {
+      if (dto.category !== undefined) {
+        row.category = dto.category?.trim() || null;
+        row.categoryId = null;
+      }
+      if (dto.subcategory !== undefined) {
+        row.subcategory = dto.subcategory?.trim() || null;
+        row.subcategoryId = null;
+      }
+    }
+
     await this.products.save(row);
 
-    // Backfill categoría en líneas históricas del mismo código
-    if (dto.category !== undefined) {
-      await this.lines.query(
-        `UPDATE pos_sale_ticket_lines l
-         INNER JOIN pos_sale_tickets t ON t.id = l.ticketId
-         SET l.category = ?
-         WHERE t.shopId = ? AND l.productCode = ? AND t.deletedAt IS NULL`,
-        [row.category, shopId, row.productCode],
-      );
-    }
+    await this.lines.query(
+      `UPDATE pos_sale_ticket_lines l
+       INNER JOIN pos_sale_tickets t ON t.id = l.ticketId
+       SET l.category = ?, l.subcategory = ?
+       WHERE t.shopId = ? AND l.productCode = ? AND t.deletedAt IS NULL`,
+      [row.category, row.subcategory, shopId, row.productCode],
+    );
 
     return row;
   }
 
-  /** Upsert catálogo y devolver mapa código → rubro. */
+  /** Upsert catálogo y devolver mapa código → {category, subcategory}. */
   async upsertFromLines(
     shopId: string,
     items: Array<{ productCode: string | null; productName: string | null }>,
-  ): Promise<Map<string, string | null>> {
-    const map = new Map<string, string | null>();
+  ): Promise<Map<string, { category: string | null; subcategory: string | null }>> {
+    const map = new Map<string, { category: string | null; subcategory: string | null }>();
     const byCode = new Map<string, { productCode: string; productName: string | null }>();
 
     for (const item of items) {
-      const code = (item.productCode || item.productName || '').trim();
+        const code = (item.productCode || item.productName || '').trim();
       if (!code) continue;
-      if (!byCode.has(code)) {
-        byCode.set(code, {
-          productCode: code,
+      // Prefer numeric Restosoft codes without trailing .0
+      const normalized =
+        /^\d+\.0+$/.test(code) ? String(parseInt(code, 10)) : code.replace(/\.0+$/, '');
+      if (!byCode.has(normalized)) {
+        byCode.set(normalized, {
+          productCode: normalized,
           productName: item.productName?.trim() || item.productCode?.trim() || null,
         });
       }
@@ -282,22 +436,31 @@ export class SalesProductsAnalyticsService {
           row.productName = meta.productName;
           toSave.push(row);
         }
-        map.set(code, row.category ?? null);
+        map.set(code, {
+          category: row.category ?? null,
+          subcategory: row.subcategory ?? null,
+        });
       } else {
         row = this.products.create({
           shopId,
           productCode: code,
           productName: meta.productName,
           category: null,
+          subcategory: null,
           active: true,
         });
         toSave.push(row);
-        map.set(code, null);
+        map.set(code, { category: null, subcategory: null });
       }
     }
     if (toSave.length) {
       const saved = await this.products.save(toSave);
-      for (const s of saved) map.set(s.productCode, s.category ?? null);
+      for (const s of saved) {
+        map.set(s.productCode, {
+          category: s.category ?? null,
+          subcategory: s.subcategory ?? null,
+        });
+      }
     }
     return map;
   }
@@ -315,6 +478,7 @@ export class SalesProductsAnalyticsService {
       { header: 'Código', key: 'code', width: 14 },
       { header: 'Plato', key: 'name', width: 36 },
       { header: 'Rubro', key: 'category', width: 20 },
+      { header: 'Subrubro', key: 'subcategory', width: 20 },
       { header: 'Cantidad', key: 'qty', width: 12 },
       { header: 'Importe', key: 'amount', width: 14 },
       { header: 'Tickets', key: 'tickets', width: 10 },
@@ -325,6 +489,7 @@ export class SalesProductsAnalyticsService {
         code: p.productCode,
         name: p.productName,
         category: p.category ?? 'Sin rubro',
+        subcategory: p.subcategory ?? 'Sin subrubro',
         qty: p.qty,
         amount: p.amount,
         tickets: p.ticketCount,
@@ -356,6 +521,30 @@ export class SalesProductsAnalyticsService {
     wsC.getColumn('amount').numFmt = moneyFmt;
     wsC.getColumn('share').numFmt = pctFmt;
 
+    const wsS = wb.addWorksheet('Subrubros');
+    wsS.columns = [
+      { header: 'Rubro', key: 'category', width: 20 },
+      { header: 'Subrubro', key: 'subcategory', width: 24 },
+      { header: 'Platos', key: 'products', width: 10 },
+      { header: 'Cantidad', key: 'qty', width: 12 },
+      { header: 'Importe', key: 'amount', width: 14 },
+      { header: 'Tickets', key: 'tickets', width: 10 },
+      { header: '%', key: 'share', width: 10 },
+    ];
+    for (const s of summary.subcategories) {
+      wsS.addRow({
+        category: s.category,
+        subcategory: s.subcategory,
+        products: s.productCount,
+        qty: s.qty,
+        amount: s.amount,
+        tickets: s.ticketCount,
+        share: s.share,
+      });
+    }
+    wsS.getColumn('amount').numFmt = moneyFmt;
+    wsS.getColumn('share').numFmt = pctFmt;
+
     const wsT = wb.addWorksheet('Totales');
     wsT.addRow(['Desde', summary.from]);
     wsT.addRow(['Hasta', summary.to]);
@@ -364,9 +553,47 @@ export class SalesProductsAnalyticsService {
     wsT.addRow(['Tickets', summary.totals.ticketCount]);
     wsT.addRow(['Platos distintos', summary.totals.productCount]);
     wsT.addRow(['Rubros', summary.totals.categoryCount]);
+    wsT.addRow(['Subrubros', summary.totals.subcategoryCount]);
     wsT.addRow(['Ticket promedio', summary.totals.avgTicketAmount]);
     wsT.getCell('B3').numFmt = moneyFmt;
-    wsT.getCell('B8').numFmt = moneyFmt;
+    wsT.getCell('B9').numFmt = moneyFmt;
+
+    const wsD = wb.addWorksheet('Por día');
+    wsD.columns = [
+      { header: 'Fecha', key: 'date', width: 14 },
+      { header: 'Cantidad', key: 'qty', width: 12 },
+      { header: 'Importe', key: 'amount', width: 14 },
+      { header: 'Tickets', key: 'tickets', width: 10 },
+    ];
+    for (const d of summary.byDay) {
+      wsD.addRow({
+        date: d.date,
+        qty: d.qty,
+        amount: d.amount,
+        tickets: d.ticketCount,
+      });
+    }
+    wsD.getColumn('amount').numFmt = moneyFmt;
+
+    const wsPay = wb.addWorksheet('Por pago');
+    wsPay.columns = [
+      { header: 'Forma de pago', key: 'payment', width: 20 },
+      { header: 'Cantidad', key: 'qty', width: 12 },
+      { header: 'Importe', key: 'amount', width: 14 },
+      { header: 'Tickets', key: 'tickets', width: 10 },
+      { header: '%', key: 'share', width: 10 },
+    ];
+    for (const p of summary.byPayment) {
+      wsPay.addRow({
+        payment: p.paymentCode,
+        qty: p.qty,
+        amount: p.amount,
+        tickets: p.ticketCount,
+        share: p.share,
+      });
+    }
+    wsPay.getColumn('amount').numFmt = moneyFmt;
+    wsPay.getColumn('share').numFmt = pctFmt;
 
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());
     return {
@@ -381,7 +608,7 @@ export class SalesProductsAnalyticsService {
   ) {
     if (filters.q?.trim()) {
       qb.andWhere(
-        '(l.productName LIKE :q OR l.productCode LIKE :q OR l.category LIKE :q)',
+        '(l.productName LIKE :q OR l.productCode LIKE :q OR l.category LIKE :q OR l.subcategory LIKE :q)',
         { q: `%${filters.q.trim()}%` },
       );
     }
@@ -390,6 +617,15 @@ export class SalesProductsAnalyticsService {
         qb.andWhere("(l.category IS NULL OR TRIM(l.category) = '')");
       } else {
         qb.andWhere('l.category = :category', { category: filters.category.trim() });
+      }
+    }
+    if (filters.subcategory?.trim()) {
+      if (filters.subcategory.trim() === 'Sin subrubro') {
+        qb.andWhere("(l.subcategory IS NULL OR TRIM(l.subcategory) = '')");
+      } else {
+        qb.andWhere('l.subcategory = :subcategory', {
+          subcategory: filters.subcategory.trim(),
+        });
       }
     }
     if (filters.paymentCode?.trim()) {
@@ -416,6 +652,17 @@ export class SalesProductsAnalyticsService {
       .orderBy('category', 'ASC')
       .getRawMany();
 
+    const subs = await this.lines
+      .createQueryBuilder('l')
+      .innerJoin('l.ticket', 't')
+      .select("DISTINCT COALESCE(NULLIF(TRIM(l.subcategory), ''), 'Sin subrubro')", 'subcategory')
+      .where('t.shopId = :shopId', { shopId })
+      .andWhere('t.active = 1')
+      .andWhere('l.active = 1')
+      .andWhere('t.businessDate BETWEEN :from AND :to', { from, to })
+      .orderBy('subcategory', 'ASC')
+      .getRawMany();
+
     const pays = await this.lines
       .createQueryBuilder('l')
       .innerJoin('l.ticket', 't')
@@ -431,6 +678,7 @@ export class SalesProductsAnalyticsService {
 
     return {
       categories: cats.map((c) => String(c.category)),
+      subcategories: subs.map((s) => String(s.subcategory)),
       paymentCodes: pays.map((p) => String(p.paymentCode)),
     };
   }
@@ -447,6 +695,7 @@ export function parseSalesProductsFilters(
     to,
     q: query.q?.trim() || null,
     category: query.category?.trim() || null,
+    subcategory: query.subcategory?.trim() || null,
     paymentCode: query.paymentCode?.trim() || null,
     salesSystemId: query.salesSystemId?.trim() || null,
   };

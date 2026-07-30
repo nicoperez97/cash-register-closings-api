@@ -18,6 +18,11 @@ export type AuthUser = {
   shopRoles: Record<string, string>;
   /** Cuentas contables asociadas por local (N:N). */
   shopAccountIds: Record<string, string[]>;
+  /** Permisos efectivos por local (expandido desde modulePermissions). */
+  shopPermissions: Record<string, Permission[]>;
+  /** Niveles de módulo por local (para UI admin). */
+  shopModulePermissions: Record<string, Record<string, string>>;
+  /** Unión de permisos (compat / admin global). */
   permissions: Permission[];
 };
 

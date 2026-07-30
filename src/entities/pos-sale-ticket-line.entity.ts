@@ -17,6 +17,10 @@ export class PosSaleTicketLine extends BaseEntity {
   @Column({ type: 'varchar', length: 128, nullable: true })
   category?: string | null;
 
+  /** Subrubro denormalizado desde catálogo. */
+  @Column({ type: 'varchar', length: 128, nullable: true })
+  subcategory?: string | null;
+
   @Column({ type: 'decimal', precision: 12, scale: 3, default: 0 })
   qty: string;
 

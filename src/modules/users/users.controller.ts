@@ -32,6 +32,10 @@ class CreateUserDto {
   @ApiProperty() @IsString() @MinLength(4) password: string;
   @ApiProperty({ enum: GlobalRole }) @IsEnum(GlobalRole) globalRole: GlobalRole;
   @ApiPropertyOptional({ type: [String] }) @IsOptional() shopIds?: string[];
+  @ApiPropertyOptional({ enum: GlobalRole }) @IsOptional() @IsEnum(GlobalRole) shopRole?: GlobalRole;
+  @ApiPropertyOptional({ type: 'object', additionalProperties: { type: 'string' } })
+  @IsOptional()
+  modulePermissions?: Record<string, string> | null;
   @ApiPropertyOptional({ type: [String] })
   @IsOptional()
   @IsArray()
@@ -52,6 +56,9 @@ class UpdateUserDto {
   @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
   @ApiPropertyOptional({ type: [String] }) @IsOptional() shopIds?: string[];
   @ApiPropertyOptional({ enum: GlobalRole }) @IsOptional() @IsEnum(GlobalRole) shopRole?: GlobalRole;
+  @ApiPropertyOptional({ type: 'object', additionalProperties: { type: 'string' } })
+  @IsOptional()
+  modulePermissions?: Record<string, string> | null;
   @ApiPropertyOptional({ type: [String] })
   @IsOptional()
   @IsArray()

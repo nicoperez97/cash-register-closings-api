@@ -14,10 +14,15 @@ import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
 import { AuthUser } from '../../common/decorators';
 import { GlobalRole } from '../../common/enums';
 import { isGlobalAdmin } from '../../common/guards';
+import {
+  deriveModulesFromRole,
+  ModulePermissionsMap,
+  sanitizeModulePermissions,
+} from '../../common/module-permissions';
 
 const SHOP_ADMIN_ROLES = new Set([GlobalRole.OWNER, GlobalRole.ADMIN]);
 
-/** Roles que un admin de local puede asignar. */
+/** Roles que un admin de local puede asignar como tipo de cuenta. */
 const ASSIGNABLE_BY_SHOP_ADMIN = new Set([
   GlobalRole.MANAGER,
   GlobalRole.CASHIER,
@@ -31,6 +36,8 @@ export class CreateUserBody {
   password: string;
   globalRole: GlobalRole;
   shopIds?: string[];
+  shopRole?: GlobalRole;
+  modulePermissions?: Record<string, string> | null;
   ledgerAccountIds?: string[] | null;
   /** Compat 1 cuenta. */
   ledgerAccountId?: string | null;
@@ -44,6 +51,7 @@ export class UpdateUserBody {
   active?: boolean;
   shopIds?: string[];
   shopRole?: GlobalRole;
+  modulePermissions?: Record<string, string> | null;
   ledgerAccountIds?: string[] | null;
   ledgerAccountId?: string | null;
 }
@@ -59,12 +67,13 @@ export class UsersService {
     private readonly accountLinks: Repository<LedgerAccountUser>,
   ) {}
 
-  /** Admin global o admin/owner del local. */
+  /** Admin global, permiso users.manage, o admin/owner del local. */
   assertShopUserAdmin(user: AuthUser, shopId: string) {
     if (isGlobalAdmin(user.globalRole as GlobalRole)) return;
     if (!user.shopIds.includes(shopId)) {
       throw new ForbiddenException('Sin acceso a este local');
     }
+    if (user.shopPermissions?.[shopId]?.includes('users.manage')) return;
     const role = (user.shopRoles?.[shopId] ?? user.globalRole) as GlobalRole;
     if (SHOP_ADMIN_ROLES.has(role)) return;
     throw new ForbiddenException('Solo un administrador del local puede gestionar usuarios');
@@ -74,6 +83,7 @@ export class UsersService {
     if (isGlobalAdmin(user.globalRole as GlobalRole)) return true;
     if (user.permissions.includes('users.manage')) return true;
     return user.shopIds.some((id) => {
+      if (user.shopPermissions?.[id]?.includes('users.manage')) return true;
       const role = (user.shopRoles?.[id] ?? user.globalRole) as GlobalRole;
       return SHOP_ADMIN_ROLES.has(role);
     });
@@ -82,6 +92,7 @@ export class UsersService {
   managedShopIds(user: AuthUser): string[] | null {
     if (isGlobalAdmin(user.globalRole as GlobalRole)) return null; // all
     return user.shopIds.filter((id) => {
+      if (user.shopPermissions?.[id]?.includes('users.manage')) return true;
       const role = (user.shopRoles?.[id] ?? user.globalRole) as GlobalRole;
       return SHOP_ADMIN_ROLES.has(role);
     });
@@ -148,6 +159,7 @@ export class UsersService {
       return {
         ...dto,
         shopRole: link?.shopRole ?? u.globalRole,
+        modulePermissions: this.effectiveModulesForLink(link, u.globalRole),
         ledgerAccountIds,
         ledgerAccountNames,
         ledgerAccountId: ledgerAccountIds[0] ?? null,
@@ -171,6 +183,8 @@ export class UsersService {
     }
 
     this.assertAssignableRole(actor, dto.globalRole);
+    const allowUsersModule = isGlobalAdmin(actor.globalRole as GlobalRole);
+    const modules = this.resolveIncomingModules(actor, dto, allowUsersModule);
 
     const email = dto.email.toLowerCase().trim();
     const exists = await this.users.findOne({ where: { email } });
@@ -192,7 +206,10 @@ export class UsersService {
         this.userShops.create({
           userId: user.id,
           shopId,
-          shopRole: dto.globalRole,
+          shopRole: dto.shopRole ?? dto.globalRole,
+          modulePermissions: isGlobalAdmin(dto.globalRole)
+            ? null
+            : (modules as Record<string, string>),
         }),
       );
     }
@@ -260,6 +277,12 @@ export class UsersService {
 
     await this.users.save(user);
 
+    const allowUsersModule = isGlobalAdmin(actor.globalRole as GlobalRole);
+    const modulesIncoming =
+      dto.modulePermissions !== undefined
+        ? this.resolveIncomingModules(actor, dto, allowUsersModule)
+        : undefined;
+
     if (dto.shopIds) {
       const nextIds = [...new Set(dto.shopIds)];
       for (const sid of nextIds) {
@@ -283,10 +306,21 @@ export class UsersService {
                 userId: id,
                 shopId: sid,
                 shopRole: dto.shopRole ?? user.globalRole,
+                modulePermissions: isGlobalAdmin(user.globalRole)
+                  ? null
+                  : ((modulesIncoming ??
+                      deriveModulesFromRole(
+                        (dto.shopRole ?? user.globalRole) as GlobalRole,
+                      )) as Record<string, string>),
               }),
             );
-          } else if (dto.shopRole) {
-            exists.shopRole = dto.shopRole;
+          } else {
+            if (dto.shopRole) exists.shopRole = dto.shopRole;
+            if (modulesIncoming !== undefined) {
+              exists.modulePermissions = isGlobalAdmin(user.globalRole)
+                ? null
+                : (modulesIncoming as Record<string, string>);
+            }
             await this.userShops.save(exists);
           }
         }
@@ -298,18 +332,39 @@ export class UsersService {
               userId: id,
               shopId: sid,
               shopRole: dto.shopRole ?? user.globalRole,
+              modulePermissions: isGlobalAdmin(user.globalRole)
+                ? null
+                : ((modulesIncoming ??
+                    deriveModulesFromRole(
+                      (dto.shopRole ?? user.globalRole) as GlobalRole,
+                    )) as Record<string, string>),
             }),
           );
         }
       }
-    } else if (shopId && dto.shopRole) {
+    } else if (shopId && (dto.shopRole || modulesIncoming !== undefined)) {
       const link = await this.userShops.findOne({ where: { userId: id, shopId } });
       if (link) {
-        link.shopRole = dto.shopRole;
+        if (dto.shopRole) link.shopRole = dto.shopRole;
+        if (modulesIncoming !== undefined) {
+          link.modulePermissions = isGlobalAdmin(user.globalRole)
+            ? null
+            : (modulesIncoming as Record<string, string>);
+        }
         await this.userShops.save(link);
       } else {
         await this.userShops.save(
-          this.userShops.create({ userId: id, shopId, shopRole: dto.shopRole }),
+          this.userShops.create({
+            userId: id,
+            shopId,
+            shopRole: dto.shopRole ?? user.globalRole,
+            modulePermissions: isGlobalAdmin(user.globalRole)
+              ? null
+              : ((modulesIncoming ??
+                  deriveModulesFromRole(
+                    (dto.shopRole ?? user.globalRole) as GlobalRole,
+                  )) as Record<string, string>),
+          }),
         );
       }
     }
@@ -347,11 +402,46 @@ export class UsersService {
     return {
       ...dto,
       shopRole: link?.shopRole ?? u.globalRole,
+      modulePermissions: this.effectiveModulesForLink(link, u.globalRole),
       ledgerAccountIds: accountIds,
       ledgerAccountNames: names,
       ledgerAccountId: accountIds[0] ?? null,
       ledgerAccountName: names.join(', ') || null,
     };
+  }
+
+  private effectiveModulesForLink(
+    link: UserShop | undefined,
+    globalRole: GlobalRole,
+  ): Record<string, string> {
+    if (isGlobalAdmin(globalRole)) {
+      return deriveModulesFromRole(GlobalRole.OWNER) as Record<string, string>;
+    }
+    // null = legacy; objeto (aunque vacío) = explícito sin módulos.
+    if (link?.modulePermissions != null) {
+      return link.modulePermissions;
+    }
+    const role = (link?.shopRole ?? globalRole) as GlobalRole;
+    return deriveModulesFromRole(role) as Record<string, string>;
+  }
+
+  private resolveIncomingModules(
+    actor: AuthUser,
+    dto: { globalRole?: GlobalRole; shopRole?: GlobalRole; modulePermissions?: Record<string, string> | null },
+    allowUsersModule: boolean,
+  ): ModulePermissionsMap {
+    if (dto.globalRole && isGlobalAdmin(dto.globalRole)) {
+      return {};
+    }
+    // Explícito (incluso {} = sin módulos): no caer al preset del rol.
+    if (dto.modulePermissions !== undefined && dto.modulePermissions !== null) {
+      if (!allowUsersModule && dto.modulePermissions['users'] === 'manage') {
+        throw new ForbiddenException('No podés asignar gestión de usuarios');
+      }
+      return sanitizeModulePermissions(dto.modulePermissions, { allowUsersModule });
+    }
+    const role = (dto.shopRole ?? dto.globalRole ?? GlobalRole.CASHIER) as GlobalRole;
+    return deriveModulesFromRole(role);
   }
 
   private normalizeAccountIds(dto: {
