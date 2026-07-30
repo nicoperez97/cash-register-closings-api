@@ -1,21 +1,18 @@
 #!/usr/bin/env bash
 # Deploy del backend en la instancia Lightsail.
-# git pull + docker compose build/up. Pensado para invocarse a mano por ahora
-# (via SSH) o desde un systemd timer que corra este mismo script.
+# git pull + docker compose build/up. Se invoca via SSH:
+# manualmente, desde el systemd timer, o desde GitHub Actions (deploy.yml)
 set -euo pipefail
 
 cd /opt/crc/api
 git fetch origin main
 git reset --hard origin/main
 
-cd /opt/crc
-if [ ! -f docker-compose.yml ]; then
-cp api/docker-compose.yml .
-fi
-if [ ! -d nginx ]; then
-cp -r api/nginx .
-fi
+mkdir -p /opt/crc/nginx
+cp -f /opt/crc/api/docker-compose.yml /opt/crc/docker-compose.yml
+cp -rf /opt/crc/api/nginx/. /opt/crc/nginx/
 
+cd /opt/crc
 docker compose pull --ignore-pull-failures || true
 docker compose build api
 docker compose up -d --remove-orphans
