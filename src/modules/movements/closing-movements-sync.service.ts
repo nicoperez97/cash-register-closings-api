@@ -25,13 +25,12 @@ export class ClosingMovementsSyncService {
   ) {}
 
   async syncFromClosing(closing: CashClosing) {
-    await this.catalogSeed.ensureShopCatalogs(closing.shopId);
-
     await this.movements.delete({ closingId: closing.id });
 
     const accounts = await this.accounts.find({
       where: { shopId: closing.shopId, active: true },
     });
+    if (!accounts.length) return;
     const byCode = new Map(accounts.map((a) => [a.code, a]));
     const byMethod = new Map(
       accounts

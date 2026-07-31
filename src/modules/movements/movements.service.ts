@@ -78,7 +78,6 @@ export class MovementsService {
 
   async list(user: AuthUser, shopId: string, filters: MovementFilters = {}) {
     this.shops.assertShopAccess(user, shopId);
-    await this.catalogSeed.ensureShopCatalogs(shopId);
 
     const qb = this.movements
       .createQueryBuilder('m')

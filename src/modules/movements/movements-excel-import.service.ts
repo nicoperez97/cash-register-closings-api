@@ -115,14 +115,12 @@ export class MovementsExcelImportService {
 
   async preview(user: AuthUser, shopId: string, file: Express.Multer.File) {
     this.shops.assertShopAccess(user, shopId);
-    await this.catalogSeed.ensureShopCatalogs(shopId);
     const drafts = await this.parseWorkbook(file);
     return this.enrich(shopId, drafts);
   }
 
   async commit(user: AuthUser, shopId: string, file: Express.Multer.File) {
     this.shops.assertShopAccess(user, shopId);
-    await this.catalogSeed.ensureShopCatalogs(shopId);
     const items = await this.enrich(shopId, await this.parseWorkbook(file));
     const valid = items.filter((i) => i.valid && !i.alreadyExists);
     const skipped = items.filter((i) => i.alreadyExists);
