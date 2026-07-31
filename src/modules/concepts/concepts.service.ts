@@ -32,7 +32,6 @@ export class ConceptsService {
 
   async list(user: AuthUser, shopId: string, kind?: ConceptKind) {
     this.shops.assertShopAccess(user, shopId);
-    await this.catalogSeed.ensureShopCatalogs(shopId);
     const where: { shopId: string; active: boolean; kind?: ConceptKind } = {
       shopId,
       active: true,

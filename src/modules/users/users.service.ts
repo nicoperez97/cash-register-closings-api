@@ -13,7 +13,8 @@ import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
 import { AuthUser } from '../../common/decorators';
 import { GlobalRole } from '../../common/enums';
-import { isGlobalAdmin } from '../../common/guards';
+import { isGlobalAdmin, isSuperAdmin } from '../../common/guards';
+import { markDeletedUnique } from '../../common/soft-delete.util';
 import {
   deriveModulesFromRole,
   ModulePermissionsMap,
@@ -381,6 +382,28 @@ export class UsersService {
     }
 
     return this.one(actor, id, shopId);
+  }
+
+  /** Soft-delete permanente: solo Super admin. */
+  async remove(actor: AuthUser, id: string) {
+    if (!isSuperAdmin(actor.globalRole as GlobalRole)) {
+      throw new ForbiddenException('Solo un super admin puede eliminar usuarios');
+    }
+    if (actor.id === id) {
+      throw new BadRequestException('No podés eliminar tu propio usuario');
+    }
+    const user = await this.users.findOne({ where: { id } });
+    if (!user) throw new NotFoundException('Usuario no encontrado');
+    if (user.globalRole === GlobalRole.OWNER && actor.id !== id) {
+      // permitir borrar otro OWNER solo si el actor es OWNER (ya validado)
+    }
+    await this.accountLinks.delete({ userId: id });
+    await this.userShops.delete({ userId: id });
+    user.active = false;
+    user.email = markDeletedUnique(user.email, user.id, 160);
+    await this.users.save(user);
+    await this.users.softRemove(user);
+    return { ok: true };
   }
 
   async one(actor: AuthUser, id: string, shopId?: string) {

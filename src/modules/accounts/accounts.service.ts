@@ -43,14 +43,10 @@ export class AccountsService implements OnModuleInit {
 
   async onModuleInit() {
     try {
-      const shops = await this.shopsRepo.find({ where: { active: true } });
-      for (const s of shops) {
-        await this.catalogSeed.ensureShopCatalogs(s.id);
-      }
       await this.migrateLegacyUserIds();
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.error('[AccountsService] Catalog seed failed:', err);
+      console.error('[AccountsService] Legacy userId migrate failed:', err);
     }
   }
 
@@ -110,7 +106,6 @@ export class AccountsService implements OnModuleInit {
 
   async list(user: AuthUser, shopId: string) {
     this.shops.assertShopAccess(user, shopId);
-    await this.catalogSeed.ensureShopCatalogs(shopId);
     const rows = await this.accounts.find({
       where: { shopId, active: true },
       order: { type: 'ASC', name: 'ASC' },

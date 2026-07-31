@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -115,5 +116,11 @@ export class UsersController {
     @Query('shopId') shopId?: string,
   ) {
     return this.users.update(user, id, dto, shopId);
+  }
+
+  @Delete(':id')
+  @RequirePermissions('closings.read')
+  remove(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.users.remove(user, id);
   }
 }

@@ -14,6 +14,7 @@ import { GlobalRole } from '../../common/enums';
 import { isGlobalAdmin } from '../../common/guards';
 import { normalizeLogoUrl } from '../../common/drive-url';
 import { isEntityActive } from '../../common/active.util';
+import { CatalogSeedService } from '../../common/catalog-seed.service';
 import { CreateShopDto, UpdateShopDto } from './dto/shop.dto';
 
 const SHOP_ADMIN_ROLES = new Set([
@@ -30,6 +31,7 @@ export class ShopsService {
     @InjectRepository(Shop) private readonly shops: Repository<Shop>,
     @InjectRepository(UserShop) private readonly userShops: Repository<UserShop>,
     @InjectRepository(User) private readonly users: Repository<User>,
+    private readonly catalogSeed: CatalogSeedService,
   ) {}
 
   assertShopAccess(user: AuthUser, shopId: string) {
@@ -113,6 +115,7 @@ export class ShopsService {
         active: true,
       }),
     );
+    await this.catalogSeed.ensureShopCatalogs(shop.id);
     return this.toDto(shop);
   }
 
