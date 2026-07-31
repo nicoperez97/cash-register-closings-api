@@ -8,8 +8,9 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Trigger deploy on Lightsail (SSH)
+      - name: Deploy Backend to Lightsail
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.LIGHTSAIL_HOST }}
@@ -17,4 +18,44 @@ jobs:
           key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
           port: 22
           command_timeout: 15m
-          script: echo "deploy triggered from GitHub Actions"
+
+          script: |
+            set -e
+
+            echo "========================================"
+            echo "🚀 Starting backend deployment"
+            echo "========================================"
+
+            cd /opt/crc
+
+            echo "📦 Updating API source..."
+
+            if [ -d "/opt/crc/api/.git" ]; then
+              cd /opt/crc/api
+              git fetch origin main
+              git reset --hard origin/main
+            else
+              rm -rf /opt/crc/api
+              git clone --branch main https://github.com/nicoperez97/cash-register-closings-api.git /opt/crc/api
+            fi
+
+            cd /opt/crc
+
+            echo "🐳 Rebuilding API image..."
+            sudo docker compose build --no-cache api
+
+            echo "🔄 Restarting API..."
+            sudo docker compose up -d api
+
+            echo "⏳ Waiting for API to start..."
+            sleep 10
+
+            echo "📋 Container status:"
+            sudo docker compose ps
+
+            echo "📋 API logs:"
+            sudo docker compose logs --tail=50 api
+
+            echo "========================================"
+            echo "✅ Backend deployment finished"
+            echo "========================================"
