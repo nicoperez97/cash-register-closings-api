@@ -16,6 +16,8 @@ import { normalizeLogoUrl } from '../../common/drive-url';
 import { isEntityActive } from '../../common/active.util';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
 import { CreateShopDto, UpdateShopDto } from './dto/shop.dto';
+import { PosnetType, ShopPosnet } from '../../common/posnet';
+import { randomUUID } from 'crypto';
 
 const SHOP_ADMIN_ROLES = new Set([
   GlobalRole.OWNER,
@@ -24,6 +26,7 @@ const SHOP_ADMIN_ROLES = new Set([
 ]);
 
 const HEX_COLOR = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
+const POSNET_TYPES = new Set(Object.values(PosnetType));
 
 @Injectable()
 export class ShopsService {
@@ -112,6 +115,7 @@ export class ShopsService {
         accentColor: this.normalizeAccent(dto.accentColor),
         salesSystemId: dto.salesSystemId ?? null,
         posPaymentMap: dto.posPaymentMap ?? null,
+        posnets: this.normalizePosnets(dto.posnets),
         active: true,
       }),
     );
@@ -150,9 +154,36 @@ export class ShopsService {
     if (dto.posPaymentMap !== undefined) {
       shop.posPaymentMap = dto.posPaymentMap;
     }
+    if (dto.posnets !== undefined) {
+      shop.posnets = this.normalizePosnets(dto.posnets);
+    }
 
     await this.shops.save(shop);
     return this.toDto(shop);
+  }
+
+  private normalizePosnets(
+    raw?: Array<{ id?: string; name: string; type: PosnetType | string }> | null,
+  ): ShopPosnet[] | null {
+    if (raw == null) return null;
+    if (!Array.isArray(raw)) {
+      throw new BadRequestException('posnets inválido');
+    }
+    const out: ShopPosnet[] = [];
+    for (const row of raw) {
+      const name = String(row?.name ?? '').trim();
+      const type = String(row?.type ?? '').trim() as PosnetType;
+      if (!name) throw new BadRequestException('Cada posnet necesita un nombre');
+      if (!POSNET_TYPES.has(type)) {
+        throw new BadRequestException(`Tipo de posnet inválido: ${row?.type}`);
+      }
+      out.push({
+        id: String(row?.id ?? '').trim() || randomUUID(),
+        name,
+        type,
+      });
+    }
+    return out;
   }
 
   private normalizeSlug(raw: string): string {
@@ -199,6 +230,7 @@ export class ShopsService {
       accentColor: s.accentColor ?? null,
       salesSystemId: s.salesSystemId ?? null,
       posPaymentMap: s.posPaymentMap ?? null,
+      posnets: s.posnets ?? [],
       active: isEntityActive(s.active),
     };
   }

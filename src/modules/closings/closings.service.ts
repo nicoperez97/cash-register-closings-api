@@ -22,6 +22,7 @@ import { isGlobalAdmin } from '../../common/guards';
 import { closingDateKey, markDeletedUnique } from '../../common/soft-delete.util';
 import { CreateClosingDto, UpdateClosingDto } from './dto/closing.dto';
 import { applyClosingFilters, ClosingListFilters } from './closing-filters';
+import { ClosingPosnetAmount, sumPosnetsByType } from '../../common/posnet';
 
 const n = (v?: number | string | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
@@ -94,12 +95,45 @@ export class ClosingsService implements OnModuleInit {
     return { calculatedTotal: calculated, declaredTotal: declared, difference: n(dto.posSystemAmount) - declared };
   }
 
+  /** Si hay montos por posnet, sobrescribe PVS / MP / Cuenta DNI con la suma por tipo. */
+  private applyPosnetSums(dto: Partial<CreateClosingDto>): Partial<CreateClosingDto> {
+    if (dto.posnetAmounts === undefined) return dto;
+    if (dto.posnetAmounts === null || dto.posnetAmounts.length === 0) {
+      return { ...dto, posnetAmounts: dto.posnetAmounts ?? [] };
+    }
+    const sums = sumPosnetsByType(dto.posnetAmounts as ClosingPosnetAmount[]);
+    return {
+      ...dto,
+      cardAmount: sums.cardAmount,
+      mercadoPagoAmount: sums.mercadoPagoAmount,
+      accountDniAmount: sums.accountDniAmount,
+    };
+  }
+
+  private normalizePosnetAmounts(
+    raw?: CreateClosingDto['posnetAmounts'] | ClosingPosnetAmount[] | null,
+  ): ClosingPosnetAmount[] | null {
+    if (raw == null) return null;
+    return raw.map((row) => ({
+      posnetId: String(row.posnetId),
+      name: String(row.name ?? '').trim() || 'Posnet',
+      type: row.type,
+      amount: n(row.amount),
+    }));
+  }
+
   private toDto(c: CashClosing) {
     return {
       id: c.id, shopId: c.shopId, businessDate: c.businessDate,
       posSystemAmount: n(c.posSystemAmount), cardAmount: n(c.cardAmount), cashAmount: n(c.cashAmount),
       mercadoPagoAmount: n(c.mercadoPagoAmount), deliveryAppsAmount: n(c.deliveryAppsAmount),
       transferAmount: n(c.transferAmount), accountDniAmount: n(c.accountDniAmount), otherAmount: n(c.otherAmount),
+      posnetAmounts: (c.posnetAmounts ?? []).map((p) => ({
+        posnetId: p.posnetId,
+        name: p.name,
+        type: p.type,
+        amount: n(p.amount),
+      })),
       unitsSold: c.unitsSold, coversCount: c.coversCount,
       averageTicket: c.averageTicket != null ? n(c.averageTicket) : null,
       cashLeftInRegister: n(c.cashLeftInRegister), cashPendingPickup: n(c.cashPendingPickup),
@@ -143,30 +177,39 @@ export class ClosingsService implements OnModuleInit {
     const dateKey = closingDateKey(dto.businessDate);
     const exists = await this.closings.findOne({ where: { shopId, businessDateKey: dateKey } });
     if (exists) throw new ConflictException('Ya existe un cierre para esa fecha');
-    const incomeExtras = (dto.extraLines ?? [])
+    const normalized = this.applyPosnetSums(dto);
+    const posnetAmounts = this.normalizePosnetAmounts(normalized.posnetAmounts);
+    const incomeExtras = (normalized.extraLines ?? [])
       .filter((e) => e.type === ExtraLineType.STUDENT_CASH || e.type === ExtraLineType.ADJUSTMENT)
       .reduce((s, e) => s + n(e.amount), 0);
-    const totals = this.calc(dto, incomeExtras);
-    const withdrawn = await this.resolveWithdrawnBy(shopId, dto.cashWithdrawnByUserId, dto.cashWithdrawnByName, dto.cashWithdrawnByEmployeeId);
+    const totals = this.calc(normalized, incomeExtras);
+    const withdrawn = await this.resolveWithdrawnBy(
+      shopId,
+      normalized.cashWithdrawnByUserId,
+      normalized.cashWithdrawnByName,
+      normalized.cashWithdrawnByEmployeeId,
+    );
     const closing = await this.closings.save(this.closings.create({
-      shopId, businessDate: dto.businessDate, businessDateKey: dateKey,
-      posSystemAmount: money(n(dto.posSystemAmount)), cardAmount: money(n(dto.cardAmount)),
-      cashAmount: money(n(dto.cashAmount)), mercadoPagoAmount: money(n(dto.mercadoPagoAmount)),
-      deliveryAppsAmount: money(n(dto.deliveryAppsAmount)), transferAmount: money(n(dto.transferAmount)),
-      accountDniAmount: money(n(dto.accountDniAmount)), otherAmount: money(n(dto.otherAmount)),
-      unitsSold: dto.unitsSold ?? null, coversCount: dto.coversCount ?? null,
-      averageTicket: dto.averageTicket != null ? money(dto.averageTicket) : null,
-      cashLeftInRegister: money(n(dto.cashLeftInRegister)), cashPendingPickup: money(n(dto.cashPendingPickup)),
-      cashWithdrawn: money(n(dto.cashWithdrawn)),
+      shopId, businessDate: normalized.businessDate, businessDateKey: dateKey,
+      posSystemAmount: money(n(normalized.posSystemAmount)), cardAmount: money(n(normalized.cardAmount)),
+      cashAmount: money(n(normalized.cashAmount)), mercadoPagoAmount: money(n(normalized.mercadoPagoAmount)),
+      deliveryAppsAmount: money(n(normalized.deliveryAppsAmount)), transferAmount: money(n(normalized.transferAmount)),
+      accountDniAmount: money(n(normalized.accountDniAmount)), otherAmount: money(n(normalized.otherAmount)),
+      posnetAmounts,
+      unitsSold: normalized.unitsSold ?? null, coversCount: normalized.coversCount ?? null,
+      averageTicket: normalized.averageTicket != null ? money(normalized.averageTicket) : null,
+      cashLeftInRegister: money(n(normalized.cashLeftInRegister)), cashPendingPickup: money(n(normalized.cashPendingPickup)),
+      cashWithdrawn: money(n(normalized.cashWithdrawn)),
       cashWithdrawnByUserId: withdrawn.cashWithdrawnByUserId,
       cashWithdrawnByEmployeeId: withdrawn.cashWithdrawnByEmployeeId,
       cashWithdrawnByName: withdrawn.cashWithdrawnByName,
-      tipsAmount: money(n(dto.tipsAmount)), declaredTotal: money(totals.declaredTotal),
+      tipsAmount: money(n(normalized.tipsAmount)), declaredTotal: money(totals.declaredTotal),
       calculatedTotal: money(totals.calculatedTotal), difference: money(totals.difference),
-      differenceReason: dto.differenceReason ?? null, notes: dto.notes ?? null, evidenceUrl: dto.evidenceUrl ?? null,
+      differenceReason: normalized.differenceReason ?? null, notes: normalized.notes ?? null,
+      evidenceUrl: normalized.evidenceUrl ?? null,
       status: ClosingStatus.SUBMITTED, createdByUserId: user.id, submittedAt: new Date(), active: true,
     }));
-    await this.replaceChildren(closing.id, dto);
+    await this.replaceChildren(closing.id, normalized as CreateClosingDto);
     await this.syncMovements(closing.id);
     return this.getOne(user, shopId, closing.id);
   }
@@ -184,7 +227,7 @@ export class ClosingsService implements OnModuleInit {
       });
       if (clash) throw new ConflictException('Ya existe un cierre para esa fecha');
     }
-    const merged: CreateClosingDto = {
+    const mergedRaw: CreateClosingDto = {
       businessDate: dto.businessDate ?? row.businessDate,
       posSystemAmount: dto.posSystemAmount ?? n(row.posSystemAmount),
       cardAmount: dto.cardAmount ?? n(row.cardAmount), cashAmount: dto.cashAmount ?? n(row.cashAmount),
@@ -193,6 +236,7 @@ export class ClosingsService implements OnModuleInit {
       transferAmount: dto.transferAmount ?? n(row.transferAmount),
       accountDniAmount: dto.accountDniAmount ?? n(row.accountDniAmount),
       otherAmount: dto.otherAmount ?? n(row.otherAmount),
+      posnetAmounts: dto.posnetAmounts,
       unitsSold: dto.unitsSold !== undefined ? dto.unitsSold : row.unitsSold ?? undefined,
       coversCount: dto.coversCount !== undefined ? dto.coversCount : row.coversCount ?? undefined,
       averageTicket: dto.averageTicket !== undefined ? dto.averageTicket : row.averageTicket != null ? n(row.averageTicket) : undefined,
@@ -207,6 +251,13 @@ export class ClosingsService implements OnModuleInit {
       notes: dto.notes ?? row.notes ?? undefined, evidenceUrl: dto.evidenceUrl ?? row.evidenceUrl ?? undefined,
       expenses: dto.expenses, extraLines: dto.extraLines,
     };
+    const merged = (
+      dto.posnetAmounts !== undefined ? this.applyPosnetSums(mergedRaw) : mergedRaw
+    ) as CreateClosingDto;
+    const posnetAmounts =
+      dto.posnetAmounts !== undefined
+        ? this.normalizePosnetAmounts(merged.posnetAmounts)
+        : row.posnetAmounts ?? null;
     const incomeExtras = (merged.extraLines ?? row.extraLines ?? [])
       .map((e: any) => ({ type: e.type, amount: n(e.amount) }))
       .filter((e) => e.type === ExtraLineType.STUDENT_CASH || e.type === ExtraLineType.ADJUSTMENT)
@@ -220,6 +271,7 @@ export class ClosingsService implements OnModuleInit {
       cashAmount: money(n(merged.cashAmount)), mercadoPagoAmount: money(n(merged.mercadoPagoAmount)),
       deliveryAppsAmount: money(n(merged.deliveryAppsAmount)), transferAmount: money(n(merged.transferAmount)),
       accountDniAmount: money(n(merged.accountDniAmount)), otherAmount: money(n(merged.otherAmount)),
+      posnetAmounts,
       unitsSold: merged.unitsSold ?? null, coversCount: merged.coversCount ?? null,
       averageTicket: merged.averageTicket != null ? money(merged.averageTicket) : null,
       cashLeftInRegister: money(n(merged.cashLeftInRegister)), cashPendingPickup: money(n(merged.cashPendingPickup)),

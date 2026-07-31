@@ -11,6 +11,7 @@ import { BaseEntity } from './base.entity';
 import { Shop } from './shop.entity';
 import { User } from './user.entity';
 import { ClosingStatus } from '../common/enums';
+import { ClosingPosnetAmount } from '../common/posnet';
 import { ClosingExpense } from './closing-expense.entity';
 import { ClosingExtraLine } from './closing-extra-line.entity';
 
@@ -51,6 +52,10 @@ export class CashClosing extends BaseEntity {
 
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
   otherAmount: string;
+
+  /** Montos cargados por cada posnet del local (snapshot al guardar el cierre). */
+  @Column({ type: 'simple-json', nullable: true })
+  posnetAmounts?: ClosingPosnetAmount[] | null;
 
   @Column({ type: 'int', nullable: true })
   unitsSold?: number | null;

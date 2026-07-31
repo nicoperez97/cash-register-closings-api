@@ -434,6 +434,7 @@ export class AuthService implements OnModuleInit {
         logoUrl: s.logoUrl ?? null,
         accentColor: s.accentColor ?? null,
         salesSystemId: s.salesSystemId ?? null,
+        posnets: s.posnets ?? [],
       })),
     };
   }

@@ -12,6 +12,7 @@ import {
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import { ClosingStatus, ExpenseCategory, ExtraLineType } from '../../../common/enums';
+import { PosnetType } from '../../../common/posnet';
 
 export class ExpenseDto {
   @ApiProperty()
@@ -46,6 +47,25 @@ export class ExtraLineDto {
   @IsOptional()
   @IsString()
   meta?: string;
+}
+
+export class ClosingPosnetAmountDto {
+  @ApiProperty()
+  @IsString()
+  posnetId: string;
+
+  @ApiProperty()
+  @IsString()
+  name: string;
+
+  @ApiProperty({ enum: PosnetType })
+  @IsEnum(PosnetType)
+  type: PosnetType;
+
+  @ApiProperty()
+  @IsNumber()
+  @Min(0)
+  amount: number;
 }
 
 export class CreateClosingDto {
@@ -93,6 +113,16 @@ export class CreateClosingDto {
   @ValidateNested({ each: true })
   @Type(() => ExtraLineDto)
   extraLines?: ExtraLineDto[];
+
+  @ApiPropertyOptional({
+    type: [ClosingPosnetAmountDto],
+    description: 'Si se envía, PVS / Mercado Pago / Cuenta DNI se recalculan como suma por tipo',
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ClosingPosnetAmountDto)
+  posnetAmounts?: ClosingPosnetAmountDto[] | null;
 }
 
 export class UpdateClosingDto extends PartialType(CreateClosingDto) {}
