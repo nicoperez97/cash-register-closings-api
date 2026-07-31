@@ -9,6 +9,7 @@ import { Employee } from '../../entities/employee.entity';
 import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { AuthUser } from '../../common/decorators';
+import { isEntityActive } from '../../common/active.util';
 import { ShopsService } from '../shops/shops.service';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
@@ -32,20 +33,20 @@ export class EmployeesService {
       userId: e.userId ?? null,
       hireDate: e.hireDate ?? null,
       notes: e.notes ?? null,
-      active: !!e.active,
+      active: isEntityActive(e.active),
     };
   }
 
   async list(user: AuthUser, shopId: string, includeInactive = false) {
     this.shops.assertShopAccess(user, shopId);
-    const where = includeInactive
-      ? { shopId }
-      : { shopId, active: true };
     const rows = await this.employees.find({
-      where,
+      where: { shopId },
       order: { fullName: 'ASC' },
     });
-    return rows.map((r) => this.toDto(r));
+    const filtered = includeInactive
+      ? rows
+      : rows.filter((r) => isEntityActive(r.active));
+    return filtered.map((r) => this.toDto(r));
   }
 
   async one(user: AuthUser, shopId: string, id: string) {
