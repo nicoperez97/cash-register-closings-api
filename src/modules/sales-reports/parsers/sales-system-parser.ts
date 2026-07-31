@@ -1,4 +1,4 @@
-/** Campo de CashClosing al que se mapea un código de pago del POS. */
+/** Campo de PosSaleDaily / desglose de medios al que se mapea un código de pago del POS. */
 export type PosPaymentField =
   | 'cash'
   | 'card'
