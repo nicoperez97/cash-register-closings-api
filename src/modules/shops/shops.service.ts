@@ -11,7 +11,7 @@ import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { AuthUser } from '../../common/decorators';
 import { GlobalRole } from '../../common/enums';
-import { isGlobalAdmin } from '../../common/guards';
+import { isGlobalAdmin, isSuperAdmin } from '../../common/guards';
 import { normalizeLogoUrl } from '../../common/drive-url';
 import { isEntityActive } from '../../common/active.util';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
@@ -35,7 +35,7 @@ export class ShopsService {
   ) {}
 
   assertShopAccess(user: AuthUser, shopId: string) {
-    if (isGlobalAdmin(user.globalRole as GlobalRole)) return;
+    if (isSuperAdmin(user.globalRole as GlobalRole)) return;
     if (!user.shopIds.includes(shopId)) {
       throw new ForbiddenException('Sin acceso a este local');
     }
@@ -62,7 +62,7 @@ export class ShopsService {
   }
 
   async findAll(user: AuthUser) {
-    if (!isGlobalAdmin(user.globalRole as GlobalRole)) {
+    if (!isSuperAdmin(user.globalRole as GlobalRole)) {
       return this.mine(user);
     }
     const list = await this.shops.find({ order: { name: 'ASC' } });
@@ -94,8 +94,8 @@ export class ShopsService {
   }
 
   async create(user: AuthUser, dto: CreateShopDto) {
-    if (!isGlobalAdmin(user.globalRole as GlobalRole)) {
-      throw new ForbiddenException('Solo un administrador puede crear locales');
+    if (!isSuperAdmin(user.globalRole as GlobalRole)) {
+      throw new ForbiddenException('Solo un super admin puede crear locales');
     }
     const slug = this.normalizeSlug(dto.slug || dto.name);
     await this.assertSlugFree(slug);

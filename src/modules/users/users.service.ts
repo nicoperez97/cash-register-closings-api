@@ -71,10 +71,11 @@ export class UsersService {
 
   /** Admin global, permiso users.manage, o admin/owner del local. */
   assertShopUserAdmin(user: AuthUser, shopId: string) {
-    if (isGlobalAdmin(user.globalRole as GlobalRole)) return;
+    if (isSuperAdmin(user.globalRole as GlobalRole)) return;
     if (!user.shopIds.includes(shopId)) {
       throw new ForbiddenException('Sin acceso a este local');
     }
+    if (isGlobalAdmin(user.globalRole as GlobalRole)) return;
     if (user.shopPermissions?.[shopId]?.includes('users.manage')) return;
     const role = (user.shopRoles?.[shopId] ?? user.globalRole) as GlobalRole;
     if (SHOP_ADMIN_ROLES.has(role)) return;
@@ -92,7 +93,11 @@ export class UsersService {
   }
 
   managedShopIds(user: AuthUser): string[] | null {
-    if (isGlobalAdmin(user.globalRole as GlobalRole)) return null; // all
+    // Solo Super admin ve usuarios de todos los locales.
+    if (isSuperAdmin(user.globalRole as GlobalRole)) return null;
+    if (isGlobalAdmin(user.globalRole as GlobalRole)) {
+      return [...user.shopIds];
+    }
     return user.shopIds.filter((id) => {
       if (user.shopPermissions?.[id]?.includes('users.manage')) return true;
       const role = (user.shopRoles?.[id] ?? user.globalRole) as GlobalRole;

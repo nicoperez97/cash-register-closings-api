@@ -17,7 +17,7 @@ import {
   ExtraLineType,
   GlobalRole,
 } from '../../common/enums';
-import { isGlobalAdmin } from '../../common/guards';
+import { isGlobalAdmin, isSuperAdmin } from '../../common/guards';
 import { AuthUser } from '../../common/decorators';
 import {
   ALL_PERMISSIONS_LIST,
@@ -343,7 +343,8 @@ export class AuthService implements OnModuleInit {
     const role = user.globalRole;
     const links = await this.userShops.find({ where: { userId } });
     let shopIds: string[];
-    if (isGlobalAdmin(role)) {
+    // Solo Super admin ve todos los locales. ADMIN (admin de local) solo los asignados.
+    if (isSuperAdmin(role)) {
       const all = await this.shops.find({ where: { active: true } });
       shopIds = all.map((s) => s.id);
     } else {
