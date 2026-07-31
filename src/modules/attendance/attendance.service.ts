@@ -4,6 +4,7 @@ import { Between, In, Repository } from 'typeorm';
 import { AttendanceDay } from '../../entities/attendance-day.entity';
 import { Employee } from '../../entities/employee.entity';
 import { AuthUser } from '../../common/decorators';
+import { isEntityActive } from '../../common/active.util';
 import { ShopsService } from '../shops/shops.service';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
@@ -24,14 +25,20 @@ export class AttendanceService {
     return { from, to, last };
   }
 
+  private async activeEmployees(shopId: string) {
+    // Filtrar en memoria: MySQL tinyint a veces no matchea bien con `active: true` en WHERE.
+    const rows = await this.employees.find({
+      where: { shopId },
+      order: { fullName: 'ASC' },
+    });
+    return rows.filter((e) => isEntityActive(e.active));
+  }
+
   async getMonth(user: AuthUser, shopId: string, year: number, month: number) {
     this.shops.assertShopAccess(user, shopId);
     if (month < 1 || month > 12) throw new BadRequestException('Mes inválido');
     const { from, to, last } = this.monthRange(year, month);
-    const employees = await this.employees.find({
-      where: { shopId, active: true },
-      order: { fullName: 'ASC' },
-    });
+    const employees = await this.activeEmployees(shopId);
     const rows = await this.days.find({
       where: {
         shopId,
@@ -93,9 +100,11 @@ export class AttendanceService {
   ) {
     this.shops.assertShopAccess(user, shopId);
     const emp = await this.employees.findOne({
-      where: { id: dto.employeeId, shopId, active: true },
+      where: { id: dto.employeeId, shopId },
     });
-    if (!emp) throw new NotFoundException('Empleado no encontrado');
+    if (!emp || !isEntityActive(emp.active)) {
+      throw new NotFoundException('Empleado no encontrado');
+    }
 
     let row = await this.days.findOne({
       where: { employeeId: dto.employeeId, date: dto.date },

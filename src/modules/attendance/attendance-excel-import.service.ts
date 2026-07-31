@@ -1,10 +1,11 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, Between } from 'typeorm';
 import * as ExcelJS from 'exceljs';
 import { Employee } from '../../entities/employee.entity';
 import { AttendanceDay } from '../../entities/attendance-day.entity';
 import { AuthUser } from '../../common/decorators';
+import { isEntityActive } from '../../common/active.util';
 import { ShopsService } from '../shops/shops.service';
 
 export interface AttendanceImportItem {
@@ -76,6 +77,102 @@ export class AttendanceExcelImportService {
       buffer,
       filename: `plantilla-presentismo-${shop.slug || 'local'}.xlsx`,
     };
+  }
+
+  /** Exporta el presentismo del mes en el mismo formato que la plantilla de importación. */
+  async exportMonth(user: AuthUser, shopId: string, year: number, month: number) {
+    this.shops.assertShopAccess(user, shopId);
+    if (month < 1 || month > 12) {
+      throw new BadRequestException('Mes inválido');
+    }
+    const shop = await this.shops.findOne(user, shopId);
+    const from = `${year}-${String(month).padStart(2, '0')}-01`;
+    const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const to = `${year}-${String(month).padStart(2, '0')}-${String(last).padStart(2, '0')}`;
+
+    const employees = await this.employees.find({
+      where: { shopId },
+      order: { fullName: 'ASC' },
+    });
+    const rows = await this.days.find({
+      where: {
+        shopId,
+        date: Between(from, to),
+      },
+      order: { date: 'ASC' },
+    });
+    const byKey = new Map<string, AttendanceDay>();
+    for (const r of rows) {
+      byKey.set(`${r.employeeId}|${r.date}`, r);
+    }
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Cash Register Closings';
+
+    const info = wb.addWorksheet('Instrucciones');
+    info.getColumn(1).width = 96;
+    info.addRow(['Presentismo exportado']);
+    info.getRow(1).font = { bold: true, size: 13 };
+    info.addRow([`Local: ${shop.name}`]);
+    info.addRow([`Período: ${String(month).padStart(2, '0')}/${year}`]);
+    info.addRow([]);
+    info.addRow([
+      'Formato compatible con la importación: hoja "Base de datos" y "Validación de datos".',
+    ]);
+
+    const ws = wb.addWorksheet('Base de datos');
+    ws.columns = [
+      { header: 'Colaborador', key: 'name', width: 22 },
+      { header: 'Fecha', key: 'date', width: 12 },
+      { header: 'Feriado', key: 'holiday', width: 10 },
+      { header: 'Presente', key: 'present', width: 10 },
+      { header: 'Horas extras', key: 'ot', width: 12 },
+    ];
+    ws.getRow(1).font = { bold: true };
+
+    const activeEmployees = employees.filter((e) => isEntityActive(e.active));
+
+    for (const emp of activeEmployees) {
+      for (let day = 1; day <= last; day++) {
+        const date = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        const cell = byKey.get(`${emp.id}|${date}`);
+        ws.addRow({
+          name: emp.fullName,
+          date,
+          holiday: !!cell?.isHoliday,
+          present: !!cell?.isPresent,
+          ot: n(cell?.overtimeHours),
+        });
+      }
+    }
+
+    const val = wb.addWorksheet('Validación de datos');
+    val.columns = [
+      { header: 'Colaborador', width: 22 },
+      { header: 'Sueldo actual', width: 14 },
+    ];
+    val.getRow(1).font = { bold: true };
+    for (const emp of activeEmployees) {
+      val.addRow([emp.fullName, n(emp.baseSalary)]);
+    }
+
+    const buffer = Buffer.from(await wb.xlsx.writeBuffer());
+    const monthPad = String(month).padStart(2, '0');
+    const slug = this.fileSlug(shop.name || shop.slug || 'local');
+    return {
+      buffer,
+      filename: `presentismo-${slug}-${year}-${monthPad}.xlsx`,
+    };
+  }
+
+  private fileSlug(name: string): string {
+    return name
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 40) || 'local';
   }
 
   async preview(user: AuthUser, shopId: string, file: Express.Multer.File) {

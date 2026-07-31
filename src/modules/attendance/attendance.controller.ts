@@ -66,15 +66,37 @@ export class AttendanceController {
 
   @Get()
   @RequirePermissions('attendance.read')
-  month(
+  async month(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
     @Query('year') year: string,
     @Query('month') month: string,
+    @Res({ passthrough: true }) res: Response,
   ) {
+    res.setHeader('Cache-Control', 'no-store');
     const y = Number(year) || new Date().getFullYear();
     const m = Number(month) || new Date().getMonth() + 1;
     return this.attendance.getMonth(user, shopId, y, m);
+  }
+
+  @Get('export.xlsx')
+  @RequirePermissions('attendance.read')
+  async export(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Query('year') year: string,
+    @Query('month') month: string,
+    @Res() res: Response,
+  ) {
+    const y = Number(year) || new Date().getFullYear();
+    const m = Number(month) || new Date().getMonth() + 1;
+    const { buffer, filename } = await this.excelImport.exportMonth(user, shopId, y, m);
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
   }
 
   @Get('import-template.xlsx')
