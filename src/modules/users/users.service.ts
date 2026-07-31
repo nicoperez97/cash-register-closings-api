@@ -481,7 +481,9 @@ export class UsersService {
 
   private assertAssignableRole(actor: AuthUser, role: GlobalRole) {
     if (isGlobalAdmin(actor.globalRole as GlobalRole)) {
-      // OWNER y ADMIN pueden asignar cualquier rol, incluido Super admin (OWNER).
+      if (role === GlobalRole.OWNER && actor.globalRole !== GlobalRole.OWNER) {
+        throw new ForbiddenException('Solo un super admin puede asignar el rol Super admin');
+      }
       return;
     }
     if (!ASSIGNABLE_BY_SHOP_ADMIN.has(role)) {

@@ -100,3 +100,8 @@ export function resolvePermissions(role: GlobalRole): Permission[] {
 export function isGlobalAdmin(role: GlobalRole | string): boolean {
   return role === GlobalRole.OWNER || role === GlobalRole.ADMIN;
 }
+
+/** Solo Super admin (OWNER). */
+export function isSuperAdmin(role: GlobalRole | string): boolean {
+  return role === GlobalRole.OWNER;
+}
