@@ -3,6 +3,7 @@ import { BaseEntity } from './base.entity';
 import { UserShop } from './user-shop.entity';
 import { CashClosing } from './cash-closing.entity';
 import { SalesSystem } from './sales-system.entity';
+import { ShopPosnet } from '../common/posnet';
 
 /** Mapa código POS → campo de cierre (cash|card|mercadoPago|delivery|transfer|accountDni|other). */
 export type PosPaymentMap = Record<string, string>;
@@ -48,6 +49,13 @@ export class Shop extends BaseEntity {
    */
   @Column({ type: 'simple-json', nullable: true })
   posPaymentMap?: PosPaymentMap | null;
+
+  /**
+   * Terminales / posnets del local.
+   * Cada uno tiene un tipo (PVS, Mercado Pago, Cuenta DNI) y se carga por separado en el cierre.
+   */
+  @Column({ type: 'simple-json', nullable: true })
+  posnets?: ShopPosnet[] | null;
 
   @ManyToOne(() => SalesSystem, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'salesSystemId' })
