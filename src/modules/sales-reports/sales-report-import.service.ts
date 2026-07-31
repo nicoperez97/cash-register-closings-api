@@ -3,10 +3,8 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { AuthUser } from '../../common/decorators';
-import { ClosingStatus, GlobalRole } from '../../common/enums';
-import { isGlobalAdmin } from '../../common/guards';
 import {
   DEFAULT_RESTOSOFT_PAYMENT_MAP,
   DEFAULT_WEMENU_PAYMENT_MAP,
@@ -14,7 +12,6 @@ import {
   WEMENU_PARSER_KEY,
   SalesSystemsSeedService,
 } from '../../common/sales-systems-seed.service';
-import { CashClosing } from '../../entities/cash-closing.entity';
 import { PosSaleDaily } from '../../entities/pos-sale-daily.entity';
 import { PosSaleImport } from '../../entities/pos-sale-import.entity';
 import { PosSaleTicket } from '../../entities/pos-sale-ticket.entity';
@@ -26,10 +23,8 @@ import { SalesParserRegistry } from './parsers/parser-registry';
 import { ParsedTicket } from './parsers/sales-system-parser';
 import type { PosPaymentField } from './parsers/sales-system-parser';
 import { SalesProductsAnalyticsService } from './sales-products-analytics.service';
-import { closingDateKey } from '../../common/soft-delete.util';
 
 const money = (n: number) => Number(n ?? 0).toFixed(2);
-const n = (v?: string | number | null) => Number(v ?? 0);
 
 type PaymentBreakdown = Record<
   'cashAmount' | 'cardAmount' | 'mercadoPagoAmount' | 'deliveryAppsAmount' | 'transferAmount' | 'accountDniAmount' | 'otherAmount',
@@ -68,11 +63,6 @@ export interface SalesReportDayPreview {
   transferAmount: number;
   accountDniAmount: number;
   otherAmount: number;
-  closingExists: boolean;
-  closingId: string | null;
-  closingLocked: boolean;
-  previousPosSystemAmount: number | null;
-  posMismatch: boolean;
   unknownPaymentCodes: string[];
 }
 
@@ -94,7 +84,6 @@ export class SalesReportImportService {
   constructor(
     @InjectRepository(Shop) private readonly shopsRepo: Repository<Shop>,
     @InjectRepository(SalesSystem) private readonly systems: Repository<SalesSystem>,
-    @InjectRepository(CashClosing) private readonly closings: Repository<CashClosing>,
     @InjectRepository(PosSaleImport) private readonly imports: Repository<PosSaleImport>,
     @InjectRepository(PosSaleTicket) private readonly tickets: Repository<PosSaleTicket>,
     @InjectRepository(PosSaleTicketLine) private readonly lines: Repository<PosSaleTicketLine>,
@@ -108,21 +97,13 @@ export class SalesReportImportService {
   async preview(user: AuthUser, shopId: string, file: Express.Multer.File): Promise<SalesReportPreview> {
     this.shops.assertShopAccess(user, shopId);
     const { system, shop, parsed, paymentMap } = await this.prepare(shopId, file);
-    return this.buildPreview(shopId, shop, system, file, parsed.tickets, parsed, paymentMap);
+    return this.buildPreview(shop, system, file, parsed.tickets, parsed, paymentMap);
   }
 
   async commit(user: AuthUser, shopId: string, file: Express.Multer.File) {
     this.shops.assertShopAccess(user, shopId);
     const { system, shop, parsed, paymentMap } = await this.prepare(shopId, file);
-    const preview = await this.buildPreview(
-      shopId,
-      shop,
-      system,
-      file,
-      parsed.tickets,
-      parsed,
-      paymentMap,
-    );
+    const preview = this.buildPreview(shop, system, file, parsed.tickets, parsed, paymentMap);
 
     const imp = await this.imports.save(
       this.imports.create({
@@ -140,7 +121,6 @@ export class SalesReportImportService {
     const allLineItems = parsed.tickets.flatMap((t) => t.lines);
     const labelsByCode = await this.productsAnalytics.upsertFromLines(shopId, allLineItems);
 
-    // Upsert tickets + lines
     for (const t of parsed.tickets) {
       let ticket = await this.tickets.findOne({
         where: {
@@ -212,10 +192,7 @@ export class SalesReportImportService {
       }
     }
 
-    // Upsert dailies + closings
     for (const day of preview.days) {
-      if (day.closingLocked) continue;
-
       let daily = await this.dailies.findOne({
         where: {
           shopId,
@@ -250,15 +227,12 @@ export class SalesReportImportService {
           }),
         );
       }
-
-      await this.applyToClosing(user, shopId, day);
     }
 
     return {
       importId: imp.id,
       ...preview,
-      committedDays: preview.days.filter((d) => !d.closingLocked).length,
-      skippedLockedDays: preview.days.filter((d) => d.closingLocked).length,
+      committedDays: preview.days.length,
     };
   }
 
@@ -295,15 +269,14 @@ export class SalesReportImportService {
     return { shop, system, parsed, paymentMap };
   }
 
-  private async buildPreview(
-    shopId: string,
+  private buildPreview(
     _shop: Shop,
     system: SalesSystem,
     file: Express.Multer.File,
     tickets: ParsedTicket[],
     parsed: { shopLabel: string | null; periodFrom: string | null; periodTo: string | null },
     paymentMap: Record<string, string>,
-  ): Promise<SalesReportPreview> {
+  ): SalesReportPreview {
     const byDate = new Map<
       string,
       { tickets: ParsedTicket[]; breakdown: PaymentBreakdown; unknown: Set<string> }
@@ -327,33 +300,18 @@ export class SalesReportImportService {
     }
 
     const dates = [...byDate.keys()].sort();
-    const existing = dates.length
-      ? await this.closings.find({
-          where: { shopId, businessDate: In(dates), active: true },
-        })
-      : [];
-    const closingByDate = new Map(existing.map((c) => [c.businessDate, c]));
-
     const allUnknown = new Set<string>();
     const days: SalesReportDayPreview[] = dates.map((businessDate) => {
       const bucket = byDate.get(businessDate)!;
       const totalAmount = bucket.tickets.reduce((s, t) => s + t.total, 0);
       const coversCount = bucket.tickets.reduce((s, t) => s + (t.covers || 0), 0);
       for (const u of bucket.unknown) allUnknown.add(u);
-      const closing = closingByDate.get(businessDate);
-      const previousPos = closing ? n(closing.posSystemAmount) : null;
       return {
         businessDate,
         ticketCount: bucket.tickets.length,
         coversCount,
         totalAmount,
         ...bucket.breakdown,
-        closingExists: !!closing,
-        closingId: closing?.id ?? null,
-        closingLocked: closing?.status === ClosingStatus.LOCKED,
-        previousPosSystemAmount: previousPos,
-        posMismatch:
-          previousPos != null && Math.abs(previousPos - totalAmount) > 0.009,
         unknownPaymentCodes: [...bucket.unknown],
       };
     });
@@ -382,81 +340,5 @@ export class SalesReportImportService {
     if (!mapped) return null;
     if (FIELD_TO_KEY[mapped]) return mapped as PosPaymentField;
     return null;
-  }
-
-  private async applyToClosing(user: AuthUser, shopId: string, day: SalesReportDayPreview) {
-    let row = await this.closings.findOne({
-      where: { shopId, businessDate: day.businessDate, active: true },
-    });
-
-    const calculated =
-      day.cardAmount +
-      day.cashAmount +
-      day.mercadoPagoAmount +
-      day.deliveryAppsAmount +
-      day.transferAmount +
-      day.accountDniAmount +
-      day.otherAmount;
-    const averageTicket =
-      day.ticketCount > 0 ? day.totalAmount / day.ticketCount : null;
-
-    if (!row) {
-      row = this.closings.create({
-        shopId,
-        businessDate: day.businessDate,
-        businessDateKey: closingDateKey(day.businessDate),
-        posSystemAmount: money(day.totalAmount),
-        cardAmount: money(day.cardAmount),
-        cashAmount: money(day.cashAmount),
-        mercadoPagoAmount: money(day.mercadoPagoAmount),
-        deliveryAppsAmount: money(day.deliveryAppsAmount),
-        transferAmount: money(day.transferAmount),
-        accountDniAmount: money(day.accountDniAmount),
-        otherAmount: money(day.otherAmount),
-        unitsSold: day.ticketCount,
-        coversCount: day.coversCount || null,
-        averageTicket: averageTicket != null ? money(averageTicket) : null,
-        cashLeftInRegister: money(0),
-        cashPendingPickup: money(0),
-        cashWithdrawn: money(0),
-        tipsAmount: money(0),
-        declaredTotal: money(calculated),
-        calculatedTotal: money(calculated),
-        difference: money(day.totalAmount - calculated),
-        notes: '[Importado POS]',
-        status: ClosingStatus.DRAFT,
-        createdByUserId: user.id,
-        submittedAt: null,
-        active: true,
-      });
-      await this.closings.save(row);
-      return;
-    }
-
-    if (row.status === ClosingStatus.LOCKED && !isGlobalAdmin(user.globalRole as GlobalRole)) {
-      return;
-    }
-
-    row.posSystemAmount = money(day.totalAmount);
-    row.cardAmount = money(day.cardAmount);
-    row.cashAmount = money(day.cashAmount);
-    row.mercadoPagoAmount = money(day.mercadoPagoAmount);
-    row.deliveryAppsAmount = money(day.deliveryAppsAmount);
-    row.transferAmount = money(day.transferAmount);
-    row.accountDniAmount = money(day.accountDniAmount);
-    row.otherAmount = money(day.otherAmount);
-    row.unitsSold = day.ticketCount;
-    row.coversCount = day.coversCount || row.coversCount;
-    row.averageTicket = averageTicket != null ? money(averageTicket) : row.averageTicket;
-    row.calculatedTotal = money(calculated);
-    // Keep declaredTotal if user already set it differently; else align to medios
-    if (n(row.declaredTotal) === 0) {
-      row.declaredTotal = money(calculated);
-    }
-    row.difference = money(n(row.posSystemAmount) - n(row.declaredTotal));
-    if (!row.notes?.includes('[Importado POS]')) {
-      row.notes = [row.notes, '[Importado POS]'].filter(Boolean).join(' ').trim();
-    }
-    await this.closings.save(row);
   }
 }

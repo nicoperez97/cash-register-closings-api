@@ -7,7 +7,6 @@ import { PosSaleDaily } from '../../entities/pos-sale-daily.entity';
 import { PosProduct } from '../../entities/pos-product.entity';
 import { PosCategory } from '../../entities/pos-category.entity';
 import { PosSubcategory } from '../../entities/pos-subcategory.entity';
-import { CashClosing } from '../../entities/cash-closing.entity';
 import { Shop } from '../../entities/shop.entity';
 import { SalesSystem } from '../../entities/sales-system.entity';
 import { ShopsModule } from '../shops/shops.module';
@@ -28,7 +27,6 @@ import { SalesReportsController } from './sales-reports.controller';
       PosProduct,
       PosCategory,
       PosSubcategory,
-      CashClosing,
       Shop,
     ]),
     ShopsModule,

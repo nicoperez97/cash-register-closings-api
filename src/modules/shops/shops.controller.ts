@@ -43,6 +43,7 @@ export class ShopsController {
     return this.shops.findAll(user);
   }
 
+  /** Listado para selects de cierre (cajeros incluidos: solo acceso al local). */
   @Get(':id/users')
   listUsers(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.shops.listUsers(user, id);

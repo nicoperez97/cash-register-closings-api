@@ -91,7 +91,7 @@ export class SalesReportsController {
   ) {}
 
   @Post('shops/:shopId/sales-reports/import-excel')
-  @RequirePermissions('closings.create')
+  @RequirePermissions('reports.export')
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {

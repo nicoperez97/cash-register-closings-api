@@ -9,7 +9,7 @@ export const RESTOSOFT_PARSER_KEY = 'restosoft';
 export const WEMENU_CODE = 'WEMENU';
 export const WEMENU_PARSER_KEY = 'wemenu';
 
-/** Defaults Restosoft: código FormaDePago → campo CashClosing. */
+/** Defaults Restosoft: código FormaDePago → campo de desglose POS. */
 export const DEFAULT_RESTOSOFT_PAYMENT_MAP: Record<string, string> = {
   CE: 'cash',
   EF: 'cash',
