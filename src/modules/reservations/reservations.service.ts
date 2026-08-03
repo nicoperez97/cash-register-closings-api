@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -34,12 +35,13 @@ export interface UpsertWaitingListDto {
   guestName?: string;
   partySize?: number;
   phone?: string;
+  area?: ReservationArea;
   notes?: string | null;
   status?: WaitingListStatus;
 }
 
 @Injectable()
-export class ReservationsService {
+export class ReservationsService implements OnModuleInit {
   constructor(
     @InjectRepository(Reservation)
     private readonly reservations: Repository<Reservation>,
@@ -48,6 +50,17 @@ export class ReservationsService {
     @InjectRepository(Shop) private readonly shopsRepo: Repository<Shop>,
     private readonly shops: ShopsService,
   ) {}
+
+  async onModuleInit() {
+    try {
+      await this.waiting.query(`
+        ALTER TABLE waiting_list_entries
+          ADD COLUMN area VARCHAR(16) NOT NULL DEFAULT 'INSIDE'
+      `);
+    } catch {
+      // columna ya existe
+    }
+  }
 
   private toReservationDto(r: Reservation) {
     return {
@@ -72,6 +85,7 @@ export class ReservationsService {
       guestName: w.guestName,
       partySize: Number(w.partySize ?? 0),
       phone: w.phone,
+      area: w.area ?? ReservationArea.INSIDE,
       notes: w.notes ?? null,
       status: w.status ?? WaitingListStatus.WAITING,
       createdAt: w.createdAt,
@@ -119,7 +133,7 @@ export class ReservationsService {
 
   private normalizePhone(raw?: string | null): string {
     const phone = String(raw ?? '').trim();
-    if (!phone) throw new BadRequestException('El teléfono es obligatorio');
+    if (!phone) return '';
     const digits = phone.replace(/\D/g, '');
     if (digits.length < 6) {
       throw new BadRequestException('Teléfono inválido');
@@ -127,11 +141,7 @@ export class ReservationsService {
     return phone;
   }
 
-  async listReservations(
-    user: AuthUser,
-    shopId: string,
-    date?: string,
-  ) {
+  async listReservations(user: AuthUser, shopId: string, date?: string) {
     this.shops.assertShopAccess(user, shopId);
     const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
     const businessDate =
@@ -233,6 +243,7 @@ export class ReservationsService {
         guestName: name,
         partySize: this.normalizePartySize(dto.partySize),
         phone: this.normalizePhone(dto.phone),
+        area: this.normalizeArea(dto.area),
         notes: dto.notes?.trim() || null,
         status: WaitingListStatus.WAITING,
         active: true,
@@ -259,6 +270,7 @@ export class ReservationsService {
     }
     if (dto.partySize !== undefined) row.partySize = this.normalizePartySize(dto.partySize);
     if (dto.phone !== undefined) row.phone = this.normalizePhone(dto.phone);
+    if (dto.area !== undefined) row.area = this.normalizeArea(dto.area);
     if (dto.notes !== undefined) row.notes = dto.notes?.trim() || null;
     if (dto.status !== undefined) row.status = dto.status;
     await this.waiting.save(row);
@@ -328,6 +340,51 @@ export class ReservationsService {
         area: r.area,
         reservationTime: r.reservationTime ?? null,
         status: r.status,
+      })),
+    };
+  }
+
+  /** Público: cola de espera activa por slug. */
+  async publicWaitingBoard(slug: string) {
+    const shop = await this.shopsRepo.findOne({
+      where: { slug: String(slug ?? '').trim().toLowerCase(), active: true },
+    });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+
+    const rows = await this.waiting.find({
+      where: {
+        shopId: shop.id,
+        status: WaitingListStatus.WAITING,
+        active: true,
+      },
+      order: { createdAt: 'ASC' },
+    });
+
+    const inside = rows.filter(
+      (r) => (r.area ?? ReservationArea.INSIDE) !== ReservationArea.OUTSIDE,
+    );
+    const outside = rows.filter((r) => r.area === ReservationArea.OUTSIDE);
+
+    return {
+      shop: {
+        name: shop.name,
+        slug: shop.slug,
+        logoUrl: shop.logoUrl ?? null,
+        accentColor: shop.accentColor ?? null,
+      },
+      totals: {
+        parties: rows.length,
+        guests: rows.reduce((s, r) => s + Number(r.partySize ?? 0), 0),
+        inside: inside.reduce((s, r) => s + Number(r.partySize ?? 0), 0),
+        outside: outside.reduce((s, r) => s + Number(r.partySize ?? 0), 0),
+      },
+      waiting: rows.map((w, index) => ({
+        id: w.id,
+        position: index + 1,
+        guestName: w.guestName,
+        partySize: Number(w.partySize ?? 0),
+        area: w.area ?? ReservationArea.INSIDE,
+        status: w.status,
       })),
     };
   }
