@@ -5,7 +5,6 @@ import { CashClosing } from '../../entities/cash-closing.entity';
 import { Movement } from '../../entities/movement.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { Concept } from '../../entities/concept.entity';
-import { Employee } from '../../entities/employee.entity';
 import { LinkedPaymentMethod } from '../../common/enums';
 import { EXPENSE_CATEGORY_TO_CONCEPT } from '../../common/catalog-seed';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
@@ -20,21 +19,21 @@ export class ClosingMovementsSyncService {
     @InjectRepository(LedgerAccount)
     private readonly accounts: Repository<LedgerAccount>,
     @InjectRepository(Concept) private readonly concepts: Repository<Concept>,
-    @InjectRepository(Employee) private readonly employees: Repository<Employee>,
     private readonly catalogSeed: CatalogSeedService,
   ) {}
 
   async syncFromClosing(closing: CashClosing) {
     await this.movements.delete({ closingId: closing.id });
 
-    const accounts = await this.accounts.find({
-      where: { shopId: closing.shopId, active: true },
-    });
+    await this.catalogSeed.ensureShopCatalogs(closing.shopId);
+
+    // Incluye inactivas: hace falta INGRESO/EGRESO/EFECTIVO aunque las hayan ocultado.
+    const accounts = await this.accounts.find({ where: { shopId: closing.shopId } });
     if (!accounts.length) return;
     const byCode = new Map(accounts.map((a) => [a.code, a]));
     const byMethod = new Map(
       accounts
-        .filter((a) => a.linkedPaymentMethod)
+        .filter((a) => a.linkedPaymentMethod && a.active)
         .map((a) => [a.linkedPaymentMethod as string, a]),
     );
     const ingreso = byCode.get('INGRESO');
@@ -115,41 +114,56 @@ export class ClosingMovementsSyncService {
 
     const cashChannel =
       byMethod.get(LinkedPaymentMethod.CASH) ?? byCode.get('EFECTIVO');
-    if (cashChannel && n(closing.cashWithdrawn) > 0) {
-      let toAccountId = egreso.id;
-      let employeeId: string | null = closing.cashWithdrawnByEmployeeId ?? null;
 
-      if (closing.cashWithdrawnToAccountId) {
-        const dest = accounts.find((a) => a.id === closing.cashWithdrawnToAccountId);
-        if (dest) toAccountId = dest.id;
-      } else if (closing.cashWithdrawnByEmployeeId) {
-        const emp = await this.employees.findOne({
-          where: { id: closing.cashWithdrawnByEmployeeId, shopId: closing.shopId },
-        });
-        if (emp) {
-          employeeId = emp.id;
-        }
-      } else if (closing.cashWithdrawnByName) {
-        const partner = accounts.find(
-          (a) =>
-            a.type === 'PARTNER' &&
-            a.name.toLowerCase() === closing.cashWithdrawnByName!.trim().toLowerCase(),
-        );
-        if (partner) toAccountId = partner.id;
-      }
+    // Efectivo a la cuenta de quien se lo lleva (PARTNER).
+    // Si no hay monto de retiro explícito, se usa efectivo − cambio − egresos.
+    let partnerDestId: string | null = null;
+    if (closing.cashWithdrawnToAccountId) {
+      const dest = accounts.find((a) => a.id === closing.cashWithdrawnToAccountId);
+      if (dest) partnerDestId = dest.id;
+    } else if (closing.cashWithdrawnByName) {
+      const partner = accounts.find(
+        (a) =>
+          a.active &&
+          a.type === 'PARTNER' &&
+          a.name.toLowerCase() === closing.cashWithdrawnByName!.trim().toLowerCase(),
+      );
+      if (partner) partnerDestId = partner.id;
+    }
 
+    const expensesTotal = (closing.expenses ?? []).reduce((s, e) => s + n(e.amount), 0);
+    const cashTake =
+      n(closing.cashWithdrawn) > 0
+        ? n(closing.cashWithdrawn)
+        : Math.max(0, n(closing.cashAmount) - n(closing.cashLeftInRegister) - expensesTotal);
+
+    if (cashChannel && partnerDestId && cashTake > 0) {
       rows.push({
         shopId: closing.shopId,
         businessDate: date,
         fromAccountId: cashChannel.id,
-        toAccountId,
+        toAccountId: partnerDestId,
+        description: `Efectivo — ${closing.cashWithdrawnByName ?? 'retiro'}`,
+        amountUyu: money(cashTake),
+        conceptId: findConcept('Utilidades') ?? findConcept('Gastos varios'),
+        closingId: closing.id,
+        employeeId: closing.cashWithdrawnByEmployeeId ?? null,
+        invoiced: false,
+        active: true,
+      });
+    } else if (cashChannel && n(closing.cashWithdrawn) > 0) {
+      rows.push({
+        shopId: closing.shopId,
+        businessDate: date,
+        fromAccountId: cashChannel.id,
+        toAccountId: egreso.id,
         description: `Retiro de efectivo${
           closing.cashWithdrawnByName ? ` — ${closing.cashWithdrawnByName}` : ''
         }`,
         amountUyu: money(n(closing.cashWithdrawn)),
         conceptId: findConcept('Utilidades') ?? findConcept('Gastos varios'),
         closingId: closing.id,
-        employeeId,
+        employeeId: closing.cashWithdrawnByEmployeeId ?? null,
         invoiced: false,
         active: true,
       });

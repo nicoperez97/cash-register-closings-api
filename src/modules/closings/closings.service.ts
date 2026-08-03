@@ -97,15 +97,18 @@ export class ClosingsService implements OnModuleInit {
   }
 
   /**
-   * Destino del retiro: cuenta PARTNER del usuario (crea si no tiene; exige elección si tiene varias).
+   * Destino del efectivo: cuenta PARTNER de quien se lo lleva
+   * (crea si no tiene; exige elección si tiene varias).
    */
   private async resolveWithdrawnToAccount(
     shopId: string,
     cashWithdrawn: number,
+    cashAmount: number,
     userId?: string | null,
     preferredAccountId?: string | null,
   ): Promise<string | null> {
-    if (!(cashWithdrawn > 0) || !userId) return preferredAccountId ?? null;
+    if (!userId) return preferredAccountId ?? null;
+    if (!(cashWithdrawn > 0) && !(cashAmount > 0)) return preferredAccountId ?? null;
     const account = await this.accounts.resolvePartnerAccountForUser(
       shopId,
       userId,
@@ -227,6 +230,7 @@ export class ClosingsService implements OnModuleInit {
     const cashWithdrawnToAccountId = await this.resolveWithdrawnToAccount(
       shopId,
       n(normalized.cashWithdrawn),
+      n(normalized.cashAmount),
       withdrawn.cashWithdrawnByUserId,
       normalized.cashWithdrawnToAccountId,
     );
@@ -313,6 +317,7 @@ export class ClosingsService implements OnModuleInit {
     const cashWithdrawnToAccountId = await this.resolveWithdrawnToAccount(
       shopId,
       n(merged.cashWithdrawn),
+      n(merged.cashAmount),
       withdrawn.cashWithdrawnByUserId,
       merged.cashWithdrawnToAccountId,
     );
