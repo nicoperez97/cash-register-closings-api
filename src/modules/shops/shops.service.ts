@@ -53,6 +53,30 @@ export class ShopsService implements OnModuleInit {
     } catch {
       // columna ya existe
     }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN reservationsEnabled TINYINT(1) NOT NULL DEFAULT 1
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN waitingListEnabled TINYINT(1) NOT NULL DEFAULT 1
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN closedWeekdays JSON NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
   }
 
   assertShopAccess(user: AuthUser, shopId: string) {
@@ -60,6 +84,28 @@ export class ShopsService implements OnModuleInit {
     if (!user.shopIds.includes(shopId)) {
       throw new ForbiddenException('Sin acceso a este local');
     }
+  }
+
+  async assertReservationsEnabled(shopId: string) {
+    const shop = await this.shops.findOne({ where: { id: shopId } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    if (shop.reservationsEnabled === false) {
+      throw new ForbiddenException('Reservas deshabilitadas en este local');
+    }
+    return shop;
+  }
+
+  async assertWaitingListEnabled(shopId: string) {
+    const shop = await this.shops.findOne({ where: { id: shopId } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    if (shop.waitingListEnabled === false) {
+      throw new ForbiddenException('Lista de espera deshabilitada en este local');
+    }
+    return shop;
+  }
+
+  async findActiveBySlug(slug: string) {
+    return this.shops.findOne({ where: { slug, active: true } });
   }
 
   /** Admin del local (shopRole) o admin/owner global, o manager con shops.manage. */
@@ -128,10 +174,12 @@ export class ShopsService implements OnModuleInit {
       list.push({ id: acc.id, name: acc.name, code: acc.code });
       accountsByUser.set(link.userId, list);
     }
+    const hideByUser = new Map(links.map((l) => [l.userId, !!l.hideFromCashWithdraw]));
     return rows.map((u) => ({
       id: u.id,
       fullName: u.fullName,
       email: u.email,
+      hideFromCashWithdraw: hideByUser.get(u.id) ?? false,
       ledgerAccounts: accountsByUser.get(u.id) ?? [],
     }));
   }
@@ -148,9 +196,12 @@ export class ShopsService implements OnModuleInit {
         slug,
         unitsLabel: dto.unitsLabel ?? null,
         coversEnabled: dto.coversEnabled ?? false,
+        reservationsEnabled: dto.reservationsEnabled ?? true,
+        waitingListEnabled: dto.waitingListEnabled ?? true,
         defaultChangeAmount: String(dto.defaultChangeAmount ?? 0),
         timezone: dto.timezone ?? 'America/Argentina/Buenos_Aires',
         openingTime: normalizeOpeningTime(dto.openingTime),
+        closedWeekdays: this.normalizeClosedWeekdays(dto.closedWeekdays),
         currency: dto.currency ?? 'ARS',
         logoUrl: normalizeLogoUrl(dto.logoUrl),
         accentColor: this.normalizeAccent(dto.accentColor),
@@ -177,9 +228,18 @@ export class ShopsService implements OnModuleInit {
     }
     if (dto.unitsLabel !== undefined) shop.unitsLabel = dto.unitsLabel || null;
     if (dto.coversEnabled !== undefined) shop.coversEnabled = dto.coversEnabled;
+    if (dto.reservationsEnabled !== undefined) {
+      shop.reservationsEnabled = dto.reservationsEnabled;
+    }
+    if (dto.waitingListEnabled !== undefined) {
+      shop.waitingListEnabled = dto.waitingListEnabled;
+    }
     if (dto.timezone !== undefined) shop.timezone = dto.timezone;
     if (dto.openingTime !== undefined) {
       shop.openingTime = normalizeOpeningTime(dto.openingTime);
+    }
+    if (dto.closedWeekdays !== undefined) {
+      shop.closedWeekdays = this.normalizeClosedWeekdays(dto.closedWeekdays);
     }
     if (dto.currency !== undefined) shop.currency = dto.currency;
     if (dto.active !== undefined) shop.active = isEntityActive(dto.active);
@@ -230,6 +290,22 @@ export class ShopsService implements OnModuleInit {
     return out;
   }
 
+  private normalizeClosedWeekdays(raw?: number[] | null): number[] {
+    if (raw == null) return [];
+    if (!Array.isArray(raw)) {
+      throw new BadRequestException('closedWeekdays inválido');
+    }
+    const set = new Set<number>();
+    for (const v of raw) {
+      const n = Number(v);
+      if (!Number.isInteger(n) || n < 0 || n > 6) {
+        throw new BadRequestException('Cada día de franco debe ser 0–6');
+      }
+      set.add(n);
+    }
+    return [...set].sort((a, b) => a - b);
+  }
+
   private normalizeSlug(raw: string): string {
     const s = raw
       .trim()
@@ -267,9 +343,12 @@ export class ShopsService implements OnModuleInit {
       slug: s.slug,
       timezone: s.timezone,
       openingTime: normalizeOpeningTime(s.openingTime),
+      closedWeekdays: Array.isArray(s.closedWeekdays) ? s.closedWeekdays : [],
       currency: s.currency,
       unitsLabel: s.unitsLabel,
       coversEnabled: !!s.coversEnabled,
+      reservationsEnabled: s.reservationsEnabled !== false,
+      waitingListEnabled: s.waitingListEnabled !== false,
       defaultChangeAmount: Number(s.defaultChangeAmount),
       logoUrl: s.logoUrl ?? null,
       accentColor: s.accentColor ?? null,

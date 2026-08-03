@@ -26,6 +26,12 @@ export class Shop extends BaseEntity {
   @Column({ type: 'varchar', length: 5, default: '10:00' })
   openingTime: string;
 
+  /**
+   * Días de franco del local (0=domingo … 6=sábado, como Date.getDay()).
+   */
+  @Column({ type: 'simple-json', nullable: true })
+  closedWeekdays?: number[] | null;
+
   @Column({ default: 'ARS' })
   currency: string;
 
@@ -34,6 +40,14 @@ export class Shop extends BaseEntity {
 
   @Column({ type: 'tinyint', default: 0 })
   coversEnabled: boolean;
+
+  /** Si es false, el módulo de reservas no está disponible en este local. */
+  @Column({ type: 'tinyint', default: 1 })
+  reservationsEnabled: boolean;
+
+  /** Si es false, el módulo de lista de espera no está disponible en este local. */
+  @Column({ type: 'tinyint', default: 1 })
+  waitingListEnabled: boolean;
 
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
   defaultChangeAmount: string;

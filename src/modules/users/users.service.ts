@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
@@ -43,6 +44,8 @@ export class CreateUserBody {
   ledgerAccountIds?: string[] | null;
   /** Compat 1 cuenta. */
   ledgerAccountId?: string | null;
+  /** Ocultar en “Quién se lo lleva” (para el shopId del request). */
+  hideFromCashWithdraw?: boolean;
 }
 
 export class UpdateUserBody {
@@ -56,10 +59,12 @@ export class UpdateUserBody {
   modulePermissions?: Record<string, string> | null;
   ledgerAccountIds?: string[] | null;
   ledgerAccountId?: string | null;
+  /** Ocultar en “Quién se lo lleva” (para el shopId del request). */
+  hideFromCashWithdraw?: boolean;
 }
 
 @Injectable()
-export class UsersService {
+export class UsersService implements OnModuleInit {
   constructor(
     @InjectRepository(User) private readonly users: Repository<User>,
     @InjectRepository(UserShop) private readonly userShops: Repository<UserShop>,
@@ -68,6 +73,17 @@ export class UsersService {
     @InjectRepository(LedgerAccountUser)
     private readonly accountLinks: Repository<LedgerAccountUser>,
   ) {}
+
+  async onModuleInit() {
+    try {
+      await this.userShops.query(`
+        ALTER TABLE user_shops
+          ADD COLUMN hideFromCashWithdraw TINYINT(1) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // columna ya existe
+    }
+  }
 
   /** Admin global, permiso users.manage, o admin/owner del local. */
   assertShopUserAdmin(user: AuthUser, shopId: string) {
@@ -167,6 +183,7 @@ export class UsersService {
         ...dto,
         shopRole: link?.shopRole ?? u.globalRole,
         modulePermissions: this.effectiveModulesForLink(link, u.globalRole),
+        hideFromCashWithdraw: !!link?.hideFromCashWithdraw,
         ledgerAccountIds,
         ledgerAccountNames,
         ledgerAccountId: ledgerAccountIds[0] ?? null,
@@ -217,6 +234,8 @@ export class UsersService {
           modulePermissions: isGlobalAdmin(dto.globalRole)
             ? null
             : (modules as Record<string, string>),
+          hideFromCashWithdraw:
+            defaultShopId === shopId ? !!dto.hideFromCashWithdraw : false,
         }),
       );
     }
@@ -325,6 +344,8 @@ export class UsersService {
                       deriveModulesFromRole(
                         (dto.shopRole ?? user.globalRole) as GlobalRole,
                       )) as Record<string, string>),
+                hideFromCashWithdraw:
+                  shopId === sid ? !!dto.hideFromCashWithdraw : false,
               }),
             );
           } else {
@@ -334,12 +355,23 @@ export class UsersService {
                 ? null
                 : (modulesIncoming as Record<string, string>);
             }
+            if (
+              shopId === sid &&
+              dto.hideFromCashWithdraw !== undefined
+            ) {
+              exists.hideFromCashWithdraw = !!dto.hideFromCashWithdraw;
+            }
             await this.userShops.save(exists);
           }
         }
       } else {
+        const prevHide = new Map(links.map((l) => [l.shopId, !!l.hideFromCashWithdraw]));
         await this.userShops.delete({ userId: id });
         for (const sid of nextIds) {
+          const hide =
+            shopId === sid && dto.hideFromCashWithdraw !== undefined
+              ? !!dto.hideFromCashWithdraw
+              : (prevHide.get(sid) ?? false);
           await this.userShops.save(
             this.userShops.create({
               userId: id,
@@ -351,11 +383,17 @@ export class UsersService {
                     deriveModulesFromRole(
                       (dto.shopRole ?? user.globalRole) as GlobalRole,
                     )) as Record<string, string>),
+              hideFromCashWithdraw: hide,
             }),
           );
         }
       }
-    } else if (shopId && (dto.shopRole || modulesIncoming !== undefined)) {
+    } else if (
+      shopId &&
+      (dto.shopRole ||
+        modulesIncoming !== undefined ||
+        dto.hideFromCashWithdraw !== undefined)
+    ) {
       const link = await this.userShops.findOne({ where: { userId: id, shopId } });
       if (link) {
         if (dto.shopRole) link.shopRole = dto.shopRole;
@@ -363,6 +401,9 @@ export class UsersService {
           link.modulePermissions = isGlobalAdmin(user.globalRole)
             ? null
             : (modulesIncoming as Record<string, string>);
+        }
+        if (dto.hideFromCashWithdraw !== undefined) {
+          link.hideFromCashWithdraw = !!dto.hideFromCashWithdraw;
         }
         await this.userShops.save(link);
       } else {
@@ -377,6 +418,7 @@ export class UsersService {
                   deriveModulesFromRole(
                     (dto.shopRole ?? user.globalRole) as GlobalRole,
                   )) as Record<string, string>),
+            hideFromCashWithdraw: !!dto.hideFromCashWithdraw,
           }),
         );
       }
@@ -438,6 +480,7 @@ export class UsersService {
       ...dto,
       shopRole: link?.shopRole ?? u.globalRole,
       modulePermissions: this.effectiveModulesForLink(link, u.globalRole),
+      hideFromCashWithdraw: !!link?.hideFromCashWithdraw,
       ledgerAccountIds: accountIds,
       ledgerAccountNames: names,
       ledgerAccountId: accountIds[0] ?? null,

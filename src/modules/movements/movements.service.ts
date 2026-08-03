@@ -9,6 +9,8 @@ import { Repository } from 'typeorm';
 import { Movement } from '../../entities/movement.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { Concept } from '../../entities/concept.entity';
+import { User } from '../../entities/user.entity';
+import { UserShop } from '../../entities/user-shop.entity';
 import { AuthUser } from '../../common/decorators';
 import { GlobalRole, LedgerAccountType } from '../../common/enums';
 import { isGlobalAdmin } from '../../common/guards';
@@ -32,6 +34,8 @@ export interface UpsertMovementDto {
   businessDate: string;
   fromAccountId?: string | null;
   toAccountId?: string | null;
+  fromUserId?: string | null;
+  toUserId?: string | null;
   description?: string | null;
   amountUyu: number;
   usdRate?: number | null;
@@ -49,6 +53,8 @@ export class MovementsService implements OnModuleInit {
     @InjectRepository(LedgerAccount)
     private readonly accounts: Repository<LedgerAccount>,
     @InjectRepository(Concept) private readonly concepts: Repository<Concept>,
+    @InjectRepository(User) private readonly users: Repository<User>,
+    @InjectRepository(UserShop) private readonly userShops: Repository<UserShop>,
     private readonly shops: ShopsService,
     private readonly catalogSeed: CatalogSeedService,
   ) {}
@@ -63,6 +69,16 @@ export class MovementsService implements OnModuleInit {
     } catch {
       // ya aplicado o motor distinto
     }
+    for (const sql of [
+      `ALTER TABLE movements ADD COLUMN fromUserId CHAR(36) NULL`,
+      `ALTER TABLE movements ADD COLUMN toUserId CHAR(36) NULL`,
+    ]) {
+      try {
+        await this.movements.query(sql);
+      } catch {
+        // ya existe
+      }
+    }
   }
 
   private toDto(m: Movement) {
@@ -74,6 +90,10 @@ export class MovementsService implements OnModuleInit {
       toAccountId: m.toAccountId,
       fromAccountName: m.fromAccount?.name ?? null,
       toAccountName: m.toAccount?.name ?? null,
+      fromUserId: m.fromUserId ?? null,
+      toUserId: m.toUserId ?? null,
+      fromUserName: m.fromUser?.fullName ?? null,
+      toUserName: m.toUser?.fullName ?? null,
       description: m.description ?? null,
       amountUyu: n(m.amountUyu),
       usdRate: m.usdRate != null ? n(m.usdRate) : null,
@@ -96,6 +116,8 @@ export class MovementsService implements OnModuleInit {
       .createQueryBuilder('m')
       .leftJoinAndSelect('m.fromAccount', 'fromAccount')
       .leftJoinAndSelect('m.toAccount', 'toAccount')
+      .leftJoinAndSelect('m.fromUser', 'fromUser')
+      .leftJoinAndSelect('m.toUser', 'toUser')
       .leftJoinAndSelect('m.concept', 'concept')
       .where('m.shopId = :shopId', { shopId })
       .andWhere('m.active = true');
@@ -145,11 +167,29 @@ export class MovementsService implements OnModuleInit {
     return id ? id : null;
   }
 
+  private normalizeUserId(value?: string | null): string | null {
+    const id = value?.trim();
+    if (!id || id === '__local__') return null;
+    return id;
+  }
+
+  private async assertShopUser(shopId: string, userId: string | null) {
+    if (!userId) return;
+    const link = await this.userShops.findOne({ where: { shopId, userId } });
+    if (!link) throw new BadRequestException('Usuario no pertenece al local');
+    const user = await this.users.findOne({ where: { id: userId, active: true } });
+    if (!user) throw new BadRequestException('Usuario inválido');
+  }
+
   async create(user: AuthUser, shopId: string, dto: UpsertMovementDto) {
     this.shops.assertShopAccess(user, shopId);
     const fromAccountId = this.normalizeAccountId(dto.fromAccountId);
     const toAccountId = this.normalizeAccountId(dto.toAccountId);
+    const fromUserId = this.normalizeUserId(dto.fromUserId);
+    const toUserId = this.normalizeUserId(dto.toUserId);
     await this.assertAccounts(shopId, fromAccountId, toAccountId);
+    await this.assertShopUser(shopId, fromUserId);
+    await this.assertShopUser(shopId, toUserId);
     if (dto.conceptId) {
       const c = await this.concepts.findOne({
         where: { id: dto.conceptId, shopId, active: true },
@@ -169,6 +209,8 @@ export class MovementsService implements OnModuleInit {
         businessDate: dto.businessDate,
         fromAccountId,
         toAccountId,
+        fromUserId,
+        toUserId,
         description: dto.description?.trim() || null,
         amountUyu: money(n(dto.amountUyu)),
         usdRate: dto.usdRate != null ? String(dto.usdRate) : null,
@@ -188,7 +230,7 @@ export class MovementsService implements OnModuleInit {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.movements.findOne({
       where: { id, shopId },
-      relations: ['fromAccount', 'toAccount', 'concept'],
+      relations: ['fromAccount', 'toAccount', 'fromUser', 'toUser', 'concept'],
     });
     if (!row) throw new NotFoundException('Movimiento no encontrado');
     return this.toDto(row);
@@ -213,6 +255,17 @@ export class MovementsService implements OnModuleInit {
         ? this.normalizeAccountId(dto.toAccountId)
         : row.toAccountId;
     await this.assertAccounts(shopId, fromId, toId);
+
+    if (dto.fromUserId !== undefined) {
+      const fromUserId = this.normalizeUserId(dto.fromUserId);
+      await this.assertShopUser(shopId, fromUserId);
+      row.fromUserId = fromUserId;
+    }
+    if (dto.toUserId !== undefined) {
+      const toUserId = this.normalizeUserId(dto.toUserId);
+      await this.assertShopUser(shopId, toUserId);
+      row.toUserId = toUserId;
+    }
 
     if (dto.businessDate !== undefined) row.businessDate = dto.businessDate;
     if (dto.fromAccountId !== undefined) row.fromAccountId = fromId;

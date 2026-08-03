@@ -14,6 +14,21 @@ export enum ClosingStatus {
   LOCKED = 'LOCKED',
 }
 
+export enum PaymentStatus {
+  PENDING_VALIDATION = 'PENDING_VALIDATION',
+  VALIDATED = 'VALIDATED',
+  REJECTED = 'REJECTED',
+  PAID = 'PAID',
+  CANCELLED = 'CANCELLED',
+}
+
+export enum NotificationType {
+  PAYMENT_VALIDATE = 'PAYMENT_VALIDATE',
+  PAYMENT_PAY = 'PAYMENT_PAY',
+  PAYMENT_REJECTED = 'PAYMENT_REJECTED',
+  PAYMENT_PAID = 'PAYMENT_PAID',
+}
+
 export enum ExpenseCategory {
   SUPPLIES = 'SUPPLIES',
   SERVICES = 'SERVICES',
@@ -43,6 +58,8 @@ export enum LedgerAccountType {
   PARTNER = 'PARTNER',
   CHANNEL = 'CHANNEL',
   SYSTEM = 'SYSTEM',
+  /** Cuenta de proveedor: no aparece en «quién se lo lleva». */
+  SUPPLIER = 'SUPPLIER',
 }
 
 export enum ConceptKind {
@@ -91,6 +108,10 @@ export const PERMISSIONS = [
   'reservations.manage',
   'waitingList.read',
   'waitingList.manage',
+  'payments.read',
+  'payments.manage',
+  'suppliers.read',
+  'suppliers.manage',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -122,6 +143,10 @@ export const ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     'reservations.manage',
     'waitingList.read',
     'waitingList.manage',
+    'payments.read',
+    'payments.manage',
+    'suppliers.read',
+    'suppliers.manage',
   ],
   [GlobalRole.CASHIER]: ['closings.create'],
   [GlobalRole.VIEWER]: [
@@ -134,11 +159,15 @@ export const ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     'commissions.read',
     'movements.read',
     'reservations.read',
+    'payments.read',
+    'suppliers.read',
   ],
   [GlobalRole.PARTNER]: [
     'closings.read',
     'reports.view',
     'reports.export',
     'movements.read',
+    'payments.read',
+    'suppliers.read',
   ],
 };
