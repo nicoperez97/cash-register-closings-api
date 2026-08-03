@@ -89,7 +89,7 @@ export class ShopsService implements OnModuleInit {
   async assertReservationsEnabled(shopId: string) {
     const shop = await this.shops.findOne({ where: { id: shopId } });
     if (!shop) throw new NotFoundException('Local no encontrado');
-    if (shop.reservationsEnabled === false) {
+    if (!shop.reservationsEnabled) {
       throw new ForbiddenException('Reservas deshabilitadas en este local');
     }
     return shop;
@@ -98,7 +98,7 @@ export class ShopsService implements OnModuleInit {
   async assertWaitingListEnabled(shopId: string) {
     const shop = await this.shops.findOne({ where: { id: shopId } });
     if (!shop) throw new NotFoundException('Local no encontrado');
-    if (shop.waitingListEnabled === false) {
+    if (!shop.waitingListEnabled) {
       throw new ForbiddenException('Lista de espera deshabilitada en este local');
     }
     return shop;
@@ -347,8 +347,8 @@ export class ShopsService implements OnModuleInit {
       currency: s.currency,
       unitsLabel: s.unitsLabel,
       coversEnabled: !!s.coversEnabled,
-      reservationsEnabled: s.reservationsEnabled !== false,
-      waitingListEnabled: s.waitingListEnabled !== false,
+      reservationsEnabled: !!s.reservationsEnabled,
+      waitingListEnabled: !!s.waitingListEnabled,
       defaultChangeAmount: Number(s.defaultChangeAmount),
       logoUrl: s.logoUrl ?? null,
       accentColor: s.accentColor ?? null,
