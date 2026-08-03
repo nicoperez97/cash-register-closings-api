@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -29,8 +30,8 @@ export interface MovementFilters {
 
 export interface UpsertMovementDto {
   businessDate: string;
-  fromAccountId: string;
-  toAccountId: string;
+  fromAccountId?: string | null;
+  toAccountId?: string | null;
   description?: string | null;
   amountUyu: number;
   usdRate?: number | null;
@@ -42,7 +43,7 @@ export interface UpsertMovementDto {
 }
 
 @Injectable()
-export class MovementsService {
+export class MovementsService implements OnModuleInit {
   constructor(
     @InjectRepository(Movement) private readonly movements: Repository<Movement>,
     @InjectRepository(LedgerAccount)
@@ -51,6 +52,18 @@ export class MovementsService {
     private readonly shops: ShopsService,
     private readonly catalogSeed: CatalogSeedService,
   ) {}
+
+  async onModuleInit() {
+    try {
+      await this.movements.query(`
+        ALTER TABLE movements
+          MODIFY COLUMN fromAccountId VARCHAR(36) NULL,
+          MODIFY COLUMN toAccountId VARCHAR(36) NULL
+      `);
+    } catch {
+      // ya aplicado o motor distinto
+    }
+  }
 
   private toDto(m: Movement) {
     return {
@@ -112,15 +125,31 @@ export class MovementsService {
     return rows.map((r) => this.toDto(r));
   }
 
-  private async assertAccounts(shopId: string, fromId: string, toId: string) {
-    const from = await this.accounts.findOne({ where: { id: fromId, shopId, active: true } });
-    const to = await this.accounts.findOne({ where: { id: toId, shopId, active: true } });
-    if (!from || !to) throw new BadRequestException('Cuenta emisora o receptora inválida');
+  private async assertAccounts(
+    shopId: string,
+    fromId?: string | null,
+    toId?: string | null,
+  ) {
+    if (fromId) {
+      const from = await this.accounts.findOne({ where: { id: fromId, shopId, active: true } });
+      if (!from) throw new BadRequestException('Cuenta origen inválida');
+    }
+    if (toId) {
+      const to = await this.accounts.findOne({ where: { id: toId, shopId, active: true } });
+      if (!to) throw new BadRequestException('Cuenta destino inválida');
+    }
+  }
+
+  private normalizeAccountId(value?: string | null): string | null {
+    const id = value?.trim();
+    return id ? id : null;
   }
 
   async create(user: AuthUser, shopId: string, dto: UpsertMovementDto) {
     this.shops.assertShopAccess(user, shopId);
-    await this.assertAccounts(shopId, dto.fromAccountId, dto.toAccountId);
+    const fromAccountId = this.normalizeAccountId(dto.fromAccountId);
+    const toAccountId = this.normalizeAccountId(dto.toAccountId);
+    await this.assertAccounts(shopId, fromAccountId, toAccountId);
     if (dto.conceptId) {
       const c = await this.concepts.findOne({
         where: { id: dto.conceptId, shopId, active: true },
@@ -138,8 +167,8 @@ export class MovementsService {
       this.movements.create({
         shopId,
         businessDate: dto.businessDate,
-        fromAccountId: dto.fromAccountId,
-        toAccountId: dto.toAccountId,
+        fromAccountId,
+        toAccountId,
         description: dto.description?.trim() || null,
         amountUyu: money(n(dto.amountUyu)),
         usdRate: dto.usdRate != null ? String(dto.usdRate) : null,
@@ -175,13 +204,19 @@ export class MovementsService {
       );
     }
 
-    const fromId = dto.fromAccountId ?? row.fromAccountId;
-    const toId = dto.toAccountId ?? row.toAccountId;
+    const fromId =
+      dto.fromAccountId !== undefined
+        ? this.normalizeAccountId(dto.fromAccountId)
+        : row.fromAccountId;
+    const toId =
+      dto.toAccountId !== undefined
+        ? this.normalizeAccountId(dto.toAccountId)
+        : row.toAccountId;
     await this.assertAccounts(shopId, fromId, toId);
 
     if (dto.businessDate !== undefined) row.businessDate = dto.businessDate;
-    if (dto.fromAccountId !== undefined) row.fromAccountId = dto.fromAccountId;
-    if (dto.toAccountId !== undefined) row.toAccountId = dto.toAccountId;
+    if (dto.fromAccountId !== undefined) row.fromAccountId = fromId;
+    if (dto.toAccountId !== undefined) row.toAccountId = toId;
     if (dto.description !== undefined) row.description = dto.description?.trim() || null;
     if (dto.amountUyu !== undefined) row.amountUyu = money(n(dto.amountUyu));
     if (dto.usdRate !== undefined) {
@@ -257,10 +292,14 @@ export class MovementsService {
       bal.set(a.id, { accountId: a.id, name: a.name, income: 0, expense: 0 });
     }
     for (const r of rows) {
-      const from = bal.get(r.fromAccountId);
-      const to = bal.get(r.toAccountId);
-      if (from) from.expense += r.amountUyu;
-      if (to) to.income += r.amountUyu;
+      if (r.fromAccountId) {
+        const from = bal.get(r.fromAccountId);
+        if (from) from.expense += r.amountUyu;
+      }
+      if (r.toAccountId) {
+        const to = bal.get(r.toAccountId);
+        if (to) to.income += r.amountUyu;
+      }
     }
     return {
       shopId,

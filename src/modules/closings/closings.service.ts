@@ -16,6 +16,7 @@ import { User } from '../../entities/user.entity';
 import { Employee } from '../../entities/employee.entity';
 import { ShopsService } from '../shops/shops.service';
 import { ClosingMovementsSyncService } from '../movements/closing-movements-sync.service';
+import { AccountsService } from '../accounts/accounts.service';
 import { AuthUser } from '../../common/decorators';
 import { ClosingStatus, ExpenseCategory, ExtraLineType, GlobalRole } from '../../common/enums';
 import { isGlobalAdmin } from '../../common/guards';
@@ -39,6 +40,7 @@ export class ClosingsService implements OnModuleInit {
     @InjectRepository(Employee) private readonly employees: Repository<Employee>,
     private readonly shops: ShopsService,
     private readonly closingMovements: ClosingMovementsSyncService,
+    private readonly accounts: AccountsService,
   ) {}
 
   async onModuleInit() {
@@ -50,6 +52,14 @@ export class ClosingsService implements OnModuleInit {
       `);
     } catch (err) {
       this.logger.warn(`No se pudo backfill businessDateKey: ${(err as Error)?.message}`);
+    }
+    try {
+      await this.closings.query(`
+        ALTER TABLE cash_closings
+          ADD COLUMN cashWithdrawnToAccountId VARCHAR(36) NULL
+      `);
+    } catch {
+      // columna ya existe
     }
   }
 
@@ -86,6 +96,24 @@ export class ClosingsService implements OnModuleInit {
     };
   }
 
+  /**
+   * Destino del retiro: cuenta PARTNER del usuario (crea si no tiene; exige elección si tiene varias).
+   */
+  private async resolveWithdrawnToAccount(
+    shopId: string,
+    cashWithdrawn: number,
+    userId?: string | null,
+    preferredAccountId?: string | null,
+  ): Promise<string | null> {
+    if (!(cashWithdrawn > 0) || !userId) return preferredAccountId ?? null;
+    const account = await this.accounts.resolvePartnerAccountForUser(
+      shopId,
+      userId,
+      preferredAccountId,
+    );
+    return account.id;
+  }
+
   private calc(dto: Partial<CreateClosingDto>, extraIncome = 0) {
     const calculated =
       n(dto.cardAmount) + n(dto.cashAmount) + n(dto.mercadoPagoAmount) +
@@ -95,18 +123,24 @@ export class ClosingsService implements OnModuleInit {
     return { calculatedTotal: calculated, declaredTotal: declared, difference: n(dto.posSystemAmount) - declared };
   }
 
-  /** Si hay montos por posnet, sobrescribe PVS / MP / Cuenta DNI con la suma por tipo. */
+  /**
+   * Si hay montos por posnet, sobrescribe solo los canales presentes en el listado.
+   * Así, sin posnets PVS/MP/DNI (o sin transferencias DNI en el snapshot) no se pisan
+   * los montos cargados a mano.
+   */
   private applyPosnetSums(dto: Partial<CreateClosingDto>): Partial<CreateClosingDto> {
     if (dto.posnetAmounts === undefined) return dto;
     if (dto.posnetAmounts === null || dto.posnetAmounts.length === 0) {
       return { ...dto, posnetAmounts: dto.posnetAmounts ?? [] };
     }
-    const sums = sumPosnetsByType(dto.posnetAmounts as ClosingPosnetAmount[]);
+    const rows = dto.posnetAmounts as ClosingPosnetAmount[];
+    const sums = sumPosnetsByType(rows);
+    const hasType = (type: string) => rows.some((r) => r.type === type);
     return {
       ...dto,
-      cardAmount: sums.cardAmount,
-      mercadoPagoAmount: sums.mercadoPagoAmount,
-      accountDniAmount: sums.accountDniAmount,
+      ...(hasType('PVS') ? { cardAmount: sums.cardAmount } : {}),
+      ...(hasType('MERCADO_PAGO') ? { mercadoPagoAmount: sums.mercadoPagoAmount } : {}),
+      ...(hasType('CUENTA_DNI') ? { accountDniAmount: sums.accountDniAmount } : {}),
     };
   }
 
@@ -139,6 +173,7 @@ export class ClosingsService implements OnModuleInit {
       cashLeftInRegister: n(c.cashLeftInRegister), cashPendingPickup: n(c.cashPendingPickup),
       cashWithdrawn: n(c.cashWithdrawn), cashWithdrawnByUserId: c.cashWithdrawnByUserId,
       cashWithdrawnByEmployeeId: c.cashWithdrawnByEmployeeId ?? null, cashWithdrawnByName: c.cashWithdrawnByName,
+      cashWithdrawnToAccountId: c.cashWithdrawnToAccountId ?? null,
       tipsAmount: n(c.tipsAmount), declaredTotal: n(c.declaredTotal), calculatedTotal: n(c.calculatedTotal),
       difference: n(c.difference), differenceReason: c.differenceReason, notes: c.notes,
       evidenceUrl: c.evidenceUrl, status: c.status, createdByUserId: c.createdByUserId, submittedAt: c.submittedAt,
@@ -189,6 +224,12 @@ export class ClosingsService implements OnModuleInit {
       normalized.cashWithdrawnByName,
       normalized.cashWithdrawnByEmployeeId,
     );
+    const cashWithdrawnToAccountId = await this.resolveWithdrawnToAccount(
+      shopId,
+      n(normalized.cashWithdrawn),
+      withdrawn.cashWithdrawnByUserId,
+      normalized.cashWithdrawnToAccountId,
+    );
     const closing = await this.closings.save(this.closings.create({
       shopId, businessDate: normalized.businessDate, businessDateKey: dateKey,
       posSystemAmount: money(n(normalized.posSystemAmount)), cardAmount: money(n(normalized.cardAmount)),
@@ -203,6 +244,7 @@ export class ClosingsService implements OnModuleInit {
       cashWithdrawnByUserId: withdrawn.cashWithdrawnByUserId,
       cashWithdrawnByEmployeeId: withdrawn.cashWithdrawnByEmployeeId,
       cashWithdrawnByName: withdrawn.cashWithdrawnByName,
+      cashWithdrawnToAccountId,
       tipsAmount: money(n(normalized.tipsAmount)), declaredTotal: money(totals.declaredTotal),
       calculatedTotal: money(totals.calculatedTotal), difference: money(totals.difference),
       differenceReason: normalized.differenceReason ?? null, notes: normalized.notes ?? null,
@@ -246,6 +288,10 @@ export class ClosingsService implements OnModuleInit {
       cashWithdrawnByUserId: dto.cashWithdrawnByUserId ?? row.cashWithdrawnByUserId ?? undefined,
       cashWithdrawnByEmployeeId: dto.cashWithdrawnByEmployeeId ?? row.cashWithdrawnByEmployeeId ?? undefined,
       cashWithdrawnByName: dto.cashWithdrawnByName ?? row.cashWithdrawnByName ?? undefined,
+      cashWithdrawnToAccountId:
+        dto.cashWithdrawnToAccountId !== undefined
+          ? dto.cashWithdrawnToAccountId
+          : row.cashWithdrawnToAccountId ?? undefined,
       tipsAmount: dto.tipsAmount ?? n(row.tipsAmount), declaredTotal: dto.declaredTotal,
       differenceReason: dto.differenceReason ?? row.differenceReason ?? undefined,
       notes: dto.notes ?? row.notes ?? undefined, evidenceUrl: dto.evidenceUrl ?? row.evidenceUrl ?? undefined,
@@ -264,6 +310,12 @@ export class ClosingsService implements OnModuleInit {
       .reduce((s, e) => s + e.amount, 0);
     const totals = this.calc(merged, incomeExtras);
     const withdrawn = await this.resolveWithdrawnBy(shopId, merged.cashWithdrawnByUserId, merged.cashWithdrawnByName, merged.cashWithdrawnByEmployeeId);
+    const cashWithdrawnToAccountId = await this.resolveWithdrawnToAccount(
+      shopId,
+      n(merged.cashWithdrawn),
+      withdrawn.cashWithdrawnByUserId,
+      merged.cashWithdrawnToAccountId,
+    );
     Object.assign(row, {
       businessDate: merged.businessDate,
       businessDateKey: closingDateKey(merged.businessDate),
@@ -279,6 +331,7 @@ export class ClosingsService implements OnModuleInit {
       cashWithdrawnByUserId: withdrawn.cashWithdrawnByUserId,
       cashWithdrawnByEmployeeId: withdrawn.cashWithdrawnByEmployeeId,
       cashWithdrawnByName: withdrawn.cashWithdrawnByName,
+      cashWithdrawnToAccountId,
       tipsAmount: money(n(merged.tipsAmount)), declaredTotal: money(totals.declaredTotal),
       calculatedTotal: money(totals.calculatedTotal), difference: money(totals.difference),
       differenceReason: merged.differenceReason ?? null, notes: merged.notes ?? null,

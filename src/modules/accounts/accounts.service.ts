@@ -194,4 +194,82 @@ export class AccountsService implements OnModuleInit {
       ),
     );
   }
+
+  /**
+   * Resuelve la cuenta PARTNER del usuario para el retiro de efectivo del cierre.
+   * - Si se indica preferredAccountId, debe estar asociada al usuario.
+   * - Si no tiene cuentas, crea una PARTNER con su nombre y la asocia.
+   * - Si tiene varias y no eligió, lanza BadRequest.
+   */
+  async resolvePartnerAccountForUser(
+    shopId: string,
+    userId: string,
+    preferredAccountId?: string | null,
+  ): Promise<LedgerAccount> {
+    const user = await this.users.findOne({ where: { id: userId, active: true } });
+    if (!user) throw new BadRequestException('Usuario del retiro no encontrado');
+
+    const links = await this.links.find({ where: { shopId, userId } });
+    const accountIds = links.map((l) => l.accountId);
+    const linked = accountIds.length
+      ? await this.accounts.find({
+          where: { shopId, id: In(accountIds), active: true },
+          order: { name: 'ASC' },
+        })
+      : [];
+    // Preferimos PARTNER; si solo tiene CHANNEL/SYSTEM linkeadas, las usamos igual.
+    const partners = linked.filter((a) => a.type === LedgerAccountType.PARTNER);
+    const candidates = partners.length ? partners : linked;
+
+    if (preferredAccountId) {
+      const chosen =
+        candidates.find((a) => a.id === preferredAccountId) ??
+        linked.find((a) => a.id === preferredAccountId);
+      if (!chosen) {
+        throw new BadRequestException(
+          'La cuenta elegida no está asociada al usuario que se lleva el efectivo',
+        );
+      }
+      return chosen;
+    }
+
+    if (candidates.length === 1) return candidates[0];
+    if (candidates.length > 1) {
+      throw new BadRequestException(
+        'El usuario tiene varias cuentas asociadas; seleccioná a cuál va el efectivo',
+      );
+    }
+
+    // Sin cuentas: crear PARTNER y asociar.
+    const baseCode = this.partnerCodeFromName(user.fullName);
+    let code = baseCode;
+    let suffix = 2;
+    while (await this.accounts.findOne({ where: { shopId, code } })) {
+      code = `${baseCode}_${suffix}`.slice(0, 40);
+      suffix += 1;
+    }
+    const row = await this.accounts.save(
+      this.accounts.create({
+        shopId,
+        name: user.fullName.trim() || 'Socio',
+        code,
+        type: LedgerAccountType.PARTNER,
+        linkedPaymentMethod: null,
+        active: true,
+      }),
+    );
+    await this.replaceUserLinks(shopId, row.id, [userId]);
+    return row;
+  }
+
+  private partnerCodeFromName(fullName: string): string {
+    const slug = fullName
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, '_')
+      .replace(/^_|_$/g, '')
+      .slice(0, 28);
+    return slug || 'SOCIO';
+  }
 }

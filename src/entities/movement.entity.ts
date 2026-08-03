@@ -14,11 +14,11 @@ export class Movement extends BaseEntity {
   @Column({ type: 'date' })
   businessDate: string;
 
-  @Column()
-  fromAccountId: string;
+  @Column({ type: 'varchar', nullable: true })
+  fromAccountId?: string | null;
 
-  @Column()
-  toAccountId: string;
+  @Column({ type: 'varchar', nullable: true })
+  toAccountId?: string | null;
 
   @Column({ type: 'varchar', length: 500, nullable: true })
   description?: string | null;
@@ -51,13 +51,13 @@ export class Movement extends BaseEntity {
   @JoinColumn({ name: 'shopId' })
   shop: Shop;
 
-  @ManyToOne(() => LedgerAccount)
+  @ManyToOne(() => LedgerAccount, { nullable: true })
   @JoinColumn({ name: 'fromAccountId' })
-  fromAccount: LedgerAccount;
+  fromAccount?: LedgerAccount | null;
 
-  @ManyToOne(() => LedgerAccount)
+  @ManyToOne(() => LedgerAccount, { nullable: true })
   @JoinColumn({ name: 'toAccountId' })
-  toAccount: LedgerAccount;
+  toAccount?: LedgerAccount | null;
 
   @ManyToOne(() => Concept, { nullable: true })
   @JoinColumn({ name: 'conceptId' })

@@ -90,6 +90,13 @@ export class CreateClosingDto {
   @ApiPropertyOptional() @IsOptional() @IsUUID() cashWithdrawnByUserId?: string;
   @ApiPropertyOptional() @IsOptional() @IsUUID() cashWithdrawnByEmployeeId?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() cashWithdrawnByName?: string;
+  @ApiPropertyOptional({
+    description:
+      'Cuenta destino del retiro. Obligatoria si el usuario tiene más de una cuenta asociada.',
+  })
+  @IsOptional()
+  @IsUUID()
+  cashWithdrawnToAccountId?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) tipsAmount?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() declaredTotal?: number;
   @ApiPropertyOptional() @IsOptional() @IsString() differenceReason?: string;

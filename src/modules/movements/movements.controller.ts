@@ -32,6 +32,7 @@ import {
   IsString,
   IsUUID,
   Min,
+  ValidateIf,
 } from 'class-validator';
 import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
@@ -40,8 +41,16 @@ import { MovementsExcelImportService } from './movements-excel-import.service';
 
 class CreateMovementDto {
   @ApiProperty() @IsDateString() businessDate: string;
-  @ApiProperty() @IsUUID() fromAccountId: string;
-  @ApiProperty() @IsUUID() toAccountId: string;
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  fromAccountId?: string | null;
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  toAccountId?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsString() description?: string | null;
   @ApiProperty() @IsNumber() @Min(0) amountUyu: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() usdRate?: number | null;
@@ -54,8 +63,16 @@ class CreateMovementDto {
 
 class UpdateMovementDto {
   @ApiPropertyOptional() @IsOptional() @IsDateString() businessDate?: string;
-  @ApiPropertyOptional() @IsOptional() @IsUUID() fromAccountId?: string;
-  @ApiPropertyOptional() @IsOptional() @IsUUID() toAccountId?: string;
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  fromAccountId?: string | null;
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  toAccountId?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsString() description?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) amountUyu?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() usdRate?: number | null;

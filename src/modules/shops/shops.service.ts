@@ -9,8 +9,10 @@ import { In, Not, Repository } from 'typeorm';
 import { Shop } from '../../entities/shop.entity';
 import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
+import { LedgerAccount } from '../../entities/ledger-account.entity';
+import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
 import { AuthUser } from '../../common/decorators';
-import { GlobalRole } from '../../common/enums';
+import { GlobalRole, LedgerAccountType } from '../../common/enums';
 import { isGlobalAdmin, isSuperAdmin } from '../../common/guards';
 import { normalizeLogoUrl } from '../../common/drive-url';
 import { isEntityActive } from '../../common/active.util';
@@ -34,6 +36,9 @@ export class ShopsService {
     @InjectRepository(Shop) private readonly shops: Repository<Shop>,
     @InjectRepository(UserShop) private readonly userShops: Repository<UserShop>,
     @InjectRepository(User) private readonly users: Repository<User>,
+    @InjectRepository(LedgerAccount) private readonly accounts: Repository<LedgerAccount>,
+    @InjectRepository(LedgerAccountUser)
+    private readonly accountLinks: Repository<LedgerAccountUser>,
     private readonly catalogSeed: CatalogSeedService,
   ) {}
 
@@ -79,7 +84,7 @@ export class ShopsService {
     return this.toDto(shop);
   }
 
-  /** Usuarios del local (para “quién se lo lleva”, etc.). */
+  /** Usuarios del local (para “quién se lo lleva”, etc.). Incluye cuentas PARTNER asociadas. */
   async listUsers(user: AuthUser, shopId: string) {
     this.assertShopAccess(user, shopId);
     const links = await this.userShops.find({ where: { shopId } });
@@ -89,10 +94,31 @@ export class ShopsService {
       where: { id: In(ids), active: true },
       order: { fullName: 'ASC' },
     });
+    const accountLinks = await this.accountLinks.find({
+      where: { shopId, userId: In(ids) },
+    });
+    const accountIds = [...new Set(accountLinks.map((l) => l.accountId))];
+    const accounts = accountIds.length
+      ? await this.accounts.find({
+          where: { shopId, id: In(accountIds), active: true },
+          order: { name: 'ASC' },
+        })
+      : [];
+    const accountById = new Map(accounts.map((a) => [a.id, a]));
+    const accountsByUser = new Map<string, Array<{ id: string; name: string; code: string }>>();
+    for (const link of accountLinks) {
+      const acc = accountById.get(link.accountId);
+      if (!acc) continue;
+      if (acc.type !== LedgerAccountType.PARTNER) continue;
+      const list = accountsByUser.get(link.userId) ?? [];
+      list.push({ id: acc.id, name: acc.name, code: acc.code });
+      accountsByUser.set(link.userId, list);
+    }
     return rows.map((u) => ({
       id: u.id,
       fullName: u.fullName,
       email: u.email,
+      ledgerAccounts: accountsByUser.get(u.id) ?? [],
     }));
   }
 

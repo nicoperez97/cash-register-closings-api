@@ -84,6 +84,10 @@ export class CashClosing extends BaseEntity {
   @Column({ type: 'varchar', nullable: true })
   cashWithdrawnByName?: string | null;
 
+  /** Cuenta PARTNER destino del retiro de efectivo (usuario que se lo lleva). */
+  @Column({ type: 'varchar', nullable: true })
+  cashWithdrawnToAccountId?: string | null;
+
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
   tipsAmount: string;
 

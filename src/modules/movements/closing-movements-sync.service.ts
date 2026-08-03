@@ -119,12 +119,14 @@ export class ClosingMovementsSyncService {
       let toAccountId = egreso.id;
       let employeeId: string | null = closing.cashWithdrawnByEmployeeId ?? null;
 
-      if (closing.cashWithdrawnByEmployeeId) {
+      if (closing.cashWithdrawnToAccountId) {
+        const dest = accounts.find((a) => a.id === closing.cashWithdrawnToAccountId);
+        if (dest) toAccountId = dest.id;
+      } else if (closing.cashWithdrawnByEmployeeId) {
         const emp = await this.employees.findOne({
           where: { id: closing.cashWithdrawnByEmployeeId, shopId: closing.shopId },
         });
         if (emp) {
-          // retiro va a egreso genérico; se marca empleado
           employeeId = emp.id;
         }
       } else if (closing.cashWithdrawnByName) {
