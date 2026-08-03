@@ -5,6 +5,7 @@ import { Concept } from '../../entities/concept.entity';
 import { Shop } from '../../entities/shop.entity';
 import { User } from '../../entities/user.entity';
 import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
+import { Movement } from '../../entities/movement.entity';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
 import { ShopsModule } from '../shops/shops.module';
 import { AccountsController } from './accounts.controller';
@@ -12,7 +13,14 @@ import { AccountsService } from './accounts.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([LedgerAccount, LedgerAccountUser, Concept, Shop, User]),
+    TypeOrmModule.forFeature([
+      LedgerAccount,
+      LedgerAccountUser,
+      Concept,
+      Shop,
+      User,
+      Movement,
+    ]),
     ShopsModule,
   ],
   controllers: [AccountsController],

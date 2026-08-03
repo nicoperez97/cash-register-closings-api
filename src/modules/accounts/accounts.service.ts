@@ -8,13 +8,23 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
+import { Movement } from '../../entities/movement.entity';
+import { Concept } from '../../entities/concept.entity';
 import { Shop } from '../../entities/shop.entity';
 import { User } from '../../entities/user.entity';
 import { AuthUser } from '../../common/decorators';
-import { LedgerAccountType, LinkedPaymentMethod } from '../../common/enums';
+import {
+  ConceptKind,
+  LedgerAccountType,
+  LinkedPaymentMethod,
+} from '../../common/enums';
 import { ShopsService } from '../shops/shops.service';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
 import { markDeletedUnique } from '../../common/soft-delete.util';
+
+const n = (v?: string | number | null) => Number(v ?? 0);
+const money = (v: number) => v.toFixed(2);
+const BALANCE_EPS = 0.01;
 
 export class UpsertAccountDto {
   name: string;
@@ -37,6 +47,10 @@ export class AccountsService implements OnModuleInit {
     private readonly accounts: Repository<LedgerAccount>,
     @InjectRepository(LedgerAccountUser)
     private readonly links: Repository<LedgerAccountUser>,
+    @InjectRepository(Movement)
+    private readonly movements: Repository<Movement>,
+    @InjectRepository(Concept)
+    private readonly concepts: Repository<Concept>,
     @InjectRepository(Shop) private readonly shopsRepo: Repository<Shop>,
     @InjectRepository(User) private readonly users: Repository<User>,
     private readonly shops: ShopsService,
@@ -138,13 +152,17 @@ export class AccountsService implements OnModuleInit {
     const code = dto.code.trim().toUpperCase();
     const clash = await this.accounts.findOne({ where: { shopId, code } });
     if (clash) throw new BadRequestException('Ya existe una cuenta con ese código');
+    const linkedPaymentMethod = dto.linkedPaymentMethod ?? null;
+    if (linkedPaymentMethod) {
+      await this.clearLinkedPaymentMethod(shopId, linkedPaymentMethod);
+    }
     const row = await this.accounts.save(
       this.accounts.create({
         shopId,
         name: dto.name.trim(),
         code,
         type: dto.type ?? LedgerAccountType.PARTNER,
-        linkedPaymentMethod: dto.linkedPaymentMethod ?? null,
+        linkedPaymentMethod,
         hideFromCashWithdraw:
           dto.type === LedgerAccountType.SUPPLIER
             ? true
@@ -172,7 +190,11 @@ export class AccountsService implements OnModuleInit {
     }
     if (dto.type !== undefined) row.type = dto.type;
     if (dto.linkedPaymentMethod !== undefined) {
-      row.linkedPaymentMethod = dto.linkedPaymentMethod;
+      const method = dto.linkedPaymentMethod;
+      if (method) {
+        await this.clearLinkedPaymentMethod(shopId, method, id);
+      }
+      row.linkedPaymentMethod = method;
     }
     if (dto.hideFromCashWithdraw !== undefined) {
       row.hideFromCashWithdraw = !!dto.hideFromCashWithdraw;
@@ -188,19 +210,164 @@ export class AccountsService implements OnModuleInit {
     return (await this.enrich([row]))[0];
   }
 
-  async remove(user: AuthUser, shopId: string, id: string) {
+  /**
+   * Asigna qué cuenta CHANNEL recibe cada campo del cierre
+   * (PVS, Mercado Pago, efectivo, etc.). Un medio → una sola cuenta.
+   */
+  async setPaymentDeposits(
+    user: AuthUser,
+    shopId: string,
+    map: Partial<Record<LinkedPaymentMethod, string | null>>,
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    const methods = Object.values(LinkedPaymentMethod);
+    for (const method of methods) {
+      if (!(method in map)) continue;
+      const accountId = map[method]?.trim() || null;
+      await this.clearLinkedPaymentMethod(shopId, method);
+      if (!accountId) continue;
+      const row = await this.accounts.findOne({
+        where: { id: accountId, shopId, active: true },
+      });
+      if (!row) {
+        throw new BadRequestException(`Cuenta no encontrada para ${method}`);
+      }
+      if (row.type === LedgerAccountType.SYSTEM) {
+        throw new BadRequestException('No se puede vincular un medio a una cuenta de sistema');
+      }
+      row.linkedPaymentMethod = method;
+      await this.accounts.save(row);
+    }
+    return this.list(user, shopId);
+  }
+
+  /** Quita el medio de todas las cuentas del local (opcionalmente excepto una). */
+  private async clearLinkedPaymentMethod(
+    shopId: string,
+    method: LinkedPaymentMethod,
+    exceptAccountId?: string,
+  ) {
+    const qb = this.accounts
+      .createQueryBuilder()
+      .update(LedgerAccount)
+      .set({ linkedPaymentMethod: null })
+      .where('shopId = :shopId', { shopId })
+      .andWhere('linkedPaymentMethod = :method', { method });
+    if (exceptAccountId) {
+      qb.andWhere('id != :exceptAccountId', { exceptAccountId });
+    }
+    await qb.execute();
+  }
+
+  async balanceOf(user: AuthUser, shopId: string, id: string) {
+    this.shops.assertShopAccess(user, shopId);
+    const row = await this.accounts.findOne({ where: { id, shopId } });
+    if (!row) throw new NotFoundException('Cuenta no encontrada');
+    const balance = await this.computeBalance(shopId, id);
+    return {
+      accountId: row.id,
+      name: row.name,
+      balance,
+    };
+  }
+
+  async remove(
+    user: AuthUser,
+    shopId: string,
+    id: string,
+    transferToAccountId?: string | null,
+  ) {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.accounts.findOne({ where: { id, shopId } });
     if (!row) throw new NotFoundException('Cuenta no encontrada');
     if (row.type === LedgerAccountType.SYSTEM) {
       throw new BadRequestException('No se pueden eliminar cuentas de sistema');
     }
+
+    const balance = await this.computeBalance(shopId, id);
+    if (Math.abs(balance) >= BALANCE_EPS) {
+      const destId = transferToAccountId?.trim() || null;
+      if (!destId) {
+        throw new BadRequestException({
+          message: `La cuenta tiene saldo ${money(balance)}. Elegí a qué cuenta transferirlo.`,
+          code: 'HAS_BALANCE',
+          balance,
+        });
+      }
+      if (destId === id) {
+        throw new BadRequestException('La cuenta destino debe ser distinta');
+      }
+      const dest = await this.accounts.findOne({
+        where: { id: destId, shopId, active: true },
+      });
+      if (!dest) throw new BadRequestException('Cuenta destino no encontrada');
+      if (dest.type === LedgerAccountType.SYSTEM) {
+        throw new BadRequestException('No se puede transferir a una cuenta de sistema');
+      }
+      await this.createBalanceTransfer(shopId, row, dest, balance);
+    }
+
     await this.links.delete({ accountId: id });
     row.code = markDeletedUnique(row.code, row.id);
     row.active = false;
     await this.accounts.save(row);
     await this.accounts.softRemove(row);
-    return { ok: true };
+    return { ok: true, transferredBalance: Math.abs(balance) >= BALANCE_EPS ? balance : 0 };
+  }
+
+  private async computeBalance(shopId: string, accountId: string): Promise<number> {
+    const rows = await this.movements
+      .createQueryBuilder('m')
+      .where('m.shopId = :shopId', { shopId })
+      .andWhere('m.active = true')
+      .andWhere('(m.fromAccountId = :id OR m.toAccountId = :id)', { id: accountId })
+      .getMany();
+    let income = 0;
+    let expense = 0;
+    for (const r of rows) {
+      const amt = n(r.amountUyu);
+      if (r.fromAccountId === accountId) expense += amt;
+      if (r.toAccountId === accountId) income += amt;
+    }
+    return Math.round((income - expense) * 100) / 100;
+  }
+
+  private async createBalanceTransfer(
+    shopId: string,
+    source: LedgerAccount,
+    dest: LedgerAccount,
+    balance: number,
+  ) {
+    const concept =
+      (await this.concepts.findOne({
+        where: { shopId, name: 'Transferencia e/ cuentas', active: true },
+      })) ??
+      (await this.concepts.findOne({
+        where: { shopId, kind: ConceptKind.TRANSFER, active: true },
+      }));
+
+    const today = new Date();
+    const y = today.getFullYear();
+    const m = String(today.getMonth() + 1).padStart(2, '0');
+    const d = String(today.getDate()).padStart(2, '0');
+    const amount = Math.abs(balance);
+    // Saldo + : fondos en la cuenta → sale hacia destino.
+    // Saldo − : la cuenta debe → entra desde destino para dejarla en cero.
+    const fromAccountId = balance > 0 ? source.id : dest.id;
+    const toAccountId = balance > 0 ? dest.id : source.id;
+
+    await this.movements.save(
+      this.movements.create({
+        shopId,
+        businessDate: `${y}-${m}-${d}`,
+        fromAccountId,
+        toAccountId,
+        amountUyu: money(amount),
+        conceptId: concept?.id ?? null,
+        description: `Transferencia por eliminación de cuenta «${source.name}»`,
+        active: true,
+      }),
+    );
   }
 
   private normalizeUserIds(dto: Partial<UpsertAccountDto>): string[] {
