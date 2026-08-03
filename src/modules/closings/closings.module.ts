@@ -8,6 +8,7 @@ import { UserShop } from '../../entities/user-shop.entity';
 import { Employee } from '../../entities/employee.entity';
 import { ShopsModule } from '../shops/shops.module';
 import { MovementsModule } from '../movements/movements.module';
+import { AccountsModule } from '../accounts/accounts.module';
 import { ClosingsController } from './closings.controller';
 import { ClosingsService } from './closings.service';
 import { WhatsappImportService } from './whatsapp-import.service';
@@ -25,6 +26,7 @@ import { ExcelImportService } from './excel-import.service';
     ]),
     ShopsModule,
     MovementsModule,
+    AccountsModule,
   ],
   controllers: [ClosingsController],
   providers: [ClosingsService, WhatsappImportService, ExcelImportService],

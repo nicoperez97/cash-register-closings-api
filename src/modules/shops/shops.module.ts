@@ -4,6 +4,7 @@ import { Shop } from '../../entities/shop.entity';
 import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
+import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
 import { Concept } from '../../entities/concept.entity';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
 import { ShopsController } from './shops.controller';
@@ -12,7 +13,14 @@ import { ShopBackupService } from './shop-backup.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Shop, UserShop, User, LedgerAccount, Concept]),
+    TypeOrmModule.forFeature([
+      Shop,
+      UserShop,
+      User,
+      LedgerAccount,
+      LedgerAccountUser,
+      Concept,
+    ]),
   ],
   controllers: [ShopsController],
   providers: [ShopsService, ShopBackupService, CatalogSeedService],
