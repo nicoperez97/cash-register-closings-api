@@ -78,10 +78,14 @@ class CreateWaitingDto {
   @Min(1)
   @Max(99)
   partySize: number;
-  @ApiProperty({ example: '+59899123456' })
+  @ApiPropertyOptional({ example: '+59899123456' })
+  @IsOptional()
   @IsString()
-  @MinLength(6)
-  phone: string;
+  phone?: string;
+  @ApiPropertyOptional({ enum: ReservationArea, default: ReservationArea.INSIDE })
+  @IsOptional()
+  @IsEnum(ReservationArea)
+  area?: ReservationArea;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
 }
 
@@ -95,6 +99,10 @@ class UpdateWaitingDto {
   @Max(99)
   partySize?: number;
   @ApiPropertyOptional() @IsOptional() @IsString() phone?: string;
+  @ApiPropertyOptional({ enum: ReservationArea })
+  @IsOptional()
+  @IsEnum(ReservationArea)
+  area?: ReservationArea;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string | null;
   @ApiPropertyOptional({ enum: WaitingListStatus })
   @IsOptional()
@@ -201,5 +209,11 @@ export class PublicReservationsController {
   @Get(':slug/reservations')
   board(@Param('slug') slug: string, @Query('date') date?: string) {
     return this.reservations.publicBoard(slug, date);
+  }
+
+  @Public()
+  @Get(':slug/waiting-list')
+  waitingBoard(@Param('slug') slug: string) {
+    return this.reservations.publicWaitingBoard(slug);
   }
 }
