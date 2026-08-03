@@ -283,13 +283,26 @@ export class MovementsService implements OnModuleInit {
   async balances(user: AuthUser, shopId: string, filters: MovementFilters = {}) {
     this.shops.assertShopAccess(user, shopId);
     const rows = await this.list(user, shopId, filters);
+    // Socios + canales del local (PVS, MP, efectivo, etc.). Sin SYSTEM (INGRESO/EGRESO).
     const accounts = await this.accounts.find({
-      where: { shopId, active: true, type: LedgerAccountType.PARTNER },
-      order: { name: 'ASC' },
+      where: [
+        { shopId, active: true, type: LedgerAccountType.PARTNER },
+        { shopId, active: true, type: LedgerAccountType.CHANNEL },
+      ],
+      order: { type: 'ASC', name: 'ASC' },
     });
-    const bal = new Map<string, { accountId: string; name: string; income: number; expense: number }>();
+    const bal = new Map<
+      string,
+      { accountId: string; name: string; type: string; income: number; expense: number }
+    >();
     for (const a of accounts) {
-      bal.set(a.id, { accountId: a.id, name: a.name, income: 0, expense: 0 });
+      bal.set(a.id, {
+        accountId: a.id,
+        name: a.name,
+        type: a.type,
+        income: 0,
+        expense: 0,
+      });
     }
     for (const r of rows) {
       if (r.fromAccountId) {
@@ -301,12 +314,23 @@ export class MovementsService implements OnModuleInit {
         if (to) to.income += r.amountUyu;
       }
     }
+    // Canales del local primero, luego socios.
+    const ordered = [...bal.values()].sort((a, b) => {
+      const rank = (t: string) => (t === LedgerAccountType.CHANNEL ? 0 : 1);
+      const d = rank(a.type) - rank(b.type);
+      if (d !== 0) return d;
+      return a.name.localeCompare(b.name, 'es');
+    });
     return {
       shopId,
       from: filters.from ?? null,
       to: filters.to ?? null,
-      accounts: [...bal.values()].map((a) => ({
-        ...a,
+      accounts: ordered.map((a) => ({
+        accountId: a.accountId,
+        name: a.name,
+        type: a.type,
+        income: a.income,
+        expense: a.expense,
         balance: a.income - a.expense,
       })),
     };

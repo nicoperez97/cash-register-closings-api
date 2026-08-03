@@ -431,6 +431,8 @@ export class AuthService implements OnModuleInit {
         coversEnabled: !!s.coversEnabled,
         defaultChangeAmount: Number(s.defaultChangeAmount),
         currency: s.currency,
+        timezone: s.timezone,
+        openingTime: s.openingTime ?? '10:00',
         logoUrl: s.logoUrl ?? null,
         accentColor: s.accentColor ?? null,
         salesSystemId: s.salesSystemId ?? null,

@@ -11,6 +11,8 @@ export type ModuleKey =
   | 'commissions'
   | 'accounts'
   | 'concepts'
+  | 'reservations'
+  | 'waitingList'
   | 'shop'
   | 'users';
 
@@ -112,6 +114,24 @@ export const MODULE_DEFS: ModuleDef[] = [
     ],
   },
   {
+    key: 'reservations',
+    label: 'Reservas',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
+    key: 'waitingList',
+    label: 'Lista de espera',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
     key: 'shop',
     label: 'Local / POS',
     levels: [
@@ -181,6 +201,8 @@ export function expandModulePermissions(
   pair('employees', 'employees.read', 'employees.manage');
   pair('payroll', 'payroll.read', 'payroll.manage');
   pair('commissions', 'commissions.read', 'commissions.manage');
+  pair('reservations', 'reservations.read', 'reservations.manage');
+  pair('waitingList', 'waitingList.read', 'waitingList.manage');
 
   if (modules.accounts === 'manage') add(set, 'accounts.manage', 'movements.read');
   if (modules.concepts === 'manage') add(set, 'concepts.manage', 'movements.read');
@@ -225,6 +247,8 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
     employees: level('employees.read', 'employees.manage'),
     payroll: level('payroll.read', 'payroll.manage'),
     commissions: level('commissions.read', 'commissions.manage'),
+    reservations: level('reservations.read', 'reservations.manage'),
+    waitingList: level('waitingList.read', 'waitingList.manage'),
     accounts: has('accounts.manage') ? 'manage' : 'none',
     concepts: has('concepts.manage') ? 'manage' : 'none',
     shop: has('shops.manage') ? 'manage' : 'none',

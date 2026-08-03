@@ -7,6 +7,7 @@ import { In, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import AdmZip from 'adm-zip';
 import { CashClosing } from '../../entities/cash-closing.entity';
+import { Shop } from '../../entities/shop.entity';
 import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { AuthUser } from '../../common/decorators';
@@ -47,6 +48,7 @@ export interface WhatsappImportItem {
 export class WhatsappImportService {
   constructor(
     @InjectRepository(CashClosing) private readonly closings: Repository<CashClosing>,
+    @InjectRepository(Shop) private readonly shopsRepo: Repository<Shop>,
     @InjectRepository(User) private readonly users: Repository<User>,
     @InjectRepository(UserShop) private readonly userShops: Repository<UserShop>,
     private readonly shops: ShopsService,
@@ -55,13 +57,13 @@ export class WhatsappImportService {
 
   async preview(user: AuthUser, shopId: string, file: Express.Multer.File) {
     this.shops.assertShopAccess(user, shopId);
-    const drafts = this.parseZip(file);
+    const drafts = await this.parseZip(shopId, file);
     return this.enrich(shopId, drafts, false);
   }
 
   async commit(user: AuthUser, shopId: string, file: Express.Multer.File) {
     this.shops.assertShopAccess(user, shopId);
-    const drafts = this.parseZip(file);
+    const drafts = await this.parseZip(shopId, file);
     const items = await this.enrich(shopId, drafts, true);
     const toCreate = items.filter((i) => !i.alreadyExists && (i.cardAmount > 0 || i.cashAmount > 0));
 
@@ -122,7 +124,7 @@ export class WhatsappImportService {
     };
   }
 
-  private parseZip(file: Express.Multer.File): ParsedClosingDraft[] {
+  private async parseZip(shopId: string, file: Express.Multer.File): Promise<ParsedClosingDraft[]> {
     if (!file?.buffer?.length) {
       throw new BadRequestException('Adjuntá un archivo ZIP de WhatsApp');
     }
@@ -151,7 +153,10 @@ export class WhatsappImportService {
     if (!messages.length) {
       throw new BadRequestException('No se encontraron mensajes en el chat');
     }
-    const drafts = extractClosingDrafts(messages);
+    const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
+    const drafts = extractClosingDrafts(messages, {
+      openingTime: shop?.openingTime ?? '10:00',
+    });
     if (!drafts.length) {
       throw new BadRequestException('No se detectaron cierres en la conversación');
     }

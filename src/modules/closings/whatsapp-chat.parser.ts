@@ -1,3 +1,5 @@
+import { parseOpeningMinutes } from '../../common/business-date';
+
 export interface WaMessage {
   at: Date;
   author: string;
@@ -66,12 +68,19 @@ function isSystemNoise(body: string): boolean {
 }
 
 /** Extrae borradores de cierre agrupando mensajes del mismo día laboral. */
-export function extractClosingDrafts(messages: WaMessage[]): ParsedClosingDraft[] {
+export function extractClosingDrafts(
+  messages: WaMessage[],
+  opts: { openingHour?: number; openingTime?: string | null } = {},
+): ParsedClosingDraft[] {
   const buckets = new Map<string, WaMessage[]>();
+  const openingMins =
+    opts.openingHour != null
+      ? Math.min(23, Math.max(0, opts.openingHour)) * 60
+      : parseOpeningMinutes(opts.openingTime ?? '05:00');
 
   for (const msg of messages) {
     if (!looksLikeClosingContent(msg.body)) continue;
-    const date = resolveBusinessDate(msg);
+    const date = resolveBusinessDate(msg, openingMins);
     if (!date) continue;
     const list = buckets.get(date) ?? [];
     list.push(msg);
@@ -99,11 +108,12 @@ function looksLikeClosingContent(body: string): boolean {
   );
 }
 
-function resolveBusinessDate(msg: WaMessage): string | null {
+function resolveBusinessDate(msg: WaMessage, openingMins: number): string | null {
   const fromBody = extractDateFromText(msg.body, msg.at);
   if (fromBody) return fromBody;
   const d = new Date(msg.at);
-  if (d.getHours() < 5) d.setDate(d.getDate() - 1);
+  const mins = d.getHours() * 60 + d.getMinutes();
+  if (mins < openingMins) d.setDate(d.getDate() - 1);
   return toIsoDate(d);
 }
 

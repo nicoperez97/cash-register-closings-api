@@ -87,6 +87,10 @@ export const PERMISSIONS = [
   'movements.read',
   'accounts.manage',
   'concepts.manage',
+  'reservations.read',
+  'reservations.manage',
+  'waitingList.read',
+  'waitingList.manage',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -114,6 +118,10 @@ export const ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     'movements.read',
     'accounts.manage',
     'concepts.manage',
+    'reservations.read',
+    'reservations.manage',
+    'waitingList.read',
+    'waitingList.manage',
   ],
   [GlobalRole.CASHIER]: ['closings.create'],
   [GlobalRole.VIEWER]: [
@@ -125,6 +133,7 @@ export const ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     'payroll.read',
     'commissions.read',
     'movements.read',
+    'reservations.read',
   ],
   [GlobalRole.PARTNER]: [
     'closings.read',

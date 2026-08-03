@@ -6,6 +6,7 @@ import { ClosingExtraLine } from '../../entities/closing-extra-line.entity';
 import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { Employee } from '../../entities/employee.entity';
+import { Shop } from '../../entities/shop.entity';
 import { ShopsModule } from '../shops/shops.module';
 import { MovementsModule } from '../movements/movements.module';
 import { AccountsModule } from '../accounts/accounts.module';
@@ -23,6 +24,7 @@ import { ExcelImportService } from './excel-import.service';
       User,
       UserShop,
       Employee,
+      Shop,
     ]),
     ShopsModule,
     MovementsModule,

@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Not, Repository } from 'typeorm';
@@ -17,6 +18,7 @@ import { isGlobalAdmin, isSuperAdmin } from '../../common/guards';
 import { normalizeLogoUrl } from '../../common/drive-url';
 import { isEntityActive } from '../../common/active.util';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
+import { normalizeOpeningTime } from '../../common/business-date';
 import { CreateShopDto, UpdateShopDto } from './dto/shop.dto';
 import { PosnetType, ShopPosnet } from '../../common/posnet';
 import { randomUUID } from 'crypto';
@@ -31,7 +33,7 @@ const HEX_COLOR = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 const POSNET_TYPES = new Set(Object.values(PosnetType));
 
 @Injectable()
-export class ShopsService {
+export class ShopsService implements OnModuleInit {
   constructor(
     @InjectRepository(Shop) private readonly shops: Repository<Shop>,
     @InjectRepository(UserShop) private readonly userShops: Repository<UserShop>,
@@ -41,6 +43,17 @@ export class ShopsService {
     private readonly accountLinks: Repository<LedgerAccountUser>,
     private readonly catalogSeed: CatalogSeedService,
   ) {}
+
+  async onModuleInit() {
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN openingTime VARCHAR(5) NOT NULL DEFAULT '10:00'
+      `);
+    } catch {
+      // columna ya existe
+    }
+  }
 
   assertShopAccess(user: AuthUser, shopId: string) {
     if (isSuperAdmin(user.globalRole as GlobalRole)) return;
@@ -137,6 +150,7 @@ export class ShopsService {
         coversEnabled: dto.coversEnabled ?? false,
         defaultChangeAmount: String(dto.defaultChangeAmount ?? 0),
         timezone: dto.timezone ?? 'America/Argentina/Buenos_Aires',
+        openingTime: normalizeOpeningTime(dto.openingTime),
         currency: dto.currency ?? 'ARS',
         logoUrl: normalizeLogoUrl(dto.logoUrl),
         accentColor: this.normalizeAccent(dto.accentColor),
@@ -164,6 +178,9 @@ export class ShopsService {
     if (dto.unitsLabel !== undefined) shop.unitsLabel = dto.unitsLabel || null;
     if (dto.coversEnabled !== undefined) shop.coversEnabled = dto.coversEnabled;
     if (dto.timezone !== undefined) shop.timezone = dto.timezone;
+    if (dto.openingTime !== undefined) {
+      shop.openingTime = normalizeOpeningTime(dto.openingTime);
+    }
     if (dto.currency !== undefined) shop.currency = dto.currency;
     if (dto.active !== undefined) shop.active = isEntityActive(dto.active);
     if (dto.defaultChangeAmount !== undefined) {
@@ -249,6 +266,7 @@ export class ShopsService {
       name: s.name,
       slug: s.slug,
       timezone: s.timezone,
+      openingTime: normalizeOpeningTime(s.openingTime),
       currency: s.currency,
       unitsLabel: s.unitsLabel,
       coversEnabled: !!s.coversEnabled,
