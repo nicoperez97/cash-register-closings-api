@@ -301,7 +301,7 @@ export class ReservationsService implements OnModuleInit {
       where: { slug: String(slug ?? '').trim().toLowerCase(), active: true },
     });
     if (!shop) throw new NotFoundException('Local no encontrado');
-    if (shop.reservationsEnabled === false) {
+    if (!shop.reservationsEnabled) {
       throw new NotFoundException('Reservas no disponibles en este local');
     }
 
@@ -361,7 +361,7 @@ export class ReservationsService implements OnModuleInit {
       where: { slug: String(slug ?? '').trim().toLowerCase(), active: true },
     });
     if (!shop) throw new NotFoundException('Local no encontrado');
-    if (shop.waitingListEnabled === false) {
+    if (!shop.waitingListEnabled) {
       throw new NotFoundException('Lista de espera no disponible en este local');
     }
 
