@@ -10,7 +10,7 @@ import { Movement } from '../../entities/movement.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { Concept } from '../../entities/concept.entity';
 import { AuthUser } from '../../common/decorators';
-import { GlobalRole } from '../../common/enums';
+import { GlobalRole, LedgerAccountType } from '../../common/enums';
 import { isGlobalAdmin } from '../../common/guards';
 import { ShopsService } from '../shops/shops.service';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
@@ -284,7 +284,7 @@ export class MovementsService implements OnModuleInit {
     this.shops.assertShopAccess(user, shopId);
     const rows = await this.list(user, shopId, filters);
     const accounts = await this.accounts.find({
-      where: { shopId, active: true },
+      where: { shopId, active: true, type: LedgerAccountType.PARTNER },
       order: { name: 'ASC' },
     });
     const bal = new Map<string, { accountId: string; name: string; income: number; expense: number }>();
