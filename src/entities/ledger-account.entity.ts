@@ -22,6 +22,10 @@ export class LedgerAccount extends BaseEntity {
   @Column({ type: 'varchar', length: 32, nullable: true })
   linkedPaymentMethod?: LinkedPaymentMethod | null;
 
+  /** Si es true, no aparece en el selector de retiro del cierre (“Quién se lo lleva”). */
+  @Column({ type: 'tinyint', default: 0 })
+  hideFromCashWithdraw: boolean;
+
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })
   shop: Shop;

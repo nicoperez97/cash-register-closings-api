@@ -26,6 +26,8 @@ export class UpsertAccountDto {
   /** Compat: un solo usuario. */
   userId?: string | null;
   active?: boolean;
+  /** Ocultar en el selector de retiro del cierre. */
+  hideFromCashWithdraw?: boolean;
 }
 
 @Injectable()
@@ -47,6 +49,14 @@ export class AccountsService implements OnModuleInit {
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error('[AccountsService] Legacy userId migrate failed:', err);
+    }
+    try {
+      await this.accounts.query(`
+        ALTER TABLE ledger_accounts
+          ADD COLUMN hideFromCashWithdraw TINYINT(1) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // columna ya existe
     }
   }
 
@@ -95,6 +105,7 @@ export class AccountsService implements OnModuleInit {
         code: a.code,
         type: a.type,
         linkedPaymentMethod: a.linkedPaymentMethod ?? null,
+        hideFromCashWithdraw: !!a.hideFromCashWithdraw,
         userIds: uids,
         userNames: names,
         userFullName: names.join(', ') || null,
@@ -125,6 +136,7 @@ export class AccountsService implements OnModuleInit {
         code,
         type: dto.type ?? LedgerAccountType.PARTNER,
         linkedPaymentMethod: dto.linkedPaymentMethod ?? null,
+        hideFromCashWithdraw: !!dto.hideFromCashWithdraw,
         active: dto.active ?? true,
       }),
     );
@@ -149,6 +161,9 @@ export class AccountsService implements OnModuleInit {
     if (dto.type !== undefined) row.type = dto.type;
     if (dto.linkedPaymentMethod !== undefined) {
       row.linkedPaymentMethod = dto.linkedPaymentMethod;
+    }
+    if (dto.hideFromCashWithdraw !== undefined) {
+      row.hideFromCashWithdraw = !!dto.hideFromCashWithdraw;
     }
     if (dto.active !== undefined) row.active = dto.active;
     await this.accounts.save(row);
@@ -217,17 +232,24 @@ export class AccountsService implements OnModuleInit {
           order: { name: 'ASC' },
         })
       : [];
-    // Preferimos PARTNER; si solo tiene CHANNEL/SYSTEM linkeadas, las usamos igual.
-    const partners = linked.filter((a) => a.type === LedgerAccountType.PARTNER);
-    const candidates = partners.length ? partners : linked;
+    // Preferimos PARTNER visibles en retiro; si solo tiene CHANNEL/SYSTEM, las usamos igual.
+    const partners = linked.filter(
+      (a) => a.type === LedgerAccountType.PARTNER && !a.hideFromCashWithdraw,
+    );
+    const candidates = partners.length
+      ? partners
+      : linked.filter((a) => !a.hideFromCashWithdraw);
 
     if (preferredAccountId) {
-      const chosen =
-        candidates.find((a) => a.id === preferredAccountId) ??
-        linked.find((a) => a.id === preferredAccountId);
+      const chosen = linked.find((a) => a.id === preferredAccountId);
       if (!chosen) {
         throw new BadRequestException(
           'La cuenta elegida no está asociada al usuario que se lleva el efectivo',
+        );
+      }
+      if (chosen.hideFromCashWithdraw) {
+        throw new BadRequestException(
+          'Esa cuenta está oculta para el retiro de efectivo; elegí otra',
         );
       }
       return chosen;
@@ -240,7 +262,7 @@ export class AccountsService implements OnModuleInit {
       );
     }
 
-    // Sin cuentas: crear PARTNER y asociar.
+    // Sin cuentas visibles: crear PARTNER y asociar.
     const baseCode = this.partnerCodeFromName(user.fullName);
     let code = baseCode;
     let suffix = 2;
@@ -255,6 +277,7 @@ export class AccountsService implements OnModuleInit {
         code,
         type: LedgerAccountType.PARTNER,
         linkedPaymentMethod: null,
+        hideFromCashWithdraw: false,
         active: true,
       }),
     );

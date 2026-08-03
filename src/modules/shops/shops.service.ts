@@ -110,6 +110,7 @@ export class ShopsService {
       const acc = accountById.get(link.accountId);
       if (!acc) continue;
       if (acc.type !== LedgerAccountType.PARTNER) continue;
+      if (acc.hideFromCashWithdraw) continue;
       const list = accountsByUser.get(link.userId) ?? [];
       list.push({ id: acc.id, name: acc.name, code: acc.code });
       accountsByUser.set(link.userId, list);

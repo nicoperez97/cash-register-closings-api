@@ -38,6 +38,12 @@ class CreateAccountDto {
   @IsUUID()
   userId?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
+  @ApiPropertyOptional({
+    description: 'Si es true, no aparece en “Quién se lo lleva” del cierre',
+  })
+  @IsOptional()
+  @IsBoolean()
+  hideFromCashWithdraw?: boolean;
 }
 
 class UpdateAccountDto {
@@ -62,6 +68,10 @@ class UpdateAccountDto {
   @IsUUID()
   userId?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  hideFromCashWithdraw?: boolean;
 }
 
 @ApiTags('accounts')
