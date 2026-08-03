@@ -143,6 +143,7 @@ export class ReservationsService implements OnModuleInit {
 
   async listReservations(user: AuthUser, shopId: string, date?: string) {
     this.shops.assertShopAccess(user, shopId);
+    await this.shops.assertReservationsEnabled(shopId);
     const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
     const businessDate =
       date && /^\d{4}-\d{2}-\d{2}$/.test(date)
@@ -163,6 +164,7 @@ export class ReservationsService implements OnModuleInit {
 
   async createReservation(user: AuthUser, shopId: string, dto: UpsertReservationDto) {
     this.shops.assertShopAccess(user, shopId);
+    await this.shops.assertReservationsEnabled(shopId);
     const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
     const businessDate = dto.businessDate
       ? this.normalizeDate(dto.businessDate)
@@ -192,6 +194,7 @@ export class ReservationsService implements OnModuleInit {
     dto: UpsertReservationDto,
   ) {
     this.shops.assertShopAccess(user, shopId);
+    await this.shops.assertReservationsEnabled(shopId);
     const row = await this.reservations.findOne({ where: { id, shopId } });
     if (!row || !isEntityActive(row.active)) {
       throw new NotFoundException('Reserva no encontrada');
@@ -211,6 +214,7 @@ export class ReservationsService implements OnModuleInit {
 
   async removeReservation(user: AuthUser, shopId: string, id: string) {
     this.shops.assertShopAccess(user, shopId);
+    await this.shops.assertReservationsEnabled(shopId);
     const row = await this.reservations.findOne({ where: { id, shopId } });
     if (!row) throw new NotFoundException('Reserva no encontrada');
     row.active = false;
@@ -221,6 +225,7 @@ export class ReservationsService implements OnModuleInit {
 
   async listWaiting(user: AuthUser, shopId: string, includeDone = false) {
     this.shops.assertShopAccess(user, shopId);
+    await this.shops.assertWaitingListEnabled(shopId);
     const qb = this.waiting
       .createQueryBuilder('w')
       .where('w.shopId = :shopId', { shopId })
@@ -235,6 +240,7 @@ export class ReservationsService implements OnModuleInit {
 
   async createWaiting(user: AuthUser, shopId: string, dto: UpsertWaitingListDto) {
     this.shops.assertShopAccess(user, shopId);
+    await this.shops.assertWaitingListEnabled(shopId);
     const name = String(dto.guestName ?? '').trim();
     if (!name) throw new BadRequestException('El nombre es obligatorio');
     const row = await this.waiting.save(
@@ -259,6 +265,7 @@ export class ReservationsService implements OnModuleInit {
     dto: UpsertWaitingListDto,
   ) {
     this.shops.assertShopAccess(user, shopId);
+    await this.shops.assertWaitingListEnabled(shopId);
     const row = await this.waiting.findOne({ where: { id, shopId } });
     if (!row || !isEntityActive(row.active)) {
       throw new NotFoundException('Entrada no encontrada');
@@ -279,6 +286,7 @@ export class ReservationsService implements OnModuleInit {
 
   async removeWaiting(user: AuthUser, shopId: string, id: string) {
     this.shops.assertShopAccess(user, shopId);
+    await this.shops.assertWaitingListEnabled(shopId);
     const row = await this.waiting.findOne({ where: { id, shopId } });
     if (!row) throw new NotFoundException('Entrada no encontrada');
     row.active = false;
@@ -293,6 +301,9 @@ export class ReservationsService implements OnModuleInit {
       where: { slug: String(slug ?? '').trim().toLowerCase(), active: true },
     });
     if (!shop) throw new NotFoundException('Local no encontrado');
+    if (shop.reservationsEnabled === false) {
+      throw new NotFoundException('Reservas no disponibles en este local');
+    }
 
     const businessDate =
       date && /^\d{4}-\d{2}-\d{2}$/.test(date)
@@ -350,6 +361,9 @@ export class ReservationsService implements OnModuleInit {
       where: { slug: String(slug ?? '').trim().toLowerCase(), active: true },
     });
     if (!shop) throw new NotFoundException('Local no encontrado');
+    if (shop.waitingListEnabled === false) {
+      throw new NotFoundException('Lista de espera no disponible en este local');
+    }
 
     const rows = await this.waiting.find({
       where: {

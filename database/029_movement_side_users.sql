@@ -1,0 +1,3 @@
+ALTER TABLE movements
+  ADD COLUMN fromUserId CHAR(36) NULL,
+  ADD COLUMN toUserId CHAR(36) NULL;

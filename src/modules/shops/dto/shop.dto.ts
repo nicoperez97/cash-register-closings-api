@@ -1,12 +1,16 @@
 import {
+  ArrayMaxSize,
   IsArray,
   IsBoolean,
   IsEnum,
+  IsInt,
   IsNumber,
   IsObject,
   IsOptional,
   IsString,
   IsUUID,
+  Max,
+  Min,
   MinLength,
   ValidateIf,
   ValidateNested,
@@ -52,6 +56,16 @@ export class CreateShopDto {
   @IsBoolean()
   coversEnabled?: boolean;
 
+  @ApiPropertyOptional({ description: 'Habilita el módulo de reservas en este local' })
+  @IsOptional()
+  @IsBoolean()
+  reservationsEnabled?: boolean;
+
+  @ApiPropertyOptional({ description: 'Habilita el módulo de lista de espera en este local' })
+  @IsOptional()
+  @IsBoolean()
+  waitingListEnabled?: boolean;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsNumber()
@@ -69,6 +83,19 @@ export class CreateShopDto {
   @IsOptional()
   @IsString()
   openingTime?: string;
+
+  @ApiPropertyOptional({
+    type: [Number],
+    example: [0, 1],
+    description: 'Días de franco (0=domingo … 6=sábado)',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(7)
+  @IsInt({ each: true })
+  @Min(0, { each: true })
+  @Max(6, { each: true })
+  closedWeekdays?: number[] | null;
 
   @ApiPropertyOptional()
   @IsOptional()

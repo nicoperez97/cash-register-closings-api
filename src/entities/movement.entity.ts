@@ -5,6 +5,7 @@ import { LedgerAccount } from './ledger-account.entity';
 import { Concept } from './concept.entity';
 import { CashClosing } from './cash-closing.entity';
 import { Employee } from './employee.entity';
+import { User } from './user.entity';
 
 @Entity({ name: 'movements' })
 export class Movement extends BaseEntity {
@@ -19,6 +20,14 @@ export class Movement extends BaseEntity {
 
   @Column({ type: 'varchar', nullable: true })
   toAccountId?: string | null;
+
+  /** Usuario origen cuando no hay cuenta (o como referencia). */
+  @Column({ type: 'varchar', nullable: true })
+  fromUserId?: string | null;
+
+  /** Usuario destino cuando no hay cuenta (o como referencia). */
+  @Column({ type: 'varchar', nullable: true })
+  toUserId?: string | null;
 
   @Column({ type: 'varchar', length: 500, nullable: true })
   description?: string | null;
@@ -58,6 +67,14 @@ export class Movement extends BaseEntity {
   @ManyToOne(() => LedgerAccount, { nullable: true })
   @JoinColumn({ name: 'toAccountId' })
   toAccount?: LedgerAccount | null;
+
+  @ManyToOne(() => User, { nullable: true })
+  @JoinColumn({ name: 'fromUserId' })
+  fromUser?: User | null;
+
+  @ManyToOne(() => User, { nullable: true })
+  @JoinColumn({ name: 'toUserId' })
+  toUser?: User | null;
 
   @ManyToOne(() => Concept, { nullable: true })
   @JoinColumn({ name: 'conceptId' })

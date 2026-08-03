@@ -1,0 +1,2 @@
+ALTER TABLE suppliers
+  ADD COLUMN bankAlias VARCHAR(100) NULL;

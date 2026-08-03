@@ -58,6 +58,15 @@ export class AccountsService implements OnModuleInit {
     } catch {
       // columna ya existe
     }
+    try {
+      await this.accounts.query(`
+        ALTER TABLE ledger_accounts
+          MODIFY COLUMN type ENUM('PARTNER', 'CHANNEL', 'SYSTEM', 'SUPPLIER')
+          NOT NULL DEFAULT 'PARTNER'
+      `);
+    } catch {
+      // enum ya actualizado
+    }
   }
 
   /** Copia ledger_accounts.userId → join table si aún existen filas legacy. */
@@ -136,7 +145,10 @@ export class AccountsService implements OnModuleInit {
         code,
         type: dto.type ?? LedgerAccountType.PARTNER,
         linkedPaymentMethod: dto.linkedPaymentMethod ?? null,
-        hideFromCashWithdraw: !!dto.hideFromCashWithdraw,
+        hideFromCashWithdraw:
+          dto.type === LedgerAccountType.SUPPLIER
+            ? true
+            : !!dto.hideFromCashWithdraw,
         active: dto.active ?? true,
       }),
     );
@@ -164,6 +176,9 @@ export class AccountsService implements OnModuleInit {
     }
     if (dto.hideFromCashWithdraw !== undefined) {
       row.hideFromCashWithdraw = !!dto.hideFromCashWithdraw;
+    }
+    if (row.type === LedgerAccountType.SUPPLIER) {
+      row.hideFromCashWithdraw = true;
     }
     if (dto.active !== undefined) row.active = dto.active;
     await this.accounts.save(row);

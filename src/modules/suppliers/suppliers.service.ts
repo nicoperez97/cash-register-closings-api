@@ -1,0 +1,212 @@
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+  OnModuleInit,
+} from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { Supplier } from '../../entities/supplier.entity';
+import { LedgerAccount } from '../../entities/ledger-account.entity';
+import { AuthUser } from '../../common/decorators';
+import { LedgerAccountType } from '../../common/enums';
+import { isEntityActive } from '../../common/active.util';
+import { ShopsService } from '../shops/shops.service';
+
+@Injectable()
+export class SuppliersService implements OnModuleInit {
+  constructor(
+    @InjectRepository(Supplier) private readonly suppliers: Repository<Supplier>,
+    @InjectRepository(LedgerAccount)
+    private readonly accounts: Repository<LedgerAccount>,
+    private readonly shops: ShopsService,
+  ) {}
+
+  async onModuleInit() {
+    try {
+      await this.suppliers.query(`
+        ALTER TABLE ledger_accounts
+          MODIFY COLUMN type ENUM('PARTNER', 'CHANNEL', 'SYSTEM', 'SUPPLIER')
+          NOT NULL DEFAULT 'PARTNER'
+      `);
+    } catch {
+      // enum ya actualizado o motor distinto
+    }
+    try {
+      await this.suppliers.query(`
+        CREATE TABLE IF NOT EXISTS suppliers (
+          id CHAR(36) NOT NULL PRIMARY KEY,
+          shopId CHAR(36) NOT NULL,
+          name VARCHAR(200) NOT NULL,
+          bankAlias VARCHAR(100) NULL,
+          notes VARCHAR(500) NULL,
+          accountId CHAR(36) NOT NULL,
+          createdAt DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+          updatedAt DATETIME(6) NULL,
+          deletedAt DATETIME(6) NULL,
+          active TINYINT(1) NOT NULL DEFAULT 1,
+          INDEX idx_suppliers_shop (shopId),
+          INDEX idx_suppliers_account (accountId)
+        )
+      `);
+    } catch {
+      // ya existe
+    }
+    try {
+      await this.suppliers.query(`
+        ALTER TABLE suppliers ADD COLUMN bankAlias VARCHAR(100) NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+  }
+
+  private toDto(s: Supplier) {
+    return {
+      id: s.id,
+      shopId: s.shopId,
+      name: s.name,
+      bankAlias: s.bankAlias ?? null,
+      notes: s.notes ?? null,
+      accountId: s.accountId,
+      accountName: s.account?.name ?? null,
+      active: isEntityActive(s.active),
+    };
+  }
+
+  private slugCode(name: string): string {
+    const raw = name
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, '')
+      .slice(0, 12);
+    return raw || 'PROV';
+  }
+
+  private async uniqueSupplierCode(shopId: string, name: string): Promise<string> {
+    const base = `PROV-${this.slugCode(name)}`.slice(0, 24);
+    let code = base;
+    let n = 1;
+    while (await this.accounts.findOne({ where: { shopId, code } })) {
+      code = `${base}-${n++}`.slice(0, 32);
+    }
+    return code;
+  }
+
+  async list(user: AuthUser, shopId: string, includeInactive = false) {
+    this.shops.assertShopAccess(user, shopId);
+    const rows = await this.suppliers.find({
+      where: { shopId },
+      relations: ['account'],
+      order: { name: 'ASC' },
+    });
+    const filtered = includeInactive
+      ? rows
+      : rows.filter((r) => isEntityActive(r.active));
+    return filtered.map((r) => this.toDto(r));
+  }
+
+  async one(user: AuthUser, shopId: string, id: string) {
+    this.shops.assertShopAccess(user, shopId);
+    const row = await this.suppliers.findOne({
+      where: { id, shopId },
+      relations: ['account'],
+    });
+    if (!row) throw new NotFoundException('Proveedor no encontrado');
+    return this.toDto(row);
+  }
+
+  async create(
+    user: AuthUser,
+    shopId: string,
+    dto: {
+      name: string;
+      bankAlias?: string | null;
+      notes?: string | null;
+      active?: boolean;
+    },
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    const name = (dto.name ?? '').trim();
+    if (!name) throw new BadRequestException('Ingresá el nombre del proveedor');
+
+    const code = await this.uniqueSupplierCode(shopId, name);
+    const account = await this.accounts.save(
+      this.accounts.create({
+        shopId,
+        name: `Proveedor: ${name}`,
+        code,
+        type: LedgerAccountType.SUPPLIER,
+        hideFromCashWithdraw: true,
+        active: true,
+      }),
+    );
+
+    const row = await this.suppliers.save(
+      this.suppliers.create({
+        shopId,
+        name,
+        bankAlias: dto.bankAlias?.trim() || null,
+        notes: dto.notes?.trim() || null,
+        accountId: account.id,
+        active: dto.active ?? true,
+      }),
+    );
+
+    return this.one(user, shopId, row.id);
+  }
+
+  async update(
+    user: AuthUser,
+    shopId: string,
+    id: string,
+    dto: {
+      name?: string;
+      bankAlias?: string | null;
+      notes?: string | null;
+      active?: boolean;
+    },
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    const row = await this.suppliers.findOne({ where: { id, shopId } });
+    if (!row) throw new NotFoundException('Proveedor no encontrado');
+
+    if (dto.name !== undefined) {
+      const name = dto.name.trim();
+      if (!name) throw new BadRequestException('Ingresá el nombre del proveedor');
+      row.name = name;
+      const account = await this.accounts.findOne({ where: { id: row.accountId, shopId } });
+      if (account) {
+        account.name = `Proveedor: ${name}`;
+        await this.accounts.save(account);
+      }
+    }
+    if (dto.bankAlias !== undefined) row.bankAlias = dto.bankAlias?.trim() || null;
+    if (dto.notes !== undefined) row.notes = dto.notes?.trim() || null;
+    if (dto.active !== undefined) {
+      row.active = dto.active;
+      const account = await this.accounts.findOne({ where: { id: row.accountId, shopId } });
+      if (account) {
+        account.active = dto.active;
+        await this.accounts.save(account);
+      }
+    }
+    await this.suppliers.save(row);
+    return this.one(user, shopId, id);
+  }
+
+  async remove(user: AuthUser, shopId: string, id: string) {
+    this.shops.assertShopAccess(user, shopId);
+    const row = await this.suppliers.findOne({ where: { id, shopId } });
+    if (!row) throw new NotFoundException('Proveedor no encontrado');
+    row.active = false;
+    await this.suppliers.save(row);
+    const account = await this.accounts.findOne({ where: { id: row.accountId, shopId } });
+    if (account) {
+      account.active = false;
+      await this.accounts.save(account);
+    }
+    return { ok: true };
+  }
+}

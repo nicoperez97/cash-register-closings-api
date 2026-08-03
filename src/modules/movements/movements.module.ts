@@ -6,6 +6,8 @@ import { Concept } from '../../entities/concept.entity';
 import { CashClosing } from '../../entities/cash-closing.entity';
 import { ClosingExpense } from '../../entities/closing-expense.entity';
 import { Employee } from '../../entities/employee.entity';
+import { User } from '../../entities/user.entity';
+import { UserShop } from '../../entities/user-shop.entity';
 import { AccountsModule } from '../accounts/accounts.module';
 import { ShopsModule } from '../shops/shops.module';
 import { MovementsController } from './movements.controller';
@@ -22,6 +24,8 @@ import { MovementsExcelImportService } from './movements-excel-import.service';
       CashClosing,
       ClosingExpense,
       Employee,
+      User,
+      UserShop,
     ]),
     ShopsModule,
     AccountsModule,

@@ -51,6 +51,16 @@ class CreateMovementDto {
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
   @IsUUID()
   toAccountId?: string | null;
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  fromUserId?: string | null;
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  toUserId?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsString() description?: string | null;
   @ApiProperty() @IsNumber() @Min(0) amountUyu: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() usdRate?: number | null;
@@ -73,6 +83,16 @@ class UpdateMovementDto {
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
   @IsUUID()
   toAccountId?: string | null;
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  fromUserId?: string | null;
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  toUserId?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsString() description?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) amountUyu?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() usdRate?: number | null;

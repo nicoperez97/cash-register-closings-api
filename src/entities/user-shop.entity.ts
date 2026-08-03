@@ -33,6 +33,10 @@ export class UserShop {
   @Column({ type: 'simple-json', nullable: true })
   modulePermissions?: Record<string, string> | null;
 
+  /** Si es true, no aparece en el selector “Quién se lo lleva” de este local. */
+  @Column({ default: false })
+  hideFromCashWithdraw: boolean;
+
   @ManyToOne(() => User, (u) => u.userShops, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'userId' })
   user: User;

@@ -47,6 +47,12 @@ class CreateUserDto {
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
   @IsUUID()
   ledgerAccountId?: string | null;
+  @ApiPropertyOptional({
+    description: 'Si es true, no aparece en “Quién se lo lleva” del local (shopId)',
+  })
+  @IsOptional()
+  @IsBoolean()
+  hideFromCashWithdraw?: boolean;
 }
 
 class UpdateUserDto {
@@ -70,6 +76,12 @@ class UpdateUserDto {
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
   @IsUUID()
   ledgerAccountId?: string | null;
+  @ApiPropertyOptional({
+    description: 'Si es true, no aparece en “Quién se lo lleva” del local (shopId)',
+  })
+  @IsOptional()
+  @IsBoolean()
+  hideFromCashWithdraw?: boolean;
 }
 
 @ApiTags('users')
