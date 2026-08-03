@@ -22,6 +22,7 @@ RUN apt-get update \
    COPY --from=builder --chown=node:node /app/dist ./dist
    COPY --chown=node:node package.json ./
    COPY --chown=node:node database ./database
+   COPY --chown=node:node legacy-ipad ./legacy-ipad
    USER node
    EXPOSE 3000
    HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=5 \

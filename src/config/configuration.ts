@@ -22,8 +22,21 @@ export default () => {
       autoLoadEntities: true,
     },
     cors: {
-      origin: env.CORS_ORIGIN ?? 'http://localhost:4200',
+      // Coma-separado: http://localhost:4200,http://192.168.0.2:3000
+      origin: parseCorsOrigin(env.CORS_ORIGIN ?? 'http://localhost:4200'),
       credentials: true,
     },
   };
 };
+
+function parseCorsOrigin(raw: string): string | string[] | boolean {
+  const value = String(raw || '').trim();
+  if (!value || value === '*') return true;
+  const parts = value
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (parts.length === 0) return true;
+  if (parts.length === 1) return parts[0];
+  return parts;
+}
