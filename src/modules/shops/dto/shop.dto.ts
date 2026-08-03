@@ -57,10 +57,18 @@ export class CreateShopDto {
   @IsNumber()
   defaultChangeAmount?: number;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ example: 'America/Argentina/Buenos_Aires' })
   @IsOptional()
   @IsString()
   timezone?: string;
+
+  @ApiPropertyOptional({
+    example: '10:00',
+    description: 'Hora de apertura (HH:mm). El día laboral dura hasta esa hora del día siguiente.',
+  })
+  @IsOptional()
+  @IsString()
+  openingTime?: string;
 
   @ApiPropertyOptional()
   @IsOptional()

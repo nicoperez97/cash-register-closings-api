@@ -16,6 +16,7 @@ import { PayrollModule } from './modules/payroll/payroll.module';
 import { CommissionsModule } from './modules/commissions/commissions.module';
 import { SalesReportsModule } from './modules/sales-reports/sales-reports.module';
 import { SalesSystemsModule } from './modules/sales-systems/sales-systems.module';
+import { ReservationsModule } from './modules/reservations/reservations.module';
 import { JwtAuthGuard, PermissionsGuard } from './common/guards';
 
 @Module({
@@ -36,6 +37,7 @@ import { JwtAuthGuard, PermissionsGuard } from './common/guards';
     CommissionsModule,
     SalesSystemsModule,
     SalesReportsModule,
+    ReservationsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

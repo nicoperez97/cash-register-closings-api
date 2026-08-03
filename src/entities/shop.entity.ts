@@ -19,6 +19,13 @@ export class Shop extends BaseEntity {
   @Column({ default: 'America/Argentina/Buenos_Aires' })
   timezone: string;
 
+  /**
+   * Hora de apertura del local (HH:mm).
+   * El día laboral corre desde esta hora hasta la misma hora del día siguiente.
+   */
+  @Column({ type: 'varchar', length: 5, default: '10:00' })
+  openingTime: string;
+
   @Column({ default: 'ARS' })
   currency: string;
 
