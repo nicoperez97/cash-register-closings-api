@@ -6,11 +6,22 @@ import {
   Param,
   Patch,
   Post,
+  Put,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
-import { IsBoolean, IsEnum, IsArray, IsOptional, IsString, IsUUID, MinLength, ValidateIf } from 'class-validator';
+import {
+  IsBoolean,
+  IsEnum,
+  IsArray,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MinLength,
+  ValidateIf,
+} from 'class-validator';
 import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { LedgerAccountType, LinkedPaymentMethod } from '../../common/enums';
@@ -74,6 +85,51 @@ class UpdateAccountDto {
   hideFromCashWithdraw?: boolean;
 }
 
+/** Mapa medio de cobro del cierre → id de cuenta (null = sin vincular). */
+class PaymentDepositsDto {
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  cash?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  card?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  mercadoPago?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  delivery?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  transfer?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  accountDni?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  other?: string | null;
+}
+
 @ApiTags('accounts')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'), PermissionsGuard)
@@ -85,6 +141,20 @@ export class AccountsController {
   @RequirePermissions('movements.read')
   list(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
     return this.accounts.list(user, shopId);
+  }
+
+  @Put('payment-deposits')
+  @RequirePermissions('accounts.manage')
+  setPaymentDeposits(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: PaymentDepositsDto,
+  ) {
+    return this.accounts.setPaymentDeposits(
+      user,
+      shopId,
+      dto as Partial<Record<LinkedPaymentMethod, string | null>>,
+    );
   }
 
   @Post()
@@ -108,13 +178,24 @@ export class AccountsController {
     return this.accounts.update(user, shopId, id, dto);
   }
 
+  @Get(':id/balance')
+  @RequirePermissions('accounts.manage')
+  balance(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+  ) {
+    return this.accounts.balanceOf(user, shopId, id);
+  }
+
   @Delete(':id')
   @RequirePermissions('accounts.manage')
   remove(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
     @Param('id') id: string,
+    @Query('transferToAccountId') transferToAccountId?: string,
   ) {
-    return this.accounts.remove(user, shopId, id);
+    return this.accounts.remove(user, shopId, id, transferToAccountId);
   }
 }
