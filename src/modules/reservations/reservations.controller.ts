@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   Param,
   Patch,
   Post,
@@ -215,5 +216,29 @@ export class PublicReservationsController {
   @Get(':slug/waiting-list')
   waitingBoard(@Param('slug') slug: string) {
     return this.reservations.publicWaitingBoard(slug);
+  }
+
+  /** Manifest PWA del tablero de reservas (mismo origen vía proxy o /api en prod). */
+  @Public()
+  @Get(':slug/manifests/reservations')
+  @Header('Content-Type', 'application/manifest+json; charset=utf-8')
+  @Header('Cache-Control', 'no-store')
+  reservationsManifest(
+    @Param('slug') slug: string,
+    @Query('appOrigin') appOrigin?: string,
+  ) {
+    return this.reservations.buildBoardPwaManifest(slug, 'reservations', appOrigin);
+  }
+
+  /** Manifest PWA del tablero de lista de espera. */
+  @Public()
+  @Get(':slug/manifests/waiting')
+  @Header('Content-Type', 'application/manifest+json; charset=utf-8')
+  @Header('Cache-Control', 'no-store')
+  waitingManifest(
+    @Param('slug') slug: string,
+    @Query('appOrigin') appOrigin?: string,
+  ) {
+    return this.reservations.buildBoardPwaManifest(slug, 'waiting', appOrigin);
   }
 }
