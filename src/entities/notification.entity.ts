@@ -24,6 +24,9 @@ export class AppNotification extends BaseEntity {
   @Column({ type: 'varchar', nullable: true })
   paymentId?: string | null;
 
+  @Column({ type: 'varchar', nullable: true })
+  closingId?: string | null;
+
   @Column({ type: 'tinyint', default: 0 })
   isRead: boolean;
 

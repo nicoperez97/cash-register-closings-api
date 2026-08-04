@@ -27,6 +27,7 @@ export enum NotificationType {
   PAYMENT_PAY = 'PAYMENT_PAY',
   PAYMENT_REJECTED = 'PAYMENT_REJECTED',
   PAYMENT_PAID = 'PAYMENT_PAID',
+  CLOSING_CREATED = 'CLOSING_CREATED',
 }
 
 export enum ExpenseCategory {
