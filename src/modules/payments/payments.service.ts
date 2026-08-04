@@ -573,7 +573,15 @@ export class PaymentsService implements OnModuleInit {
       businessDate: paidAt,
       fromAccountId: accountId,
       toAccountId: egreso.id,
-      description: `Pago: ${this.displayTitle(row)}`,
+      fromUserId: row.payerUserId ?? null,
+      employeeId: row.employeeId ?? null,
+      description: [
+        `Pago: ${this.displayTitle(row)}`,
+        row.supplier?.name ? `Proveedor: ${row.supplier.name}` : null,
+        row.employee?.fullName ? `Empleado: ${row.employee.fullName}` : null,
+      ]
+        .filter(Boolean)
+        .join(' · '),
       amountUyu: n(row.amount),
     });
 

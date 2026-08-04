@@ -402,4 +402,93 @@ export class ReservationsService implements OnModuleInit {
       })),
     };
   }
+
+  /**
+   * Manifest PWA instalable para tableros públicos.
+   * `appOrigin` debe ser el origen del front (mismo host desde el que se sirve el HTML),
+   * porque start_url/id/scope/íconos tienen que ser same-origin con la página.
+   */
+  async buildBoardPwaManifest(
+    slug: string,
+    kind: 'reservations' | 'waiting',
+    appOriginRaw?: string,
+  ) {
+    const shop = await this.shopsRepo.findOne({
+      where: { slug: String(slug ?? '').trim().toLowerCase(), active: true },
+    });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    if (kind === 'reservations' && !shop.reservationsEnabled) {
+      throw new NotFoundException('Reservas no disponibles en este local');
+    }
+    if (kind === 'waiting' && !shop.waitingListEnabled) {
+      throw new NotFoundException('Lista de espera no disponible en este local');
+    }
+
+    // Valida ?appOrigin= (contrato del endpoint); el manifest usa paths `/...`
+    // resolubles contra el origen de la página (mismo host vía proxy).
+    normalizeAppOrigin(appOriginRaw);
+
+    const pathPrefix = kind === 'reservations' ? 'r' : 'w';
+    const startPath = `/${pathPrefix}/${encodeURIComponent(shop.slug)}`;
+    const fullPrefix = kind === 'reservations' ? 'Reservas' : 'Lista de espera';
+    const shortPrefix = kind === 'reservations' ? 'Reservas' : 'Espera';
+    const theme =
+      (shop.accentColor || '').trim() ||
+      (kind === 'waiting' ? '#2e7d32' : '#c45c26');
+    const name = `${fullPrefix} · ${shop.name}`;
+    // short_name corto: iOS lo usa en el ícono (si no, cae en "Cierres")
+    const shortName = shortPrefix;
+
+    return {
+      name,
+      short_name: shortName,
+      description: `${fullPrefix} en vivo — ${shop.name}`,
+      lang: 'es-AR',
+      dir: 'ltr',
+      display: 'standalone',
+      orientation: 'any',
+      theme_color: theme,
+      background_color: '#0e0c0b',
+      // id distinto de la app "Cierres" (/) para instalación separada
+      id: startPath,
+      scope: startPath,
+      start_url: startPath,
+      categories: ['business', 'food'],
+      icons: [
+        {
+          src: '/icons/icon-192x192.png',
+          sizes: '192x192',
+          type: 'image/png',
+          purpose: 'any',
+        },
+        {
+          src: '/icons/icon-512x512.png',
+          sizes: '512x512',
+          type: 'image/png',
+          purpose: 'any',
+        },
+        {
+          src: '/icons/icon-maskable-512x512.png',
+          sizes: '512x512',
+          type: 'image/png',
+          purpose: 'maskable',
+        },
+      ],
+    };
+  }
+}
+
+function normalizeAppOrigin(raw?: string): string {
+  const fallback = process.env.PUBLIC_APP_ORIGIN?.trim() || 'http://localhost:4200';
+  const candidate = String(raw || fallback).trim();
+  let url: URL;
+  try {
+    url = new URL(candidate);
+  } catch {
+    throw new BadRequestException('appOrigin inválido');
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new BadRequestException('appOrigin debe ser http(s)');
+  }
+  return url.origin;
 }

@@ -25,10 +25,17 @@ async function bootstrap() {
   const legacyDir = join(__dirname, '..', 'legacy-ipad');
   if (existsSync(legacyDir)) {
     const express = app.getHttpAdapter().getInstance();
-    express.get('/ipad', (_req: unknown, res: { redirect: (code: number, url: string) => void }) => {
-      res.redirect(302, '/ipad/');
+    // Importante: en Express (strict routing off) GET '/ipad' también matchea '/ipad/'.
+    // Si redirigimos siempre a '/ipad/' → bucle infinito (Safari: "demasiados redireccionamientos").
+    express.get('/ipad', (req: { url?: string }, res: { redirect: (code: number, url: string) => void }, next: () => void) => {
+      const url = String(req.url || '');
+      if (url === '/ipad' || url.startsWith('/ipad?')) {
+        res.redirect(302, '/ipad/');
+        return;
+      }
+      next();
     });
-    app.useStaticAssets(legacyDir, { prefix: '/ipad/' });
+    app.useStaticAssets(legacyDir, { prefix: '/ipad/', index: 'index.html' });
   }
 
   const swaggerConfig = new DocumentBuilder()
