@@ -10,8 +10,10 @@ import { UsersModule } from './modules/users/users.module';
 import { AccountsModule } from './modules/accounts/accounts.module';
 import { ConceptsModule } from './modules/concepts/concepts.module';
 import { EmployeesModule } from './modules/employees/employees.module';
+import { CandidatesModule } from './modules/candidates/candidates.module';
 import { MovementsModule } from './modules/movements/movements.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
+import { ProductionAttendanceModule } from './modules/production-attendance/production-attendance.module';
 import { PayrollModule } from './modules/payroll/payroll.module';
 import { CommissionsModule } from './modules/commissions/commissions.module';
 import { SalesReportsModule } from './modules/sales-reports/sales-reports.module';
@@ -34,8 +36,10 @@ import { JwtAuthGuard, PermissionsGuard } from './common/guards';
     AccountsModule,
     ConceptsModule,
     EmployeesModule,
+    CandidatesModule,
     MovementsModule,
     AttendanceModule,
+    ProductionAttendanceModule,
     PayrollModule,
     CommissionsModule,
     SalesSystemsModule,

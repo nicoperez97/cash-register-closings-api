@@ -52,6 +52,14 @@ export class AuthService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
+    try {
+      await this.users.query(`
+        ALTER TABLE users
+          ADD COLUMN favoriteShopId CHAR(36) NULL
+      `);
+    } catch {
+      // ya existe
+    }
     // Seed demo solo si se pide explícitamente (nunca por defecto en prod/local limpio).
     if (process.env.ENABLE_DEMO_SEED !== 'true') {
       return;
@@ -76,11 +84,16 @@ export class AuthService implements OnModuleInit {
           coversEnabled: false,
           defaultChangeAmount: '15000.00',
           accentColor: '#E65100',
+          accentSecondary: '#FFB300',
           active: true,
         }),
       );
     } else if (!panino.accentColor) {
       panino.accentColor = '#E65100';
+      await this.shops.save(panino);
+    }
+    if (panino && !panino.accentSecondary) {
+      panino.accentSecondary = '#FFB300';
       await this.shops.save(panino);
     }
 
@@ -95,11 +108,16 @@ export class AuthService implements OnModuleInit {
           coversEnabled: true,
           defaultChangeAmount: '0.00',
           accentColor: '#00897B',
+          accentSecondary: '#26A69A',
           active: true,
         }),
       );
     } else if (!tutto.accentColor) {
       tutto.accentColor = '#00897B';
+      await this.shops.save(tutto);
+    }
+    if (tutto && !tutto.accentSecondary) {
+      tutto.accentSecondary = '#26A69A';
       await this.shops.save(tutto);
     }
 
@@ -412,7 +430,19 @@ export class AuthService implements OnModuleInit {
       shopPermissions,
       shopModulePermissions,
       permissions,
+      favoriteShopId:
+        user.favoriteShopId && shopIds.includes(user.favoriteShopId)
+          ? user.favoriteShopId
+          : null,
     };
+  }
+
+  async setFavoriteShop(userId: string, shopId: string | null) {
+    const profile = await this.buildAuthUser(userId);
+    const next =
+      shopId && profile.shopIds.includes(shopId) ? shopId : null;
+    await this.users.update({ id: userId }, { favoriteShopId: next });
+    return this.me(userId);
   }
 
   async me(userId: string) {
@@ -432,12 +462,14 @@ export class AuthService implements OnModuleInit {
         reservationsEnabled: !!s.reservationsEnabled,
         waitingListEnabled: !!s.waitingListEnabled,
         defaultChangeAmount: Number(s.defaultChangeAmount),
+        productionDefaultHours: Number(s.productionDefaultHours ?? 8) || 8,
         currency: s.currency,
         timezone: s.timezone,
         openingTime: s.openingTime ?? '10:00',
         closedWeekdays: Array.isArray(s.closedWeekdays) ? s.closedWeekdays : [],
         logoUrl: s.logoUrl ?? null,
         accentColor: s.accentColor ?? null,
+        accentSecondary: s.accentSecondary ?? null,
         salesSystemId: s.salesSystemId ?? null,
         posnets: s.posnets ?? [],
       })),

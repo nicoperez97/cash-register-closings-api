@@ -408,7 +408,9 @@ export class ReservationsService implements OnModuleInit {
    * Manifest PWA instalable para tableros públicos.
    * `appOrigin` debe ser el origen del front (mismo host desde el que se sirve el HTML),
    * porque start_url/id/scope tienen que ser same-origin con la página.
-   * Los íconos usan el logo del local si está configurado; si no, los de Cierres.
+   * Los íconos de installability son siempre los PNG same-origin del front.
+   * Un logo de Drive/CDN no se usa en el manifest (rompe el criterio 192/512 de Chrome);
+   * el logo sigue mostrándose en el tablero y en apple-touch-icon vía el front.
    */
   async buildBoardPwaManifest(
     slug: string,
@@ -483,17 +485,29 @@ const DEFAULT_BOARD_PWA_ICONS = [
 ] as const;
 
 function buildBoardPwaIcons(logoUrlRaw?: string | null) {
+  const defaults = [...DEFAULT_BOARD_PWA_ICONS];
   const logo = normalizeLogoUrl(logoUrlRaw);
-  if (!logo) return [...DEFAULT_BOARD_PWA_ICONS];
+  if (!logo) return defaults;
 
   const type = guessImageMime(logo);
-  // Misma URL en varios tamaños: el navegador escala; el logo del local es la identidad
-  // de las PWAs de Reservas / Lista de espera (instalación separada de "Cierres").
+  // SVG no cumple el criterio de installability de Chromium (hace falta PNG 192 + 512).
+  if (type === 'image/svg+xml') return defaults;
+
+  // Logos de Drive / URLs absolutas externas: si son el único ícono (o fallan al
+  // descargar / miden <512px), Chrome no muestra "Instalar". Solo usamos logo en el
+  // manifest cuando es path same-origin; si no, los PNG del sitio garantizan install.
+  if (!isSameOriginIconPath(logo)) return defaults;
+
   return [
     { src: logo, sizes: '192x192', type, purpose: 'any' },
     { src: logo, sizes: '512x512', type, purpose: 'any' },
-    { src: logo, sizes: '512x512', type, purpose: 'maskable' },
+    ...defaults,
   ];
+}
+
+/** Path relativo same-origin (`/uploads/logo.png`). Absolutas (Drive, CDN) → false. */
+function isSameOriginIconPath(src: string): boolean {
+  return src.startsWith('/') && !src.startsWith('//');
 }
 
 function guessImageMime(url: string): string {

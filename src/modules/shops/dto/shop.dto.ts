@@ -71,6 +71,16 @@ export class CreateShopDto {
   @IsNumber()
   defaultChangeAmount?: number;
 
+  @ApiPropertyOptional({
+    example: 8,
+    description: 'Horas por defecto al marcar asistencia en producción',
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(24)
+  productionDefaultHours?: number;
+
   @ApiPropertyOptional({ example: 'America/Argentina/Buenos_Aires' })
   @IsOptional()
   @IsString()
@@ -114,6 +124,11 @@ export class CreateShopDto {
   @IsOptional()
   @IsString()
   accentColor?: string;
+
+  @ApiPropertyOptional({ example: '#F9A825', description: 'Color de énfasis / secundario' })
+  @IsOptional()
+  @IsString()
+  accentSecondary?: string;
 
   @ApiPropertyOptional({ description: 'Sistema de ventas / POS (Restosoft, etc.)' })
   @IsOptional()

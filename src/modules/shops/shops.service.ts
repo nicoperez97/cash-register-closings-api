@@ -72,7 +72,15 @@ export class ShopsService implements OnModuleInit {
     try {
       await this.shops.query(`
         ALTER TABLE shops
-          ADD COLUMN closedWeekdays JSON NULL
+          ADD COLUMN productionDefaultHours DECIMAL(6,2) NOT NULL DEFAULT 8.00
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN accentSecondary VARCHAR(16) NULL
       `);
     } catch {
       // columna ya existe
@@ -199,12 +207,18 @@ export class ShopsService implements OnModuleInit {
         reservationsEnabled: dto.reservationsEnabled ?? true,
         waitingListEnabled: dto.waitingListEnabled ?? true,
         defaultChangeAmount: String(dto.defaultChangeAmount ?? 0),
+        productionDefaultHours: String(
+          dto.productionDefaultHours !== undefined && dto.productionDefaultHours !== null
+            ? Math.max(0, Number(dto.productionDefaultHours) || 0)
+            : 8,
+        ),
         timezone: dto.timezone ?? 'America/Argentina/Buenos_Aires',
         openingTime: normalizeOpeningTime(dto.openingTime),
         closedWeekdays: this.normalizeClosedWeekdays(dto.closedWeekdays),
         currency: dto.currency ?? 'ARS',
         logoUrl: normalizeLogoUrl(dto.logoUrl),
         accentColor: this.normalizeAccent(dto.accentColor),
+        accentSecondary: this.normalizeAccent(dto.accentSecondary),
         salesSystemId: dto.salesSystemId ?? null,
         posPaymentMap: dto.posPaymentMap ?? null,
         posnets: this.normalizePosnets(dto.posnets),
@@ -246,11 +260,19 @@ export class ShopsService implements OnModuleInit {
     if (dto.defaultChangeAmount !== undefined) {
       shop.defaultChangeAmount = String(dto.defaultChangeAmount);
     }
+    if (dto.productionDefaultHours !== undefined) {
+      shop.productionDefaultHours = String(
+        Math.max(0, Number(dto.productionDefaultHours) || 0),
+      );
+    }
     if (dto.logoUrl !== undefined) {
       shop.logoUrl = normalizeLogoUrl(dto.logoUrl);
     }
     if (dto.accentColor !== undefined) {
       shop.accentColor = this.normalizeAccent(dto.accentColor);
+    }
+    if (dto.accentSecondary !== undefined) {
+      shop.accentSecondary = this.normalizeAccent(dto.accentSecondary);
     }
     if (dto.salesSystemId !== undefined) {
       shop.salesSystemId = dto.salesSystemId || null;
@@ -350,8 +372,10 @@ export class ShopsService implements OnModuleInit {
       reservationsEnabled: !!s.reservationsEnabled,
       waitingListEnabled: !!s.waitingListEnabled,
       defaultChangeAmount: Number(s.defaultChangeAmount),
+      productionDefaultHours: Number(s.productionDefaultHours ?? 8) || 8,
       logoUrl: s.logoUrl ?? null,
       accentColor: s.accentColor ?? null,
+      accentSecondary: s.accentSecondary ?? null,
       salesSystemId: s.salesSystemId ?? null,
       posPaymentMap: s.posPaymentMap ?? null,
       posnets: s.posnets ?? [],

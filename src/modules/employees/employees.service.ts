@@ -2,10 +2,11 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Not, Repository } from 'typeorm';
-import { Employee } from '../../entities/employee.entity';
+import { Employee, EmployeeType } from '../../entities/employee.entity';
 import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { AuthUser } from '../../common/decorators';
@@ -15,14 +16,37 @@ import { ShopsService } from '../shops/shops.service';
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
 
+function normalizeEmployeeType(value?: EmployeeType | string | null): EmployeeType {
+  return value === EmployeeType.ROTATING ? EmployeeType.ROTATING : EmployeeType.FIXED;
+}
+
 @Injectable()
-export class EmployeesService {
+export class EmployeesService implements OnModuleInit {
   constructor(
     @InjectRepository(Employee) private readonly employees: Repository<Employee>,
     @InjectRepository(User) private readonly users: Repository<User>,
     @InjectRepository(UserShop) private readonly userShops: Repository<UserShop>,
     private readonly shops: ShopsService,
   ) {}
+
+  async onModuleInit() {
+    try {
+      await this.employees.query(`
+        ALTER TABLE employees
+          ADD COLUMN type ENUM('FIXED', 'ROTATING') NOT NULL DEFAULT 'FIXED'
+      `);
+    } catch {
+      // ya existe
+    }
+    try {
+      await this.employees.query(`
+        ALTER TABLE employees
+          ADD COLUMN producesFood TINYINT(1) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // ya existe
+    }
+  }
 
   private toDto(e: Employee) {
     return {
@@ -33,6 +57,8 @@ export class EmployeesService {
       userId: e.userId ?? null,
       hireDate: e.hireDate ?? null,
       notes: e.notes ?? null,
+      type: normalizeEmployeeType(e.type),
+      producesFood: !!e.producesFood,
       active: isEntityActive(e.active),
     };
   }
@@ -85,6 +111,8 @@ export class EmployeesService {
       userId?: string | null;
       hireDate?: string | null;
       notes?: string | null;
+      type?: EmployeeType;
+      producesFood?: boolean;
       active?: boolean;
     },
   ) {
@@ -98,6 +126,8 @@ export class EmployeesService {
         userId: dto.userId ?? null,
         hireDate: dto.hireDate ?? null,
         notes: dto.notes ?? null,
+        type: normalizeEmployeeType(dto.type),
+        producesFood: !!dto.producesFood,
         active: dto.active ?? true,
       }),
     );
@@ -114,6 +144,8 @@ export class EmployeesService {
       userId?: string | null;
       hireDate?: string | null;
       notes?: string | null;
+      type?: EmployeeType;
+      producesFood?: boolean;
       active?: boolean;
     },
   ) {
@@ -128,6 +160,8 @@ export class EmployeesService {
     if (dto.baseSalary !== undefined) row.baseSalary = money(n(dto.baseSalary));
     if (dto.hireDate !== undefined) row.hireDate = dto.hireDate;
     if (dto.notes !== undefined) row.notes = dto.notes;
+    if (dto.type !== undefined) row.type = normalizeEmployeeType(dto.type);
+    if (dto.producesFood !== undefined) row.producesFood = !!dto.producesFood;
     if (dto.active !== undefined) row.active = dto.active;
     await this.employees.save(row);
     return this.toDto(row);

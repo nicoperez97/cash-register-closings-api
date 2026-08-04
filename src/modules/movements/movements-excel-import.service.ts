@@ -113,6 +113,95 @@ export class MovementsExcelImportService {
     };
   }
 
+  /** Exporta movimientos del período en el mismo formato que la plantilla de importación. */
+  async exportRange(
+    user: AuthUser,
+    shopId: string,
+    filters: { from?: string; to?: string } = {},
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    const shop = await this.shops.findOne(user, shopId);
+
+    const qb = this.movements
+      .createQueryBuilder('m')
+      .leftJoinAndSelect('m.fromAccount', 'fromAccount')
+      .leftJoinAndSelect('m.toAccount', 'toAccount')
+      .leftJoinAndSelect('m.fromUser', 'fromUser')
+      .leftJoinAndSelect('m.toUser', 'toUser')
+      .leftJoinAndSelect('m.concept', 'concept')
+      .where('m.shopId = :shopId', { shopId })
+      .andWhere('m.active = true');
+
+    if (filters.from) qb.andWhere('m.businessDate >= :from', { from: filters.from });
+    if (filters.to) qb.andWhere('m.businessDate <= :to', { to: filters.to });
+    qb.orderBy('m.businessDate', 'ASC').addOrderBy('m.createdAt', 'ASC');
+    const rows = await qb.getMany();
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Cash Register Closings';
+
+    const info = wb.addWorksheet('Instrucciones');
+    info.getColumn(1).width = 96;
+    info.addRow(['Movimientos exportados']);
+    info.getRow(1).font = { bold: true, size: 13 };
+    info.addRow([`Local: ${shop.name}`]);
+    if (filters.from || filters.to) {
+      info.addRow([`Período: ${filters.from ?? '…'} → ${filters.to ?? '…'}`]);
+    }
+    info.addRow([]);
+    info.addRow(['Formato compatible con la importación: hoja "Movimientos".']);
+
+    const ws = wb.addWorksheet('Movimientos');
+    ws.columns = TEMPLATE_HEADERS.map((header) => ({
+      header,
+      width: header.includes('Descrip') || header.includes('Concepto') ? 28 : 16,
+    }));
+    ws.getRow(1).font = { bold: true };
+    ws.getRow(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFE3F2FD' },
+    };
+
+    for (const m of rows) {
+      const fromName = m.fromAccount?.name || m.fromUser?.fullName || '';
+      const toName = m.toAccount?.name || m.toUser?.fullName || '';
+      ws.addRow([
+        m.businessDate,
+        fromName,
+        toName,
+        m.description ?? '',
+        n(m.amountUyu),
+        m.usdRate != null ? n(m.usdRate) : '',
+        m.amountUsd != null ? n(m.amountUsd) : '',
+        m.concept?.name ?? '',
+        !!m.invoiced,
+        m.invoiceNumber ?? '',
+      ]);
+    }
+
+    const buffer = Buffer.from(await wb.xlsx.writeBuffer());
+    const slug = this.fileSlug(shop.name || shop.slug || 'local');
+    const fromPart = filters.from ?? 'inicio';
+    const toPart = filters.to ?? 'hoy';
+    return {
+      buffer,
+      filename: `movimientos-${slug}-${fromPart}_${toPart}.xlsx`,
+    };
+  }
+
+  private fileSlug(name: string): string {
+    return (
+      name
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '')
+        .slice(0, 40) || 'local'
+    );
+  }
+
   async preview(user: AuthUser, shopId: string, file: Express.Multer.File) {
     this.shops.assertShopAccess(user, shopId);
     const drafts = await this.parseWorkbook(file);
