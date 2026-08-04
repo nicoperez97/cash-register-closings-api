@@ -18,6 +18,10 @@ export class User extends BaseEntity {
   @Column({ type: 'enum', enum: GlobalRole, default: GlobalRole.CASHIER })
   globalRole: GlobalRole;
 
+  /** Local preferido al iniciar sesión (debe estar entre los asignados). */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  favoriteShopId?: string | null;
+
   @OneToMany(() => UserShop, (us) => us.user)
   userShops?: UserShop[];
 

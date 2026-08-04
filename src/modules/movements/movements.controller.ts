@@ -175,6 +175,27 @@ export class MovementsController {
     res.send(buffer);
   }
 
+  @Get('export.xlsx')
+  @RequirePermissions('movements.read')
+  async export(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Query('from') from: string | undefined,
+    @Query('to') to: string | undefined,
+    @Res() res: Response,
+  ) {
+    const { buffer, filename } = await this.excelImport.exportRange(user, shopId, {
+      from,
+      to,
+    });
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
+  }
+
   @Post('import-excel')
   @RequirePermissions('movements.manage')
   @ApiConsumes('multipart/form-data')

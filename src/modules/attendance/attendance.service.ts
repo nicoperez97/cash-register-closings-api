@@ -2,12 +2,16 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, In, Repository } from 'typeorm';
 import { AttendanceDay } from '../../entities/attendance-day.entity';
-import { Employee } from '../../entities/employee.entity';
+import { Employee, EmployeeType } from '../../entities/employee.entity';
 import { AuthUser } from '../../common/decorators';
 import { isEntityActive } from '../../common/active.util';
 import { ShopsService } from '../shops/shops.service';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
+
+function employeeTypeOf(e: Employee): EmployeeType {
+  return e.type === EmployeeType.ROTATING ? EmployeeType.ROTATING : EmployeeType.FIXED;
+}
 
 @Injectable()
 export class AttendanceService {
@@ -81,6 +85,7 @@ export class AttendanceService {
           employeeId: e.id,
           fullName: e.fullName,
           baseSalary: n(e.baseSalary),
+          type: employeeTypeOf(e),
           days: byDate,
         };
       }),

@@ -7,6 +7,7 @@ export type ModuleKey =
   | 'movements'
   | 'attendance'
   | 'employees'
+  | 'candidates'
   | 'payroll'
   | 'commissions'
   | 'accounts'
@@ -75,6 +76,15 @@ export const MODULE_DEFS: ModuleDef[] = [
   {
     key: 'employees',
     label: 'Empleados',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
+    key: 'candidates',
+    label: 'CVs / Candidatos',
     levels: [
       { value: 'none', label: 'Ninguno' },
       { value: 'read', label: 'Ver' },
@@ -219,6 +229,7 @@ export function expandModulePermissions(
   pair('movements', 'movements.read', 'movements.manage');
   pair('attendance', 'attendance.read', 'attendance.manage');
   pair('employees', 'employees.read', 'employees.manage');
+  pair('candidates', 'candidates.read', 'candidates.manage');
   pair('payroll', 'payroll.read', 'payroll.manage');
   pair('commissions', 'commissions.read', 'commissions.manage');
   pair('reservations', 'reservations.read', 'reservations.manage');
@@ -270,6 +281,7 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
     movements: level('movements.read', 'movements.manage'),
     attendance: level('attendance.read', 'attendance.manage'),
     employees: level('employees.read', 'employees.manage'),
+    candidates: level('candidates.read', 'candidates.manage'),
     payroll: level('payroll.read', 'payroll.manage'),
     commissions: level('commissions.read', 'commissions.manage'),
     reservations: level('reservations.read', 'reservations.manage'),

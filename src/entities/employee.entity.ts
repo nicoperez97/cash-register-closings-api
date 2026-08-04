@@ -3,6 +3,12 @@ import { BaseEntity } from './base.entity';
 import { Shop } from './shop.entity';
 import { User } from './user.entity';
 
+/** Fijo: entra en “Todos presentes”. Rotativo: solo se marca a mano. */
+export enum EmployeeType {
+  FIXED = 'FIXED',
+  ROTATING = 'ROTATING',
+}
+
 @Entity({ name: 'employees' })
 export class Employee extends BaseEntity {
   @Column()
@@ -22,6 +28,13 @@ export class Employee extends BaseEntity {
 
   @Column({ type: 'text', nullable: true })
   notes?: string | null;
+
+  @Column({ type: 'enum', enum: EmployeeType, default: EmployeeType.FIXED })
+  type: EmployeeType;
+
+  /** Si produce comida → aparece en asistencia de producción. */
+  @Column({ type: 'tinyint', default: 0 })
+  producesFood: boolean;
 
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })

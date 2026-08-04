@@ -24,6 +24,8 @@ export type AuthUser = {
   shopModulePermissions: Record<string, Record<string, string>>;
   /** Unión de permisos (compat / admin global). */
   permissions: Permission[];
+  /** Local favorito al iniciar sesión. */
+  favoriteShopId?: string | null;
 };
 
 export const CurrentUser = createParamDecorator(

@@ -14,6 +14,7 @@ import { AuthGuard } from '@nestjs/passport';
 import {
   IsBoolean,
   IsDateString,
+  IsEnum,
   IsNumber,
   IsOptional,
   IsString,
@@ -23,6 +24,7 @@ import {
 } from 'class-validator';
 import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
+import { EmployeeType } from '../../entities/employee.entity';
 import { EmployeesService } from './employees.service';
 
 class CreateEmployeeDto {
@@ -31,6 +33,14 @@ class CreateEmployeeDto {
   @ApiPropertyOptional() @IsOptional() @IsUUID() userId?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsDateString() hireDate?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string | null;
+  @ApiPropertyOptional({ enum: EmployeeType })
+  @IsOptional()
+  @IsEnum(EmployeeType)
+  type?: EmployeeType;
+  @ApiPropertyOptional({ description: 'Si produce comida (asistencia en producción)' })
+  @IsOptional()
+  @IsBoolean()
+  producesFood?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
 }
 
@@ -40,6 +50,14 @@ class UpdateEmployeeDto {
   @ApiPropertyOptional() @IsOptional() userId?: string | null;
   @ApiPropertyOptional() @IsOptional() hireDate?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string | null;
+  @ApiPropertyOptional({ enum: EmployeeType })
+  @IsOptional()
+  @IsEnum(EmployeeType)
+  type?: EmployeeType;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  producesFood?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
 }
 

@@ -52,13 +52,23 @@ export class Shop extends BaseEntity {
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
   defaultChangeAmount: string;
 
+  /**
+   * Horas por defecto al marcar asistencia en producción.
+   */
+  @Column({ type: 'decimal', precision: 6, scale: 2, default: 8 })
+  productionDefaultHours: string;
+
   /** URL pública del logo del local (sidebar, toolbar, etc.). */
   @Column({ type: 'varchar', length: 500, nullable: true })
   logoUrl?: string | null;
 
-  /** Color de énfasis del local (hex, p.ej. #E65100). */
+  /** Color principal del local (hex, p.ej. #E65100). */
   @Column({ type: 'varchar', length: 16, nullable: true })
   accentColor?: string | null;
+
+  /** Color de énfasis / secundario del local (hex). */
+  @Column({ type: 'varchar', length: 16, nullable: true })
+  accentSecondary?: string | null;
 
   /** Sistema de ventas / POS del local (Restosoft, etc.). */
   @Column({ type: 'uuid', nullable: true })
