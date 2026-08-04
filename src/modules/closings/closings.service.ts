@@ -8,18 +8,28 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { CashClosing } from '../../entities/cash-closing.entity';
 import { ClosingExpense } from '../../entities/closing-expense.entity';
 import { ClosingExtraLine } from '../../entities/closing-extra-line.entity';
 import { User } from '../../entities/user.entity';
 import { Employee } from '../../entities/employee.entity';
+import { UserShop } from '../../entities/user-shop.entity';
+import { Shop } from '../../entities/shop.entity';
 import { ShopsService } from '../shops/shops.service';
 import { ClosingMovementsSyncService } from '../movements/closing-movements-sync.service';
 import { AccountsService } from '../accounts/accounts.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { AuthUser } from '../../common/decorators';
-import { ClosingStatus, ExpenseCategory, ExtraLineType, GlobalRole } from '../../common/enums';
+import {
+  ClosingStatus,
+  ExpenseCategory,
+  ExtraLineType,
+  GlobalRole,
+  NotificationType,
+} from '../../common/enums';
 import { isGlobalAdmin } from '../../common/guards';
+import { isEntityActive } from '../../common/active.util';
 import { closingDateKey, markDeletedUnique } from '../../common/soft-delete.util';
 import { CreateClosingDto, UpdateClosingDto } from './dto/closing.dto';
 import { applyClosingFilters, ClosingListFilters } from './closing-filters';
@@ -27,6 +37,8 @@ import { ClosingPosnetAmount, sumPosnetsByType } from '../../common/posnet';
 
 const n = (v?: number | string | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
+
+const SHOP_ADMIN_ROLES = new Set<GlobalRole>([GlobalRole.OWNER, GlobalRole.ADMIN]);
 
 @Injectable()
 export class ClosingsService implements OnModuleInit {
@@ -38,9 +50,12 @@ export class ClosingsService implements OnModuleInit {
     @InjectRepository(ClosingExtraLine) private readonly extras: Repository<ClosingExtraLine>,
     @InjectRepository(User) private readonly users: Repository<User>,
     @InjectRepository(Employee) private readonly employees: Repository<Employee>,
+    @InjectRepository(UserShop) private readonly userShops: Repository<UserShop>,
+    @InjectRepository(Shop) private readonly shopRepo: Repository<Shop>,
     private readonly shops: ShopsService,
     private readonly closingMovements: ClosingMovementsSyncService,
     private readonly accounts: AccountsService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async onModuleInit() {
@@ -257,7 +272,13 @@ export class ClosingsService implements OnModuleInit {
     }));
     await this.replaceChildren(closing.id, normalized as CreateClosingDto);
     await this.syncMovements(closing.id);
-    return this.getOne(user, shopId, closing.id);
+    const created = await this.getOne(user, shopId, closing.id);
+    void this.notifyAdminsClosingCreated(user, shopId, created).catch((err) => {
+      this.logger.warn(
+        `No se pudo notificar cierre ${closing.id}: ${(err as Error)?.message ?? err}`,
+      );
+    });
+    return created;
   }
 
   async update(user: AuthUser, shopId: string, id: string, dto: UpdateClosingDto) {
@@ -416,5 +437,50 @@ export class ClosingsService implements OnModuleInit {
         })));
       }
     }
+  }
+
+  /** Notifica a admins del local (OWNER/ADMIN) que se registró un cierre. */
+  private async notifyAdminsClosingCreated(
+    actor: AuthUser,
+    shopId: string,
+    closing: { id: string; businessDate: string; declaredTotal: number },
+  ) {
+    const shop = await this.shopRepo.findOne({ where: { id: shopId } });
+    const shopName = shop?.name?.trim() || 'Local';
+    const links = await this.userShops.find({
+      where: {
+        shopId,
+        shopRole: In([GlobalRole.OWNER, GlobalRole.ADMIN]),
+      },
+    });
+    const recipientIds = new Set(links.map((l) => l.userId));
+
+    // Super admins globales con acceso al local (OWNER global ve todos).
+    const globalOwners = await this.users.find({
+      where: { globalRole: GlobalRole.OWNER },
+      select: ['id', 'active'],
+    });
+    for (const u of globalOwners) {
+      if (isEntityActive(u.active)) recipientIds.add(u.id);
+    }
+
+    recipientIds.delete(actor.id);
+    if (!recipientIds.size) return;
+
+    const date = String(closing.businessDate || '').slice(0, 10);
+    const total = Number(closing.declaredTotal || 0).toLocaleString('es-AR');
+    const title = 'Nuevo cierre de caja';
+    const body = `${shopName} · ${date} · $${total} · por ${actor.fullName || actor.email}`;
+
+    await this.notifications.createMany(
+      [...recipientIds].map((userId) => ({
+        userId,
+        shopId,
+        type: NotificationType.CLOSING_CREATED,
+        title,
+        body,
+        closingId: closing.id,
+      })),
+    );
   }
 }

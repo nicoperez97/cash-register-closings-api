@@ -23,6 +23,7 @@ export class NotificationsService implements OnModuleInit {
           title VARCHAR(200) NOT NULL,
           body VARCHAR(500) NOT NULL,
           paymentId CHAR(36) NULL,
+          closingId CHAR(36) NULL,
           isRead TINYINT(1) NOT NULL DEFAULT 0,
           readAt DATETIME(6) NULL,
           createdAt DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
@@ -36,6 +37,14 @@ export class NotificationsService implements OnModuleInit {
     } catch {
       // ya existe
     }
+    try {
+      await this.notifications.query(`
+        ALTER TABLE notifications
+          ADD COLUMN closingId CHAR(36) NULL
+      `);
+    } catch {
+      // ya existe
+    }
   }
 
   async create(input: {
@@ -45,6 +54,7 @@ export class NotificationsService implements OnModuleInit {
     title: string;
     body: string;
     paymentId?: string | null;
+    closingId?: string | null;
   }) {
     const row = await this.notifications.save(
       this.notifications.create({
@@ -54,11 +64,42 @@ export class NotificationsService implements OnModuleInit {
         title: input.title,
         body: input.body,
         paymentId: input.paymentId ?? null,
+        closingId: input.closingId ?? null,
         isRead: false,
         active: true,
       }),
     );
     return this.toDto(row);
+  }
+
+  async createMany(
+    inputs: Array<{
+      userId: string;
+      shopId?: string | null;
+      type: NotificationType;
+      title: string;
+      body: string;
+      paymentId?: string | null;
+      closingId?: string | null;
+    }>,
+  ) {
+    if (!inputs.length) return [];
+    const rows = await this.notifications.save(
+      inputs.map((input) =>
+        this.notifications.create({
+          userId: input.userId,
+          shopId: input.shopId ?? null,
+          type: input.type,
+          title: input.title,
+          body: input.body,
+          paymentId: input.paymentId ?? null,
+          closingId: input.closingId ?? null,
+          isRead: false,
+          active: true,
+        }),
+      ),
+    );
+    return rows.map((r) => this.toDto(r));
   }
 
   async list(user: AuthUser, opts?: { shopId?: string; unreadOnly?: boolean }) {
@@ -88,6 +129,27 @@ export class NotificationsService implements OnModuleInit {
     }
     const count = await qb.getCount();
     return { count };
+  }
+
+  /** Conteos de no leídas agrupados por local (sin las globales). */
+  async unreadCountsByShop(user: AuthUser) {
+    const rows = await this.notifications
+      .createQueryBuilder('n')
+      .select('n.shopId', 'shopId')
+      .addSelect('COUNT(*)', 'count')
+      .where('n.userId = :userId', { userId: user.id })
+      .andWhere('n.active = true')
+      .andWhere('n.isRead = false')
+      .andWhere('n.shopId IS NOT NULL')
+      .groupBy('n.shopId')
+      .getRawMany<{ shopId: string; count: string }>();
+
+    const counts: Record<string, number> = {};
+    for (const row of rows) {
+      if (!row.shopId) continue;
+      counts[row.shopId] = Math.max(0, Number(row.count) || 0);
+    }
+    return { counts };
   }
 
   async markRead(user: AuthUser, id: string) {
@@ -123,6 +185,7 @@ export class NotificationsService implements OnModuleInit {
       title: n.title,
       body: n.body,
       paymentId: n.paymentId ?? null,
+      closingId: n.closingId ?? null,
       read: !!n.isRead,
       readAt: n.readAt ?? null,
       createdAt: n.createdAt,
