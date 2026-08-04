@@ -20,6 +20,7 @@ import { AuthUser } from '../../common/decorators';
 import { ShopsService } from '../shops/shops.service';
 import { resolveShopCalendarDate } from '../../common/business-date';
 import { isEntityActive } from '../../common/active.util';
+import { normalizeLogoUrl } from '../../common/drive-url';
 
 export interface UpsertReservationDto {
   businessDate?: string;
@@ -406,7 +407,8 @@ export class ReservationsService implements OnModuleInit {
   /**
    * Manifest PWA instalable para tableros públicos.
    * `appOrigin` debe ser el origen del front (mismo host desde el que se sirve el HTML),
-   * porque start_url/id/scope/íconos tienen que ser same-origin con la página.
+   * porque start_url/id/scope tienen que ser same-origin con la página.
+   * Los íconos usan el logo del local si está configurado; si no, los de Cierres.
    */
   async buildBoardPwaManifest(
     slug: string,
@@ -454,28 +456,61 @@ export class ReservationsService implements OnModuleInit {
       scope: startPath,
       start_url: startPath,
       categories: ['business', 'food'],
-      icons: [
-        {
-          src: '/icons/icon-192x192.png',
-          sizes: '192x192',
-          type: 'image/png',
-          purpose: 'any',
-        },
-        {
-          src: '/icons/icon-512x512.png',
-          sizes: '512x512',
-          type: 'image/png',
-          purpose: 'any',
-        },
-        {
-          src: '/icons/icon-maskable-512x512.png',
-          sizes: '512x512',
-          type: 'image/png',
-          purpose: 'maskable',
-        },
-      ],
+      icons: buildBoardPwaIcons(shop.logoUrl),
     };
   }
+}
+
+const DEFAULT_BOARD_PWA_ICONS = [
+  {
+    src: '/icons/icon-192x192.png',
+    sizes: '192x192',
+    type: 'image/png',
+    purpose: 'any',
+  },
+  {
+    src: '/icons/icon-512x512.png',
+    sizes: '512x512',
+    type: 'image/png',
+    purpose: 'any',
+  },
+  {
+    src: '/icons/icon-maskable-512x512.png',
+    sizes: '512x512',
+    type: 'image/png',
+    purpose: 'maskable',
+  },
+] as const;
+
+function buildBoardPwaIcons(logoUrlRaw?: string | null) {
+  const logo = normalizeLogoUrl(logoUrlRaw);
+  if (!logo) return [...DEFAULT_BOARD_PWA_ICONS];
+
+  const type = guessImageMime(logo);
+  // Misma URL en varios tamaños: el navegador escala; el logo del local es la identidad
+  // de las PWAs de Reservas / Lista de espera (instalación separada de "Cierres").
+  return [
+    { src: logo, sizes: '192x192', type, purpose: 'any' },
+    { src: logo, sizes: '512x512', type, purpose: 'any' },
+    { src: logo, sizes: '512x512', type, purpose: 'maskable' },
+  ];
+}
+
+function guessImageMime(url: string): string {
+  const path = url.split('?')[0].split('#')[0].toLowerCase();
+  if (path.endsWith('.svg')) return 'image/svg+xml';
+  if (path.endsWith('.webp')) return 'image/webp';
+  if (path.endsWith('.jpg') || path.endsWith('.jpeg')) return 'image/jpeg';
+  if (path.endsWith('.gif')) return 'image/gif';
+  if (path.endsWith('.png')) return 'image/png';
+  if (
+    path.includes('googleusercontent.com') ||
+    path.includes('drive.google.com') ||
+    path.includes('ggpht.com')
+  ) {
+    return 'image/jpeg';
+  }
+  return 'image/png';
 }
 
 function normalizeAppOrigin(raw?: string): string {
