@@ -14,6 +14,7 @@ import { UserShop } from '../../entities/user-shop.entity';
 import { AuthUser } from '../../common/decorators';
 import { GlobalRole, LedgerAccountType } from '../../common/enums';
 import { isGlobalAdmin } from '../../common/guards';
+import { isEntityActive } from '../../common/active.util';
 import { ShopsService } from '../shops/shops.service';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
 
@@ -153,12 +154,16 @@ export class MovementsService implements OnModuleInit {
     toId?: string | null,
   ) {
     if (fromId) {
-      const from = await this.accounts.findOne({ where: { id: fromId, shopId, active: true } });
-      if (!from) throw new BadRequestException('Cuenta origen inválida');
+      const from = await this.accounts.findOne({ where: { id: fromId, shopId } });
+      if (!from || !isEntityActive(from.active)) {
+        throw new BadRequestException('Cuenta origen inválida');
+      }
     }
     if (toId) {
-      const to = await this.accounts.findOne({ where: { id: toId, shopId, active: true } });
-      if (!to) throw new BadRequestException('Cuenta destino inválida');
+      const to = await this.accounts.findOne({ where: { id: toId, shopId } });
+      if (!to || !isEntityActive(to.active)) {
+        throw new BadRequestException('Cuenta destino inválida');
+      }
     }
   }
 

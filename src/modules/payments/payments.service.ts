@@ -20,6 +20,7 @@ import { ShopsService } from '../shops/shops.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MovementsService } from '../movements/movements.service';
 import { resolveUserPermissions } from '../../common/guards';
+import { isEntityActive } from '../../common/active.util';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
@@ -160,9 +161,12 @@ export class PaymentsService implements OnModuleInit {
 
   private async assertAccount(shopId: string, accountId: string) {
     const acc = await this.accounts.findOne({
-      where: { id: accountId, shopId, active: true },
+      where: { id: accountId, shopId },
     });
     if (!acc) throw new BadRequestException('Cuenta inválida');
+    if (!isEntityActive(acc.active)) {
+      throw new BadRequestException('La cuenta seleccionada está inactiva');
+    }
     return acc;
   }
 
@@ -219,11 +223,14 @@ export class PaymentsService implements OnModuleInit {
     if (!(n(payment.amount) > 0)) {
       throw new BadRequestException('Un pago abonado necesita monto mayor a 0');
     }
+    // Validar cuenta origen con el mismo criterio que el pago (mensaje claro).
+    await this.assertAccount(shopId, payment.accountId);
+
     const egreso = await this.accounts.findOne({
-      where: { shopId, code: 'EGRESO', active: true },
+      where: { shopId, code: 'EGRESO' },
     });
-    if (!egreso) {
-      throw new BadRequestException('No hay cuenta EGRESO en el local');
+    if (!egreso || !isEntityActive(egreso.active)) {
+      throw new BadRequestException('No hay cuenta EGRESO activa en el local');
     }
     const paidAt =
       this.toDateOnly(payment.paidAt) || new Date().toISOString().slice(0, 10);
@@ -248,9 +255,16 @@ export class PaymentsService implements OnModuleInit {
         }
       }
       const movement = await this.movements.create(user, shopId, payload);
+      // Solo tocar movementId/paidAt por SQL: un save() de la entidad cargada
+      // puede pisar accountId con la relación vieja.
+      await this.payments
+        .createQueryBuilder()
+        .update(Payment)
+        .set({ movementId: movement.id, paidAt })
+        .where('id = :id AND shopId = :shopId', { id: payment.id, shopId })
+        .execute();
       payment.movementId = movement.id;
       payment.paidAt = paidAt;
-      await this.payments.save(payment);
       return true;
     };
 
@@ -473,87 +487,106 @@ export class PaymentsService implements OnModuleInit {
 
     const wasPaid = row.status === PaymentStatus.PAID;
 
-    if (dto.title !== undefined) row.title = dto.title?.trim() || null;
-    if (dto.notes !== undefined) row.notes = dto.notes?.trim() || null;
+    const patch: Partial<Payment> = {};
+
+    if (dto.title !== undefined) patch.title = dto.title?.trim() || null;
+    if (dto.notes !== undefined) patch.notes = dto.notes?.trim() || null;
     if (dto.amount !== undefined) {
       if (dto.amount === null || (dto.amount as any) === '') {
         if (wasPaid) throw new BadRequestException('Un pago abonado necesita monto');
-        row.amount = null;
+        patch.amount = null;
       } else {
         if (n(dto.amount) < 0) throw new BadRequestException('El monto no puede ser negativo');
         if (wasPaid && !(n(dto.amount) > 0)) {
           throw new BadRequestException('Un pago abonado necesita monto mayor a 0');
         }
-        row.amount = money(n(dto.amount));
+        patch.amount = money(n(dto.amount));
       }
     }
-    if (dto.dueDate !== undefined) row.dueDate = this.emptyToNull(dto.dueDate) ?? null;
+    if (dto.dueDate !== undefined) patch.dueDate = this.emptyToNull(dto.dueDate) ?? null;
     if (dto.paidAt !== undefined) {
       if (!wasPaid) {
         throw new BadRequestException('La fecha de pago solo aplica a pagos abonados');
       }
       const paidAt = this.toDateOnly(dto.paidAt);
-      // Si viene vacío, mantenemos la fecha actual (no bloqueamos el guardado).
-      if (paidAt) row.paidAt = paidAt;
+      if (paidAt) patch.paidAt = paidAt;
     }
+
+    let nextPayer = row.payerUserId ?? null;
     if (dto.payerUserId !== undefined) {
-      const payerUserId = this.emptyToNull(dto.payerUserId) ?? null;
-      if (payerUserId) await this.assertShopUser(shopId, payerUserId, 'Quién paga');
-      row.payerUserId = payerUserId;
+      nextPayer = this.emptyToNull(dto.payerUserId) ?? null;
+      if (nextPayer) await this.assertShopUser(shopId, nextPayer, 'Quién paga');
+      patch.payerUserId = nextPayer;
     }
+
+    let nextValidator = row.validatorUserId ?? null;
     if (dto.validatorUserId !== undefined) {
-      const validatorUserId = this.emptyToNull(dto.validatorUserId) ?? null;
-      if (validatorUserId) await this.assertShopUser(shopId, validatorUserId, 'Quién valida');
-      row.validatorUserId = validatorUserId;
+      nextValidator = this.emptyToNull(dto.validatorUserId) ?? null;
+      if (nextValidator) await this.assertShopUser(shopId, nextValidator, 'Quién valida');
+      patch.validatorUserId = nextValidator;
     }
+
+    let nextAccountId = row.accountId ?? null;
     if (dto.accountId !== undefined) {
-      const accountId = this.emptyToNull(dto.accountId) ?? null;
-      if (wasPaid && !accountId) {
+      nextAccountId = this.emptyToNull(dto.accountId) ?? null;
+      if (wasPaid && !nextAccountId) {
         throw new BadRequestException('Un pago abonado necesita la cuenta que paga');
       }
-      if (accountId) await this.assertAccount(shopId, accountId);
-      row.accountId = accountId;
+      if (nextAccountId) await this.assertAccount(shopId, nextAccountId);
+      patch.accountId = nextAccountId;
     }
+
+    let nextSupplierId = row.supplierId ?? null;
+    let nextEmployeeId = row.employeeId ?? null;
     if (dto.supplierId !== undefined) {
-      const supplierId = this.emptyToNull(dto.supplierId) ?? null;
-      if (supplierId) await this.assertSupplier(shopId, supplierId);
-      row.supplierId = supplierId;
-      if (supplierId) row.employeeId = null;
+      nextSupplierId = this.emptyToNull(dto.supplierId) ?? null;
+      if (nextSupplierId) await this.assertSupplier(shopId, nextSupplierId);
+      patch.supplierId = nextSupplierId;
+      if (nextSupplierId) {
+        nextEmployeeId = null;
+        patch.employeeId = null;
+      }
     }
     if (dto.employeeId !== undefined) {
-      const employeeId = this.emptyToNull(dto.employeeId) ?? null;
-      if (employeeId) await this.assertEmployee(shopId, employeeId);
-      row.employeeId = employeeId;
-      if (employeeId) row.supplierId = null;
+      nextEmployeeId = this.emptyToNull(dto.employeeId) ?? null;
+      if (nextEmployeeId) await this.assertEmployee(shopId, nextEmployeeId);
+      patch.employeeId = nextEmployeeId;
+      if (nextEmployeeId) {
+        nextSupplierId = null;
+        patch.supplierId = null;
+      }
     }
-    if (row.supplierId && row.employeeId) {
+    if (nextSupplierId && nextEmployeeId) {
       throw new BadRequestException('Un pago no puede tener proveedor y empleado a la vez');
     }
 
-    const wasValidated = !wasPaid && row.status === PaymentStatus.VALIDATED;
-    if (wasValidated) {
-      row.status = PaymentStatus.PENDING_VALIDATION;
-      row.validatedAt = null;
-      row.validatedByUserId = null;
+    // Editar NUNCA cambia el estado (ni vuelve a validación ni abona).
+    if (!Object.keys(patch).length) {
+      return this.toDto(row);
     }
 
-    await this.payments.save(row);
+    await this.payments
+      .createQueryBuilder()
+      .update(Payment)
+      .set(patch)
+      .where('id = :id AND shopId = :shopId', { id, shopId })
+      .execute();
+
     let loaded = await this.load(shopId, id);
 
-    if (wasPaid) {
+    // Si está pagado y cambió algo que afecta el movimiento, solo sincronizar ese movimiento.
+    const movementFieldsChanged =
+      wasPaid &&
+      (patch.accountId !== undefined ||
+        patch.amount !== undefined ||
+        patch.paidAt !== undefined ||
+        patch.title !== undefined ||
+        patch.supplierId !== undefined ||
+        patch.employeeId !== undefined ||
+        patch.payerUserId !== undefined);
+    if (movementFieldsChanged) {
       await this.syncPaidMovement(user, shopId, loaded);
       loaded = await this.load(shopId, id);
-    }
-
-    if (wasValidated && loaded.validatorUserId) {
-      await this.notifications.create({
-        userId: loaded.validatorUserId,
-        shopId,
-        type: NotificationType.PAYMENT_VALIDATE,
-        title: 'Pago para revalidar',
-        body: `"${this.displayTitle(loaded)}" fue editado y necesita validación otra vez`,
-        paymentId: loaded.id,
-      });
     }
 
     return this.toDto(loaded);
