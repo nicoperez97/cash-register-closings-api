@@ -69,6 +69,7 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Asistencia',
     levels: [
       { value: 'none', label: 'Ninguno' },
+      { value: 'self', label: 'Solo mis horas (producción)' },
       { value: 'read', label: 'Ver' },
       { value: 'manage', label: 'Gestionar' },
     ],
@@ -227,7 +228,17 @@ export function expandModulePermissions(
   };
 
   pair('movements', 'movements.read', 'movements.manage');
-  pair('attendance', 'attendance.read', 'attendance.manage');
+  switch (modules.attendance) {
+    case 'self':
+      add(set, 'attendance.self');
+      break;
+    case 'read':
+      add(set, 'attendance.read');
+      break;
+    case 'manage':
+      add(set, 'attendance.read', 'attendance.manage');
+      break;
+  }
   pair('employees', 'employees.read', 'employees.manage');
   pair('candidates', 'candidates.read', 'candidates.manage');
   pair('payroll', 'payroll.read', 'payroll.manage');
@@ -275,11 +286,18 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
     return 'none';
   };
 
+  const attendance = (): ModuleLevel => {
+    if (has('attendance.manage')) return 'manage';
+    if (has('attendance.read')) return 'read';
+    if (has('attendance.self')) return 'self';
+    return 'none';
+  };
+
   return {
     closings: closings(),
     reports: reports(),
     movements: level('movements.read', 'movements.manage'),
-    attendance: level('attendance.read', 'attendance.manage'),
+    attendance: attendance(),
     employees: level('employees.read', 'employees.manage'),
     candidates: level('candidates.read', 'candidates.manage'),
     payroll: level('payroll.read', 'payroll.manage'),

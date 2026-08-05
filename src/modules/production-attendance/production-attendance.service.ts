@@ -65,6 +65,83 @@ export class ProductionAttendanceService implements OnModuleInit {
     return h > 0 ? h : 8;
   }
 
+  /** Empleado productor vinculado al usuario logueado. */
+  async resolveMyProducer(user: AuthUser, shopId: string): Promise<Employee> {
+    this.shops.assertShopAccess(user, shopId);
+    const emp = await this.employees.findOne({
+      where: { shopId, userId: user.id },
+    });
+    if (!emp || !isEntityActive(emp.active) || !emp.producesFood) {
+      throw new NotFoundException(
+        'No hay un productor activo vinculado a tu usuario en este local. Pedile a un admin que te asocie en Empleados (Produce comida + usuario).',
+      );
+    }
+    return emp;
+  }
+
+  async getMyRange(user: AuthUser, shopId: string, from: string, to: string) {
+    const emp = await this.resolveMyProducer(user, shopId);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      throw new BadRequestException('Rango de fechas inválido');
+    }
+    if (from > to) throw new BadRequestException('La fecha desde no puede ser posterior a hasta');
+    const defaultHours = await this.defaultHoursForShop(shopId);
+    const rows = await this.days.find({
+      where: {
+        shopId,
+        employeeId: emp.id,
+        date: Between(from, to),
+      },
+      order: { date: 'ASC' },
+    });
+    const byDate: Record<string, { id?: string; hours: number; isPresent: boolean }> = {};
+    for (const d of rows) {
+      const hours = n(d.hours);
+      byDate[d.date] = { id: d.id, hours, isPresent: hours > 0 };
+    }
+    return {
+      shopId,
+      from,
+      to,
+      defaultHours,
+      employee: { employeeId: emp.id, fullName: emp.fullName },
+      days: byDate,
+      totalHours: rows.reduce((s, d) => s + n(d.hours), 0),
+    };
+  }
+
+  async upsertMyDay(
+    user: AuthUser,
+    shopId: string,
+    dto: { date: string; hours?: number; isPresent?: boolean },
+  ) {
+    const emp = await this.resolveMyProducer(user, shopId);
+    return this.upsertDay(user, shopId, {
+      employeeId: emp.id,
+      date: dto.date,
+      hours: dto.hours,
+      isPresent: dto.isPresent,
+    });
+  }
+
+  async bulkUpsertMy(
+    user: AuthUser,
+    shopId: string,
+    items: Array<{ date: string; hours?: number; isPresent?: boolean }>,
+  ) {
+    const emp = await this.resolveMyProducer(user, shopId);
+    return this.bulkUpsert(
+      user,
+      shopId,
+      (items ?? []).map((i) => ({
+        employeeId: emp.id,
+        date: i.date,
+        hours: i.hours,
+        isPresent: i.isPresent,
+      })),
+    );
+  }
+
   async getMonth(user: AuthUser, shopId: string, year: number, month: number) {
     this.shops.assertShopAccess(user, shopId);
     if (month < 1 || month > 12) throw new BadRequestException('Mes inválido');

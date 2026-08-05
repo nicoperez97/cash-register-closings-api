@@ -99,6 +99,7 @@ export const PERMISSIONS = [
   'candidates.read',
   'attendance.manage',
   'attendance.read',
+  'attendance.self',
   'payroll.manage',
   'payroll.read',
   'commissions.manage',
