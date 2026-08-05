@@ -53,6 +53,20 @@ class BulkProductionAttendanceDto {
   items: UpsertProductionAttendanceDto[];
 }
 
+class UpsertMyProductionAttendanceDto {
+  @ApiProperty() @IsDateString() date: string;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() isPresent?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) hours?: number;
+}
+
+class BulkMyProductionAttendanceDto {
+  @ApiProperty({ type: [UpsertMyProductionAttendanceDto] })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => UpsertMyProductionAttendanceDto)
+  items: UpsertMyProductionAttendanceDto[];
+}
+
 @ApiTags('production-attendance')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'), PermissionsGuard)
@@ -62,6 +76,41 @@ export class ProductionAttendanceController {
     private readonly attendance: ProductionAttendanceService,
     private readonly excelImport: ProductionAttendanceExcelImportService,
   ) {}
+
+  /** Horas del productor vinculado al usuario (día / semana / mes vía from-to). */
+  @Get('me')
+  @RequirePermissions('attendance.self')
+  async myRange(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    res.setHeader('Cache-Control', 'no-store');
+    if (!from || !to) throw new BadRequestException('Indicá from y to (YYYY-MM-DD)');
+    return this.attendance.getMyRange(user, shopId, from, to);
+  }
+
+  @Post('me')
+  @RequirePermissions('attendance.self')
+  upsertMine(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: UpsertMyProductionAttendanceDto,
+  ) {
+    return this.attendance.upsertMyDay(user, shopId, dto);
+  }
+
+  @Post('me/bulk')
+  @RequirePermissions('attendance.self')
+  bulkMine(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: BulkMyProductionAttendanceDto,
+  ) {
+    return this.attendance.bulkUpsertMy(user, shopId, dto.items ?? []);
+  }
 
   @Get()
   @RequirePermissions('attendance.read')
