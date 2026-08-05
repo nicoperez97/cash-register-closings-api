@@ -282,15 +282,28 @@ export class PaymentsService implements OnModuleInit {
     }
   }
 
-  private parseStatuses(status?: string): string[] {
-    if (!status) return [];
-    return String(status)
+  private parseCsv(raw?: string): string[] {
+    if (!raw) return [];
+    return String(raw)
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
   }
 
-  async list(user: AuthUser, shopId: string, status?: string) {
+  private parseStatuses(status?: string): string[] {
+    return this.parseCsv(status);
+  }
+
+  async list(
+    user: AuthUser,
+    shopId: string,
+    opts?: {
+      status?: string;
+      payerUserId?: string;
+      validatorUserId?: string;
+      mineUserId?: string;
+    },
+  ) {
     this.shops.assertShopAccess(user, shopId);
     const qb = this.payments
       .createQueryBuilder('p')
@@ -301,11 +314,32 @@ export class PaymentsService implements OnModuleInit {
       .leftJoinAndSelect('p.employee', 'employee')
       .where('p.shopId = :shopId', { shopId })
       .andWhere('p.active = true');
-    const statuses = this.parseStatuses(status);
+    const statuses = this.parseStatuses(opts?.status);
     if (statuses.length === 1) {
       qb.andWhere('p.status = :status', { status: statuses[0] });
     } else if (statuses.length > 1) {
       qb.andWhere('p.status IN (:...statuses)', { statuses });
+    }
+    const payerIds = this.parseCsv(opts?.payerUserId);
+    if (payerIds.length === 1) {
+      qb.andWhere('p.payerUserId = :payerUserId', { payerUserId: payerIds[0] });
+    } else if (payerIds.length > 1) {
+      qb.andWhere('p.payerUserId IN (:...payerIds)', { payerIds });
+    }
+    const validatorIds = this.parseCsv(opts?.validatorUserId);
+    if (validatorIds.length === 1) {
+      qb.andWhere('p.validatorUserId = :validatorUserId', {
+        validatorUserId: validatorIds[0],
+      });
+    } else if (validatorIds.length > 1) {
+      qb.andWhere('p.validatorUserId IN (:...validatorIds)', { validatorIds });
+    }
+    const mineUserId = (opts?.mineUserId ?? '').trim();
+    if (mineUserId) {
+      qb.andWhere(
+        '(p.payerUserId = :mineUserId OR p.validatorUserId = :mineUserId)',
+        { mineUserId },
+      );
     }
     qb.orderBy('p.dueDate', 'ASC').addOrderBy('p.createdAt', 'DESC');
     const rows = await qb.getMany();
@@ -315,13 +349,25 @@ export class PaymentsService implements OnModuleInit {
   async exportExcel(
     user: AuthUser,
     shopId: string,
-    status?: string,
-    kind?: string,
+    opts?: {
+      status?: string;
+      kind?: string;
+      payerUserId?: string;
+      validatorUserId?: string;
+      mineUserId?: string;
+    },
   ) {
     this.shops.assertShopAccess(user, shopId);
     const shop = await this.shops.findOne(user, shopId);
-    let rows = await this.list(user, shopId, status || undefined);
-    const kindNorm = kind === 'employee' || kind === 'supplier' ? kind : undefined;
+    const status = opts?.status;
+    let rows = await this.list(user, shopId, {
+      status: status || undefined,
+      payerUserId: opts?.payerUserId,
+      validatorUserId: opts?.validatorUserId,
+      mineUserId: opts?.mineUserId,
+    });
+    const kindNorm =
+      opts?.kind === 'employee' || opts?.kind === 'supplier' ? opts.kind : undefined;
     if (kindNorm === 'supplier') rows = rows.filter((r) => !!r.supplierId);
     if (kindNorm === 'employee') rows = rows.filter((r) => !r.supplierId);
 
@@ -360,6 +406,15 @@ export class PaymentsService implements OnModuleInit {
       return `Filtro estado: ${statuses.map(statusLabel).join(', ')}`;
     })();
     info.addRow([statusFilterLabel]);
+    if (opts?.validatorUserId) {
+      info.addRow([`Filtro valida: ${opts.validatorUserId}`]);
+    }
+    if (opts?.payerUserId) {
+      info.addRow([`Filtro paga: ${opts.payerUserId}`]);
+    }
+    if (opts?.mineUserId) {
+      info.addRow(['Filtro: solo asignados a mí (valida o paga)']);
+    }
     info.addRow([`Total pagos: ${rows.length}`]);
 
     const columns = [

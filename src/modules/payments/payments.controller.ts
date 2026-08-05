@@ -139,8 +139,18 @@ export class PaymentsController {
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
     @Query('status') status?: string,
+    @Query('payerUserId') payerUserId?: string,
+    @Query('validatorUserId') validatorUserId?: string,
+    @Query('mine') mine?: string,
   ) {
-    return this.payments.list(user, shopId, status);
+    const mineUserId =
+      mine === '1' || mine === 'true' ? user.id : undefined;
+    return this.payments.list(user, shopId, {
+      status,
+      payerUserId,
+      validatorUserId,
+      mineUserId,
+    });
   }
 
   @Get('export.xlsx')
@@ -150,14 +160,20 @@ export class PaymentsController {
     @Param('shopId') shopId: string,
     @Query('status') status: string | undefined,
     @Query('kind') kind: string | undefined,
+    @Query('payerUserId') payerUserId: string | undefined,
+    @Query('validatorUserId') validatorUserId: string | undefined,
+    @Query('mine') mine: string | undefined,
     @Res() res: Response,
   ) {
-    const { buffer, filename } = await this.payments.exportExcel(
-      user,
-      shopId,
+    const mineUserId =
+      mine === '1' || mine === 'true' ? user.id : undefined;
+    const { buffer, filename } = await this.payments.exportExcel(user, shopId, {
       status,
       kind,
-    );
+      payerUserId,
+      validatorUserId,
+      mineUserId,
+    });
     res.setHeader(
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
