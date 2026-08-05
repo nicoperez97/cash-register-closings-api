@@ -4,12 +4,26 @@ import { Repository } from 'typeorm';
 import { AppNotification } from '../../entities/notification.entity';
 import { NotificationType } from '../../common/enums';
 import { AuthUser } from '../../common/decorators';
+import { PushService } from './push.service';
+
+function deepLinkFor(type: NotificationType, opts: {
+  shopId?: string | null;
+  closingId?: string | null;
+  paymentId?: string | null;
+}): string {
+  if (opts.closingId) return `/closings/${opts.closingId}`;
+  if (type === NotificationType.CLOSING_CREATED) return '/closings';
+  if (type === NotificationType.PRODUCTION_HOURS_LOGGED) return '/production-attendance';
+  if (String(type).startsWith('PAYMENT_')) return '/payments/suppliers';
+  return '/';
+}
 
 @Injectable()
 export class NotificationsService implements OnModuleInit {
   constructor(
     @InjectRepository(AppNotification)
     private readonly notifications: Repository<AppNotification>,
+    private readonly push: PushService,
   ) {}
 
   async onModuleInit() {
@@ -69,7 +83,18 @@ export class NotificationsService implements OnModuleInit {
         active: true,
       }),
     );
-    return this.toDto(row);
+    const dto = this.toDto(row);
+    void this.push
+      .sendToUsers([input.userId], {
+        title: input.title,
+        body: input.body,
+        url: deepLinkFor(input.type, input),
+        tag: `crc-${input.type}-${row.id}`,
+        shopId: input.shopId ?? null,
+        notificationId: row.id,
+      })
+      .catch(() => undefined);
+    return dto;
   }
 
   async createMany(
@@ -99,6 +124,29 @@ export class NotificationsService implements OnModuleInit {
         }),
       ),
     );
+
+    // Un push por destinatario (mismo contenido agrupado).
+    const byUser = new Map<string, (typeof rows)[number]>();
+    for (const row of rows) {
+      if (!byUser.has(row.userId)) byUser.set(row.userId, row);
+    }
+    for (const [userId, row] of byUser) {
+      void this.push
+        .sendToUsers([userId], {
+          title: row.title,
+          body: row.body,
+          url: deepLinkFor(row.type, {
+            shopId: row.shopId,
+            closingId: row.closingId,
+            paymentId: row.paymentId,
+          }),
+          tag: `crc-${row.type}-${row.id}`,
+          shopId: row.shopId ?? null,
+          notificationId: row.id,
+        })
+        .catch(() => undefined);
+    }
+
     return rows.map((r) => this.toDto(r));
   }
 

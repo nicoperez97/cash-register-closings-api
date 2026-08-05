@@ -28,6 +28,8 @@ export enum NotificationType {
   PAYMENT_REJECTED = 'PAYMENT_REJECTED',
   PAYMENT_PAID = 'PAYMENT_PAID',
   CLOSING_CREATED = 'CLOSING_CREATED',
+  /** Productor cargó / actualizó sus horas de producción. */
+  PRODUCTION_HOURS_LOGGED = 'PRODUCTION_HOURS_LOGGED',
 }
 
 export enum ExpenseCategory {

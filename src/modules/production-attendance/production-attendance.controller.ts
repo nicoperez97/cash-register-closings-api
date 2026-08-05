@@ -112,6 +112,20 @@ export class ProductionAttendanceController {
     return this.attendance.bulkUpsertMy(user, shopId, dto.items ?? []);
   }
 
+  /** Resumen de horas: semana actual + total del año. */
+  @Get('summary')
+  @RequirePermissions('attendance.read')
+  async summary(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Query('year') year: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    res.setHeader('Cache-Control', 'no-store');
+    const y = Number(year) || new Date().getFullYear();
+    return this.attendance.getSummary(user, shopId, y);
+  }
+
   @Get()
   @RequirePermissions('attendance.read')
   async month(
