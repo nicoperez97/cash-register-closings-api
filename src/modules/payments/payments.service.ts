@@ -138,6 +138,7 @@ export class PaymentsService implements OnModuleInit {
       accountName: p.account?.name ?? null,
       supplierId: p.supplierId ?? null,
       supplierName: p.supplier?.name ?? null,
+      supplierBankAlias: p.supplier?.bankAlias ?? null,
       employeeId: p.employeeId ?? null,
       employeeName: p.employee?.fullName ?? null,
       status: p.status,
