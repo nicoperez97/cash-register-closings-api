@@ -1,24 +1,39 @@
-import { BadRequestException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleInit,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, In, Repository } from 'typeorm';
 import { ProductionAttendanceDay } from '../../entities/production-attendance-day.entity';
 import { Employee } from '../../entities/employee.entity';
 import { Shop } from '../../entities/shop.entity';
+import { User } from '../../entities/user.entity';
+import { UserShop } from '../../entities/user-shop.entity';
 import { AuthUser } from '../../common/decorators';
+import { GlobalRole, NotificationType } from '../../common/enums';
 import { isEntityActive } from '../../common/active.util';
 import { ShopsService } from '../shops/shops.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const hoursStr = (v: number) => Math.max(0, Number(v) || 0).toFixed(2);
 
 @Injectable()
 export class ProductionAttendanceService implements OnModuleInit {
+  private readonly logger = new Logger(ProductionAttendanceService.name);
+
   constructor(
     @InjectRepository(ProductionAttendanceDay)
     private readonly days: Repository<ProductionAttendanceDay>,
     @InjectRepository(Employee) private readonly employees: Repository<Employee>,
     @InjectRepository(Shop) private readonly shopsRepo: Repository<Shop>,
+    @InjectRepository(User) private readonly users: Repository<User>,
+    @InjectRepository(UserShop) private readonly userShops: Repository<UserShop>,
     private readonly shops: ShopsService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async onModuleInit() {
@@ -116,12 +131,18 @@ export class ProductionAttendanceService implements OnModuleInit {
     dto: { date: string; hours?: number; isPresent?: boolean },
   ) {
     const emp = await this.resolveMyProducer(user, shopId);
-    return this.upsertDay(user, shopId, {
+    const saved = await this.upsertDay(user, shopId, {
       employeeId: emp.id,
       date: dto.date,
       hours: dto.hours,
       isPresent: dto.isPresent,
     });
+    void this.notifyAdminsProducerHours(user, shopId, emp, [saved]).catch((err) => {
+      this.logger.warn(
+        `No se pudo notificar carga de horas: ${(err as Error)?.message ?? err}`,
+      );
+    });
+    return saved;
   }
 
   async bulkUpsertMy(
@@ -130,7 +151,7 @@ export class ProductionAttendanceService implements OnModuleInit {
     items: Array<{ date: string; hours?: number; isPresent?: boolean }>,
   ) {
     const emp = await this.resolveMyProducer(user, shopId);
-    return this.bulkUpsert(
+    const saved = await this.bulkUpsert(
       user,
       shopId,
       (items ?? []).map((i) => ({
@@ -140,6 +161,14 @@ export class ProductionAttendanceService implements OnModuleInit {
         isPresent: i.isPresent,
       })),
     );
+    if (saved.length) {
+      void this.notifyAdminsProducerHours(user, shopId, emp, saved).catch((err) => {
+        this.logger.warn(
+          `No se pudo notificar carga de horas: ${(err as Error)?.message ?? err}`,
+        );
+      });
+    }
+    return saved;
   }
 
   async getMonth(user: AuthUser, shopId: string, year: number, month: number) {
@@ -185,6 +214,88 @@ export class ProductionAttendanceService implements OnModuleInit {
           days: byDate,
         };
       }),
+    };
+  }
+
+  /** Totales de horas: semana actual (lun–dom) + año indicado, por productor. */
+  async getSummary(user: AuthUser, shopId: string, year: number) {
+    this.shops.assertShopAccess(user, shopId);
+    if (!Number.isFinite(year) || year < 2000 || year > 2100) {
+      throw new BadRequestException('Año inválido');
+    }
+
+    const now = new Date();
+    const day = now.getDay(); // 0=dom
+    const mondayOffset = day === 0 ? -6 : 1 - day;
+    const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() + mondayOffset);
+    const sunday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6);
+    const iso = (d: Date) => {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${dd}`;
+    };
+    const weekFrom = iso(monday);
+    const weekTo = iso(sunday);
+    const yearFrom = `${year}-01-01`;
+    const yearTo = `${year}-12-31`;
+
+    const employees = await this.producerEmployees(shopId);
+    const empIds = employees.map((e) => e.id);
+
+    if (!empIds.length) {
+      return {
+        shopId,
+        week: { from: weekFrom, to: weekTo, totalHours: 0, byEmployee: [] },
+        year: { year, totalHours: 0, byEmployee: [] },
+      };
+    }
+
+    const [weekRows, yearRows] = await Promise.all([
+      this.days.find({
+        where: {
+          shopId,
+          employeeId: In(empIds),
+          date: Between(weekFrom, weekTo),
+        },
+      }),
+      this.days.find({
+        where: {
+          shopId,
+          employeeId: In(empIds),
+          date: Between(yearFrom, yearTo),
+        },
+      }),
+    ]);
+
+    const sumByEmp = (rows: ProductionAttendanceDay[]) => {
+      const map = new Map<string, number>();
+      for (const r of rows) {
+        map.set(r.employeeId, (map.get(r.employeeId) ?? 0) + n(r.hours));
+      }
+      return employees.map((e) => ({
+        employeeId: e.id,
+        fullName: e.fullName,
+        hours: map.get(e.id) ?? 0,
+      }));
+    };
+
+    const weekByEmployee = sumByEmp(weekRows);
+    const yearByEmployee = sumByEmp(yearRows);
+
+    return {
+      shopId,
+      week: {
+        from: weekFrom,
+        to: weekTo,
+        totalHours: weekByEmployee.reduce((s, e) => s + e.hours, 0),
+        byEmployee: weekByEmployee,
+      },
+      year: {
+        year,
+        totalHours: yearByEmployee.reduce((s, e) => s + e.hours, 0),
+        byEmployee: yearByEmployee,
+      },
     };
   }
 
@@ -254,5 +365,65 @@ export class ProductionAttendanceService implements OnModuleInit {
       out.push(await this.upsertDay(user, shopId, item));
     }
     return out;
+  }
+
+  /** Notifica a admins del local (OWNER/ADMIN) cuando un productor carga sus horas. */
+  private async notifyAdminsProducerHours(
+    actor: AuthUser,
+    shopId: string,
+    employee: Employee,
+    days: Array<{ date: string; hours: number }>,
+  ) {
+    if (!days.length) return;
+
+    const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
+    const shopName = shop?.name?.trim() || 'Local';
+    const links = await this.userShops.find({
+      where: {
+        shopId,
+        shopRole: In([GlobalRole.OWNER, GlobalRole.ADMIN]),
+      },
+    });
+    const recipientIds = new Set(links.map((l) => l.userId));
+
+    const globalOwners = await this.users.find({
+      where: { globalRole: GlobalRole.OWNER },
+      select: ['id', 'active'],
+    });
+    for (const u of globalOwners) {
+      if (isEntityActive(u.active)) recipientIds.add(u.id);
+    }
+
+    recipientIds.delete(actor.id);
+    if (!recipientIds.size) return;
+
+    const producerName = employee.fullName?.trim() || actor.fullName || actor.email;
+    const totalHours = days.reduce((s, d) => s + n(d.hours), 0);
+    const sortedDates = [...days.map((d) => d.date)].sort();
+    const title = 'Horas de producción cargadas';
+    let body: string;
+    if (days.length === 1) {
+      const h = n(days[0].hours).toLocaleString('es-AR', {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 2,
+      });
+      body = `${shopName} · ${producerName} cargó ${h} h el ${sortedDates[0]}`;
+    } else {
+      const total = totalHours.toLocaleString('es-AR', {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 2,
+      });
+      body = `${shopName} · ${producerName} actualizó ${days.length} días (${sortedDates[0]} – ${sortedDates[sortedDates.length - 1]}, total ${total} h)`;
+    }
+
+    await this.notifications.createMany(
+      [...recipientIds].map((userId) => ({
+        userId,
+        shopId,
+        type: NotificationType.PRODUCTION_HOURS_LOGGED,
+        title,
+        body,
+      })),
+    );
   }
 }

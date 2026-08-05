@@ -26,6 +26,11 @@ export default () => {
       origin: parseCorsOrigin(env.CORS_ORIGIN ?? 'http://localhost:4200'),
       credentials: true,
     },
+    webPush: {
+      publicKey: (env.VAPID_PUBLIC_KEY ?? '').trim(),
+      privateKey: (env.VAPID_PRIVATE_KEY ?? '').trim(),
+      subject: (env.VAPID_SUBJECT ?? 'mailto:admin@cierres.local').trim(),
+    },
   };
 };
 
