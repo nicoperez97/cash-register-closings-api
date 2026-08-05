@@ -188,6 +188,85 @@ export class PaymentsService implements OnModuleInit {
     return v;
   }
 
+  private toDateOnly(value: string | Date | null | undefined): string | null {
+    if (value == null || value === '') return null;
+    if (value instanceof Date) {
+      if (Number.isNaN(value.getTime())) return null;
+      const y = value.getFullYear();
+      const m = String(value.getMonth() + 1).padStart(2, '0');
+      const d = String(value.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+    const m = /^(\d{4}-\d{2}-\d{2})/.exec(String(value));
+    return m?.[1] ?? null;
+  }
+
+  private paymentMovementDescription(p: Payment) {
+    return [
+      `Pago: ${this.displayTitle(p)}`,
+      p.supplier?.name ? `Proveedor: ${p.supplier.name}` : null,
+      p.employee?.fullName ? `Empleado: ${p.employee.fullName}` : null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+  }
+
+  /** Actualiza o recrea el movimiento del pago abonado. */
+  private async syncPaidMovement(user: AuthUser, shopId: string, payment: Payment) {
+    if (!payment.accountId) {
+      throw new BadRequestException('Indicá la cuenta con la que se paga');
+    }
+    if (!(n(payment.amount) > 0)) {
+      throw new BadRequestException('Un pago abonado necesita monto mayor a 0');
+    }
+    const egreso = await this.accounts.findOne({
+      where: { shopId, code: 'EGRESO', active: true },
+    });
+    if (!egreso) {
+      throw new BadRequestException('No hay cuenta EGRESO en el local');
+    }
+    const paidAt =
+      this.toDateOnly(payment.paidAt) || new Date().toISOString().slice(0, 10);
+    const basePayload = {
+      businessDate: paidAt,
+      fromAccountId: payment.accountId,
+      toAccountId: egreso.id,
+      employeeId: payment.employeeId ?? null,
+      amountUyu: n(payment.amount),
+      description: this.paymentMovementDescription(payment),
+    };
+
+    const tryWrite = async (fromUserId: string | null) => {
+      const payload = { ...basePayload, fromUserId };
+      if (payment.movementId) {
+        try {
+          await this.movements.update(user, shopId, payment.movementId, payload);
+          return true;
+        } catch (err) {
+          if (!(err instanceof NotFoundException)) throw err;
+          // movimiento borrado → recrear
+        }
+      }
+      const movement = await this.movements.create(user, shopId, payload);
+      payment.movementId = movement.id;
+      payment.paidAt = paidAt;
+      await this.payments.save(payment);
+      return true;
+    };
+
+    try {
+      await tryWrite(payment.payerUserId ?? null);
+    } catch (err) {
+      // Si el pagador ya no pertenece al local, igual guardamos el movimiento.
+      const msg = String((err as Error)?.message ?? err);
+      if (payment.payerUserId && /no pertenece al local/i.test(msg)) {
+        await tryWrite(null);
+        return;
+      }
+      throw err;
+    }
+  }
+
   async list(user: AuthUser, shopId: string, status?: string) {
     this.shops.assertShopAccess(user, shopId);
     const qb = this.payments
@@ -413,9 +492,9 @@ export class PaymentsService implements OnModuleInit {
       if (!wasPaid) {
         throw new BadRequestException('La fecha de pago solo aplica a pagos abonados');
       }
-      const paidAt = this.emptyToNull(dto.paidAt);
-      if (!paidAt) throw new BadRequestException('Indicá la fecha de pago');
-      row.paidAt = paidAt;
+      const paidAt = this.toDateOnly(dto.paidAt);
+      // Si viene vacío, mantenemos la fecha actual (no bloqueamos el guardado).
+      if (paidAt) row.paidAt = paidAt;
     }
     if (dto.payerUserId !== undefined) {
       const payerUserId = this.emptyToNull(dto.payerUserId) ?? null;
@@ -459,33 +538,11 @@ export class PaymentsService implements OnModuleInit {
     }
 
     await this.payments.save(row);
-    const loaded = await this.load(shopId, id);
+    let loaded = await this.load(shopId, id);
 
-    if (wasPaid && loaded.movementId) {
-      const egreso = await this.accounts.findOne({
-        where: { shopId, code: 'EGRESO', active: true },
-      });
-      if (!egreso) {
-        throw new BadRequestException('No hay cuenta EGRESO en el local');
-      }
-      if (!loaded.accountId) {
-        throw new BadRequestException('Indicá la cuenta con la que se paga');
-      }
-      await this.movements.update(user, shopId, loaded.movementId, {
-        businessDate: loaded.paidAt || undefined,
-        fromAccountId: loaded.accountId,
-        toAccountId: egreso.id,
-        fromUserId: loaded.payerUserId ?? null,
-        employeeId: loaded.employeeId ?? null,
-        amountUyu: n(loaded.amount),
-        description: [
-          `Pago: ${this.displayTitle(loaded)}`,
-          loaded.supplier?.name ? `Proveedor: ${loaded.supplier.name}` : null,
-          loaded.employee?.fullName ? `Empleado: ${loaded.employee.fullName}` : null,
-        ]
-          .filter(Boolean)
-          .join(' · '),
-      });
+    if (wasPaid) {
+      await this.syncPaidMovement(user, shopId, loaded);
+      loaded = await this.load(shopId, id);
     }
 
     if (wasValidated && loaded.validatorUserId) {
