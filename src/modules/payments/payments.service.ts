@@ -282,6 +282,14 @@ export class PaymentsService implements OnModuleInit {
     }
   }
 
+  private parseStatuses(status?: string): string[] {
+    if (!status) return [];
+    return String(status)
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
   async list(user: AuthUser, shopId: string, status?: string) {
     this.shops.assertShopAccess(user, shopId);
     const qb = this.payments
@@ -293,7 +301,12 @@ export class PaymentsService implements OnModuleInit {
       .leftJoinAndSelect('p.employee', 'employee')
       .where('p.shopId = :shopId', { shopId })
       .andWhere('p.active = true');
-    if (status) qb.andWhere('p.status = :status', { status });
+    const statuses = this.parseStatuses(status);
+    if (statuses.length === 1) {
+      qb.andWhere('p.status = :status', { status: statuses[0] });
+    } else if (statuses.length > 1) {
+      qb.andWhere('p.status IN (:...statuses)', { statuses });
+    }
     qb.orderBy('p.dueDate', 'ASC').addOrderBy('p.createdAt', 'DESC');
     const rows = await qb.getMany();
     return rows.map((r) => this.toDto(r));
@@ -341,7 +354,12 @@ export class PaymentsService implements OnModuleInit {
     info.addRow([`Local: ${shop.name}`]);
     info.addRow([`Sección: ${kindLabel}`]);
     info.addRow([`Generado: ${new Date().toISOString().slice(0, 19).replace('T', ' ')}`]);
-    info.addRow([status ? `Filtro estado: ${statusLabel(status)}` : 'Filtro estado: Todos']);
+    const statusFilterLabel = (() => {
+      const statuses = this.parseStatuses(status);
+      if (!statuses.length) return 'Filtro estado: Todos';
+      return `Filtro estado: ${statuses.map(statusLabel).join(', ')}`;
+    })();
+    info.addRow([statusFilterLabel]);
     info.addRow([`Total pagos: ${rows.length}`]);
 
     const columns = [
