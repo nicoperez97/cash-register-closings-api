@@ -29,6 +29,7 @@ export interface UpsertPaymentDto {
   notes?: string | null;
   amount?: number | null;
   dueDate?: string | null;
+  paidAt?: string | null;
   payerUserId?: string | null;
   validatorUserId?: string | null;
   accountId?: string | null;
@@ -387,24 +388,35 @@ export class PaymentsService implements OnModuleInit {
       throw new ForbiddenException('Sin permiso para editar pagos');
     }
     const row = await this.load(shopId, id);
-    if (
-      row.status === PaymentStatus.PAID ||
-      row.status === PaymentStatus.CANCELLED
-    ) {
-      throw new BadRequestException('No se puede editar un pago cerrado');
+    if (row.status === PaymentStatus.CANCELLED) {
+      throw new BadRequestException('No se puede editar un pago cancelado');
     }
+
+    const wasPaid = row.status === PaymentStatus.PAID;
 
     if (dto.title !== undefined) row.title = dto.title?.trim() || null;
     if (dto.notes !== undefined) row.notes = dto.notes?.trim() || null;
     if (dto.amount !== undefined) {
       if (dto.amount === null || (dto.amount as any) === '') {
+        if (wasPaid) throw new BadRequestException('Un pago abonado necesita monto');
         row.amount = null;
       } else {
         if (n(dto.amount) < 0) throw new BadRequestException('El monto no puede ser negativo');
+        if (wasPaid && !(n(dto.amount) > 0)) {
+          throw new BadRequestException('Un pago abonado necesita monto mayor a 0');
+        }
         row.amount = money(n(dto.amount));
       }
     }
     if (dto.dueDate !== undefined) row.dueDate = this.emptyToNull(dto.dueDate) ?? null;
+    if (dto.paidAt !== undefined) {
+      if (!wasPaid) {
+        throw new BadRequestException('La fecha de pago solo aplica a pagos abonados');
+      }
+      const paidAt = this.emptyToNull(dto.paidAt);
+      if (!paidAt) throw new BadRequestException('Indicá la fecha de pago');
+      row.paidAt = paidAt;
+    }
     if (dto.payerUserId !== undefined) {
       const payerUserId = this.emptyToNull(dto.payerUserId) ?? null;
       if (payerUserId) await this.assertShopUser(shopId, payerUserId, 'Quién paga');
@@ -417,6 +429,9 @@ export class PaymentsService implements OnModuleInit {
     }
     if (dto.accountId !== undefined) {
       const accountId = this.emptyToNull(dto.accountId) ?? null;
+      if (wasPaid && !accountId) {
+        throw new BadRequestException('Un pago abonado necesita la cuenta que paga');
+      }
       if (accountId) await this.assertAccount(shopId, accountId);
       row.accountId = accountId;
     }
@@ -436,7 +451,7 @@ export class PaymentsService implements OnModuleInit {
       throw new BadRequestException('Un pago no puede tener proveedor y empleado a la vez');
     }
 
-    const wasValidated = row.status === PaymentStatus.VALIDATED;
+    const wasValidated = !wasPaid && row.status === PaymentStatus.VALIDATED;
     if (wasValidated) {
       row.status = PaymentStatus.PENDING_VALIDATION;
       row.validatedAt = null;
@@ -445,6 +460,33 @@ export class PaymentsService implements OnModuleInit {
 
     await this.payments.save(row);
     const loaded = await this.load(shopId, id);
+
+    if (wasPaid && loaded.movementId) {
+      const egreso = await this.accounts.findOne({
+        where: { shopId, code: 'EGRESO', active: true },
+      });
+      if (!egreso) {
+        throw new BadRequestException('No hay cuenta EGRESO en el local');
+      }
+      if (!loaded.accountId) {
+        throw new BadRequestException('Indicá la cuenta con la que se paga');
+      }
+      await this.movements.update(user, shopId, loaded.movementId, {
+        businessDate: loaded.paidAt || undefined,
+        fromAccountId: loaded.accountId,
+        toAccountId: egreso.id,
+        fromUserId: loaded.payerUserId ?? null,
+        employeeId: loaded.employeeId ?? null,
+        amountUyu: n(loaded.amount),
+        description: [
+          `Pago: ${this.displayTitle(loaded)}`,
+          loaded.supplier?.name ? `Proveedor: ${loaded.supplier.name}` : null,
+          loaded.employee?.fullName ? `Empleado: ${loaded.employee.fullName}` : null,
+        ]
+          .filter(Boolean)
+          .join(' · '),
+      });
+    }
 
     if (wasValidated && loaded.validatorUserId) {
       await this.notifications.create({

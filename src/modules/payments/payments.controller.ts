@@ -88,6 +88,11 @@ class UpdatePaymentDto {
   @ApiPropertyOptional()
   @IsOptional()
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsDateString()
+  paidAt?: string | null;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
   @IsUUID()
   payerUserId?: string | null;
   @ApiPropertyOptional()
