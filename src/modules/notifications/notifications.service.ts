@@ -105,6 +105,7 @@ export class NotificationsService implements OnModuleInit {
       }),
     );
     const dto = this.toDto(row);
+    const unreadCount = await this.countUnreadForUser(input.userId);
     void this.push
       .sendToUsers([input.userId], {
         title: input.title,
@@ -113,6 +114,7 @@ export class NotificationsService implements OnModuleInit {
         tag: `crc-${input.type}-${row.id}`,
         shopId: input.shopId ?? null,
         notificationId: row.id,
+        unreadCount,
       })
       .catch(() => undefined);
     void this.mail
@@ -160,22 +162,26 @@ export class NotificationsService implements OnModuleInit {
     for (const row of rows) {
       if (!byUser.has(row.userId)) byUser.set(row.userId, row);
     }
-    for (const [userId, row] of byUser) {
-      void this.push
-        .sendToUsers([userId], {
-          title: row.title,
-          body: row.body,
-          url: deepLinkFor(row.type, {
-            shopId: row.shopId,
-            closingId: row.closingId,
-            paymentId: row.paymentId,
-          }),
-          tag: `crc-${row.type}-${row.id}`,
-          shopId: row.shopId ?? null,
-          notificationId: row.id,
-        })
-        .catch(() => undefined);
-    }
+    void Promise.all(
+      [...byUser.entries()].map(async ([userId, row]) => {
+        const unreadCount = await this.countUnreadForUser(userId);
+        await this.push
+          .sendToUsers([userId], {
+            title: row.title,
+            body: row.body,
+            url: deepLinkFor(row.type, {
+              shopId: row.shopId,
+              closingId: row.closingId,
+              paymentId: row.paymentId,
+            }),
+            tag: `crc-${row.type}-${row.id}`,
+            shopId: row.shopId ?? null,
+            notificationId: row.id,
+            unreadCount,
+          })
+          .catch(() => undefined);
+      }),
+    ).catch(() => undefined);
 
     void this.mail
       .sendNotificationEmails(
@@ -264,6 +270,12 @@ export class NotificationsService implements OnModuleInit {
     }
     await qb.execute();
     return { ok: true };
+  }
+
+  private async countUnreadForUser(userId: string): Promise<number> {
+    return this.notifications.count({
+      where: { userId, active: true, isRead: false },
+    });
   }
 
   private toDto(n: AppNotification) {

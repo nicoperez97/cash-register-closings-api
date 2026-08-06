@@ -13,6 +13,8 @@ export type PushPayload = {
   tag?: string;
   shopId?: string | null;
   notificationId?: string | null;
+  /** Total de no leídas del usuario (para badge del ícono PWA). */
+  unreadCount?: number;
 };
 
 @Injectable()
@@ -131,6 +133,10 @@ export class PushService implements OnModuleInit {
       tag: payload.tag || 'crc-notification',
       shopId: payload.shopId ?? null,
       notificationId: payload.notificationId ?? null,
+      unreadCount:
+        typeof payload.unreadCount === 'number' && payload.unreadCount > 0
+          ? Math.floor(payload.unreadCount)
+          : undefined,
     });
 
     await Promise.all(
