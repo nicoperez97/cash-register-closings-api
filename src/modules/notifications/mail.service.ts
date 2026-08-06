@@ -148,6 +148,9 @@ export class MailService {
     if (type === NotificationType.CLOSING_CREATED) {
       return { path: '/closings', label: 'Ver cierres' };
     }
+    if (type === NotificationType.CASH_WITHDRAWAL_PICKED) {
+      return { path: '/cash-withdrawals', label: 'Ver retiros' };
+    }
     if (type === NotificationType.PRODUCTION_HOURS_LOGGED) {
       return { path: '/production-attendance', label: 'Ver producción' };
     }

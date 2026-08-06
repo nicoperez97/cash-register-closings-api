@@ -6,6 +6,13 @@ import { AuthUser } from '../../common/decorators';
 import { PosProduct } from '../../entities/pos-product.entity';
 import { PosSaleTicketLine } from '../../entities/pos-sale-ticket-line.entity';
 import { ShopsService } from '../shops/shops.service';
+import {
+  allSeedProducts,
+  guessByCodeRange,
+  guessWineVarietyFromName,
+  looksLikeWineWithoutVariety,
+  normProductCode,
+} from './pos-catalog.seed';
 
 export interface SalesProductsFilters {
   from: string;
@@ -94,6 +101,27 @@ export interface SalesProductsSummary {
 function n(v: unknown): number {
   const x = Number(v ?? 0);
   return Number.isFinite(x) ? x : 0;
+}
+
+/** Normaliza DATE/Date/string a YYYY-MM-DD (evita "Wed Mar 18" al String(date)). */
+function toIsoDateOnly(v: unknown): string {
+  if (v instanceof Date && !Number.isNaN(v.getTime())) {
+    const y = v.getUTCFullYear();
+    const m = String(v.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(v.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  const s = String(v ?? '').trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  const d = new Date(s);
+  if (!Number.isNaN(d.getTime())) {
+    const y = d.getUTCFullYear();
+    const mo = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(d.getUTCDate()).padStart(2, '0');
+    return `${y}-${mo}-${day}`;
+  }
+  return s.slice(0, 10);
 }
 
 @Injectable()
@@ -237,7 +265,7 @@ export class SalesProductsAnalyticsService {
     });
 
     const byDay: SalesDayRow[] = dayRaw.map((r) => ({
-      date: String(r.date).slice(0, 10),
+      date: toIsoDateOnly(r.date),
       qty: n(r.qty),
       amount: n(r.amount),
       ticketCount: n(r.ticketCount),
@@ -405,7 +433,7 @@ export class SalesProductsAnalyticsService {
     const byCode = new Map<string, { productCode: string; productName: string | null }>();
 
     for (const item of items) {
-        const code = (item.productCode || item.productName || '').trim();
+      const code = (item.productCode || item.productName || '').trim();
       if (!code) continue;
       // Prefer numeric Restosoft codes without trailing .0
       const normalized =
@@ -420,6 +448,35 @@ export class SalesProductsAnalyticsService {
 
     if (!byCode.size) return map;
 
+    const seedByCode = new Map<string, { category: string; subcategory: string }>();
+    for (const p of allSeedProducts()) {
+      const c = normProductCode(p.code);
+      if (c) seedByCode.set(c, { category: p.category, subcategory: p.subcategory });
+    }
+
+    const resolveNewLabels = (
+      code: string,
+      productName: string | null,
+    ): { category: string | null; subcategory: string | null } => {
+      const seed = seedByCode.get(code);
+      if (seed?.category === 'VINOS' && !seed.subcategory) {
+        return { category: null, subcategory: null };
+      }
+      if (seed) return { category: seed.category, subcategory: seed.subcategory };
+
+      const wineSub = guessWineVarietyFromName(productName);
+      if (wineSub) return { category: 'VINOS', subcategory: wineSub };
+
+      // Vino sin cepa clara: no cargar rubro/subrubro
+      if (looksLikeWineWithoutVariety(productName)) {
+        return { category: null, subcategory: null };
+      }
+
+      const guess = guessByCodeRange(code);
+      if (guess) return { category: guess.category, subcategory: guess.subcategory };
+      return { category: null, subcategory: null };
+    };
+
     const codes = [...byCode.keys()];
     const existing = await this.products
       .createQueryBuilder('p')
@@ -432,25 +489,40 @@ export class SalesProductsAnalyticsService {
     for (const [code, meta] of byCode) {
       let row = existingByCode.get(code);
       if (row) {
+        let dirty = false;
         if (meta.productName && meta.productName !== row.productName) {
           row.productName = meta.productName;
-          toSave.push(row);
+          dirty = true;
         }
+        // Completar rubro/subrubro solo si falta y podemos identificarlo (vinos: con cepa).
+        if (!row.category || (row.category === 'VINOS' && !row.subcategory)) {
+          const labels = resolveNewLabels(code, meta.productName ?? row.productName ?? null);
+          if (labels.category && (labels.category !== 'VINOS' || labels.subcategory)) {
+            row.category = labels.category;
+            row.subcategory = labels.subcategory;
+            dirty = true;
+          }
+        }
+        if (dirty) toSave.push(row);
         map.set(code, {
           category: row.category ?? null,
           subcategory: row.subcategory ?? null,
         });
       } else {
+        const labels = resolveNewLabels(code, meta.productName);
         row = this.products.create({
           shopId,
           productCode: code,
           productName: meta.productName,
-          category: null,
-          subcategory: null,
+          category: labels.category,
+          subcategory: labels.subcategory,
           active: true,
         });
         toSave.push(row);
-        map.set(code, { category: null, subcategory: null });
+        map.set(code, {
+          category: labels.category,
+          subcategory: labels.subcategory,
+        });
       }
     }
     if (toSave.length) {

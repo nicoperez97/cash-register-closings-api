@@ -151,23 +151,8 @@ export class ClosingMovementsSyncService {
         invoiced: false,
         active: true,
       });
-    } else if (cashChannel && n(closing.cashWithdrawn) > 0) {
-      rows.push({
-        shopId: closing.shopId,
-        businessDate: date,
-        fromAccountId: cashChannel.id,
-        toAccountId: egreso.id,
-        description: `Retiro de efectivo${
-          closing.cashWithdrawnByName ? ` — ${closing.cashWithdrawnByName}` : ''
-        }`,
-        amountUyu: money(n(closing.cashWithdrawn)),
-        conceptId: findConcept('Utilidades') ?? findConcept('Gastos varios'),
-        closingId: closing.id,
-        employeeId: closing.cashWithdrawnByEmployeeId ?? null,
-        invoiced: false,
-        active: true,
-      });
     }
+    // Sin destinatario: el retiro queda pendiente en «A Retirar»; no mandar a EGRESO.
 
     for (const exp of closing.expenses ?? []) {
       const amount = n(exp.amount);

@@ -17,6 +17,8 @@ import {
   SeedProduct,
   allSeedProducts,
   guessByCodeRange,
+  guessWineVarietyFromName,
+  looksLikeWineWithoutVariety,
   normProductCode,
   normProductName,
 } from './pos-catalog.seed';
@@ -312,12 +314,33 @@ export class PosCatalogService {
       let catName: string | null = seed?.category ?? null;
       let subName: string | null = seed?.subcategory ?? null;
 
+      // Restosoft no trae subrubros de vinos: inferir cepa por nombre si hace falta.
+      if ((!catName || catName === 'VINOS') && !subName) {
+        const wineSub = guessWineVarietyFromName(product.productName);
+        if (wineSub) {
+          catName = 'VINOS';
+          subName = wineSub;
+        }
+      }
+
       if (!catName) {
         const guess = code ? guessByCodeRange(code) : null;
         if (guess) {
           catName = guess.category;
           subName = guess.subcategory;
         }
+      }
+
+      // Sin cepa identificable no cargamos VINOS (ni “Otros” inventado).
+      if (catName === 'VINOS' && !subName) {
+        skipped++;
+        unmatched.push(`${product.productCode ?? '?'} ${product.productName ?? ''}`.trim());
+        continue;
+      }
+      if (!catName && looksLikeWineWithoutVariety(product.productName)) {
+        skipped++;
+        unmatched.push(`${product.productCode ?? '?'} ${product.productName ?? ''}`.trim());
+        continue;
       }
 
       if (!catName) {
@@ -328,8 +351,9 @@ export class PosCatalogService {
 
       const cat = categoryByName.get(catName);
       const sub = subName ? subByKey.get(`${catName}||${subName}`) : undefined;
-      if (!cat) {
+      if (!cat || (catName === 'VINOS' && !sub)) {
         skipped++;
+        unmatched.push(`${product.productCode ?? '?'} ${product.productName ?? ''}`.trim());
         continue;
       }
 
