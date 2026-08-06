@@ -8,6 +8,10 @@ import { User } from '../../entities/user.entity';
 import { Shop } from '../../entities/shop.entity';
 import { NotificationType } from '../../common/enums';
 import { isEntityActive } from '../../common/active.util';
+import {
+  buildNotificationEmailHtml,
+  buildNotificationEmailText,
+} from './mail-template';
 
 type MailPayload = {
   userId: string;
@@ -22,6 +26,9 @@ type ShopMailRow = Pick<
   | 'id'
   | 'email'
   | 'name'
+  | 'logoUrl'
+  | 'accentColor'
+  | 'accentSecondary'
   | 'emailSmtpPassword'
   | 'emailNotificationsEnabled'
   | 'emailNotificationTypes'
@@ -36,6 +43,7 @@ export class MailService {
   private readonly smtpHost: string;
   private readonly smtpPort: number;
   private readonly smtpSecure: boolean;
+  private readonly appOrigin: string;
 
   constructor(
     private readonly config: ConfigService,
@@ -46,6 +54,13 @@ export class MailService {
     this.smtpHost = (this.config.get<string>('smtp.host') ?? '').trim();
     this.smtpPort = this.config.get<number>('smtp.port') ?? 587;
     this.smtpSecure = !!this.config.get<boolean>('smtp.secure');
+    this.appOrigin = (
+      this.config.get<string>('publicAppOrigin') ??
+      process.env.PUBLIC_APP_ORIGIN ??
+      ''
+    )
+      .trim()
+      .replace(/\/+$/, '');
     const user = (this.config.get<string>('smtp.user') ?? '').trim();
     const pass = (this.config.get<string>('smtp.pass') ?? '').trim();
     if (this.smtpHost) {
@@ -63,11 +78,14 @@ export class MailService {
   }
 
   isEnabled(): boolean {
-    // Puede haber envío por SMTP del local aunque no haya SMTP global.
     return true;
   }
 
-  private shopAllowsEmail(shop: ShopMailRow | null | undefined, type: string, userId: string): boolean {
+  private shopAllowsEmail(
+    shop: ShopMailRow | null | undefined,
+    type: string,
+    userId: string,
+  ): boolean {
     if (!shop) return true;
     const enabled =
       shop.emailNotificationsEnabled === undefined ||
@@ -123,10 +141,43 @@ export class MailService {
     };
   }
 
-  /**
-   * Destino: email del usuario.
-   * Remitente / SMTP: email + contraseña del local, o SMTP global del .env.
-   */
+  private actionForType(type: string): { path: string; label: string } {
+    if (type === NotificationType.STOCK_BELOW_MINIMUM) {
+      return { path: '/stock', label: 'Abrir stock' };
+    }
+    if (type === NotificationType.CLOSING_CREATED) {
+      return { path: '/closings', label: 'Ver cierres' };
+    }
+    if (type === NotificationType.PRODUCTION_HOURS_LOGGED) {
+      return { path: '/production-attendance', label: 'Ver producción' };
+    }
+    if (String(type).startsWith('PAYMENT_')) {
+      return { path: '/payments/suppliers', label: 'Ver pagos' };
+    }
+    return { path: '/', label: 'Abrir la app' };
+  }
+
+  private renderMail(input: MailPayload, shop: ShopMailRow | null, user: User) {
+    const action = this.actionForType(String(input.type));
+    const actionUrl = this.appOrigin ? `${this.appOrigin}${action.path}` : null;
+    const tpl = {
+      type: String(input.type),
+      title: input.title,
+      body: input.body,
+      recipientName: user.fullName,
+      shopName: shop?.name ?? null,
+      shopLogoUrl: shop?.logoUrl ?? null,
+      accentColor: shop?.accentColor ?? null,
+      accentSecondary: shop?.accentSecondary ?? null,
+      actionUrl,
+      actionLabel: action.label,
+    };
+    return {
+      text: buildNotificationEmailText(tpl),
+      html: buildNotificationEmailHtml(tpl),
+    };
+  }
+
   async sendNotificationEmail(input: MailPayload): Promise<void> {
     let shop: ShopMailRow | null = null;
     if (input.shopId) {
@@ -157,16 +208,15 @@ export class MailService {
 
     const shopName = shop?.name?.trim() || null;
     const fromHeader = shopName ? `"${shopName}" <${from}>` : from;
+    const rendered = this.renderMail(input, shop, user);
 
     try {
       await transporter.sendMail({
         from: fromHeader,
         to: user.email.trim(),
         subject: input.title,
-        text: input.body,
-        html: `<p style="font-family:sans-serif;font-size:15px;line-height:1.45;color:#222">${escapeHtml(
-          input.body,
-        )}</p>`,
+        text: rendered.text,
+        html: rendered.html,
         replyTo: shop?.email?.trim() || undefined,
       });
     } catch (err) {
@@ -221,15 +271,14 @@ export class MailService {
 
       const shopName = shop?.name?.trim() || null;
       const fromHeader = shopName ? `"${shopName}" <${fromEmail}>` : fromEmail;
+      const rendered = this.renderMail(input, shop, user);
       try {
         await transporter.sendMail({
           from: fromHeader,
           to: user.email.trim(),
           subject: input.title,
-          text: input.body,
-          html: `<p style="font-family:sans-serif;font-size:15px;line-height:1.45;color:#222">${escapeHtml(
-            input.body,
-          )}</p>`,
+          text: rendered.text,
+          html: rendered.html,
           replyTo: shop?.email?.trim() || undefined,
         });
       } catch (err) {
@@ -239,12 +288,4 @@ export class MailService {
       }
     }
   }
-}
-
-function escapeHtml(value: string): string {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }

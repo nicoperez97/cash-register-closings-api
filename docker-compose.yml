@@ -41,9 +41,10 @@ services:
       DB_SYNC: ${DB_SYNC}
       JWT_SECRET: ${JWT_SECRET}
       CORS_ORIGIN: ${CORS_ORIGIN}
+      PUBLIC_APP_ORIGIN: ${PUBLIC_APP_ORIGIN:-https://d1jr8rgm5npiqn.cloudfront.net}
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY}
-      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@cierres.local}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-https://d1jr8rgm5npiqn.cloudfront.net}
     networks:
       - internal
 
