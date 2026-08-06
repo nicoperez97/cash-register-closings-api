@@ -16,6 +16,7 @@ export type ModuleKey =
   | 'waitingList'
   | 'payments'
   | 'suppliers'
+  | 'stock'
   | 'shop'
   | 'users';
 
@@ -163,6 +164,15 @@ export const MODULE_DEFS: ModuleDef[] = [
     ],
   },
   {
+    key: 'stock',
+    label: 'Stock',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
     key: 'shop',
     label: 'Local / POS',
     levels: [
@@ -247,6 +257,7 @@ export function expandModulePermissions(
   pair('waitingList', 'waitingList.read', 'waitingList.manage');
   pair('payments', 'payments.read', 'payments.manage');
   pair('suppliers', 'suppliers.read', 'suppliers.manage');
+  pair('stock', 'stock.read', 'stock.manage');
   // Quien gestiona pagos puede elegir / crear proveedores en el formulario.
   if (modules.payments === 'manage') add(set, 'suppliers.read', 'suppliers.manage');
   if (modules.payments === 'read') add(set, 'suppliers.read');
@@ -306,6 +317,7 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
     waitingList: level('waitingList.read', 'waitingList.manage'),
     payments: level('payments.read', 'payments.manage'),
     suppliers: level('suppliers.read', 'suppliers.manage'),
+    stock: level('stock.read', 'stock.manage'),
     accounts: has('accounts.manage') ? 'manage' : 'none',
     concepts: has('concepts.manage') ? 'manage' : 'none',
     shop: has('shops.manage') ? 'manage' : 'none',

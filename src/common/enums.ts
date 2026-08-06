@@ -30,7 +30,22 @@ export enum NotificationType {
   CLOSING_CREATED = 'CLOSING_CREATED',
   /** Productor cargó / actualizó sus horas de producción. */
   PRODUCTION_HOURS_LOGGED = 'PRODUCTION_HOURS_LOGGED',
+  /** Producto de stock por debajo del mínimo de su categoría. */
+  STOCK_BELOW_MINIMUM = 'STOCK_BELOW_MINIMUM',
 }
+
+/** Etiquetas para UI de configuración de mails del local. */
+export const NOTIFICATION_TYPE_LABELS: Record<NotificationType, string> = {
+  [NotificationType.PAYMENT_VALIDATE]: 'Pagos · pendiente de validar',
+  [NotificationType.PAYMENT_PAY]: 'Pagos · pendiente de abonar',
+  [NotificationType.PAYMENT_REJECTED]: 'Pagos · rechazados',
+  [NotificationType.PAYMENT_PAID]: 'Pagos · abonados',
+  [NotificationType.CLOSING_CREATED]: 'Cierres creados',
+  [NotificationType.PRODUCTION_HOURS_LOGGED]: 'Horas de producción cargadas',
+  [NotificationType.STOCK_BELOW_MINIMUM]: 'Stock bajo el mínimo',
+};
+
+export const ALL_NOTIFICATION_TYPES: NotificationType[] = Object.values(NotificationType);
 
 export enum ExpenseCategory {
   SUPPLIES = 'SUPPLIES',
@@ -118,6 +133,8 @@ export const PERMISSIONS = [
   'payments.manage',
   'suppliers.read',
   'suppliers.manage',
+  'stock.read',
+  'stock.manage',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -155,6 +172,8 @@ export const ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     'payments.manage',
     'suppliers.read',
     'suppliers.manage',
+    'stock.read',
+    'stock.manage',
   ],
   [GlobalRole.CASHIER]: ['closings.create'],
   [GlobalRole.VIEWER]: [
@@ -170,6 +189,7 @@ export const ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     'reservations.read',
     'payments.read',
     'suppliers.read',
+    'stock.read',
   ],
   [GlobalRole.PARTNER]: [
     'closings.read',

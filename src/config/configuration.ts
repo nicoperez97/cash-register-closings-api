@@ -31,6 +31,15 @@ export default () => {
       privateKey: (env.VAPID_PRIVATE_KEY ?? '').trim(),
       subject: (env.VAPID_SUBJECT ?? 'mailto:admin@cierres.local').trim(),
     },
+    smtp: {
+      host: (env.SMTP_HOST ?? '').trim(),
+      port: parseInt(env.SMTP_PORT ?? '587', 10),
+      secure: (env.SMTP_SECURE ?? 'false') === 'true',
+      user: (env.SMTP_USER ?? '').trim(),
+      pass: (env.SMTP_PASS ?? '').trim(),
+      /** Remitente por defecto si el local no tiene email. */
+      from: (env.SMTP_FROM ?? env.SMTP_USER ?? '').trim(),
+    },
   };
 };
 
@@ -39,7 +48,7 @@ function parseCorsOrigin(raw: string): string | string[] | boolean {
   if (!value || value === '*') return true;
   const parts = value
     .split(',')
-    .map((s) => s.trim())
+    .map((s) => s.trim().replace(/\/+$/, ''))
     .filter(Boolean);
   if (parts.length === 0) return true;
   if (parts.length === 1) return parts[0];

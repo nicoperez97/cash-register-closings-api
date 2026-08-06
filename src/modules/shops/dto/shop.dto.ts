@@ -2,6 +2,7 @@ import {
   ArrayMaxSize,
   IsArray,
   IsBoolean,
+  IsEmail,
   IsEnum,
   IsInt,
   IsNumber,
@@ -129,6 +130,51 @@ export class CreateShopDto {
   @IsOptional()
   @IsString()
   accentSecondary?: string;
+
+  @ApiPropertyOptional({
+    example: 'local@restaurante.com',
+    description: 'Email del local (remitente y usuario SMTP, p.ej. Gmail)',
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsEmail()
+  email?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      'Contraseña SMTP / de aplicación del email del local. Omitir o "" = no cambiar; null = borrar',
+    nullable: true,
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsString()
+  @MinLength(4)
+  emailSmtpPassword?: string | null;
+
+  @ApiPropertyOptional({ description: 'Si es false, no se envían mails de este local' })
+  @IsOptional()
+  @IsBoolean()
+  emailNotificationsEnabled?: boolean;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Tipos de notificación a enviar por mail. null = todos',
+    nullable: true,
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  emailNotificationTypes?: string[] | null;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'IDs de usuarios del local que reciben mails. null = todos',
+    nullable: true,
+  })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('4', { each: true })
+  emailNotificationUserIds?: string[] | null;
 
   @ApiPropertyOptional({ description: 'Sistema de ventas / POS (Restosoft, etc.)' })
   @IsOptional()

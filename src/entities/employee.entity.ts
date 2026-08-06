@@ -36,6 +36,13 @@ export class Employee extends BaseEntity {
   @Column({ type: 'tinyint', default: 0 })
   producesFood: boolean;
 
+  /**
+   * Productor supervisor a cargo de este empleado (mismo local, producesFood).
+   * El supervisor puede cargar las horas de producción de quienes tiene a cargo.
+   */
+  @Column({ type: 'varchar', nullable: true })
+  supervisorEmployeeId?: string | null;
+
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })
   shop: Shop;
@@ -43,4 +50,8 @@ export class Employee extends BaseEntity {
   @ManyToOne(() => User, { nullable: true })
   @JoinColumn({ name: 'userId' })
   user?: User | null;
+
+  @ManyToOne(() => Employee, { nullable: true })
+  @JoinColumn({ name: 'supervisorEmployeeId' })
+  supervisor?: Employee | null;
 }

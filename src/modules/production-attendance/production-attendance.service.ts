@@ -171,6 +171,122 @@ export class ProductionAttendanceService implements OnModuleInit {
     return saved;
   }
 
+  /** Productores a cargo del productor vinculado al usuario. */
+  async listMyTeam(user: AuthUser, shopId: string) {
+    const me = await this.resolveMyProducer(user, shopId);
+    const team = await this.employees.find({
+      where: { shopId, supervisorEmployeeId: me.id },
+      order: { fullName: 'ASC' },
+    });
+    return {
+      supervisor: { employeeId: me.id, fullName: me.fullName },
+      team: team
+        .filter((e) => isEntityActive(e.active) && !!e.producesFood)
+        .map((e) => ({ employeeId: e.id, fullName: e.fullName })),
+    };
+  }
+
+  private async assertTeamMember(supervisorId: string, shopId: string, employeeId: string) {
+    const emp = await this.employees.findOne({ where: { id: employeeId, shopId } });
+    if (
+      !emp ||
+      !isEntityActive(emp.active) ||
+      !emp.producesFood ||
+      emp.supervisorEmployeeId !== supervisorId
+    ) {
+      throw new NotFoundException('Ese productor no está a tu cargo');
+    }
+    return emp;
+  }
+
+  async getTeamMemberRange(
+    user: AuthUser,
+    shopId: string,
+    employeeId: string,
+    from: string,
+    to: string,
+  ) {
+    const me = await this.resolveMyProducer(user, shopId);
+    const emp = await this.assertTeamMember(me.id, shopId, employeeId);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      throw new BadRequestException('Rango de fechas inválido');
+    }
+    if (from > to) throw new BadRequestException('La fecha desde no puede ser posterior a hasta');
+    const defaultHours = await this.defaultHoursForShop(shopId);
+    const rows = await this.days.find({
+      where: {
+        shopId,
+        employeeId: emp.id,
+        date: Between(from, to),
+      },
+      order: { date: 'ASC' },
+    });
+    const byDate: Record<string, { id?: string; hours: number; isPresent: boolean }> = {};
+    for (const d of rows) {
+      const hours = n(d.hours);
+      byDate[d.date] = { id: d.id, hours, isPresent: hours > 0 };
+    }
+    return {
+      shopId,
+      from,
+      to,
+      defaultHours,
+      employee: { employeeId: emp.id, fullName: emp.fullName },
+      days: byDate,
+      totalHours: rows.reduce((s, d) => s + n(d.hours), 0),
+    };
+  }
+
+  async upsertTeamMemberDay(
+    user: AuthUser,
+    shopId: string,
+    employeeId: string,
+    dto: { date: string; hours?: number; isPresent?: boolean },
+  ) {
+    const me = await this.resolveMyProducer(user, shopId);
+    const emp = await this.assertTeamMember(me.id, shopId, employeeId);
+    const saved = await this.upsertDay(user, shopId, {
+      employeeId: emp.id,
+      date: dto.date,
+      hours: dto.hours,
+      isPresent: dto.isPresent,
+    });
+    void this.notifyAdminsProducerHours(user, shopId, emp, [saved]).catch((err) => {
+      this.logger.warn(
+        `No se pudo notificar carga de horas: ${(err as Error)?.message ?? err}`,
+      );
+    });
+    return saved;
+  }
+
+  async bulkUpsertTeamMember(
+    user: AuthUser,
+    shopId: string,
+    employeeId: string,
+    items: Array<{ date: string; hours?: number; isPresent?: boolean }>,
+  ) {
+    const me = await this.resolveMyProducer(user, shopId);
+    const emp = await this.assertTeamMember(me.id, shopId, employeeId);
+    const saved = await this.bulkUpsert(
+      user,
+      shopId,
+      (items ?? []).map((i) => ({
+        employeeId: emp.id,
+        date: i.date,
+        hours: i.hours,
+        isPresent: i.isPresent,
+      })),
+    );
+    if (saved.length) {
+      void this.notifyAdminsProducerHours(user, shopId, emp, saved).catch((err) => {
+        this.logger.warn(
+          `No se pudo notificar carga de horas: ${(err as Error)?.message ?? err}`,
+        );
+      });
+    }
+    return saved;
+  }
+
   async getMonth(user: AuthUser, shopId: string, year: number, month: number) {
     this.shops.assertShopAccess(user, shopId);
     if (month < 1 || month > 12) throw new BadRequestException('Mes inválido');

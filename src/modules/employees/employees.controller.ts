@@ -41,6 +41,12 @@ class CreateEmployeeDto {
   @IsOptional()
   @IsBoolean()
   producesFood?: boolean;
+  @ApiPropertyOptional({
+    description: 'Productor supervisor a cargo (solo si produce comida)',
+  })
+  @IsOptional()
+  @IsUUID()
+  supervisorEmployeeId?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
 }
 
@@ -58,6 +64,11 @@ class UpdateEmployeeDto {
   @IsOptional()
   @IsBoolean()
   producesFood?: boolean;
+  @ApiPropertyOptional({
+    description: 'Productor supervisor a cargo (solo si produce comida)',
+  })
+  @IsOptional()
+  supervisorEmployeeId?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
 }
 

@@ -1,0 +1,250 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@nestjs/typeorm';
+import { In, Repository } from 'typeorm';
+import * as nodemailer from 'nodemailer';
+import type Transporter from 'nodemailer/lib/mailer';
+import { User } from '../../entities/user.entity';
+import { Shop } from '../../entities/shop.entity';
+import { NotificationType } from '../../common/enums';
+import { isEntityActive } from '../../common/active.util';
+
+type MailPayload = {
+  userId: string;
+  shopId?: string | null;
+  type: NotificationType | string;
+  title: string;
+  body: string;
+};
+
+type ShopMailRow = Pick<
+  Shop,
+  | 'id'
+  | 'email'
+  | 'name'
+  | 'emailSmtpPassword'
+  | 'emailNotificationsEnabled'
+  | 'emailNotificationTypes'
+  | 'emailNotificationUserIds'
+>;
+
+@Injectable()
+export class MailService {
+  private readonly logger = new Logger(MailService.name);
+  private globalTransporter: Transporter | null = null;
+  private readonly defaultFrom: string;
+  private readonly smtpHost: string;
+  private readonly smtpPort: number;
+  private readonly smtpSecure: boolean;
+
+  constructor(
+    private readonly config: ConfigService,
+    @InjectRepository(User) private readonly users: Repository<User>,
+    @InjectRepository(Shop) private readonly shops: Repository<Shop>,
+  ) {
+    this.defaultFrom = (this.config.get<string>('smtp.from') ?? '').trim();
+    this.smtpHost = (this.config.get<string>('smtp.host') ?? '').trim();
+    this.smtpPort = this.config.get<number>('smtp.port') ?? 587;
+    this.smtpSecure = !!this.config.get<boolean>('smtp.secure');
+    const user = (this.config.get<string>('smtp.user') ?? '').trim();
+    const pass = (this.config.get<string>('smtp.pass') ?? '').trim();
+    if (this.smtpHost) {
+      this.globalTransporter = nodemailer.createTransport({
+        host: this.smtpHost,
+        port: this.smtpPort,
+        secure: this.smtpSecure,
+        auth: user ? { user, pass } : undefined,
+      });
+    } else {
+      this.logger.log(
+        'SMTP global no configurado: se usará el email/contraseña de cada local (p.ej. Gmail)',
+      );
+    }
+  }
+
+  isEnabled(): boolean {
+    // Puede haber envío por SMTP del local aunque no haya SMTP global.
+    return true;
+  }
+
+  private shopAllowsEmail(shop: ShopMailRow | null | undefined, type: string, userId: string): boolean {
+    if (!shop) return true;
+    const enabled =
+      shop.emailNotificationsEnabled === undefined ||
+      shop.emailNotificationsEnabled === null
+        ? true
+        : !!shop.emailNotificationsEnabled;
+    if (!enabled) return false;
+
+    const types = Array.isArray(shop.emailNotificationTypes)
+      ? shop.emailNotificationTypes
+      : null;
+    if (types !== null && !types.includes(type)) return false;
+
+    const userIds = Array.isArray(shop.emailNotificationUserIds)
+      ? shop.emailNotificationUserIds
+      : null;
+    if (userIds !== null && !userIds.includes(userId)) return false;
+
+    return true;
+  }
+
+  private async loadShop(shopId: string): Promise<ShopMailRow | null> {
+    return this.shops
+      .createQueryBuilder('s')
+      .addSelect('s.emailSmtpPassword')
+      .where('s.id = :id', { id: shopId })
+      .getOne();
+  }
+
+  private transporterForShop(shop: ShopMailRow | null): {
+    transporter: Transporter | null;
+    fromEmail: string | null;
+  } {
+    const shopEmail = shop?.email?.trim() || null;
+    const shopPass = shop?.emailSmtpPassword?.trim() || null;
+    if (shopEmail && shopPass) {
+      const host = this.smtpHost || 'smtp.gmail.com';
+      const port = this.smtpHost ? this.smtpPort : 587;
+      const secure = this.smtpHost ? this.smtpSecure : false;
+      return {
+        transporter: nodemailer.createTransport({
+          host,
+          port,
+          secure,
+          auth: { user: shopEmail, pass: shopPass },
+        }),
+        fromEmail: shopEmail,
+      };
+    }
+    return {
+      transporter: this.globalTransporter,
+      fromEmail: shopEmail || this.defaultFrom || null,
+    };
+  }
+
+  /**
+   * Destino: email del usuario.
+   * Remitente / SMTP: email + contraseña del local, o SMTP global del .env.
+   */
+  async sendNotificationEmail(input: MailPayload): Promise<void> {
+    let shop: ShopMailRow | null = null;
+    if (input.shopId) {
+      shop = await this.loadShop(input.shopId);
+      if (!this.shopAllowsEmail(shop, String(input.type), input.userId)) return;
+    }
+
+    const { transporter, fromEmail } = this.transporterForShop(shop);
+    if (!transporter) {
+      this.logger.warn(
+        'Sin SMTP (ni del local ni global): email omitido. Configurá email + contraseña en el local.',
+      );
+      return;
+    }
+
+    const user = await this.users.findOne({
+      where: { id: input.userId },
+      select: ['id', 'email', 'fullName', 'active'],
+    });
+    if (!user || !isEntityActive(user.active) || !user.email?.trim()) return;
+    if (user.email.includes('@import.cierres.local')) return;
+
+    const from = fromEmail;
+    if (!from) {
+      this.logger.warn('Sin remitente (shop.email ni SMTP_FROM): email omitido');
+      return;
+    }
+
+    const shopName = shop?.name?.trim() || null;
+    const fromHeader = shopName ? `"${shopName}" <${from}>` : from;
+
+    try {
+      await transporter.sendMail({
+        from: fromHeader,
+        to: user.email.trim(),
+        subject: input.title,
+        text: input.body,
+        html: `<p style="font-family:sans-serif;font-size:15px;line-height:1.45;color:#222">${escapeHtml(
+          input.body,
+        )}</p>`,
+        replyTo: shop?.email?.trim() || undefined,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `No se pudo enviar email a ${user.email}: ${(err as Error)?.message ?? err}`,
+      );
+    }
+  }
+
+  async sendNotificationEmails(inputs: MailPayload[]): Promise<void> {
+    if (!inputs.length) return;
+
+    const userIds = [...new Set(inputs.map((i) => i.userId))];
+    const shopIds = [
+      ...new Set(inputs.map((i) => i.shopId).filter((id): id is string => !!id)),
+    ];
+
+    const [users, shops] = await Promise.all([
+      this.users.find({
+        where: { id: In(userIds) },
+        select: ['id', 'email', 'fullName', 'active'],
+      }),
+      shopIds.length
+        ? this.shops
+            .createQueryBuilder('s')
+            .addSelect('s.emailSmtpPassword')
+            .where('s.id IN (:...ids)', { ids: shopIds })
+            .getMany()
+        : Promise.resolve([] as Shop[]),
+    ]);
+
+    const userById = new Map(users.map((u) => [u.id, u]));
+    const shopById = new Map(shops.map((s) => [s.id, s as ShopMailRow]));
+
+    const byUser = new Map<string, MailPayload>();
+    for (const input of inputs) {
+      if (!byUser.has(input.userId)) byUser.set(input.userId, input);
+    }
+
+    for (const input of byUser.values()) {
+      const shop = input.shopId ? shopById.get(input.shopId) ?? null : null;
+      if (input.shopId && !this.shopAllowsEmail(shop, String(input.type), input.userId)) {
+        continue;
+      }
+
+      const user = userById.get(input.userId);
+      if (!user || !isEntityActive(user.active) || !user.email?.trim()) continue;
+      if (user.email.includes('@import.cierres.local')) continue;
+
+      const { transporter, fromEmail } = this.transporterForShop(shop);
+      if (!transporter || !fromEmail) continue;
+
+      const shopName = shop?.name?.trim() || null;
+      const fromHeader = shopName ? `"${shopName}" <${fromEmail}>` : fromEmail;
+      try {
+        await transporter.sendMail({
+          from: fromHeader,
+          to: user.email.trim(),
+          subject: input.title,
+          text: input.body,
+          html: `<p style="font-family:sans-serif;font-size:15px;line-height:1.45;color:#222">${escapeHtml(
+            input.body,
+          )}</p>`,
+          replyTo: shop?.email?.trim() || undefined,
+        });
+      } catch (err) {
+        this.logger.warn(
+          `No se pudo enviar email a ${user.email}: ${(err as Error)?.message ?? err}`,
+        );
+      }
+    }
+  }
+}
+
+function escapeHtml(value: string): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
