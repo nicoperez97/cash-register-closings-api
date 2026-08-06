@@ -26,10 +26,17 @@ export default () => {
       origin: parseCorsOrigin(env.CORS_ORIGIN ?? 'http://localhost:4200'),
       credentials: true,
     },
+    /** Origen del front (links en mails / PWA). */
+    publicAppOrigin: (env.PUBLIC_APP_ORIGIN ?? env.CORS_ORIGIN?.split(',')[0] ?? '').trim(),
     webPush: {
       publicKey: (env.VAPID_PUBLIC_KEY ?? '').trim(),
       privateKey: (env.VAPID_PRIVATE_KEY ?? '').trim(),
-      subject: (env.VAPID_SUBJECT ?? 'mailto:admin@cierres.local').trim(),
+      // mailto: o https: — si no hay mail fijo, usar la URL pública de la app
+      subject: (
+        env.VAPID_SUBJECT ??
+        env.PUBLIC_APP_ORIGIN ??
+        'https://d1jr8rgm5npiqn.cloudfront.net'
+      ).trim(),
     },
     smtp: {
       host: (env.SMTP_HOST ?? '').trim(),
