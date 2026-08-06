@@ -15,7 +15,16 @@ cp -rf /opt/crc/api/nginx/. /opt/crc/nginx/
 cd /opt/crc
 docker compose pull --ignore-pull-failures || true
 docker compose build api
-docker compose up -d --remove-orphans
+
+# Evitar "Conflict. The container name ... is already in use" tras recreates fallidos.
+docker compose stop api 2>/dev/null || true
+conflict_ids="$(docker ps -aq --filter name=crc-api 2>/dev/null || true)"
+if [ -n "${conflict_ids}" ]; then
+  # shellcheck disable=SC2086
+  docker rm -f ${conflict_ids} || true
+fi
+
+docker compose up -d --remove-orphans --force-recreate api
 docker image prune -f
 
 echo "Deploy OK: $(date -u +%FT%TZ)"
