@@ -14,6 +14,7 @@ function deepLinkFor(type: NotificationType, opts: {
 }): string {
   if (opts.closingId) return `/closings/${opts.closingId}`;
   if (type === NotificationType.CLOSING_CREATED) return '/closings';
+  if (type === NotificationType.CASH_WITHDRAWAL_PICKED) return '/cash-withdrawals';
   if (type === NotificationType.PRODUCTION_HOURS_LOGGED) return '/production-attendance';
   if (type === NotificationType.STOCK_BELOW_MINIMUM) return '/stock';
   if (String(type).startsWith('PAYMENT_')) return '/payments/suppliers';
@@ -61,6 +62,23 @@ export class NotificationsService implements OnModuleInit {
       `);
     } catch {
       // ya existe
+    }
+    try {
+      await this.notifications.query(`
+        ALTER TABLE notifications
+          MODIFY COLUMN type ENUM(
+            'PAYMENT_VALIDATE',
+            'PAYMENT_PAY',
+            'PAYMENT_REJECTED',
+            'PAYMENT_PAID',
+            'CLOSING_CREATED',
+            'CASH_WITHDRAWAL_PICKED',
+            'PRODUCTION_HOURS_LOGGED',
+            'STOCK_BELOW_MINIMUM'
+          ) NOT NULL
+      `);
+    } catch {
+      // motor sin enum o ya actualizado
     }
   }
 

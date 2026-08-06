@@ -14,6 +14,12 @@ export enum ClosingStatus {
   LOCKED = 'LOCKED',
 }
 
+/** Retiro de efectivo del cierre aún no asignado a un socio. */
+export enum CashPendingWithdrawalStatus {
+  PENDING = 'PENDING',
+  PICKED = 'PICKED',
+}
+
 export enum PaymentStatus {
   PENDING_VALIDATION = 'PENDING_VALIDATION',
   VALIDATED = 'VALIDATED',
@@ -28,6 +34,8 @@ export enum NotificationType {
   PAYMENT_REJECTED = 'PAYMENT_REJECTED',
   PAYMENT_PAID = 'PAYMENT_PAID',
   CLOSING_CREATED = 'CLOSING_CREATED',
+  /** Efectivo retirado desde «A Retirar» (o asignado a un socio). */
+  CASH_WITHDRAWAL_PICKED = 'CASH_WITHDRAWAL_PICKED',
   /** Productor cargó / actualizó sus horas de producción. */
   PRODUCTION_HOURS_LOGGED = 'PRODUCTION_HOURS_LOGGED',
   /** Producto de stock por debajo del mínimo de su categoría. */
@@ -41,6 +49,7 @@ export const NOTIFICATION_TYPE_LABELS: Record<NotificationType, string> = {
   [NotificationType.PAYMENT_REJECTED]: 'Pagos · rechazados',
   [NotificationType.PAYMENT_PAID]: 'Pagos · abonados',
   [NotificationType.CLOSING_CREATED]: 'Cierres creados',
+  [NotificationType.CASH_WITHDRAWAL_PICKED]: 'Retiros de efectivo',
   [NotificationType.PRODUCTION_HOURS_LOGGED]: 'Horas de producción cargadas',
   [NotificationType.STOCK_BELOW_MINIMUM]: 'Stock bajo el mínimo',
 };

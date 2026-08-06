@@ -34,6 +34,7 @@ import { closingDateKey, markDeletedUnique } from '../../common/soft-delete.util
 import { CreateClosingDto, UpdateClosingDto } from './dto/closing.dto';
 import { applyClosingFilters, ClosingListFilters } from './closing-filters';
 import { ClosingPosnetAmount, sumPosnetsByType } from '../../common/posnet';
+import { CashWithdrawalsService } from './cash-withdrawals.service';
 
 const n = (v?: number | string | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
@@ -56,6 +57,7 @@ export class ClosingsService implements OnModuleInit {
     private readonly closingMovements: ClosingMovementsSyncService,
     private readonly accounts: AccountsService,
     private readonly notifications: NotificationsService,
+    private readonly cashWithdrawals: CashWithdrawalsService,
   ) {}
 
   async onModuleInit() {
@@ -226,8 +228,13 @@ export class ClosingsService implements OnModuleInit {
   }
 
   private async syncMovements(closingId: string) {
-    const full = await this.closings.findOne({ where: { id: closingId }, relations: ['expenses', 'extraLines'] });
-    if (full) await this.closingMovements.syncFromClosing(full);
+    const full = await this.closings.findOne({
+      where: { id: closingId },
+      relations: ['expenses', 'extraLines'],
+    });
+    if (!full) return;
+    await this.closingMovements.syncFromClosing(full);
+    await this.cashWithdrawals.syncFromClosing(full);
   }
 
   async list(user: AuthUser, shopId: string, filters: ClosingListFilters = {}) {
@@ -429,6 +436,7 @@ export class ClosingsService implements OnModuleInit {
     const row = await this.closings.findOne({ where: { id, shopId }, relations: ['expenses', 'extraLines'] });
     if (!row) throw new NotFoundException('Cierre no encontrado');
     await this.closingMovements.syncFromClosing({ ...row, expenses: [], extraLines: [] } as CashClosing);
+    await this.cashWithdrawals.cancelForClosing(id);
     await this.expenses.delete({ closingId: id });
     await this.extras.delete({ closingId: id });
     row.businessDateKey = markDeletedUnique(
@@ -468,7 +476,14 @@ export class ClosingsService implements OnModuleInit {
   private async notifyAdminsClosingCreated(
     actor: AuthUser,
     shopId: string,
-    closing: { id: string; businessDate: string; declaredTotal: number },
+    closing: {
+      id: string;
+      businessDate: string;
+      declaredTotal: number;
+      cashPendingPickup?: number;
+      cashWithdrawnByUserId?: string | null;
+      cashWithdrawnByEmployeeId?: string | null;
+    },
   ) {
     const shop = await this.shopRepo.findOne({ where: { id: shopId } });
     const shopName = shop?.name?.trim() || 'Local';
@@ -495,7 +510,20 @@ export class ClosingsService implements OnModuleInit {
     const date = String(closing.businessDate || '').slice(0, 10);
     const total = Number(closing.declaredTotal || 0).toLocaleString('es-AR');
     const title = 'Nuevo cierre de caja';
-    const body = `${shopName} · ${date} · $${total} · por ${actor.fullName || actor.email}`;
+    const parts = [
+      shopName,
+      date,
+      `$${total}`,
+      `por ${actor.fullName || actor.email}`,
+    ];
+    const hasWho = !!(closing.cashWithdrawnByUserId || closing.cashWithdrawnByEmployeeId);
+    const pendingAmount = Number(closing.cashPendingPickup || 0);
+    if (!hasWho && pendingAmount > 0) {
+      parts.push(
+        `Hay $${pendingAmount.toLocaleString('es-AR')} para retirar en A Retirar`,
+      );
+    }
+    const body = parts.join(' · ');
 
     await this.notifications.createMany(
       [...recipientIds].map((userId) => ({

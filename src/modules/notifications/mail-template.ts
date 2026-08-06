@@ -58,7 +58,13 @@ const TYPE_META: Record<string, TypeMeta> = {
     label: 'Cierres',
     tone: '#1565c0',
     toneSoft: '#e3f2fd',
-    hint: 'Se cargó un nuevo cierre de caja.',
+    hint: 'Se cargó un nuevo cierre de caja. Si hay efectivo sin destinatario, revisá A Retirar.',
+  },
+  [NotificationType.CASH_WITHDRAWAL_PICKED]: {
+    label: 'Retiros',
+    tone: '#2e7d32',
+    toneSoft: '#e8f5e9',
+    hint: 'Se registró un retiro de efectivo.',
   },
   [NotificationType.PRODUCTION_HOURS_LOGGED]: {
     label: 'Producción',
