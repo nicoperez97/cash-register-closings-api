@@ -6,26 +6,31 @@ WORKDIR /app
 # python3/make/g++ son necesarios para compilar bcrypt (modulo nativo)
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 make g++ \
-  && rm -rf /var/lib/apt/lists/*
-  COPY package.json package-lock.json ./
-  RUN npm ci --no-audit --no-fund
-  COPY . .
-  RUN npm run build \
-   && npm prune --omit=dev
+ && rm -rf /var/lib/apt/lists/*
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY . .
+RUN npm run build \
+ && npm prune --omit=dev
 
-   FROM node:22-bookworm-slim AS runtime
-   ENV NODE_ENV=production
-   ENV PORT=3000
-   ENV TZ=UTC
-   WORKDIR /app
-   COPY --from=builder --chown=node:node /app/node_modules ./node_modules
-   COPY --from=builder --chown=node:node /app/dist ./dist
-   COPY --chown=node:node package.json ./
-   COPY --chown=node:node database ./database
-   COPY --chown=node:node legacy-ipad ./legacy-ipad
-   USER node
-   EXPOSE 3000
-   HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=5 \
-    CMD node -e "require('net').connect(3000,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"
-    CMD ["node", "dist/main.js"]
-    
+FROM node:22-bookworm-slim AS runtime
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV TZ=UTC
+WORKDIR /app
+COPY --from=builder --chown=node:node /app/node_modules ./node_modules
+COPY --from=builder --chown=node:node /app/dist ./dist
+COPY --chown=node:node package.json ./
+COPY --chown=node:node database ./database
+COPY --chown=node:node legacy-ipad ./legacy-ipad
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
+ && mkdir -p /app/uploads \
+ && chown node:node /app/uploads
+# Entrypoint corre como root solo para chown del volumen; luego baja a node.
+USER root
+EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=5 \
+  CMD node -e "require('net').connect(3000,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"
+ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["node", "dist/main.js"]
