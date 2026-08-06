@@ -112,6 +112,55 @@ export class ProductionAttendanceController {
     return this.attendance.bulkUpsertMy(user, shopId, dto.items ?? []);
   }
 
+  /** Productores a cargo del usuario (supervisor). */
+  @Get('me/team')
+  @RequirePermissions('attendance.self')
+  myTeam(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
+    return this.attendance.listMyTeam(user, shopId);
+  }
+
+  @Get('me/team/:employeeId')
+  @RequirePermissions('attendance.self')
+  async teamMemberRange(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('employeeId') employeeId: string,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    res.setHeader('Cache-Control', 'no-store');
+    if (!from || !to) throw new BadRequestException('Indicá from y to (YYYY-MM-DD)');
+    return this.attendance.getTeamMemberRange(user, shopId, employeeId, from, to);
+  }
+
+  @Post('me/team/:employeeId')
+  @RequirePermissions('attendance.self')
+  upsertTeamMember(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('employeeId') employeeId: string,
+    @Body() dto: UpsertMyProductionAttendanceDto,
+  ) {
+    return this.attendance.upsertTeamMemberDay(user, shopId, employeeId, dto);
+  }
+
+  @Post('me/team/:employeeId/bulk')
+  @RequirePermissions('attendance.self')
+  bulkTeamMember(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('employeeId') employeeId: string,
+    @Body() dto: BulkMyProductionAttendanceDto,
+  ) {
+    return this.attendance.bulkUpsertTeamMember(
+      user,
+      shopId,
+      employeeId,
+      dto.items ?? [],
+    );
+  }
+
   /** Resumen de horas: semana actual + total del año. */
   @Get('summary')
   @RequirePermissions('attendance.read')

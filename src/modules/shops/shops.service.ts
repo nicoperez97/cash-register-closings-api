@@ -85,6 +85,46 @@ export class ShopsService implements OnModuleInit {
     } catch {
       // columna ya existe
     }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN email VARCHAR(180) NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN emailNotificationsEnabled TINYINT(1) NOT NULL DEFAULT 1
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN emailNotificationTypes TEXT NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN emailNotificationUserIds TEXT NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN emailSmtpPassword VARCHAR(255) NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
   }
 
   assertShopAccess(user: AuthUser, shopId: string) {
@@ -148,7 +188,7 @@ export class ShopsService implements OnModuleInit {
     this.assertShopAccess(user, id);
     const shop = await this.shops.findOne({ where: { id } });
     if (!shop) throw new NotFoundException('Local no encontrado');
-    return this.toDto(shop);
+    return this.toDto(shop, { emailSmtpConfigured: await this.hasSmtpPassword(id) });
   }
 
   /** Usuarios del local (para “quién se lo lleva”, etc.). Incluye cuentas PARTNER asociadas. */
@@ -219,6 +259,11 @@ export class ShopsService implements OnModuleInit {
         logoUrl: normalizeLogoUrl(dto.logoUrl),
         accentColor: this.normalizeAccent(dto.accentColor),
         accentSecondary: this.normalizeAccent(dto.accentSecondary),
+        email: this.normalizeEmail(dto.email),
+        emailSmtpPassword: this.normalizeSmtpPassword(dto.emailSmtpPassword) ?? null,
+        emailNotificationsEnabled: dto.emailNotificationsEnabled ?? true,
+        emailNotificationTypes: this.normalizeStringList(dto.emailNotificationTypes),
+        emailNotificationUserIds: this.normalizeStringList(dto.emailNotificationUserIds),
         salesSystemId: dto.salesSystemId ?? null,
         posPaymentMap: dto.posPaymentMap ?? null,
         posnets: this.normalizePosnets(dto.posnets),
@@ -226,7 +271,9 @@ export class ShopsService implements OnModuleInit {
       }),
     );
     await this.catalogSeed.ensureShopCatalogs(shop.id);
-    return this.toDto(shop);
+    return this.toDto(shop, {
+      emailSmtpConfigured: await this.hasSmtpPassword(shop.id),
+    });
   }
 
   async update(user: AuthUser, id: string, dto: UpdateShopDto) {
@@ -274,6 +321,25 @@ export class ShopsService implements OnModuleInit {
     if (dto.accentSecondary !== undefined) {
       shop.accentSecondary = this.normalizeAccent(dto.accentSecondary);
     }
+    if (dto.email !== undefined) {
+      shop.email = this.normalizeEmail(dto.email);
+    }
+    // Contraseña con select:false: no asignar al entity cargado (TypeORM la pisaría en save).
+    const smtpPasswordPatch =
+      dto.emailSmtpPassword === undefined
+        ? undefined
+        : dto.emailSmtpPassword === null
+          ? null
+          : this.normalizeSmtpPassword(dto.emailSmtpPassword);
+    if (dto.emailNotificationsEnabled !== undefined) {
+      shop.emailNotificationsEnabled = !!dto.emailNotificationsEnabled;
+    }
+    if (dto.emailNotificationTypes !== undefined) {
+      shop.emailNotificationTypes = this.normalizeStringList(dto.emailNotificationTypes);
+    }
+    if (dto.emailNotificationUserIds !== undefined) {
+      shop.emailNotificationUserIds = this.normalizeStringList(dto.emailNotificationUserIds);
+    }
     if (dto.salesSystemId !== undefined) {
       shop.salesSystemId = dto.salesSystemId || null;
     }
@@ -285,7 +351,15 @@ export class ShopsService implements OnModuleInit {
     }
 
     await this.shops.save(shop);
-    return this.toDto(shop);
+    if (smtpPasswordPatch !== undefined) {
+      // Solo actualizar si vino null (borrar) o string no vacío
+      if (smtpPasswordPatch === null || smtpPasswordPatch) {
+        await this.shops.update(id, { emailSmtpPassword: smtpPasswordPatch });
+      }
+    }
+    return this.toDto(await this.shops.findOneOrFail({ where: { id } }), {
+      emailSmtpConfigured: await this.hasSmtpPassword(id),
+    });
   }
 
   private normalizePosnets(
@@ -358,7 +432,34 @@ export class ShopsService implements OnModuleInit {
       : v.toUpperCase();
   }
 
-  toDto(s: Shop) {
+  private normalizeEmail(raw?: string | null): string | null {
+    const v = raw?.trim().toLowerCase();
+    if (!v) return null;
+    return v;
+  }
+
+  private normalizeSmtpPassword(raw?: string | null): string | null {
+    const v = String(raw ?? '').trim();
+    return v || null;
+  }
+
+  private async hasSmtpPassword(shopId: string): Promise<boolean> {
+    const row = await this.shops
+      .createQueryBuilder('s')
+      .select('s.emailSmtpPassword', 'pwd')
+      .where('s.id = :id', { id: shopId })
+      .getRawOne<{ pwd?: string | null }>();
+    return !!String(row?.pwd ?? '').trim();
+  }
+
+  /** null = “todos”; [] = ninguno. */
+  private normalizeStringList(raw?: string[] | null): string[] | null {
+    if (raw == null) return null;
+    if (!Array.isArray(raw)) return null;
+    return [...new Set(raw.map((x) => String(x ?? '').trim()).filter(Boolean))];
+  }
+
+  toDto(s: Shop, opts?: { emailSmtpConfigured?: boolean }) {
     return {
       id: s.id,
       name: s.name,
@@ -376,6 +477,18 @@ export class ShopsService implements OnModuleInit {
       logoUrl: s.logoUrl ?? null,
       accentColor: s.accentColor ?? null,
       accentSecondary: s.accentSecondary ?? null,
+      email: s.email ?? null,
+      emailSmtpConfigured: !!opts?.emailSmtpConfigured,
+      emailNotificationsEnabled:
+        s.emailNotificationsEnabled === undefined || s.emailNotificationsEnabled === null
+          ? true
+          : !!s.emailNotificationsEnabled,
+      emailNotificationTypes: Array.isArray(s.emailNotificationTypes)
+        ? s.emailNotificationTypes
+        : null,
+      emailNotificationUserIds: Array.isArray(s.emailNotificationUserIds)
+        ? s.emailNotificationUserIds
+        : null,
       salesSystemId: s.salesSystemId ?? null,
       posPaymentMap: s.posPaymentMap ?? null,
       posnets: s.posnets ?? [],

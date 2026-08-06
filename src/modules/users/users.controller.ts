@@ -53,6 +53,12 @@ class CreateUserDto {
   @IsOptional()
   @IsBoolean()
   hideFromCashWithdraw?: boolean;
+  @ApiPropertyOptional({
+    description: 'Si es true, recibe alertas cuando el stock baja del mínimo',
+  })
+  @IsOptional()
+  @IsBoolean()
+  isStockAdmin?: boolean;
 }
 
 class UpdateUserDto {
@@ -82,6 +88,12 @@ class UpdateUserDto {
   @IsOptional()
   @IsBoolean()
   hideFromCashWithdraw?: boolean;
+  @ApiPropertyOptional({
+    description: 'Si es true, recibe alertas cuando el stock baja del mínimo',
+  })
+  @IsOptional()
+  @IsBoolean()
+  isStockAdmin?: boolean;
 }
 
 @ApiTags('users')
@@ -115,8 +127,12 @@ export class UsersController {
 
   @Get(':id')
   @RequirePermissions('closings.read')
-  one(@CurrentUser() user: AuthUser, @Param('id') id: string) {
-    return this.users.one(user, id);
+  one(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Query('shopId') shopId?: string,
+  ) {
+    return this.users.one(user, id, shopId);
   }
 
   @Patch(':id')

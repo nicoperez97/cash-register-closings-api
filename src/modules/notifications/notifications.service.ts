@@ -5,6 +5,7 @@ import { AppNotification } from '../../entities/notification.entity';
 import { NotificationType } from '../../common/enums';
 import { AuthUser } from '../../common/decorators';
 import { PushService } from './push.service';
+import { MailService } from './mail.service';
 
 function deepLinkFor(type: NotificationType, opts: {
   shopId?: string | null;
@@ -14,6 +15,7 @@ function deepLinkFor(type: NotificationType, opts: {
   if (opts.closingId) return `/closings/${opts.closingId}`;
   if (type === NotificationType.CLOSING_CREATED) return '/closings';
   if (type === NotificationType.PRODUCTION_HOURS_LOGGED) return '/production-attendance';
+  if (type === NotificationType.STOCK_BELOW_MINIMUM) return '/stock';
   if (String(type).startsWith('PAYMENT_')) return '/payments/suppliers';
   return '/';
 }
@@ -24,6 +26,7 @@ export class NotificationsService implements OnModuleInit {
     @InjectRepository(AppNotification)
     private readonly notifications: Repository<AppNotification>,
     private readonly push: PushService,
+    private readonly mail: MailService,
   ) {}
 
   async onModuleInit() {
@@ -94,6 +97,15 @@ export class NotificationsService implements OnModuleInit {
         notificationId: row.id,
       })
       .catch(() => undefined);
+    void this.mail
+      .sendNotificationEmail({
+        userId: input.userId,
+        shopId: input.shopId,
+        type: input.type,
+        title: input.title,
+        body: input.body,
+      })
+      .catch(() => undefined);
     return dto;
   }
 
@@ -146,6 +158,18 @@ export class NotificationsService implements OnModuleInit {
         })
         .catch(() => undefined);
     }
+
+    void this.mail
+      .sendNotificationEmails(
+        rows.map((row) => ({
+          userId: row.userId,
+          shopId: row.shopId,
+          type: row.type,
+          title: row.title,
+          body: row.body,
+        })),
+      )
+      .catch(() => undefined);
 
     return rows.map((r) => this.toDto(r));
   }

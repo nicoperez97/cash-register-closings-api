@@ -46,6 +46,14 @@ export class EmployeesService implements OnModuleInit {
     } catch {
       // ya existe
     }
+    try {
+      await this.employees.query(`
+        ALTER TABLE employees
+          ADD COLUMN supervisorEmployeeId CHAR(36) NULL
+      `);
+    } catch {
+      // ya existe
+    }
   }
 
   private toDto(e: Employee) {
@@ -59,6 +67,7 @@ export class EmployeesService implements OnModuleInit {
       notes: e.notes ?? null,
       type: normalizeEmployeeType(e.type),
       producesFood: !!e.producesFood,
+      supervisorEmployeeId: e.supervisorEmployeeId ?? null,
       active: isEntityActive(e.active),
     };
   }
@@ -102,6 +111,38 @@ export class EmployeesService implements OnModuleInit {
     if (!u) throw new BadRequestException('Usuario no encontrado');
   }
 
+  private async assertSupervisor(
+    shopId: string,
+    employeeId: string | undefined,
+    supervisorEmployeeId: string | null | undefined,
+    producesFood: boolean,
+  ) {
+    if (supervisorEmployeeId === undefined) return;
+    if (!supervisorEmployeeId) return;
+    if (!producesFood) {
+      throw new BadRequestException(
+        'Solo los productores (produce comida) pueden tener un supervisor a cargo',
+      );
+    }
+    if (employeeId && supervisorEmployeeId === employeeId) {
+      throw new BadRequestException('Un productor no puede ser su propio supervisor');
+    }
+    const supervisor = await this.employees.findOne({
+      where: { id: supervisorEmployeeId, shopId },
+    });
+    if (!supervisor || !isEntityActive(supervisor.active) || !supervisor.producesFood) {
+      throw new BadRequestException(
+        'El supervisor debe ser un productor activo del mismo local',
+      );
+    }
+    // Evitar ciclo directo A→B y B→A
+    if (employeeId && supervisor.supervisorEmployeeId === employeeId) {
+      throw new BadRequestException(
+        'No se puede crear un ciclo de supervisión entre estos productores',
+      );
+    }
+  }
+
   async create(
     user: AuthUser,
     shopId: string,
@@ -113,11 +154,14 @@ export class EmployeesService implements OnModuleInit {
       notes?: string | null;
       type?: EmployeeType;
       producesFood?: boolean;
+      supervisorEmployeeId?: string | null;
       active?: boolean;
     },
   ) {
     this.shops.assertShopAccess(user, shopId);
     await this.assertUserLink(shopId, dto.userId);
+    const producesFood = !!dto.producesFood;
+    await this.assertSupervisor(shopId, undefined, dto.supervisorEmployeeId, producesFood);
     const row = await this.employees.save(
       this.employees.create({
         shopId,
@@ -127,7 +171,8 @@ export class EmployeesService implements OnModuleInit {
         hireDate: dto.hireDate ?? null,
         notes: dto.notes ?? null,
         type: normalizeEmployeeType(dto.type),
-        producesFood: !!dto.producesFood,
+        producesFood,
+        supervisorEmployeeId: producesFood ? (dto.supervisorEmployeeId ?? null) : null,
         active: dto.active ?? true,
       }),
     );
@@ -146,6 +191,7 @@ export class EmployeesService implements OnModuleInit {
       notes?: string | null;
       type?: EmployeeType;
       producesFood?: boolean;
+      supervisorEmployeeId?: string | null;
       active?: boolean;
     },
   ) {
@@ -163,6 +209,15 @@ export class EmployeesService implements OnModuleInit {
     if (dto.type !== undefined) row.type = normalizeEmployeeType(dto.type);
     if (dto.producesFood !== undefined) row.producesFood = !!dto.producesFood;
     if (dto.active !== undefined) row.active = dto.active;
+
+    const producesFood = !!row.producesFood;
+    if (dto.supervisorEmployeeId !== undefined) {
+      await this.assertSupervisor(shopId, id, dto.supervisorEmployeeId, producesFood);
+      row.supervisorEmployeeId = producesFood ? dto.supervisorEmployeeId : null;
+    } else if (dto.producesFood !== undefined && !producesFood) {
+      row.supervisorEmployeeId = null;
+    }
+
     await this.employees.save(row);
     return this.toDto(row);
   }

@@ -37,6 +37,10 @@ export class UserShop {
   @Column({ default: false })
   hideFromCashWithdraw: boolean;
 
+  /** Recibe notificaciones cuando un producto del local baja del mínimo. */
+  @Column({ default: false })
+  isStockAdmin: boolean;
+
   @ManyToOne(() => User, (u) => u.userShops, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'userId' })
   user: User;

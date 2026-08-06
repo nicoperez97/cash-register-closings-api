@@ -46,6 +46,8 @@ export class CreateUserBody {
   ledgerAccountId?: string | null;
   /** Ocultar en “Quién se lo lleva” (para el shopId del request). */
   hideFromCashWithdraw?: boolean;
+  /** Administrador de stock: recibe alertas de stock bajo mínimo. */
+  isStockAdmin?: boolean;
 }
 
 export class UpdateUserBody {
@@ -61,6 +63,8 @@ export class UpdateUserBody {
   ledgerAccountId?: string | null;
   /** Ocultar en “Quién se lo lleva” (para el shopId del request). */
   hideFromCashWithdraw?: boolean;
+  /** Administrador de stock: recibe alertas de stock bajo mínimo. */
+  isStockAdmin?: boolean;
 }
 
 @Injectable()
@@ -79,6 +83,14 @@ export class UsersService implements OnModuleInit {
       await this.userShops.query(`
         ALTER TABLE user_shops
           ADD COLUMN hideFromCashWithdraw TINYINT(1) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.userShops.query(`
+        ALTER TABLE user_shops
+          ADD COLUMN isStockAdmin TINYINT(1) NOT NULL DEFAULT 0
       `);
     } catch {
       // columna ya existe
@@ -184,6 +196,7 @@ export class UsersService implements OnModuleInit {
         shopRole: link?.shopRole ?? u.globalRole,
         modulePermissions: this.effectiveModulesForLink(link, u.globalRole),
         hideFromCashWithdraw: !!link?.hideFromCashWithdraw,
+        isStockAdmin: !!link?.isStockAdmin,
         ledgerAccountIds,
         ledgerAccountNames,
         ledgerAccountId: ledgerAccountIds[0] ?? null,
@@ -236,6 +249,7 @@ export class UsersService implements OnModuleInit {
             : (modules as Record<string, string>),
           hideFromCashWithdraw:
             defaultShopId === shopId ? !!dto.hideFromCashWithdraw : false,
+          isStockAdmin: defaultShopId === shopId ? !!dto.isStockAdmin : false,
         }),
       );
     }
@@ -346,6 +360,7 @@ export class UsersService implements OnModuleInit {
                       )) as Record<string, string>),
                 hideFromCashWithdraw:
                   shopId === sid ? !!dto.hideFromCashWithdraw : false,
+                isStockAdmin: shopId === sid ? !!dto.isStockAdmin : false,
               }),
             );
           } else {
@@ -361,17 +376,25 @@ export class UsersService implements OnModuleInit {
             ) {
               exists.hideFromCashWithdraw = !!dto.hideFromCashWithdraw;
             }
+            if (shopId === sid && dto.isStockAdmin !== undefined) {
+              exists.isStockAdmin = !!dto.isStockAdmin;
+            }
             await this.userShops.save(exists);
           }
         }
       } else {
         const prevHide = new Map(links.map((l) => [l.shopId, !!l.hideFromCashWithdraw]));
+        const prevStockAdmin = new Map(links.map((l) => [l.shopId, !!l.isStockAdmin]));
         await this.userShops.delete({ userId: id });
         for (const sid of nextIds) {
           const hide =
             shopId === sid && dto.hideFromCashWithdraw !== undefined
               ? !!dto.hideFromCashWithdraw
               : (prevHide.get(sid) ?? false);
+          const stockAdmin =
+            shopId === sid && dto.isStockAdmin !== undefined
+              ? !!dto.isStockAdmin
+              : (prevStockAdmin.get(sid) ?? false);
           await this.userShops.save(
             this.userShops.create({
               userId: id,
@@ -384,6 +407,7 @@ export class UsersService implements OnModuleInit {
                       (dto.shopRole ?? user.globalRole) as GlobalRole,
                     )) as Record<string, string>),
               hideFromCashWithdraw: hide,
+              isStockAdmin: stockAdmin,
             }),
           );
         }
@@ -392,7 +416,8 @@ export class UsersService implements OnModuleInit {
       shopId &&
       (dto.shopRole ||
         modulesIncoming !== undefined ||
-        dto.hideFromCashWithdraw !== undefined)
+        dto.hideFromCashWithdraw !== undefined ||
+        dto.isStockAdmin !== undefined)
     ) {
       const link = await this.userShops.findOne({ where: { userId: id, shopId } });
       if (link) {
@@ -404,6 +429,9 @@ export class UsersService implements OnModuleInit {
         }
         if (dto.hideFromCashWithdraw !== undefined) {
           link.hideFromCashWithdraw = !!dto.hideFromCashWithdraw;
+        }
+        if (dto.isStockAdmin !== undefined) {
+          link.isStockAdmin = !!dto.isStockAdmin;
         }
         await this.userShops.save(link);
       } else {
@@ -419,6 +447,7 @@ export class UsersService implements OnModuleInit {
                     (dto.shopRole ?? user.globalRole) as GlobalRole,
                   )) as Record<string, string>),
             hideFromCashWithdraw: !!dto.hideFromCashWithdraw,
+            isStockAdmin: !!dto.isStockAdmin,
           }),
         );
       }
@@ -481,6 +510,7 @@ export class UsersService implements OnModuleInit {
       shopRole: link?.shopRole ?? u.globalRole,
       modulePermissions: this.effectiveModulesForLink(link, u.globalRole),
       hideFromCashWithdraw: !!link?.hideFromCashWithdraw,
+      isStockAdmin: !!link?.isStockAdmin,
       ledgerAccountIds: accountIds,
       ledgerAccountNames: names,
       ledgerAccountId: accountIds[0] ?? null,

@@ -70,6 +70,35 @@ export class Shop extends BaseEntity {
   @Column({ type: 'varchar', length: 16, nullable: true })
   accentSecondary?: string | null;
 
+  /** Email del local (remitente de notificaciones por correo). */
+  @Column({ type: 'varchar', length: 180, nullable: true })
+  email?: string | null;
+
+  /**
+   * Contraseña SMTP / contraseña de aplicación (p.ej. Gmail).
+   * No se expone en la API; solo se indica si está configurada.
+   */
+  @Column({ type: 'varchar', length: 255, nullable: true, select: false })
+  emailSmtpPassword?: string | null;
+
+  /** Si es false, no se envían mails de notificación de este local. */
+  @Column({ type: 'tinyint', default: 1 })
+  emailNotificationsEnabled: boolean;
+
+  /**
+   * Tipos de notificación a enviar por mail.
+   * null = todos los tipos.
+   */
+  @Column({ type: 'simple-json', nullable: true })
+  emailNotificationTypes?: string[] | null;
+
+  /**
+   * Usuarios del local que reciben mails.
+   * null = todos los usuarios del local.
+   */
+  @Column({ type: 'simple-json', nullable: true })
+  emailNotificationUserIds?: string[] | null;
+
   /** Sistema de ventas / POS del local (Restosoft, etc.). */
   @Column({ type: 'uuid', nullable: true })
   salesSystemId?: string | null;

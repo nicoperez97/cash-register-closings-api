@@ -22,6 +22,7 @@ import { ReservationsModule } from './modules/reservations/reservations.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 import { SuppliersModule } from './modules/suppliers/suppliers.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { StockModule } from './modules/stock/stock.module';
 import { JwtAuthGuard, PermissionsGuard } from './common/guards';
 
 @Module({
@@ -48,6 +49,7 @@ import { JwtAuthGuard, PermissionsGuard } from './common/guards';
     NotificationsModule,
     PaymentsModule,
     SuppliersModule,
+    StockModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
