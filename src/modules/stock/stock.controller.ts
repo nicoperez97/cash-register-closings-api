@@ -13,6 +13,7 @@ import {
 import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import {
+  IsArray,
   IsBoolean,
   IsNumber,
   IsOptional,
@@ -29,18 +30,15 @@ import { StockService } from './stock.service';
 
 class NewCategoryInlineDto {
   @ApiProperty() @IsString() @MinLength(1) name: string;
-  @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) minQuantity?: number;
 }
 
 class CreateCategoryDto {
   @ApiProperty() @IsString() @MinLength(1) name: string;
-  @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) minQuantity?: number;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
 }
 
 class UpdateCategoryDto {
   @ApiPropertyOptional() @IsOptional() @IsString() @MinLength(1) name?: string;
-  @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) minQuantity?: number;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
 }
 
@@ -53,6 +51,8 @@ class CreateProductDto {
   @Type(() => NewCategoryInlineDto)
   newCategory?: NewCategoryInlineDto | null;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) quantity?: number;
+  @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) minQuantity?: number;
+  @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) maxQuantity?: number;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
 }
 
@@ -65,6 +65,8 @@ class UpdateProductDto {
   @Type(() => NewCategoryInlineDto)
   newCategory?: NewCategoryInlineDto | null;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) quantity?: number;
+  @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) minQuantity?: number;
+  @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) maxQuantity?: number;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
 }
 
@@ -72,6 +74,13 @@ class AdjustQuantityDto {
   @ApiProperty({ description: '+1 o -1' })
   @IsNumber()
   delta: number;
+}
+
+class RestockProductsDto {
+  @ApiProperty({ type: [String], description: 'IDs de productos a reponer al máximo' })
+  @IsArray()
+  @IsUUID('4', { each: true })
+  productIds: string[];
 }
 
 @ApiTags('stock')
@@ -151,6 +160,16 @@ export class StockController {
     @Body() dto: UpdateProductDto,
   ) {
     return this.stock.updateProduct(user, shopId, id, dto);
+  }
+
+  @Post('products/restock')
+  @RequirePermissions('stock.manage')
+  restock(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: RestockProductsDto,
+  ) {
+    return this.stock.restockProducts(user, shopId, dto.productIds);
   }
 
   @Post('products/:id/adjust')
