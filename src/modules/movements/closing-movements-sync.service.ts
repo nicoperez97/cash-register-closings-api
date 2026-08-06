@@ -25,17 +25,20 @@ export class ClosingMovementsSyncService {
   async syncFromClosing(closing: CashClosing) {
     await this.movements.delete({ closingId: closing.id });
 
+    // Solo asegura INGRESO/EGRESO; los canales salen de «Depósito del cierre».
     await this.catalogSeed.ensureShopCatalogs(closing.shopId);
 
-    // Incluye inactivas: hace falta INGRESO/EGRESO/EFECTIVO aunque las hayan ocultado.
     const accounts = await this.accounts.find({ where: { shopId: closing.shopId } });
     if (!accounts.length) return;
     const byCode = new Map(accounts.map((a) => [a.code, a]));
-    const byMethod = new Map(
-      accounts
-        .filter((a) => a.linkedPaymentMethod && a.active)
-        .map((a) => [a.linkedPaymentMethod as string, a]),
-    );
+
+    // Un medio → la cuenta activa configurada en depósitos (linkedPaymentMethod).
+    const byMethod = new Map<string, LedgerAccount>();
+    for (const a of accounts) {
+      if (!a.active || !a.linkedPaymentMethod) continue;
+      byMethod.set(a.linkedPaymentMethod, a);
+    }
+
     const ingreso = byCode.get('INGRESO');
     const egreso = byCode.get('EGRESO');
     if (!ingreso || !egreso) return;
@@ -57,7 +60,9 @@ export class ClosingMovementsSyncService {
       conceptName: string,
     ) => {
       if (amount <= 0) return;
-      const channel = byMethod.get(method) ?? byCode.get('EFECTIVO') ?? egreso;
+      const channel = byMethod.get(method);
+      // Sin cuenta destino en «Depósito del cierre» → no inventar canal.
+      if (!channel) return;
       rows.push({
         shopId: closing.shopId,
         businessDate: date,
@@ -112,11 +117,9 @@ export class ClosingMovementsSyncService {
       pushIncome(LinkedPaymentMethod.OTHER, n(closing.otherAmount), 'Otros ingresos', 'Ingreso');
     }
 
-    const cashChannel =
-      byMethod.get(LinkedPaymentMethod.CASH) ?? byCode.get('EFECTIVO');
+    const cashChannel = byMethod.get(LinkedPaymentMethod.CASH) ?? null;
 
     // Efectivo a la cuenta de quien se lo lleva (PARTNER).
-    // Si no hay monto de retiro explícito, se usa efectivo − cambio − egresos.
     let partnerDestId: string | null = null;
     if (closing.cashWithdrawnToAccountId) {
       const dest = accounts.find((a) => a.id === closing.cashWithdrawnToAccountId);
@@ -152,18 +155,19 @@ export class ClosingMovementsSyncService {
         active: true,
       });
     }
-    // Sin destinatario: el retiro queda pendiente en «A Retirar»; no mandar a EGRESO.
 
     for (const exp of closing.expenses ?? []) {
       const amount = n(exp.amount);
       if (amount <= 0) continue;
       const conceptName =
         EXPENSE_CATEGORY_TO_CONCEPT[exp.category] ?? 'Otros gastos';
-      const fromAccount = cashChannel ?? byCode.get('TOMA') ?? egreso;
+      // Egresos salen del efectivo depositado; si no hay, de EGRESO no tiene sentido —
+      // se omite el movimiento si no hay canal de efectivo configurado.
+      if (!cashChannel) continue;
       rows.push({
         shopId: closing.shopId,
         businessDate: date,
-        fromAccountId: fromAccount.id,
+        fromAccountId: cashChannel.id,
         toAccountId: egreso.id,
         description: exp.label,
         amountUyu: money(amount),

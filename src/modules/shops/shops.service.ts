@@ -270,7 +270,7 @@ export class ShopsService implements OnModuleInit {
         active: true,
       }),
     );
-    await this.catalogSeed.ensureShopCatalogs(shop.id);
+    await this.catalogSeed.seedNewShopCatalogs(shop.id);
     return this.toDto(shop, {
       emailSmtpConfigured: await this.hasSmtpPassword(shop.id),
     });

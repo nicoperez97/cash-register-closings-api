@@ -4,55 +4,38 @@ import {
   LinkedPaymentMethod,
 } from './enums';
 
+/** Solo sistema: se aseguran en cada sync de cierre (no canales ni socios). */
+export const SYSTEM_LEDGER_ACCOUNTS: Array<{
+  name: string;
+  code: string;
+  type: LedgerAccountType;
+}> = [
+  { name: '1. Ingreso', code: 'INGRESO', type: LedgerAccountType.SYSTEM },
+  { name: '2. Egreso', code: 'EGRESO', type: LedgerAccountType.SYSTEM },
+];
+
+/**
+ * Catálogo inicial al crear un local.
+ * Los canales NO traen linkedPaymentMethod: eso se configura en «Depósito del cierre».
+ */
 export const DEFAULT_LEDGER_ACCOUNTS: Array<{
   name: string;
   code: string;
   type: LedgerAccountType;
   linkedPaymentMethod?: LinkedPaymentMethod | null;
 }> = [
-  { name: '1. Ingreso', code: 'INGRESO', type: LedgerAccountType.SYSTEM },
-  { name: '2. Egreso', code: 'EGRESO', type: LedgerAccountType.SYSTEM },
+  ...SYSTEM_LEDGER_ACCOUNTS,
   { name: 'Fonti', code: 'FONTI', type: LedgerAccountType.PARTNER },
   { name: 'Manu', code: 'MANU', type: LedgerAccountType.PARTNER },
   { name: 'Nike', code: 'NIKE', type: LedgerAccountType.PARTNER },
   { name: 'Santi', code: 'SANTI', type: LedgerAccountType.PARTNER },
   { name: 'Toma', code: 'TOMA', type: LedgerAccountType.PARTNER },
-  {
-    name: 'MP Toma',
-    code: 'MP_TOMA',
-    type: LedgerAccountType.CHANNEL,
-    linkedPaymentMethod: LinkedPaymentMethod.MERCADO_PAGO,
-  },
-  {
-    name: 'PVS Toma',
-    code: 'PVS_TOMA',
-    type: LedgerAccountType.CHANNEL,
-    linkedPaymentMethod: LinkedPaymentMethod.CARD,
-  },
-  {
-    name: 'Cuenta DNI Toma',
-    code: 'DNI_TOMA',
-    type: LedgerAccountType.CHANNEL,
-    linkedPaymentMethod: LinkedPaymentMethod.ACCOUNT_DNI,
-  },
-  {
-    name: 'Efectivo Caja',
-    code: 'EFECTIVO',
-    type: LedgerAccountType.CHANNEL,
-    linkedPaymentMethod: LinkedPaymentMethod.CASH,
-  },
-  {
-    name: 'Delivery',
-    code: 'DELIVERY',
-    type: LedgerAccountType.CHANNEL,
-    linkedPaymentMethod: LinkedPaymentMethod.DELIVERY,
-  },
-  {
-    name: 'Transferencia',
-    code: 'TRANSFER',
-    type: LedgerAccountType.CHANNEL,
-    linkedPaymentMethod: LinkedPaymentMethod.TRANSFER,
-  },
+  { name: 'Mercado Pago', code: 'MP', type: LedgerAccountType.CHANNEL },
+  { name: 'PVS', code: 'PVS', type: LedgerAccountType.CHANNEL },
+  { name: 'Cuenta DNI', code: 'DNI', type: LedgerAccountType.CHANNEL },
+  { name: 'Efectivo Caja', code: 'EFECTIVO', type: LedgerAccountType.CHANNEL },
+  { name: 'Delivery', code: 'DELIVERY', type: LedgerAccountType.CHANNEL },
+  { name: 'Transferencia', code: 'TRANSFER', type: LedgerAccountType.CHANNEL },
 ];
 
 /** Conceptos alineados al Excel del contador (subset operativo + frecuentes). */

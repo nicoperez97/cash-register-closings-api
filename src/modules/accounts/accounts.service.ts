@@ -310,6 +310,7 @@ export class AccountsService implements OnModuleInit {
     await this.links.delete({ accountId: id });
     row.code = markDeletedUnique(row.code, row.id);
     row.active = false;
+    row.linkedPaymentMethod = null;
     await this.accounts.save(row);
     await this.accounts.softRemove(row);
     return { ok: true, transferredBalance: Math.abs(balance) >= BALANCE_EPS ? balance : 0 };
