@@ -5,148 +5,57 @@ on:
     branches: [main]
   workflow_dispatch: {}
 
-concurrency:
-  group: deploy-backend-production
-  cancel-in-progress: false
-
 jobs:
-  compile:
-    name: 1 · Compilar
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-
-      - name: Instalar dependencias
-        run: npm ci --no-audit --no-fund
-
-      - name: Compilar NestJS
-        run: npm run build
-
-      - name: Resumen
-        if: always()
-        run: |
-          {
-            echo "## 1 · Compilar"
-            if [ "${{ job.status }}" = "success" ]; then
-              echo "✅ Compilación OK — listo para deploy en Lightsail"
-            else
-              echo "❌ Falló la compilación. Revisá los logs del step **Compilar NestJS**."
-              echo ""
-              echo "El deploy **no** se ejecuta si esta etapa falla."
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-
   deploy:
-    name: 2 · Deploy Lightsail
-    needs: compile
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+
     steps:
-      - name: Actualizar código, build Docker y reiniciar API
-        id: ssh_deploy
-        uses: appleboy/ssh-action@v1.2.0
+      - name: Deploy Backend to Lightsail
+        uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.LIGHTSAIL_HOST }}
           username: ${{ secrets.LIGHTSAIL_USER }}
           key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
           port: 22
-          command_timeout: 20m
-          script_stop: true
+          command_timeout: 15m
+
           script: |
-            set -euo pipefail
-
-            die() {
-              echo "::error title=Deploy Backend::$1"
-              exit 1
-            }
+            set -e
 
             echo "========================================"
-            echo "Deploy Backend — Lightsail"
+            echo "🚀 Starting backend deployment"
             echo "========================================"
 
-            echo ""
-            echo ">>> [1/6] Ir al directorio de la app"
-            cd /opt/crc || die "No existe /opt/crc en el servidor"
+            cd /opt/crc
 
-            echo ""
-            echo ">>> [2/6] Actualizar código (git pull main)"
+            echo "📦 Updating API source..."
+
             if [ -d "/opt/crc/api/.git" ]; then
               cd /opt/crc/api
-              git fetch origin main || die "git fetch falló"
-              git reset --hard origin/main || die "git reset falló"
-              echo "Commit: $(git rev-parse --short HEAD)"
+              git fetch origin main
+              git reset --hard origin/main
             else
               rm -rf /opt/crc/api
-              git clone --branch main https://github.com/nicoperez97/cash-register-closings-api.git /opt/crc/api \
-                || die "git clone falló"
+              git clone --branch main https://github.com/nicoperez97/cash-register-closings-api.git /opt/crc/api
             fi
 
             cd /opt/crc
-            if [ ! -f docker-compose.yml ]; then
-              cp api/docker-compose.yml . || die "No se pudo copiar docker-compose.yml"
-            fi
-            if [ ! -d nginx ] && [ -d api/nginx ]; then
-              cp -r api/nginx .
-            fi
 
-            echo ""
-            echo ">>> [3/6] Build imagen Docker (api)"
-            sudo docker compose build api || die "docker compose build api falló — revisá el Dockerfile / logs de build"
+            echo "🐳 Rebuilding API image..."
+            sudo docker compose build --no-cache api
 
-            echo ""
-            echo ">>> [4/6] Limpiar contenedores api en conflicto"
-            # Compose a veces deja nombres huérfanos (ej. 54ffeee427f9_crc-api-1) tras un recreate fallido.
-            sudo docker compose stop api 2>/dev/null || true
-            conflict_ids="$(sudo docker ps -aq --filter name=crc-api 2>/dev/null || true)"
-            if [ -n "${conflict_ids}" ]; then
-              echo "Removiendo contenedores: ${conflict_ids}"
-              # shellcheck disable=SC2086
-              sudo docker rm -f ${conflict_ids} || true
-            fi
+            echo "🔄 Restarting API..."
+            sudo docker compose up -d api
 
-            echo ""
-            echo ">>> [5/6] Reiniciar contenedor api"
-            sudo docker compose up -d --remove-orphans --force-recreate api \
-              || die "docker compose up falló (conflicto de nombre o imagen)"
+            echo "⏳ Waiting for API to start..."
+            sleep 10
 
-            echo ""
-            echo ">>> [6/6] Verificar que el contenedor esté arriba"
-            sleep 8
-            sudo docker compose ps api
-            if ! sudo docker compose ps api | grep -qE 'Up|running'; then
-              echo "---- Últimos logs de api ----"
-              sudo docker compose logs --tail=80 api || true
-              die "El contenedor api no quedó en estado Up"
-            fi
+            echo "📋 Container status:"
+            sudo docker compose ps
 
-            echo ""
-            echo "---- Últimos logs (informativos) ----"
-            sudo docker compose logs --tail=40 api || true
+            echo "📋 API logs:"
+            sudo docker compose logs --tail=50 api
 
-            echo ""
             echo "========================================"
-            echo "Deploy Backend OK"
+            echo "✅ Backend deployment finished"
             echo "========================================"
-
-      - name: Resumen
-        if: always()
-        run: |
-          {
-            echo "## 2 · Deploy Lightsail"
-            if [ "${{ job.status }}" = "success" ]; then
-              echo "✅ Código actualizado, imagen rebuild y API reiniciada en Lightsail."
-            else
-              echo "❌ Falló el deploy por SSH."
-              echo ""
-              echo "Buscá en el log la línea que empieza con **>>>** — indica la etapa."
-              echo "También aparece \`::error\` con el motivo concreto."
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
