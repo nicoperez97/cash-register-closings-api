@@ -64,6 +64,51 @@ export class Payment extends BaseEntity {
   @Column({ type: 'varchar', nullable: true })
   movementId?: string | null;
 
+  /** Datos de facturación del comprobante del proveedor. */
+  @Column({ type: 'varchar', length: 200, nullable: true })
+  invoiceLegalName?: string | null;
+
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  invoiceTaxId?: string | null;
+
+  @Column({ type: 'varchar', length: 10, nullable: true })
+  invoiceType?: string | null;
+
+  @Column({ type: 'varchar', length: 40, nullable: true })
+  invoiceNumber?: string | null;
+
+  @Column({ type: 'decimal', precision: 14, scale: 2, nullable: true })
+  invoiceNetAmount?: string | null;
+
+  @Column({ type: 'decimal', precision: 14, scale: 2, nullable: true })
+  invoiceIvaAmount?: string | null;
+
+  @Column({ type: 'decimal', precision: 14, scale: 2, nullable: true })
+  invoicePerceptionsAmount?: string | null;
+
+  @Column({ type: 'decimal', precision: 14, scale: 2, nullable: true })
+  invoiceOtherTaxesAmount?: string | null;
+
+  /** Path relativo bajo uploads/ del PDF o foto de la factura. */
+  @Column({ type: 'varchar', length: 500, nullable: true })
+  invoiceFilePath?: string | null;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  invoiceFileName?: string | null;
+
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  invoiceFileMime?: string | null;
+
+  /** Path relativo bajo uploads/ del comprobante de pago. */
+  @Column({ type: 'varchar', length: 500, nullable: true })
+  receiptFilePath?: string | null;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  receiptFileName?: string | null;
+
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  receiptFileMime?: string | null;
+
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })
   shop: Shop;

@@ -4,9 +4,11 @@ import {
   Injectable,
   NotFoundException,
   OnModuleInit,
+  StreamableFile,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { createReadStream } from 'fs';
 import * as ExcelJS from 'exceljs';
 import { Payment } from '../../entities/payment.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
@@ -21,6 +23,8 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { MovementsService } from '../movements/movements.service';
 import { resolveUserPermissions } from '../../common/guards';
 import { isEntityActive } from '../../common/active.util';
+import { deletePaymentUploads, deleteUploadIfExists, resolveUploadPath, saveUploadFile } from '../../common/uploads';
+import { ocrAndParseInvoice, ParsedInvoice } from './invoice-ocr.parser';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
@@ -36,6 +40,14 @@ export interface UpsertPaymentDto {
   accountId?: string | null;
   supplierId?: string | null;
   employeeId?: string | null;
+  invoiceLegalName?: string | null;
+  invoiceTaxId?: string | null;
+  invoiceType?: string | null;
+  invoiceNumber?: string | null;
+  invoiceNetAmount?: number | null;
+  invoiceIvaAmount?: number | null;
+  invoicePerceptionsAmount?: number | null;
+  invoiceOtherTaxesAmount?: number | null;
 }
 
 @Injectable()
@@ -96,6 +108,20 @@ export class PaymentsService implements OnModuleInit {
       `ALTER TABLE payments MODIFY COLUMN accountId CHAR(36) NULL`,
       `ALTER TABLE payments ADD COLUMN supplierId CHAR(36) NULL`,
       `ALTER TABLE payments ADD COLUMN employeeId CHAR(36) NULL`,
+      `ALTER TABLE payments ADD COLUMN invoiceLegalName VARCHAR(200) NULL`,
+      `ALTER TABLE payments ADD COLUMN invoiceTaxId VARCHAR(20) NULL`,
+      `ALTER TABLE payments ADD COLUMN invoiceType VARCHAR(10) NULL`,
+      `ALTER TABLE payments ADD COLUMN invoiceNumber VARCHAR(40) NULL`,
+      `ALTER TABLE payments ADD COLUMN invoiceNetAmount DECIMAL(14,2) NULL`,
+      `ALTER TABLE payments ADD COLUMN invoiceIvaAmount DECIMAL(14,2) NULL`,
+      `ALTER TABLE payments ADD COLUMN invoicePerceptionsAmount DECIMAL(14,2) NULL`,
+      `ALTER TABLE payments ADD COLUMN invoiceOtherTaxesAmount DECIMAL(14,2) NULL`,
+      `ALTER TABLE payments ADD COLUMN invoiceFilePath VARCHAR(500) NULL`,
+      `ALTER TABLE payments ADD COLUMN invoiceFileName VARCHAR(255) NULL`,
+      `ALTER TABLE payments ADD COLUMN invoiceFileMime VARCHAR(120) NULL`,
+      `ALTER TABLE payments ADD COLUMN receiptFilePath VARCHAR(500) NULL`,
+      `ALTER TABLE payments ADD COLUMN receiptFileName VARCHAR(255) NULL`,
+      `ALTER TABLE payments ADD COLUMN receiptFileMime VARCHAR(120) NULL`,
     ]) {
       try {
         await this.payments.query(sql);
@@ -139,6 +165,8 @@ export class PaymentsService implements OnModuleInit {
       supplierId: p.supplierId ?? null,
       supplierName: p.supplier?.name ?? null,
       supplierBankAlias: p.supplier?.bankAlias ?? null,
+      supplierLegalName: p.supplier?.legalName ?? null,
+      supplierTaxId: p.supplier?.taxId ?? null,
       employeeId: p.employeeId ?? null,
       employeeName: p.employee?.fullName ?? null,
       status: p.status,
@@ -147,9 +175,55 @@ export class PaymentsService implements OnModuleInit {
       validatedByUserId: p.validatedByUserId ?? null,
       createdByUserId: p.createdByUserId ?? null,
       movementId: p.movementId ?? null,
+      invoiceLegalName: p.invoiceLegalName ?? null,
+      invoiceTaxId: p.invoiceTaxId ?? null,
+      invoiceType: p.invoiceType ?? null,
+      invoiceNumber: p.invoiceNumber ?? null,
+      invoiceNetAmount: p.invoiceNetAmount != null ? n(p.invoiceNetAmount) : null,
+      invoiceIvaAmount: p.invoiceIvaAmount != null ? n(p.invoiceIvaAmount) : null,
+      invoicePerceptionsAmount:
+        p.invoicePerceptionsAmount != null ? n(p.invoicePerceptionsAmount) : null,
+      invoiceOtherTaxesAmount:
+        p.invoiceOtherTaxesAmount != null ? n(p.invoiceOtherTaxesAmount) : null,
+      hasInvoiceFile: !!p.invoiceFilePath,
+      invoiceFileName: p.invoiceFileName ?? null,
+      hasReceiptFile: !!p.receiptFilePath,
+      receiptFileName: p.receiptFileName ?? null,
       createdAt: p.createdAt,
       updatedAt: p.updatedAt ?? null,
     };
+  }
+
+  private moneyOrNull(v: number | null | undefined | ''): string | null | undefined {
+    if (v === undefined) return undefined;
+    if (v === null || v === ('' as any)) return null;
+    if (n(v) < 0) throw new BadRequestException('El monto no puede ser negativo');
+    return money(n(v));
+  }
+
+  private async syncSupplierBilling(
+    shopId: string,
+    supplierId: string | null | undefined,
+    legalName?: string | null,
+    taxId?: string | null,
+  ) {
+    if (!supplierId) return;
+    const supplier = await this.suppliers.findOne({
+      where: { id: supplierId, shopId, active: true },
+    });
+    if (!supplier) return;
+    let changed = false;
+    const nextLegal = (legalName ?? '').trim() || null;
+    const nextTax = (taxId ?? '').trim() || null;
+    if (nextLegal && nextLegal !== (supplier.legalName ?? null)) {
+      supplier.legalName = nextLegal;
+      changed = true;
+    }
+    if (nextTax && nextTax !== (supplier.taxId ?? null)) {
+      supplier.taxId = nextTax;
+      changed = true;
+    }
+    if (changed) await this.suppliers.save(supplier);
   }
 
   private async assertShopUser(shopId: string, userId: string, label: string) {
@@ -302,6 +376,14 @@ export class PaymentsService implements OnModuleInit {
       payerUserId?: string;
       validatorUserId?: string;
       mineUserId?: string;
+      dueFrom?: string;
+      dueTo?: string;
+      paidFrom?: string;
+      paidTo?: string;
+      supplierId?: string;
+      employeeId?: string;
+      amountMin?: string | number;
+      amountMax?: string | number;
     },
   ) {
     this.shops.assertShopAccess(user, shopId);
@@ -341,6 +423,48 @@ export class PaymentsService implements OnModuleInit {
         { mineUserId },
       );
     }
+    const dueFrom = this.toDateOnly(opts?.dueFrom);
+    const dueTo = this.toDateOnly(opts?.dueTo);
+    if (dueFrom) {
+      qb.andWhere('p.dueDate IS NOT NULL AND p.dueDate >= :dueFrom', { dueFrom });
+    }
+    if (dueTo) {
+      qb.andWhere('p.dueDate IS NOT NULL AND p.dueDate <= :dueTo', { dueTo });
+    }
+    const paidFrom = this.toDateOnly(opts?.paidFrom);
+    const paidTo = this.toDateOnly(opts?.paidTo);
+    if (paidFrom) {
+      qb.andWhere('p.paidAt IS NOT NULL AND p.paidAt >= :paidFrom', { paidFrom });
+    }
+    if (paidTo) {
+      qb.andWhere('p.paidAt IS NOT NULL AND p.paidAt <= :paidTo', { paidTo });
+    }
+    const supplierIds = this.parseCsv(opts?.supplierId);
+    if (supplierIds.length === 1) {
+      qb.andWhere('p.supplierId = :supplierId', { supplierId: supplierIds[0] });
+    } else if (supplierIds.length > 1) {
+      qb.andWhere('p.supplierId IN (:...supplierIds)', { supplierIds });
+    }
+    const employeeIds = this.parseCsv(opts?.employeeId);
+    if (employeeIds.length === 1) {
+      qb.andWhere('p.employeeId = :employeeId', { employeeId: employeeIds[0] });
+    } else if (employeeIds.length > 1) {
+      qb.andWhere('p.employeeId IN (:...employeeIds)', { employeeIds });
+    }
+    const amountMin =
+      opts?.amountMin !== undefined && opts?.amountMin !== null && opts?.amountMin !== ''
+        ? Number(opts.amountMin)
+        : null;
+    const amountMax =
+      opts?.amountMax !== undefined && opts?.amountMax !== null && opts?.amountMax !== ''
+        ? Number(opts.amountMax)
+        : null;
+    if (amountMin != null && Number.isFinite(amountMin)) {
+      qb.andWhere('p.amount IS NOT NULL AND p.amount >= :amountMin', { amountMin });
+    }
+    if (amountMax != null && Number.isFinite(amountMax)) {
+      qb.andWhere('p.amount IS NOT NULL AND p.amount <= :amountMax', { amountMax });
+    }
     qb.orderBy('p.dueDate', 'ASC').addOrderBy('p.createdAt', 'DESC');
     const rows = await qb.getMany();
     return rows.map((r) => this.toDto(r));
@@ -355,6 +479,14 @@ export class PaymentsService implements OnModuleInit {
       payerUserId?: string;
       validatorUserId?: string;
       mineUserId?: string;
+      dueFrom?: string;
+      dueTo?: string;
+      paidFrom?: string;
+      paidTo?: string;
+      supplierId?: string;
+      employeeId?: string;
+      amountMin?: string | number;
+      amountMax?: string | number;
     },
   ) {
     this.shops.assertShopAccess(user, shopId);
@@ -365,6 +497,14 @@ export class PaymentsService implements OnModuleInit {
       payerUserId: opts?.payerUserId,
       validatorUserId: opts?.validatorUserId,
       mineUserId: opts?.mineUserId,
+      dueFrom: opts?.dueFrom,
+      dueTo: opts?.dueTo,
+      paidFrom: opts?.paidFrom,
+      paidTo: opts?.paidTo,
+      supplierId: opts?.supplierId,
+      employeeId: opts?.employeeId,
+      amountMin: opts?.amountMin,
+      amountMax: opts?.amountMax,
     });
     const kindNorm =
       opts?.kind === 'employee' || opts?.kind === 'supplier' ? opts.kind : undefined;
@@ -414,6 +554,24 @@ export class PaymentsService implements OnModuleInit {
     }
     if (opts?.mineUserId) {
       info.addRow(['Filtro: solo asignados a mí (valida o paga)']);
+    }
+    if (opts?.dueFrom || opts?.dueTo) {
+      info.addRow([
+        `Filtro vencimiento: ${opts.dueFrom || '…'} → ${opts.dueTo || '…'}`,
+      ]);
+    }
+    if (opts?.paidFrom || opts?.paidTo) {
+      info.addRow([
+        `Filtro realizado: ${opts.paidFrom || '…'} → ${opts.paidTo || '…'}`,
+      ]);
+    }
+    if (opts?.supplierId) info.addRow([`Filtro proveedor: ${opts.supplierId}`]);
+    if (opts?.employeeId) info.addRow([`Filtro empleado: ${opts.employeeId}`]);
+    if (opts?.amountMin != null && opts?.amountMin !== '') {
+      info.addRow([`Monto desde: ${opts.amountMin}`]);
+    }
+    if (opts?.amountMax != null && opts?.amountMax !== '') {
+      info.addRow([`Monto hasta: ${opts.amountMax}`]);
     }
     info.addRow([`Total pagos: ${rows.length}`]);
 
@@ -526,10 +684,25 @@ export class PaymentsService implements OnModuleInit {
         accountId,
         supplierId,
         employeeId,
+        invoiceLegalName: this.emptyToNull(dto.invoiceLegalName)?.trim() || null,
+        invoiceTaxId: this.emptyToNull(dto.invoiceTaxId)?.trim() || null,
+        invoiceType: this.emptyToNull(dto.invoiceType)?.trim() || null,
+        invoiceNumber: this.emptyToNull(dto.invoiceNumber)?.trim() || null,
+        invoiceNetAmount: this.moneyOrNull(dto.invoiceNetAmount) ?? null,
+        invoiceIvaAmount: this.moneyOrNull(dto.invoiceIvaAmount) ?? null,
+        invoicePerceptionsAmount: this.moneyOrNull(dto.invoicePerceptionsAmount) ?? null,
+        invoiceOtherTaxesAmount: this.moneyOrNull(dto.invoiceOtherTaxesAmount) ?? null,
         status: PaymentStatus.PENDING_VALIDATION,
         createdByUserId: user.id,
         active: true,
       }),
+    );
+
+    await this.syncSupplierBilling(
+      shopId,
+      supplierId,
+      row.invoiceLegalName,
+      row.invoiceTaxId,
     );
 
     const loaded = await this.load(shopId, row.id);
@@ -634,6 +807,31 @@ export class PaymentsService implements OnModuleInit {
       throw new BadRequestException('Un pago no puede tener proveedor y empleado a la vez');
     }
 
+    if (dto.invoiceLegalName !== undefined) {
+      patch.invoiceLegalName = this.emptyToNull(dto.invoiceLegalName)?.trim() || null;
+    }
+    if (dto.invoiceTaxId !== undefined) {
+      patch.invoiceTaxId = this.emptyToNull(dto.invoiceTaxId)?.trim() || null;
+    }
+    if (dto.invoiceType !== undefined) {
+      patch.invoiceType = this.emptyToNull(dto.invoiceType)?.trim() || null;
+    }
+    if (dto.invoiceNumber !== undefined) {
+      patch.invoiceNumber = this.emptyToNull(dto.invoiceNumber)?.trim() || null;
+    }
+    if (dto.invoiceNetAmount !== undefined) {
+      patch.invoiceNetAmount = this.moneyOrNull(dto.invoiceNetAmount) ?? null;
+    }
+    if (dto.invoiceIvaAmount !== undefined) {
+      patch.invoiceIvaAmount = this.moneyOrNull(dto.invoiceIvaAmount) ?? null;
+    }
+    if (dto.invoicePerceptionsAmount !== undefined) {
+      patch.invoicePerceptionsAmount = this.moneyOrNull(dto.invoicePerceptionsAmount) ?? null;
+    }
+    if (dto.invoiceOtherTaxesAmount !== undefined) {
+      patch.invoiceOtherTaxesAmount = this.moneyOrNull(dto.invoiceOtherTaxesAmount) ?? null;
+    }
+
     // Editar NUNCA cambia el estado (ni vuelve a validación ni abona).
     if (!Object.keys(patch).length) {
       return this.toDto(row);
@@ -645,6 +843,15 @@ export class PaymentsService implements OnModuleInit {
       .set(patch)
       .where('id = :id AND shopId = :shopId', { id, shopId })
       .execute();
+
+    const billingSupplierId =
+      patch.supplierId !== undefined ? nextSupplierId : row.supplierId;
+    await this.syncSupplierBilling(
+      shopId,
+      billingSupplierId,
+      patch.invoiceLegalName !== undefined ? patch.invoiceLegalName : row.invoiceLegalName,
+      patch.invoiceTaxId !== undefined ? patch.invoiceTaxId : row.invoiceTaxId,
+    );
 
     let loaded = await this.load(shopId, id);
 
@@ -837,8 +1044,170 @@ export class PaymentsService implements OnModuleInit {
     if (row.status === PaymentStatus.PAID) {
       throw new BadRequestException('No se puede eliminar un pago abonado');
     }
+    // Borra factura/comprobante del disco para no dejar basura
+    deleteUploadIfExists(row.invoiceFilePath);
+    deleteUploadIfExists(row.receiptFilePath);
+    deletePaymentUploads(shopId, id);
+    row.invoiceFilePath = null;
+    row.invoiceFileName = null;
+    row.invoiceFileMime = null;
+    row.receiptFilePath = null;
+    row.receiptFileName = null;
+    row.receiptFileMime = null;
     row.active = false;
+    await this.payments.save(row);
     await this.payments.softRemove(row);
     return { ok: true };
+  }
+
+  async parseInvoice(
+    user: AuthUser,
+    shopId: string,
+    file: Express.Multer.File,
+  ): Promise<ParsedInvoice> {
+    this.shops.assertShopAccess(user, shopId);
+    if (!this.canManage(user, shopId)) {
+      throw new ForbiddenException('Sin permiso para cargar facturas');
+    }
+    return ocrAndParseInvoice(file);
+  }
+
+  async uploadInvoiceFile(
+    user: AuthUser,
+    shopId: string,
+    id: string,
+    file: Express.Multer.File,
+    applyParsed = true,
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    if (!this.canManage(user, shopId)) {
+      throw new ForbiddenException('Sin permiso para cargar facturas');
+    }
+    const row = await this.load(shopId, id);
+    if (!file?.buffer?.length) throw new BadRequestException('Archivo requerido');
+
+    let parsed: ParsedInvoice | null = null;
+    if (applyParsed) {
+      try {
+        parsed = await ocrAndParseInvoice(file);
+      } catch {
+        parsed = null;
+      }
+    }
+
+    deleteUploadIfExists(row.invoiceFilePath);
+    const saved = saveUploadFile({
+      relativeDir: `payments/${shopId}/${id}`,
+      basename: 'invoice',
+      buffer: file.buffer,
+      originalName: file.originalname,
+      mime: file.mimetype,
+    });
+
+    const patch: Partial<Payment> = {
+      invoiceFilePath: saved.relativePath,
+      invoiceFileName: file.originalname || saved.fileName,
+      invoiceFileMime: file.mimetype || null,
+    };
+
+    if (parsed) {
+      if (parsed.legalName) patch.invoiceLegalName = parsed.legalName;
+      if (parsed.taxId) patch.invoiceTaxId = parsed.taxId;
+      if (parsed.invoiceType) patch.invoiceType = parsed.invoiceType;
+      if (parsed.invoiceNumber) patch.invoiceNumber = parsed.invoiceNumber;
+      if (parsed.netAmount != null) patch.invoiceNetAmount = money(parsed.netAmount);
+      if (parsed.ivaAmount != null) patch.invoiceIvaAmount = money(parsed.ivaAmount);
+      if (parsed.perceptionsAmount != null) {
+        patch.invoicePerceptionsAmount = money(parsed.perceptionsAmount);
+      }
+      if (parsed.otherTaxesAmount != null) {
+        patch.invoiceOtherTaxesAmount = money(parsed.otherTaxesAmount);
+      }
+      if (parsed.totalAmount != null && !(n(row.amount) > 0)) {
+        patch.amount = money(parsed.totalAmount);
+      }
+    }
+
+    await this.payments
+      .createQueryBuilder()
+      .update(Payment)
+      .set(patch)
+      .where('id = :id AND shopId = :shopId', { id, shopId })
+      .execute();
+
+    await this.syncSupplierBilling(
+      shopId,
+      row.supplierId,
+      patch.invoiceLegalName ?? row.invoiceLegalName,
+      patch.invoiceTaxId ?? row.invoiceTaxId,
+    );
+
+    return this.toDto(await this.load(shopId, id));
+  }
+
+  async uploadReceiptFile(
+    user: AuthUser,
+    shopId: string,
+    id: string,
+    file: Express.Multer.File,
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    const row = await this.load(shopId, id);
+    if (row.status !== PaymentStatus.PAID) {
+      throw new BadRequestException('Solo se puede adjuntar comprobante a un pago abonado');
+    }
+    const canUpload =
+      this.canManage(user, shopId) ||
+      (row.payerUserId && row.payerUserId === user.id);
+    if (!canUpload) {
+      throw new ForbiddenException('Sin permiso para cargar el comprobante');
+    }
+    if (!file?.buffer?.length) throw new BadRequestException('Archivo requerido');
+
+    deleteUploadIfExists(row.receiptFilePath);
+    const saved = saveUploadFile({
+      relativeDir: `payments/${shopId}/${id}`,
+      basename: 'receipt',
+      buffer: file.buffer,
+      originalName: file.originalname,
+      mime: file.mimetype,
+    });
+
+    await this.payments
+      .createQueryBuilder()
+      .update(Payment)
+      .set({
+        receiptFilePath: saved.relativePath,
+        receiptFileName: file.originalname || saved.fileName,
+        receiptFileMime: file.mimetype || null,
+      })
+      .where('id = :id AND shopId = :shopId', { id, shopId })
+      .execute();
+
+    return this.toDto(await this.load(shopId, id));
+  }
+
+  async downloadInvoiceFile(user: AuthUser, shopId: string, id: string) {
+    this.shops.assertShopAccess(user, shopId);
+    const row = await this.load(shopId, id);
+    const abs = resolveUploadPath(row.invoiceFilePath);
+    if (!abs) throw new NotFoundException('Factura no encontrada');
+    return {
+      stream: new StreamableFile(createReadStream(abs)),
+      fileName: row.invoiceFileName || 'factura.pdf',
+      mime: row.invoiceFileMime || 'application/octet-stream',
+    };
+  }
+
+  async downloadReceiptFile(user: AuthUser, shopId: string, id: string) {
+    this.shops.assertShopAccess(user, shopId);
+    const row = await this.load(shopId, id);
+    const abs = resolveUploadPath(row.receiptFilePath);
+    if (!abs) throw new NotFoundException('Comprobante no encontrado');
+    return {
+      stream: new StreamableFile(createReadStream(abs)),
+      fileName: row.receiptFileName || 'comprobante.pdf',
+      mime: row.receiptFileMime || 'application/octet-stream',
+    };
   }
 }

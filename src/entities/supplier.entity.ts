@@ -11,6 +11,14 @@ export class Supplier extends BaseEntity {
   @Column({ type: 'varchar', length: 200 })
   name: string;
 
+  /** Razón social (dato fiscal fijo). */
+  @Column({ type: 'varchar', length: 200, nullable: true })
+  legalName?: string | null;
+
+  /** CUIT / identificación fiscal. */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  taxId?: string | null;
+
   /** Alias o CBU para transferencias. */
   @Column({ type: 'varchar', length: 100, nullable: true })
   bankAlias?: string | null;
