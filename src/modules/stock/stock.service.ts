@@ -6,7 +6,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { StockCategory } from '../../entities/stock-category.entity';
 import { StockProduct } from '../../entities/stock-product.entity';
 import { UserShop } from '../../entities/user-shop.entity';
@@ -60,6 +60,8 @@ export class StockService implements OnModuleInit {
           categoryId CHAR(36) NOT NULL,
           name VARCHAR(200) NOT NULL,
           quantity DECIMAL(12,2) NOT NULL DEFAULT 0,
+          minQuantity DECIMAL(12,2) NOT NULL DEFAULT 0,
+          maxQuantity DECIMAL(12,2) NOT NULL DEFAULT 0,
           createdAt DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
           updatedAt DATETIME(6) NULL,
           deletedAt DATETIME(6) NULL,
@@ -71,6 +73,49 @@ export class StockService implements OnModuleInit {
     } catch {
       // ya existe
     }
+    try {
+      await this.products.query(`
+        ALTER TABLE stock_products
+          ADD COLUMN maxQuantity DECIMAL(12,2) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.products.query(`
+        ALTER TABLE stock_products
+          ADD COLUMN minQuantity DECIMAL(12,2) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.products.query(`
+        CREATE TABLE IF NOT EXISTS app_meta (
+          metaKey VARCHAR(100) NOT NULL PRIMARY KEY,
+          metaValue VARCHAR(255) NULL,
+          updatedAt DATETIME(6) NULL
+        )
+      `);
+      const rows: Array<{ c: number }> = await this.products.query(
+        `SELECT COUNT(*) AS c FROM app_meta WHERE metaKey = 'stock_min_on_product_v1'`,
+      );
+      const done = Number(rows?.[0]?.c ?? 0) > 0;
+      if (!done) {
+        await this.products.query(`
+          UPDATE stock_products p
+          INNER JOIN stock_categories c ON c.id = p.categoryId
+          SET p.minQuantity = c.minQuantity
+          WHERE c.minQuantity IS NOT NULL AND c.minQuantity > 0
+        `);
+        await this.products.query(`
+          INSERT INTO app_meta (metaKey, metaValue, updatedAt)
+          VALUES ('stock_min_on_product_v1', '1', NOW(6))
+        `);
+      }
+    } catch {
+      // ignore
+    }
   }
 
   private categoryDto(c: StockCategory) {
@@ -78,21 +123,22 @@ export class StockService implements OnModuleInit {
       id: c.id,
       shopId: c.shopId,
       name: c.name,
-      minQuantity: n(c.minQuantity),
       active: isEntityActive(c.active),
     };
   }
 
   private productDto(p: StockProduct, category?: StockCategory | null) {
     const cat = category ?? p.category ?? null;
-    const minQuantity = n(cat?.minQuantity);
+    const minQuantity = n(p.minQuantity);
     const quantity = n(p.quantity);
+    const maxQuantity = n(p.maxQuantity);
     return {
       id: p.id,
       shopId: p.shopId,
       categoryId: p.categoryId,
       categoryName: cat?.name ?? null,
       minQuantity,
+      maxQuantity,
       name: p.name,
       quantity,
       belowMinimum: quantity < minQuantity,
@@ -117,7 +163,7 @@ export class StockService implements OnModuleInit {
   async createCategory(
     user: AuthUser,
     shopId: string,
-    dto: { name: string; minQuantity?: number; active?: boolean },
+    dto: { name: string; active?: boolean },
   ) {
     this.shops.assertShopAccess(user, shopId);
     const name = dto.name?.trim();
@@ -126,7 +172,6 @@ export class StockService implements OnModuleInit {
       this.categories.create({
         shopId,
         name,
-        minQuantity: qty(n(dto.minQuantity)),
         active: dto.active ?? true,
       }),
     );
@@ -137,7 +182,7 @@ export class StockService implements OnModuleInit {
     user: AuthUser,
     shopId: string,
     id: string,
-    dto: { name?: string; minQuantity?: number; active?: boolean },
+    dto: { name?: string; active?: boolean },
   ) {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.categories.findOne({ where: { id, shopId } });
@@ -147,7 +192,6 @@ export class StockService implements OnModuleInit {
       if (!name) throw new BadRequestException('Indicá el nombre de la categoría');
       row.name = name;
     }
-    if (dto.minQuantity !== undefined) row.minQuantity = qty(n(dto.minQuantity));
     if (dto.active !== undefined) row.active = dto.active;
     await this.categories.save(row);
     return this.categoryDto(row);
@@ -188,7 +232,7 @@ export class StockService implements OnModuleInit {
     shopId: string,
     dto: {
       categoryId?: string | null;
-      newCategory?: { name: string; minQuantity?: number } | null;
+      newCategory?: { name: string } | null;
     },
   ): Promise<StockCategory> {
     if (dto.newCategory?.name?.trim()) {
@@ -196,7 +240,6 @@ export class StockService implements OnModuleInit {
         this.categories.create({
           shopId,
           name: dto.newCategory.name.trim(),
-          minQuantity: qty(n(dto.newCategory.minQuantity)),
           active: true,
         }),
       );
@@ -219,8 +262,10 @@ export class StockService implements OnModuleInit {
     dto: {
       name: string;
       categoryId?: string | null;
-      newCategory?: { name: string; minQuantity?: number } | null;
+      newCategory?: { name: string } | null;
       quantity?: number;
+      minQuantity?: number;
+      maxQuantity?: number;
       active?: boolean;
     },
   ) {
@@ -234,6 +279,8 @@ export class StockService implements OnModuleInit {
         categoryId: category.id,
         name,
         quantity: qty(n(dto.quantity)),
+        minQuantity: qty(n(dto.minQuantity)),
+        maxQuantity: qty(n(dto.maxQuantity)),
         active: dto.active ?? true,
       }),
     );
@@ -247,8 +294,10 @@ export class StockService implements OnModuleInit {
     dto: {
       name?: string;
       categoryId?: string | null;
-      newCategory?: { name: string; minQuantity?: number } | null;
+      newCategory?: { name: string } | null;
       quantity?: number;
+      minQuantity?: number;
+      maxQuantity?: number;
       active?: boolean;
     },
   ) {
@@ -270,6 +319,8 @@ export class StockService implements OnModuleInit {
       row.name = name;
     }
     if (dto.quantity !== undefined) row.quantity = qty(n(dto.quantity));
+    if (dto.minQuantity !== undefined) row.minQuantity = qty(n(dto.minQuantity));
+    if (dto.maxQuantity !== undefined) row.maxQuantity = qty(n(dto.maxQuantity));
     if (dto.active !== undefined) row.active = dto.active;
     await this.products.save(row);
 
@@ -277,6 +328,44 @@ export class StockService implements OnModuleInit {
       category = await this.categories.findOne({ where: { id: row.categoryId, shopId } });
     }
     return this.productDto(row, category);
+  }
+
+  async restockProducts(user: AuthUser, shopId: string, productIds: string[]) {
+    this.shops.assertShopAccess(user, shopId);
+    const ids = [...new Set((productIds ?? []).map((id) => String(id || '').trim()).filter(Boolean))];
+    if (!ids.length) throw new BadRequestException('Seleccioná al menos un producto');
+
+    const rows = await this.products.find({
+      where: { shopId, id: In(ids) },
+      relations: ['category'],
+    });
+    if (!rows.length) throw new NotFoundException('Productos no encontrados');
+
+    const updated: ReturnType<StockService['productDto']>[] = [];
+    const skipped: string[] = [];
+
+    for (const row of rows) {
+      if (!isEntityActive(row.active)) {
+        skipped.push(row.name);
+        continue;
+      }
+      const max = n(row.maxQuantity);
+      if (!(max > 0)) {
+        skipped.push(row.name);
+        continue;
+      }
+      row.quantity = qty(max);
+      await this.products.save(row);
+      updated.push(this.productDto(row, row.category));
+    }
+
+    if (!updated.length) {
+      throw new BadRequestException(
+        'Ningún producto se pudo reponer. Configurá un stock máximo mayor a 0.',
+      );
+    }
+
+    return { products: updated, skipped };
   }
 
   async removeProduct(user: AuthUser, shopId: string, id: string) {
@@ -313,10 +402,10 @@ export class StockService implements OnModuleInit {
     row.quantity = qty(after);
     await this.products.save(row);
 
-    const min = n(category.minQuantity);
+    const min = n(row.minQuantity);
     const crossedBelow = before >= min && after < min;
     if (crossedBelow) {
-      void this.notifyStockAdmins(user, shopId, row, category, after).catch((err) => {
+      void this.notifyStockAdmins(user, shopId, row, category, after, min).catch((err) => {
         this.logger.warn(
           `No se pudo notificar stock bajo: ${(err as Error)?.message ?? err}`,
         );
@@ -332,6 +421,7 @@ export class StockService implements OnModuleInit {
     product: StockProduct,
     category: StockCategory,
     quantity: number,
+    minQuantity: number,
   ) {
     const links = await this.userShops.find({ where: { shopId } });
     const recipientIds = new Set(
@@ -344,7 +434,7 @@ export class StockService implements OnModuleInit {
       minimumFractionDigits: 0,
       maximumFractionDigits: 2,
     });
-    const minLabel = n(category.minQuantity).toLocaleString('es-AR', {
+    const minLabel = minQuantity.toLocaleString('es-AR', {
       minimumFractionDigits: 0,
       maximumFractionDigits: 2,
     });
@@ -355,7 +445,7 @@ export class StockService implements OnModuleInit {
         shopId,
         type: NotificationType.STOCK_BELOW_MINIMUM,
         title: 'Stock bajo el mínimo',
-        body: `El producto «${product.name}» quedó en ${qtyLabel} (mínimo ${minLabel} en ${category.name}).`,
+        body: `El producto «${product.name}» quedó en ${qtyLabel} (mínimo ${minLabel}${category?.name ? `, ${category.name}` : ''}).`,
       })),
     );
   }

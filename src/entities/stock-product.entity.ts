@@ -17,6 +17,14 @@ export class StockProduct extends BaseEntity {
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
   quantity: string;
 
+  /** Stock mínimo del producto. */
+  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
+  minQuantity: string;
+
+  /** Stock máximo (para reponer). 0 = no configurado. */
+  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
+  maxQuantity: string;
+
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })
   shop: Shop;
