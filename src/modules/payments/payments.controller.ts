@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -8,10 +9,15 @@ import {
   Post,
   Query,
   Res,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
   ApiPropertyOptional,
   ApiTags,
 } from '@nestjs/swagger';
@@ -69,6 +75,34 @@ class CreatePaymentDto {
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
   @IsUUID()
   employeeId?: string | null;
+  @ApiPropertyOptional() @IsOptional() @IsString() invoiceLegalName?: string | null;
+  @ApiPropertyOptional() @IsOptional() @IsString() invoiceTaxId?: string | null;
+  @ApiPropertyOptional() @IsOptional() @IsString() invoiceType?: string | null;
+  @ApiPropertyOptional() @IsOptional() @IsString() invoiceNumber?: string | null;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsNumber()
+  @Min(0)
+  invoiceNetAmount?: number | null;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsNumber()
+  @Min(0)
+  invoiceIvaAmount?: number | null;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsNumber()
+  @Min(0)
+  invoicePerceptionsAmount?: number | null;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsNumber()
+  @Min(0)
+  invoiceOtherTaxesAmount?: number | null;
 }
 
 class UpdatePaymentDto {
@@ -115,6 +149,34 @@ class UpdatePaymentDto {
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
   @IsUUID()
   employeeId?: string | null;
+  @ApiPropertyOptional() @IsOptional() @IsString() invoiceLegalName?: string | null;
+  @ApiPropertyOptional() @IsOptional() @IsString() invoiceTaxId?: string | null;
+  @ApiPropertyOptional() @IsOptional() @IsString() invoiceType?: string | null;
+  @ApiPropertyOptional() @IsOptional() @IsString() invoiceNumber?: string | null;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsNumber()
+  @Min(0)
+  invoiceNetAmount?: number | null;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsNumber()
+  @Min(0)
+  invoiceIvaAmount?: number | null;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsNumber()
+  @Min(0)
+  invoicePerceptionsAmount?: number | null;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsNumber()
+  @Min(0)
+  invoiceOtherTaxesAmount?: number | null;
 }
 
 class PayPaymentDto {
@@ -142,6 +204,14 @@ export class PaymentsController {
     @Query('payerUserId') payerUserId?: string,
     @Query('validatorUserId') validatorUserId?: string,
     @Query('mine') mine?: string,
+    @Query('dueFrom') dueFrom?: string,
+    @Query('dueTo') dueTo?: string,
+    @Query('paidFrom') paidFrom?: string,
+    @Query('paidTo') paidTo?: string,
+    @Query('supplierId') supplierId?: string,
+    @Query('employeeId') employeeId?: string,
+    @Query('amountMin') amountMin?: string,
+    @Query('amountMax') amountMax?: string,
   ) {
     const mineUserId =
       mine === '1' || mine === 'true' ? user.id : undefined;
@@ -150,6 +220,14 @@ export class PaymentsController {
       payerUserId,
       validatorUserId,
       mineUserId,
+      dueFrom,
+      dueTo,
+      paidFrom,
+      paidTo,
+      supplierId,
+      employeeId,
+      amountMin,
+      amountMax,
     });
   }
 
@@ -163,6 +241,14 @@ export class PaymentsController {
     @Query('payerUserId') payerUserId: string | undefined,
     @Query('validatorUserId') validatorUserId: string | undefined,
     @Query('mine') mine: string | undefined,
+    @Query('dueFrom') dueFrom: string | undefined,
+    @Query('dueTo') dueTo: string | undefined,
+    @Query('paidFrom') paidFrom: string | undefined,
+    @Query('paidTo') paidTo: string | undefined,
+    @Query('supplierId') supplierId: string | undefined,
+    @Query('employeeId') employeeId: string | undefined,
+    @Query('amountMin') amountMin: string | undefined,
+    @Query('amountMax') amountMax: string | undefined,
     @Res() res: Response,
   ) {
     const mineUserId =
@@ -173,6 +259,14 @@ export class PaymentsController {
       payerUserId,
       validatorUserId,
       mineUserId,
+      dueFrom,
+      dueTo,
+      paidFrom,
+      paidTo,
+      supplierId,
+      employeeId,
+      amountMin,
+      amountMax,
     });
     res.setHeader(
       'Content-Type',
@@ -180,6 +274,30 @@ export class PaymentsController {
     );
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(buffer);
+  }
+
+  @Post('parse-invoice')
+  @RequirePermissions('payments.manage')
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+      },
+      required: ['file'],
+    },
+  })
+  @UseInterceptors(
+    FileInterceptor('file', { limits: { fileSize: 15 * 1024 * 1024 } }),
+  )
+  parseInvoice(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) throw new BadRequestException('Archivo requerido');
+    return this.payments.parseInvoice(user, shopId, file);
   }
 
   @Get(':id')
@@ -211,6 +329,101 @@ export class PaymentsController {
     @Body() dto: UpdatePaymentDto,
   ) {
     return this.payments.update(user, shopId, id, dto);
+  }
+
+  @Post(':id/invoice-file')
+  @RequirePermissions('payments.manage')
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+        applyParsed: { type: 'string', description: '1/true para rellenar desde OCR' },
+      },
+      required: ['file'],
+    },
+  })
+  @UseInterceptors(
+    FileInterceptor('file', { limits: { fileSize: 15 * 1024 * 1024 } }),
+  )
+  uploadInvoice(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body('applyParsed') applyParsed?: string,
+  ) {
+    if (!file) throw new BadRequestException('Archivo requerido');
+    const apply = applyParsed !== '0' && applyParsed !== 'false';
+    return this.payments.uploadInvoiceFile(user, shopId, id, file, apply);
+  }
+
+  @Get(':id/invoice-file')
+  @RequirePermissions('payments.read')
+  async downloadInvoice(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { stream, fileName, mime } = await this.payments.downloadInvoiceFile(
+      user,
+      shopId,
+      id,
+    );
+    res.setHeader('Content-Type', mime);
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${encodeURIComponent(fileName)}"`,
+    );
+    return stream;
+  }
+
+  @Post(':id/receipt-file')
+  @RequirePermissions('payments.read')
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+      },
+      required: ['file'],
+    },
+  })
+  @UseInterceptors(
+    FileInterceptor('file', { limits: { fileSize: 15 * 1024 * 1024 } }),
+  )
+  uploadReceipt(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) throw new BadRequestException('Archivo requerido');
+    return this.payments.uploadReceiptFile(user, shopId, id, file);
+  }
+
+  @Get(':id/receipt-file')
+  @RequirePermissions('payments.read')
+  async downloadReceipt(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { stream, fileName, mime } = await this.payments.downloadReceiptFile(
+      user,
+      shopId,
+      id,
+    );
+    res.setHeader('Content-Type', mime);
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${encodeURIComponent(fileName)}"`,
+    );
+    return stream;
   }
 
   @Post(':id/validate')

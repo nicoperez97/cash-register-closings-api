@@ -300,7 +300,7 @@
       num(form.transferAmount) +
       num(form.accountDniAmount) +
       num(form.otherAmount);
-    form.difference = num(form.posSystemAmount) - num(form.declaredTotal);
+    form.difference = num(form.declaredTotal) - num(form.posSystemAmount);
   }
 
   function emptyForm(shop, closing) {

@@ -45,6 +45,9 @@ services:
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-https://d1jr8rgm5npiqn.cloudfront.net}
+      UPLOADS_DIR: /app/uploads
+    volumes:
+      - uploads-data:/app/uploads
     networks:
       - internal
 
@@ -69,3 +72,4 @@ networks:
 
 volumes:
   db-data:
+  uploads-data:

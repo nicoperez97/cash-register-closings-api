@@ -76,6 +76,31 @@ export class ClosingsService implements OnModuleInit {
     } catch {
       // columna ya existe
     }
+    // Una sola vez: invertir signo histórico (antes era caja sistema − declarado).
+    try {
+      await this.closings.query(`
+        CREATE TABLE IF NOT EXISTS app_meta (
+          metaKey VARCHAR(64) NOT NULL PRIMARY KEY,
+          metaValue VARCHAR(255) NULL,
+          updatedAt DATETIME(6) NULL
+        )
+      `);
+      const rows: Array<{ c: number | string }> = await this.closings.query(
+        `SELECT COUNT(*) AS c FROM app_meta WHERE metaKey = 'difference_formula_v2'`,
+      );
+      const already = Number(rows?.[0]?.c ?? 0) > 0;
+      if (!already) {
+        // Marca primero para no correr dos veces si el seed corre en paralelo después
+        await this.closings.query(`
+          INSERT INTO app_meta (metaKey, metaValue, updatedAt)
+          VALUES ('difference_formula_v2', '1', NOW(6))
+        `);
+        await this.closings.query(`UPDATE cash_closings SET difference = -difference`);
+        this.logger.log('Migradas diferencias de cierre al signo declarado − caja sistema');
+      }
+    } catch (err) {
+      this.logger.warn(`No se pudo migrar signo de diferencia: ${(err as Error)?.message}`);
+    }
   }
 
   private async resolveWithdrawnBy(
@@ -138,7 +163,7 @@ export class ClosingsService implements OnModuleInit {
       n(dto.deliveryAppsAmount) + n(dto.transferAmount) + n(dto.accountDniAmount) +
       n(dto.otherAmount) + extraIncome;
     const declared = dto.declaredTotal !== undefined ? n(dto.declaredTotal) : calculated;
-    return { calculatedTotal: calculated, declaredTotal: declared, difference: n(dto.posSystemAmount) - declared };
+    return { calculatedTotal: calculated, declaredTotal: declared, difference: declared - n(dto.posSystemAmount) };
   }
 
   /**

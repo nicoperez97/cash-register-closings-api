@@ -18,6 +18,14 @@ import { SuppliersService } from './suppliers.service';
 
 class CreateSupplierDto {
   @ApiProperty() @IsString() @MinLength(1) name: string;
+  @ApiPropertyOptional({ description: 'Razón social' })
+  @IsOptional()
+  @IsString()
+  legalName?: string | null;
+  @ApiPropertyOptional({ description: 'CUIT' })
+  @IsOptional()
+  @IsString()
+  taxId?: string | null;
   @ApiPropertyOptional({ description: 'Alias o CBU' })
   @IsOptional()
   @IsString()
@@ -28,6 +36,14 @@ class CreateSupplierDto {
 
 class UpdateSupplierDto {
   @ApiPropertyOptional() @IsOptional() @IsString() @MinLength(1) name?: string;
+  @ApiPropertyOptional({ description: 'Razón social' })
+  @IsOptional()
+  @IsString()
+  legalName?: string | null;
+  @ApiPropertyOptional({ description: 'CUIT' })
+  @IsOptional()
+  @IsString()
+  taxId?: string | null;
   @ApiPropertyOptional({ description: 'Alias o CBU' })
   @IsOptional()
   @IsString()

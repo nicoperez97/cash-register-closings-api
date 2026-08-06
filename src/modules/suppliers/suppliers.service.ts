@@ -59,6 +59,16 @@ export class SuppliersService implements OnModuleInit {
     } catch {
       // columna ya existe
     }
+    for (const sql of [
+      `ALTER TABLE suppliers ADD COLUMN legalName VARCHAR(200) NULL`,
+      `ALTER TABLE suppliers ADD COLUMN taxId VARCHAR(20) NULL`,
+    ]) {
+      try {
+        await this.suppliers.query(sql);
+      } catch {
+        // ya aplicado
+      }
+    }
   }
 
   private toDto(s: Supplier) {
@@ -66,6 +76,8 @@ export class SuppliersService implements OnModuleInit {
       id: s.id,
       shopId: s.shopId,
       name: s.name,
+      legalName: s.legalName ?? null,
+      taxId: s.taxId ?? null,
       bankAlias: s.bankAlias ?? null,
       notes: s.notes ?? null,
       accountId: s.accountId,
@@ -122,6 +134,8 @@ export class SuppliersService implements OnModuleInit {
     shopId: string,
     dto: {
       name: string;
+      legalName?: string | null;
+      taxId?: string | null;
       bankAlias?: string | null;
       notes?: string | null;
       active?: boolean;
@@ -147,6 +161,8 @@ export class SuppliersService implements OnModuleInit {
       this.suppliers.create({
         shopId,
         name,
+        legalName: dto.legalName?.trim() || null,
+        taxId: dto.taxId?.trim() || null,
         bankAlias: dto.bankAlias?.trim() || null,
         notes: dto.notes?.trim() || null,
         accountId: account.id,
@@ -163,6 +179,8 @@ export class SuppliersService implements OnModuleInit {
     id: string,
     dto: {
       name?: string;
+      legalName?: string | null;
+      taxId?: string | null;
       bankAlias?: string | null;
       notes?: string | null;
       active?: boolean;
@@ -182,6 +200,8 @@ export class SuppliersService implements OnModuleInit {
         await this.accounts.save(account);
       }
     }
+    if (dto.legalName !== undefined) row.legalName = dto.legalName?.trim() || null;
+    if (dto.taxId !== undefined) row.taxId = dto.taxId?.trim() || null;
     if (dto.bankAlias !== undefined) row.bankAlias = dto.bankAlias?.trim() || null;
     if (dto.notes !== undefined) row.notes = dto.notes?.trim() || null;
     if (dto.active !== undefined) {
