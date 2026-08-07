@@ -11,6 +11,7 @@ import {
   ReservationArea,
   ReservationStatus,
 } from '../../entities/reservation.entity';
+import { ReservationDayNotice } from '../../entities/reservation-day-notice.entity';
 import {
   WaitingListEntry,
   WaitingListStatus,
@@ -53,6 +54,8 @@ export class ReservationsService implements OnModuleInit {
   constructor(
     @InjectRepository(Reservation)
     private readonly reservations: Repository<Reservation>,
+    @InjectRepository(ReservationDayNotice)
+    private readonly dayNotices: Repository<ReservationDayNotice>,
     @InjectRepository(WaitingListEntry)
     private readonly waiting: Repository<WaitingListEntry>,
     @InjectRepository(Shop) private readonly shopsRepo: Repository<Shop>,
@@ -67,6 +70,24 @@ export class ReservationsService implements OnModuleInit {
       `);
     } catch {
       // columna ya existe
+    }
+    try {
+      await this.dayNotices.query(`
+        CREATE TABLE IF NOT EXISTS reservation_day_notices (
+          id CHAR(36) NOT NULL PRIMARY KEY,
+          shopId CHAR(36) NOT NULL,
+          businessDate DATE NOT NULL,
+          message TEXT NOT NULL,
+          createdAt DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+          updatedAt DATETIME(6) NULL,
+          deletedAt DATETIME(6) NULL,
+          active TINYINT(1) NOT NULL DEFAULT 1,
+          UNIQUE KEY UQ_reservation_day_notices_shop_date (shopId, businessDate),
+          INDEX IDX_reservation_day_notices_shop_date (shopId, businessDate)
+        )
+      `);
+    } catch {
+      // ya existe
     }
   }
 
@@ -178,11 +199,79 @@ export class ReservationsService implements OnModuleInit {
       .orderBy('r.reservationTime', 'ASC')
       .addOrderBy('r.createdAt', 'ASC')
       .getMany();
+    const notice = await this.findDayNoticeMessage(shopId, businessDate);
     return {
       shopId,
       businessDate,
+      notice,
       reservations: rows.map((r) => this.toReservationDto(r)),
     };
+  }
+
+  async upsertDayNotice(
+    user: AuthUser,
+    shopId: string,
+    dto: { businessDate?: string; message?: string | null },
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    const shop = await this.shops.assertReservationsEnabled(shopId);
+    const dateRaw = dto.businessDate;
+    if (dateRaw != null && String(dateRaw).trim() !== '' && !isIsoDateOnly(dateRaw)) {
+      throw new BadRequestException('Fecha inválida');
+    }
+    const businessDate = isIsoDateOnly(dateRaw)
+      ? dateRaw
+      : resolveShopCalendarDate(new Date(), { timezone: shop.timezone });
+    const message = String(dto.message ?? '').trim();
+
+    let row = await this.dayNotices.findOne({
+      where: { shopId, businessDate },
+      withDeleted: true,
+    });
+
+    if (!message) {
+      if (row) {
+        row.message = '';
+        row.active = false;
+        row.deletedAt = null as unknown as undefined;
+        await this.dayNotices.save(row);
+      }
+      return { shopId, businessDate, notice: null as string | null };
+    }
+
+    if (row) {
+      row.message = message;
+      row.active = true;
+      row.deletedAt = null as unknown as undefined;
+      await this.dayNotices.save(row);
+    } else {
+      row = await this.dayNotices.save(
+        this.dayNotices.create({
+          shopId,
+          businessDate,
+          message,
+          active: true,
+        }),
+      );
+    }
+
+    return {
+      shopId,
+      businessDate,
+      notice: row.message,
+    };
+  }
+
+  private async findDayNoticeMessage(
+    shopId: string,
+    businessDate: string,
+  ): Promise<string | null> {
+    const row = await this.dayNotices.findOne({
+      where: { shopId, businessDate, active: true },
+    });
+    if (!row || !isEntityActive(row.active)) return null;
+    const msg = String(row.message ?? '').trim();
+    return msg || null;
   }
 
   async reservationsSummary(
@@ -423,6 +512,7 @@ export class ReservationsService implements OnModuleInit {
 
     const inside = visible.filter((r) => r.area === ReservationArea.INSIDE);
     const outside = visible.filter((r) => r.area === ReservationArea.OUTSIDE);
+    const notice = await this.findDayNoticeMessage(shop.id, businessDate);
 
     return {
       shop: {
@@ -432,6 +522,7 @@ export class ReservationsService implements OnModuleInit {
         accentColor: shop.accentColor ?? null,
       },
       businessDate,
+      notice,
       totals: {
         parties: visible.length,
         guests: visible.reduce((s, r) => s + Number(r.partySize ?? 0), 0),
