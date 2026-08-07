@@ -7,6 +7,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -142,6 +143,21 @@ class UpdateWaitingDto {
   status?: WaitingListStatus;
 }
 
+class UpsertDayNoticeDto {
+  @ApiPropertyOptional({ description: 'YYYY-MM-DD; default hoy del local' })
+  @IsOptional()
+  @IsString()
+  businessDate?: string;
+
+  @ApiPropertyOptional({
+    description: 'Texto del aviso. Vacío elimina el aviso del día.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  message?: string | null;
+}
+
 @ApiTags('reservations')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'), PermissionsGuard)
@@ -168,6 +184,16 @@ export class ReservationsController {
     @Query('date') date?: string,
   ) {
     return this.reservations.listReservations(user, shopId, date);
+  }
+
+  @Put('reservation-day-notices')
+  @RequirePermissions('reservations.manage')
+  upsertDayNotice(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: UpsertDayNoticeDto,
+  ) {
+    return this.reservations.upsertDayNotice(user, shopId, dto);
   }
 
   @Post('reservations')
