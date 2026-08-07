@@ -40,6 +40,8 @@ export enum NotificationType {
   PRODUCTION_HOURS_LOGGED = 'PRODUCTION_HOURS_LOGGED',
   /** Producto de stock por debajo del mínimo de su categoría. */
   STOCK_BELOW_MINIMUM = 'STOCK_BELOW_MINIMUM',
+  /** Alguien compartió el snapshot de stock actual con admins de stock. */
+  STOCK_SHARED = 'STOCK_SHARED',
 }
 
 /** Etiquetas para UI de configuración de mails del local. */
@@ -52,6 +54,7 @@ export const NOTIFICATION_TYPE_LABELS: Record<NotificationType, string> = {
   [NotificationType.CASH_WITHDRAWAL_PICKED]: 'Retiros de efectivo',
   [NotificationType.PRODUCTION_HOURS_LOGGED]: 'Horas de producción cargadas',
   [NotificationType.STOCK_BELOW_MINIMUM]: 'Stock bajo el mínimo',
+  [NotificationType.STOCK_SHARED]: 'Stock compartido',
 };
 
 export const ALL_NOTIFICATION_TYPES: NotificationType[] = Object.values(NotificationType);

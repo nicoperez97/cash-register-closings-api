@@ -377,6 +377,75 @@ export class StockService implements OnModuleInit {
     return { ok: true };
   }
 
+  async listStockAdmins(user: AuthUser, shopId: string) {
+    this.shops.assertShopAccess(user, shopId);
+    const links = await this.userShops.find({
+      where: { shopId, isStockAdmin: true },
+      relations: ['user'],
+    });
+    return links
+      .filter((l) => l.user && isEntityActive(l.user.active))
+      .map((l) => ({
+        id: l.userId,
+        fullName: l.user.fullName,
+        email: l.user.email,
+      }))
+      .sort((a, b) => a.fullName.localeCompare(b.fullName, 'es', { sensitivity: 'base' }));
+  }
+
+  async shareStock(
+    user: AuthUser,
+    shopId: string,
+    recipientUserIds?: string[] | null,
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    const shop = await this.shops.findOne(user, shopId);
+    const shopName = shop?.name ?? 'Local';
+
+    const links = await this.userShops.find({
+      where: { shopId, isStockAdmin: true },
+      relations: ['user'],
+    });
+    let recipients = links.filter((l) => l.user && isEntityActive(l.user.active));
+
+    if (Array.isArray(recipientUserIds)) {
+      if (!recipientUserIds.length) {
+        throw new BadRequestException('Seleccioná al menos un administrador de stock');
+      }
+      const allowed = new Set(recipientUserIds);
+      recipients = recipients.filter((l) => allowed.has(l.userId));
+    }
+    if (!recipients.length) {
+      throw new BadRequestException(
+        'No hay administradores de stock para notificar. Marcá al menos uno en Usuarios.',
+      );
+    }
+
+    const products = await this.listProducts(user, shopId, false);
+    const { shareText, notifyBody, title } = this.buildStockSharePayload(
+      shopName,
+      user.fullName ?? 'Alguien',
+      products,
+    );
+
+    await this.notifications.createMany(
+      recipients.map((l) => ({
+        userId: l.userId,
+        shopId,
+        type: NotificationType.STOCK_SHARED,
+        title,
+        body: notifyBody,
+      })),
+    );
+
+    return {
+      ok: true,
+      notified: recipients.length,
+      title,
+      shareText,
+    };
+  }
+
   async adjustQuantity(
     user: AuthUser,
     shopId: string,
@@ -405,7 +474,7 @@ export class StockService implements OnModuleInit {
     const min = n(row.minQuantity);
     const crossedBelow = before >= min && after < min;
     if (crossedBelow) {
-      void this.notifyStockAdmins(user, shopId, row, category, after, min).catch((err) => {
+      void this.notifyStockAdmins(shopId, row, category, after, min).catch((err) => {
         this.logger.warn(
           `No se pudo notificar stock bajo: ${(err as Error)?.message ?? err}`,
         );
@@ -415,8 +484,63 @@ export class StockService implements OnModuleInit {
     return this.productDto(row, category);
   }
 
+  private buildStockSharePayload(
+    shopName: string,
+    actorName: string,
+    products: Array<{
+      name: string;
+      quantity: number;
+      minQuantity: number;
+      belowMinimum: boolean;
+      categoryName?: string | null;
+    }>,
+  ) {
+    const fmt = (v: number) =>
+      v.toLocaleString('es-AR', {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 2,
+      });
+
+    const below = products.filter((p) => p.belowMinimum);
+    const title = `Stock actual · ${shopName}`;
+    const header = `${actorName} compartió el stock de ${shopName}`;
+    const summary = `${products.length} producto${products.length === 1 ? '' : 's'}${
+      below.length ? ` · ${below.length} bajo mínimo` : ''
+    }`;
+
+    const lines = products.map((p) => {
+      const cat = p.categoryName ? ` (${p.categoryName})` : '';
+      const low = p.belowMinimum ? ' ⚠' : '';
+      return `• ${p.name}${cat}: ${fmt(p.quantity)} (mín. ${fmt(p.minQuantity)})${low}`;
+    });
+
+    const shareText = [header, summary, '', ...lines].join('\n');
+
+    // Misma lista que el share, recortada si hace falta (un ítem por línea).
+    const maxLines = 40;
+    const listed = lines.slice(0, maxLines);
+    const more =
+      lines.length > listed.length ? `\n…y ${lines.length - listed.length} productos más` : '';
+
+    let notifyBody = [header, summary, '', ...listed].join('\n') + more;
+    if (notifyBody.length > 1900) {
+      // Recortar por líneas para no partir un ítem a la mitad.
+      const kept: string[] = [];
+      let size = 0;
+      for (const line of [header, summary, '', ...listed]) {
+        const next = kept.length ? size + 1 + line.length : line.length;
+        if (next > 1890) break;
+        kept.push(line);
+        size = next;
+      }
+      notifyBody = kept.join('\n') + '\n…';
+    }
+
+    return { title, shareText, notifyBody };
+  }
+
+  /** Avisa a todos los admins de stock del local (incluye quien bajó el stock). */
   private async notifyStockAdmins(
-    actor: AuthUser,
     shopId: string,
     product: StockProduct,
     category: StockCategory,
@@ -424,11 +548,10 @@ export class StockService implements OnModuleInit {
     minQuantity: number,
   ) {
     const links = await this.userShops.find({ where: { shopId } });
-    const recipientIds = new Set(
-      links.filter((l) => !!l.isStockAdmin).map((l) => l.userId),
-    );
-    recipientIds.delete(actor.id);
-    if (!recipientIds.size) return;
+    const recipientIds = [
+      ...new Set(links.filter((l) => !!l.isStockAdmin).map((l) => l.userId)),
+    ];
+    if (!recipientIds.length) return;
 
     const qtyLabel = quantity.toLocaleString('es-AR', {
       minimumFractionDigits: 0,
@@ -440,7 +563,7 @@ export class StockService implements OnModuleInit {
     });
 
     await this.notifications.createMany(
-      [...recipientIds].map((userId) => ({
+      recipientIds.map((userId) => ({
         userId,
         shopId,
         type: NotificationType.STOCK_BELOW_MINIMUM,
