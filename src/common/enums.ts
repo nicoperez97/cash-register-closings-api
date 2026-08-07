@@ -38,10 +38,14 @@ export enum NotificationType {
   CASH_WITHDRAWAL_PICKED = 'CASH_WITHDRAWAL_PICKED',
   /** Productor cargó / actualizó sus horas de producción. */
   PRODUCTION_HOURS_LOGGED = 'PRODUCTION_HOURS_LOGGED',
-  /** Producto de stock por debajo del mínimo de su categoría. */
+  /** Producto de stock alimentos por debajo del mínimo. */
   STOCK_BELOW_MINIMUM = 'STOCK_BELOW_MINIMUM',
-  /** Alguien compartió el snapshot de stock actual con admins de stock. */
+  /** Alguien compartió el snapshot de stock alimentos con admins. */
   STOCK_SHARED = 'STOCK_SHARED',
+  /** Producto de stock bebidas por debajo del mínimo. */
+  BEVERAGE_STOCK_BELOW_MINIMUM = 'BEVERAGE_STOCK_BELOW_MINIMUM',
+  /** Alguien compartió el snapshot de stock bebidas con admins. */
+  BEVERAGE_STOCK_SHARED = 'BEVERAGE_STOCK_SHARED',
 }
 
 /** Etiquetas para UI de configuración de mails del local. */
@@ -53,8 +57,10 @@ export const NOTIFICATION_TYPE_LABELS: Record<NotificationType, string> = {
   [NotificationType.CLOSING_CREATED]: 'Cierres creados',
   [NotificationType.CASH_WITHDRAWAL_PICKED]: 'Retiros de efectivo',
   [NotificationType.PRODUCTION_HOURS_LOGGED]: 'Horas de producción cargadas',
-  [NotificationType.STOCK_BELOW_MINIMUM]: 'Stock bajo el mínimo',
-  [NotificationType.STOCK_SHARED]: 'Stock compartido',
+  [NotificationType.STOCK_BELOW_MINIMUM]: 'Stock alimentos · bajo el mínimo',
+  [NotificationType.STOCK_SHARED]: 'Stock alimentos · compartido',
+  [NotificationType.BEVERAGE_STOCK_BELOW_MINIMUM]: 'Stock bebidas · bajo el mínimo',
+  [NotificationType.BEVERAGE_STOCK_SHARED]: 'Stock bebidas · compartido',
 };
 
 export const ALL_NOTIFICATION_TYPES: NotificationType[] = Object.values(NotificationType);
@@ -147,6 +153,8 @@ export const PERMISSIONS = [
   'suppliers.manage',
   'stock.read',
   'stock.manage',
+  'beverageStock.read',
+  'beverageStock.manage',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -186,6 +194,8 @@ export const ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     'suppliers.manage',
     'stock.read',
     'stock.manage',
+    'beverageStock.read',
+    'beverageStock.manage',
   ],
   [GlobalRole.CASHIER]: ['closings.create'],
   [GlobalRole.VIEWER]: [
@@ -202,6 +212,7 @@ export const ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     'payments.read',
     'suppliers.read',
     'stock.read',
+    'beverageStock.read',
   ],
   [GlobalRole.PARTNER]: [
     'closings.read',

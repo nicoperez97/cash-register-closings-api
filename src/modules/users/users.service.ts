@@ -46,8 +46,10 @@ export class CreateUserBody {
   ledgerAccountId?: string | null;
   /** Ocultar en “Quién se lo lleva” (para el shopId del request). */
   hideFromCashWithdraw?: boolean;
-  /** Administrador de stock: recibe alertas de stock bajo mínimo. */
+  /** Administrador de stock alimentos: recibe alertas de stock bajo mínimo. */
   isStockAdmin?: boolean;
+  /** Administrador de stock bebidas: recibe alertas de stock bebidas bajo mínimo. */
+  isBeverageStockAdmin?: boolean;
 }
 
 export class UpdateUserBody {
@@ -63,8 +65,10 @@ export class UpdateUserBody {
   ledgerAccountId?: string | null;
   /** Ocultar en “Quién se lo lleva” (para el shopId del request). */
   hideFromCashWithdraw?: boolean;
-  /** Administrador de stock: recibe alertas de stock bajo mínimo. */
+  /** Administrador de stock alimentos: recibe alertas de stock bajo mínimo. */
   isStockAdmin?: boolean;
+  /** Administrador de stock bebidas: recibe alertas de stock bebidas bajo mínimo. */
+  isBeverageStockAdmin?: boolean;
 }
 
 @Injectable()
@@ -91,6 +95,14 @@ export class UsersService implements OnModuleInit {
       await this.userShops.query(`
         ALTER TABLE user_shops
           ADD COLUMN isStockAdmin TINYINT(1) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.userShops.query(`
+        ALTER TABLE user_shops
+          ADD COLUMN isBeverageStockAdmin TINYINT(1) NOT NULL DEFAULT 0
       `);
     } catch {
       // columna ya existe
@@ -197,6 +209,7 @@ export class UsersService implements OnModuleInit {
         modulePermissions: this.effectiveModulesForLink(link, u.globalRole),
         hideFromCashWithdraw: !!link?.hideFromCashWithdraw,
         isStockAdmin: !!link?.isStockAdmin,
+        isBeverageStockAdmin: !!link?.isBeverageStockAdmin,
         ledgerAccountIds,
         ledgerAccountNames,
         ledgerAccountId: ledgerAccountIds[0] ?? null,
@@ -250,6 +263,8 @@ export class UsersService implements OnModuleInit {
           hideFromCashWithdraw:
             defaultShopId === shopId ? !!dto.hideFromCashWithdraw : false,
           isStockAdmin: defaultShopId === shopId ? !!dto.isStockAdmin : false,
+          isBeverageStockAdmin:
+            defaultShopId === shopId ? !!dto.isBeverageStockAdmin : false,
         }),
       );
     }
@@ -361,6 +376,8 @@ export class UsersService implements OnModuleInit {
                 hideFromCashWithdraw:
                   shopId === sid ? !!dto.hideFromCashWithdraw : false,
                 isStockAdmin: shopId === sid ? !!dto.isStockAdmin : false,
+                isBeverageStockAdmin:
+                  shopId === sid ? !!dto.isBeverageStockAdmin : false,
               }),
             );
           } else {
@@ -379,12 +396,18 @@ export class UsersService implements OnModuleInit {
             if (shopId === sid && dto.isStockAdmin !== undefined) {
               exists.isStockAdmin = !!dto.isStockAdmin;
             }
+            if (shopId === sid && dto.isBeverageStockAdmin !== undefined) {
+              exists.isBeverageStockAdmin = !!dto.isBeverageStockAdmin;
+            }
             await this.userShops.save(exists);
           }
         }
       } else {
         const prevHide = new Map(links.map((l) => [l.shopId, !!l.hideFromCashWithdraw]));
         const prevStockAdmin = new Map(links.map((l) => [l.shopId, !!l.isStockAdmin]));
+        const prevBeverageStockAdmin = new Map(
+          links.map((l) => [l.shopId, !!l.isBeverageStockAdmin]),
+        );
         await this.userShops.delete({ userId: id });
         for (const sid of nextIds) {
           const hide =
@@ -395,6 +418,10 @@ export class UsersService implements OnModuleInit {
             shopId === sid && dto.isStockAdmin !== undefined
               ? !!dto.isStockAdmin
               : (prevStockAdmin.get(sid) ?? false);
+          const beverageStockAdmin =
+            shopId === sid && dto.isBeverageStockAdmin !== undefined
+              ? !!dto.isBeverageStockAdmin
+              : (prevBeverageStockAdmin.get(sid) ?? false);
           await this.userShops.save(
             this.userShops.create({
               userId: id,
@@ -408,6 +435,7 @@ export class UsersService implements OnModuleInit {
                     )) as Record<string, string>),
               hideFromCashWithdraw: hide,
               isStockAdmin: stockAdmin,
+              isBeverageStockAdmin: beverageStockAdmin,
             }),
           );
         }
@@ -417,7 +445,8 @@ export class UsersService implements OnModuleInit {
       (dto.shopRole ||
         modulesIncoming !== undefined ||
         dto.hideFromCashWithdraw !== undefined ||
-        dto.isStockAdmin !== undefined)
+        dto.isStockAdmin !== undefined ||
+        dto.isBeverageStockAdmin !== undefined)
     ) {
       const link = await this.userShops.findOne({ where: { userId: id, shopId } });
       if (link) {
@@ -432,6 +461,9 @@ export class UsersService implements OnModuleInit {
         }
         if (dto.isStockAdmin !== undefined) {
           link.isStockAdmin = !!dto.isStockAdmin;
+        }
+        if (dto.isBeverageStockAdmin !== undefined) {
+          link.isBeverageStockAdmin = !!dto.isBeverageStockAdmin;
         }
         await this.userShops.save(link);
       } else {
@@ -448,6 +480,7 @@ export class UsersService implements OnModuleInit {
                   )) as Record<string, string>),
             hideFromCashWithdraw: !!dto.hideFromCashWithdraw,
             isStockAdmin: !!dto.isStockAdmin,
+            isBeverageStockAdmin: !!dto.isBeverageStockAdmin,
           }),
         );
       }
@@ -511,6 +544,7 @@ export class UsersService implements OnModuleInit {
       modulePermissions: this.effectiveModulesForLink(link, u.globalRole),
       hideFromCashWithdraw: !!link?.hideFromCashWithdraw,
       isStockAdmin: !!link?.isStockAdmin,
+      isBeverageStockAdmin: !!link?.isBeverageStockAdmin,
       ledgerAccountIds: accountIds,
       ledgerAccountNames: names,
       ledgerAccountId: accountIds[0] ?? null,

@@ -11,10 +11,16 @@ import { StockCategory } from '../../entities/stock-category.entity';
 import { StockProduct } from '../../entities/stock-product.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { AuthUser } from '../../common/decorators';
-import { NotificationType } from '../../common/enums';
 import { isEntityActive } from '../../common/active.util';
 import { ShopsService } from '../shops/shops.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import {
+  StockKind,
+  stockAdminFlag,
+  stockBelowType,
+  stockLabel,
+  stockSharedType,
+} from './stock-kind';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const qty = (v: number) => Math.max(0, Number(v) || 0).toFixed(2);
@@ -40,13 +46,15 @@ export class StockService implements OnModuleInit {
         CREATE TABLE IF NOT EXISTS stock_categories (
           id CHAR(36) NOT NULL PRIMARY KEY,
           shopId CHAR(36) NOT NULL,
+          kind VARCHAR(20) NOT NULL DEFAULT 'food',
           name VARCHAR(200) NOT NULL,
           minQuantity DECIMAL(12,2) NOT NULL DEFAULT 0,
           createdAt DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
           updatedAt DATETIME(6) NULL,
           deletedAt DATETIME(6) NULL,
           active TINYINT(1) NOT NULL DEFAULT 1,
-          INDEX idx_stock_categories_shop (shopId)
+          INDEX idx_stock_categories_shop (shopId),
+          INDEX idx_stock_categories_shop_kind (shopId, kind)
         )
       `);
     } catch {
@@ -57,6 +65,7 @@ export class StockService implements OnModuleInit {
         CREATE TABLE IF NOT EXISTS stock_products (
           id CHAR(36) NOT NULL PRIMARY KEY,
           shopId CHAR(36) NOT NULL,
+          kind VARCHAR(20) NOT NULL DEFAULT 'food',
           categoryId CHAR(36) NOT NULL,
           name VARCHAR(200) NOT NULL,
           quantity DECIMAL(12,2) NOT NULL DEFAULT 0,
@@ -67,6 +76,7 @@ export class StockService implements OnModuleInit {
           deletedAt DATETIME(6) NULL,
           active TINYINT(1) NOT NULL DEFAULT 1,
           INDEX idx_stock_products_shop (shopId),
+          INDEX idx_stock_products_shop_kind (shopId, kind),
           INDEX idx_stock_products_category (categoryId)
         )
       `);
@@ -88,6 +98,50 @@ export class StockService implements OnModuleInit {
       `);
     } catch {
       // columna ya existe
+    }
+    try {
+      await this.categories.query(`
+        ALTER TABLE stock_categories
+          ADD COLUMN kind VARCHAR(20) NOT NULL DEFAULT 'food'
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.products.query(`
+        ALTER TABLE stock_products
+          ADD COLUMN kind VARCHAR(20) NOT NULL DEFAULT 'food'
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.categories.query(`
+        CREATE INDEX idx_stock_categories_shop ON stock_categories (shopId)
+      `);
+    } catch {
+      // índice ya existe
+    }
+    try {
+      await this.products.query(`
+        CREATE INDEX idx_stock_products_shop ON stock_products (shopId)
+      `);
+    } catch {
+      // índice ya existe
+    }
+    try {
+      await this.categories.query(`
+        CREATE INDEX idx_stock_categories_shop_kind ON stock_categories (shopId, kind)
+      `);
+    } catch {
+      // índice ya existe
+    }
+    try {
+      await this.products.query(`
+        CREATE INDEX idx_stock_products_shop_kind ON stock_products (shopId, kind)
+      `);
+    } catch {
+      // índice ya existe
     }
     try {
       await this.products.query(`
@@ -122,6 +176,7 @@ export class StockService implements OnModuleInit {
     return {
       id: c.id,
       shopId: c.shopId,
+      kind: (c.kind as StockKind) || 'food',
       name: c.name,
       active: isEntityActive(c.active),
     };
@@ -135,6 +190,7 @@ export class StockService implements OnModuleInit {
     return {
       id: p.id,
       shopId: p.shopId,
+      kind: (p.kind as StockKind) || 'food',
       categoryId: p.categoryId,
       categoryName: cat?.name ?? null,
       minQuantity,
@@ -148,10 +204,15 @@ export class StockService implements OnModuleInit {
 
   // ─── Categories ───────────────────────────────────────────────
 
-  async listCategories(user: AuthUser, shopId: string, includeInactive = false) {
+  async listCategories(
+    user: AuthUser,
+    shopId: string,
+    kind: StockKind,
+    includeInactive = false,
+  ) {
     this.shops.assertShopAccess(user, shopId);
     const rows = await this.categories.find({
-      where: { shopId },
+      where: { shopId, kind },
       order: { name: 'ASC' },
     });
     const filtered = includeInactive
@@ -163,6 +224,7 @@ export class StockService implements OnModuleInit {
   async createCategory(
     user: AuthUser,
     shopId: string,
+    kind: StockKind,
     dto: { name: string; active?: boolean },
   ) {
     this.shops.assertShopAccess(user, shopId);
@@ -171,6 +233,7 @@ export class StockService implements OnModuleInit {
     const row = await this.categories.save(
       this.categories.create({
         shopId,
+        kind,
         name,
         active: dto.active ?? true,
       }),
@@ -181,11 +244,12 @@ export class StockService implements OnModuleInit {
   async updateCategory(
     user: AuthUser,
     shopId: string,
+    kind: StockKind,
     id: string,
     dto: { name?: string; active?: boolean },
   ) {
     this.shops.assertShopAccess(user, shopId);
-    const row = await this.categories.findOne({ where: { id, shopId } });
+    const row = await this.categories.findOne({ where: { id, shopId, kind } });
     if (!row) throw new NotFoundException('Categoría no encontrada');
     if (dto.name !== undefined) {
       const name = dto.name.trim();
@@ -197,11 +261,13 @@ export class StockService implements OnModuleInit {
     return this.categoryDto(row);
   }
 
-  async removeCategory(user: AuthUser, shopId: string, id: string) {
+  async removeCategory(user: AuthUser, shopId: string, kind: StockKind, id: string) {
     this.shops.assertShopAccess(user, shopId);
-    const row = await this.categories.findOne({ where: { id, shopId } });
+    const row = await this.categories.findOne({ where: { id, shopId, kind } });
     if (!row) throw new NotFoundException('Categoría no encontrada');
-    const products = await this.products.find({ where: { shopId, categoryId: id } });
+    const products = await this.products.find({
+      where: { shopId, categoryId: id, kind },
+    });
     const activeLinked = products.filter((p) => isEntityActive(p.active)).length;
     if (activeLinked > 0) {
       throw new BadRequestException(
@@ -215,10 +281,15 @@ export class StockService implements OnModuleInit {
 
   // ─── Products ─────────────────────────────────────────────────
 
-  async listProducts(user: AuthUser, shopId: string, includeInactive = false) {
+  async listProducts(
+    user: AuthUser,
+    shopId: string,
+    kind: StockKind,
+    includeInactive = false,
+  ) {
     this.shops.assertShopAccess(user, shopId);
     const rows = await this.products.find({
-      where: { shopId },
+      where: { shopId, kind },
       relations: ['category'],
       order: { name: 'ASC' },
     });
@@ -230,6 +301,7 @@ export class StockService implements OnModuleInit {
 
   private async resolveCategory(
     shopId: string,
+    kind: StockKind,
     dto: {
       categoryId?: string | null;
       newCategory?: { name: string } | null;
@@ -239,6 +311,7 @@ export class StockService implements OnModuleInit {
       return this.categories.save(
         this.categories.create({
           shopId,
+          kind,
           name: dto.newCategory.name.trim(),
           active: true,
         }),
@@ -253,12 +326,18 @@ export class StockService implements OnModuleInit {
     if (!cat || !isEntityActive(cat.active)) {
       throw new BadRequestException('Categoría no encontrada');
     }
+    if ((cat.kind || 'food') !== kind) {
+      throw new BadRequestException(
+        `La categoría no pertenece al stock de ${stockLabel(kind)}`,
+      );
+    }
     return cat;
   }
 
   async createProduct(
     user: AuthUser,
     shopId: string,
+    kind: StockKind,
     dto: {
       name: string;
       categoryId?: string | null;
@@ -272,10 +351,11 @@ export class StockService implements OnModuleInit {
     this.shops.assertShopAccess(user, shopId);
     const name = dto.name?.trim();
     if (!name) throw new BadRequestException('Indicá el nombre del producto');
-    const category = await this.resolveCategory(shopId, dto);
+    const category = await this.resolveCategory(shopId, kind, dto);
     const row = await this.products.save(
       this.products.create({
         shopId,
+        kind,
         categoryId: category.id,
         name,
         quantity: qty(n(dto.quantity)),
@@ -290,6 +370,7 @@ export class StockService implements OnModuleInit {
   async updateProduct(
     user: AuthUser,
     shopId: string,
+    kind: StockKind,
     id: string,
     dto: {
       name?: string;
@@ -303,14 +384,14 @@ export class StockService implements OnModuleInit {
   ) {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.products.findOne({
-      where: { id, shopId },
+      where: { id, shopId, kind },
       relations: ['category'],
     });
     if (!row) throw new NotFoundException('Producto no encontrado');
 
     let category = row.category ?? null;
     if (dto.newCategory?.name?.trim() || dto.categoryId !== undefined) {
-      category = await this.resolveCategory(shopId, dto);
+      category = await this.resolveCategory(shopId, kind, dto);
       row.categoryId = category.id;
     }
     if (dto.name !== undefined) {
@@ -330,13 +411,18 @@ export class StockService implements OnModuleInit {
     return this.productDto(row, category);
   }
 
-  async restockProducts(user: AuthUser, shopId: string, productIds: string[]) {
+  async restockProducts(
+    user: AuthUser,
+    shopId: string,
+    kind: StockKind,
+    productIds: string[],
+  ) {
     this.shops.assertShopAccess(user, shopId);
     const ids = [...new Set((productIds ?? []).map((id) => String(id || '').trim()).filter(Boolean))];
     if (!ids.length) throw new BadRequestException('Seleccioná al menos un producto');
 
     const rows = await this.products.find({
-      where: { shopId, id: In(ids) },
+      where: { shopId, kind, id: In(ids) },
       relations: ['category'],
     });
     if (!rows.length) throw new NotFoundException('Productos no encontrados');
@@ -368,19 +454,20 @@ export class StockService implements OnModuleInit {
     return { products: updated, skipped };
   }
 
-  async removeProduct(user: AuthUser, shopId: string, id: string) {
+  async removeProduct(user: AuthUser, shopId: string, kind: StockKind, id: string) {
     this.shops.assertShopAccess(user, shopId);
-    const row = await this.products.findOne({ where: { id, shopId } });
+    const row = await this.products.findOne({ where: { id, shopId, kind } });
     if (!row) throw new NotFoundException('Producto no encontrado');
     row.active = false;
     await this.products.save(row);
     return { ok: true };
   }
 
-  async listStockAdmins(user: AuthUser, shopId: string) {
+  async listStockAdmins(user: AuthUser, shopId: string, kind: StockKind) {
     this.shops.assertShopAccess(user, shopId);
+    const flag = stockAdminFlag(kind);
     const links = await this.userShops.find({
-      where: { shopId, isStockAdmin: true },
+      where: { shopId, [flag]: true },
       relations: ['user'],
     });
     return links
@@ -396,43 +483,49 @@ export class StockService implements OnModuleInit {
   async shareStock(
     user: AuthUser,
     shopId: string,
+    kind: StockKind,
     recipientUserIds?: string[] | null,
   ) {
     this.shops.assertShopAccess(user, shopId);
     const shop = await this.shops.findOne(user, shopId);
     const shopName = shop?.name ?? 'Local';
+    const label = stockLabel(kind);
+    const flag = stockAdminFlag(kind);
 
     const links = await this.userShops.find({
-      where: { shopId, isStockAdmin: true },
+      where: { shopId, [flag]: true },
       relations: ['user'],
     });
     let recipients = links.filter((l) => l.user && isEntityActive(l.user.active));
 
     if (Array.isArray(recipientUserIds)) {
       if (!recipientUserIds.length) {
-        throw new BadRequestException('Seleccioná al menos un administrador de stock');
+        throw new BadRequestException(
+          `Seleccioná al menos un administrador de stock de ${label}`,
+        );
       }
       const allowed = new Set(recipientUserIds);
       recipients = recipients.filter((l) => allowed.has(l.userId));
     }
     if (!recipients.length) {
       throw new BadRequestException(
-        'No hay administradores de stock para notificar. Marcá al menos uno en Usuarios.',
+        `No hay administradores de stock de ${label} para notificar. Marcá al menos uno en Usuarios.`,
       );
     }
 
-    const products = await this.listProducts(user, shopId, false);
+    const products = await this.listProducts(user, shopId, kind, false);
     const { shareText, notifyBody, title } = this.buildStockSharePayload(
       shopName,
       user.fullName ?? 'Alguien',
       products,
+      kind,
     );
 
     await this.notifications.createMany(
       recipients.map((l) => ({
         userId: l.userId,
         shopId,
-        type: NotificationType.STOCK_SHARED,
+        type: stockSharedType(kind),
         title,
         body: notifyBody,
       })),
@@ -449,6 +542,7 @@ export class StockService implements OnModuleInit {
   async adjustQuantity(
     user: AuthUser,
     shopId: string,
+    kind: StockKind,
     id: string,
     delta: number,
   ) {
@@ -457,7 +551,7 @@ export class StockService implements OnModuleInit {
       throw new BadRequestException('El ajuste debe ser +1 o -1');
     }
     const row = await this.products.findOne({
-      where: { id, shopId },
+      where: { id, shopId, kind },
       relations: ['category'],
     });
     if (!row || !isEntityActive(row.active)) {
@@ -474,7 +568,7 @@ export class StockService implements OnModuleInit {
     const min = n(row.minQuantity);
     const crossedBelow = before >= min && after < min;
     if (crossedBelow) {
-      void this.notifyStockAdmins(shopId, row, category, after, min).catch((err) => {
+      void this.notifyStockAdmins(shopId, kind, row, category, after, min).catch((err) => {
         this.logger.warn(
           `No se pudo notificar stock bajo: ${(err as Error)?.message ?? err}`,
         );
@@ -494,6 +588,7 @@ export class StockService implements OnModuleInit {
       belowMinimum: boolean;
       categoryName?: string | null;
     }>,
+    kind: StockKind,
   ) {
     const fmt = (v: number) =>
       v.toLocaleString('es-AR', {
@@ -501,14 +596,24 @@ export class StockService implements OnModuleInit {
         maximumFractionDigits: 2,
       });
 
+    const label = stockLabel(kind);
     const below = products.filter((p) => p.belowMinimum);
-    const title = `Stock actual · ${shopName}`;
-    const header = `${actorName} compartió el stock de ${shopName}`;
+    const title = `Stock ${label} · ${shopName}`;
+    const header = `${actorName} compartió el stock de ${label} de ${shopName}`;
     const summary = `${products.length} producto${products.length === 1 ? '' : 's'}${
       below.length ? ` · ${below.length} bajo mínimo` : ''
     }`;
 
-    const lines = products.map((p) => {
+    const sorted = [...products].sort((a, b) => {
+      const qtyDiff = Number(a.quantity) - Number(b.quantity);
+      if (qtyDiff !== 0) return qtyDiff;
+      const marginA = Number(a.quantity) - Number(a.minQuantity);
+      const marginB = Number(b.quantity) - Number(b.minQuantity);
+      if (marginA !== marginB) return marginA - marginB;
+      return a.name.localeCompare(b.name, 'es', { sensitivity: 'base' });
+    });
+
+    const lines = sorted.map((p) => {
       const cat = p.categoryName ? ` (${p.categoryName})` : '';
       const low = p.belowMinimum ? ' ⚠' : '';
       return `• ${p.name}${cat}: ${fmt(p.quantity)} (mín. ${fmt(p.minQuantity)})${low}`;
@@ -539,17 +644,19 @@ export class StockService implements OnModuleInit {
     return { title, shareText, notifyBody };
   }
 
-  /** Avisa a todos los admins de stock del local (incluye quien bajó el stock). */
+  /** Avisa a todos los admins del kind del local (incluye quien bajó el stock). */
   private async notifyStockAdmins(
     shopId: string,
+    kind: StockKind,
     product: StockProduct,
     category: StockCategory,
     quantity: number,
     minQuantity: number,
   ) {
     const links = await this.userShops.find({ where: { shopId } });
+    const flag = stockAdminFlag(kind);
     const recipientIds = [
-      ...new Set(links.filter((l) => !!l.isStockAdmin).map((l) => l.userId)),
+      ...new Set(links.filter((l) => !!l[flag]).map((l) => l.userId)),
     ];
     if (!recipientIds.length) return;
 
@@ -561,13 +668,14 @@ export class StockService implements OnModuleInit {
       minimumFractionDigits: 0,
       maximumFractionDigits: 2,
     });
+    const label = stockLabel(kind);
 
     await this.notifications.createMany(
       recipientIds.map((userId) => ({
         userId,
         shopId,
-        type: NotificationType.STOCK_BELOW_MINIMUM,
-        title: 'Stock bajo el mínimo',
+        type: stockBelowType(kind),
+        title: `Stock de ${label} bajo el mínimo`,
         body: `El producto «${product.name}» quedó en ${qtyLabel} (mínimo ${minLabel}${category?.name ? `, ${category.name}` : ''}).`,
       })),
     );

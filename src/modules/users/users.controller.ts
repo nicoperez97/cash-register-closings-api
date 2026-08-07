@@ -54,11 +54,17 @@ class CreateUserDto {
   @IsBoolean()
   hideFromCashWithdraw?: boolean;
   @ApiPropertyOptional({
-    description: 'Si es true, recibe alertas cuando el stock baja del mínimo',
+    description: 'Si es true, recibe alertas cuando el stock de alimentos baja del mínimo',
   })
   @IsOptional()
   @IsBoolean()
   isStockAdmin?: boolean;
+  @ApiPropertyOptional({
+    description: 'Si es true, recibe alertas cuando el stock de bebidas baja del mínimo',
+  })
+  @IsOptional()
+  @IsBoolean()
+  isBeverageStockAdmin?: boolean;
 }
 
 class UpdateUserDto {
@@ -89,11 +95,17 @@ class UpdateUserDto {
   @IsBoolean()
   hideFromCashWithdraw?: boolean;
   @ApiPropertyOptional({
-    description: 'Si es true, recibe alertas cuando el stock baja del mínimo',
+    description: 'Si es true, recibe alertas cuando el stock de alimentos baja del mínimo',
   })
   @IsOptional()
   @IsBoolean()
   isStockAdmin?: boolean;
+  @ApiPropertyOptional({
+    description: 'Si es true, recibe alertas cuando el stock de bebidas baja del mínimo',
+  })
+  @IsOptional()
+  @IsBoolean()
+  isBeverageStockAdmin?: boolean;
 }
 
 @ApiTags('users')

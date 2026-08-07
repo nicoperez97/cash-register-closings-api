@@ -17,6 +17,7 @@ export type ModuleKey =
   | 'payments'
   | 'suppliers'
   | 'stock'
+  | 'beverageStock'
   | 'shop'
   | 'users';
 
@@ -165,7 +166,16 @@ export const MODULE_DEFS: ModuleDef[] = [
   },
   {
     key: 'stock',
-    label: 'Stock',
+    label: 'Stock alimentos',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
+    key: 'beverageStock',
+    label: 'Stock bebidas',
     levels: [
       { value: 'none', label: 'Ninguno' },
       { value: 'read', label: 'Ver' },
@@ -258,6 +268,7 @@ export function expandModulePermissions(
   pair('payments', 'payments.read', 'payments.manage');
   pair('suppliers', 'suppliers.read', 'suppliers.manage');
   pair('stock', 'stock.read', 'stock.manage');
+  pair('beverageStock', 'beverageStock.read', 'beverageStock.manage');
   // Quien gestiona pagos puede elegir / crear proveedores en el formulario.
   if (modules.payments === 'manage') add(set, 'suppliers.read', 'suppliers.manage');
   if (modules.payments === 'read') add(set, 'suppliers.read');
@@ -318,6 +329,7 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
     payments: level('payments.read', 'payments.manage'),
     suppliers: level('suppliers.read', 'suppliers.manage'),
     stock: level('stock.read', 'stock.manage'),
+    beverageStock: level('beverageStock.read', 'beverageStock.manage'),
     accounts: has('accounts.manage') ? 'manage' : 'none',
     concepts: has('concepts.manage') ? 'manage' : 'none',
     shop: has('shops.manage') ? 'manage' : 'none',

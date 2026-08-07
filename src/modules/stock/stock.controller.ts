@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Param,
   Patch,
@@ -24,9 +25,16 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
-import { PermissionsGuard } from '../../common/guards';
+import { CurrentUser, AuthUser } from '../../common/decorators';
+import { PermissionsGuard, resolveUserPermissions } from '../../common/guards';
+import { Permission } from '../../common/enums';
 import { StockService } from './stock.service';
+import {
+  StockKind,
+  parseStockKind,
+  stockManagePermission,
+  stockReadPermission,
+} from './stock-kind';
 
 class NewCategoryInlineDto {
   @ApiProperty() @IsString() @MinLength(1) name: string;
@@ -102,128 +110,167 @@ class ShareStockDto {
 export class StockController {
   constructor(private readonly stock: StockService) {}
 
+  private assertPermission(
+    user: AuthUser,
+    shopId: string,
+    permission: Permission,
+  ) {
+    const perms = resolveUserPermissions(user, shopId);
+    if (!perms.includes(permission)) {
+      throw new ForbiddenException('Sin permiso');
+    }
+  }
+
+  private resolveKind(kindRaw?: string): StockKind {
+    return parseStockKind(kindRaw);
+  }
+
   @Get('categories')
-  @RequirePermissions('stock.read')
   listCategories(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
+    @Query('kind') kindRaw?: string,
     @Query('includeInactive') includeInactive?: string,
   ) {
-    return this.stock.listCategories(user, shopId, includeInactive === 'true');
+    const kind = this.resolveKind(kindRaw);
+    this.assertPermission(user, shopId, stockReadPermission(kind));
+    return this.stock.listCategories(user, shopId, kind, includeInactive === 'true');
   }
 
   @Post('categories')
-  @RequirePermissions('stock.manage')
   createCategory(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
     @Body() dto: CreateCategoryDto,
+    @Query('kind') kindRaw?: string,
   ) {
-    return this.stock.createCategory(user, shopId, dto);
+    const kind = this.resolveKind(kindRaw);
+    this.assertPermission(user, shopId, stockManagePermission(kind));
+    return this.stock.createCategory(user, shopId, kind, dto);
   }
 
   @Patch('categories/:id')
-  @RequirePermissions('stock.manage')
   updateCategory(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
     @Param('id') id: string,
     @Body() dto: UpdateCategoryDto,
+    @Query('kind') kindRaw?: string,
   ) {
-    return this.stock.updateCategory(user, shopId, id, dto);
+    const kind = this.resolveKind(kindRaw);
+    this.assertPermission(user, shopId, stockManagePermission(kind));
+    return this.stock.updateCategory(user, shopId, kind, id, dto);
   }
 
   @Delete('categories/:id')
-  @RequirePermissions('stock.manage')
   removeCategory(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
     @Param('id') id: string,
+    @Query('kind') kindRaw?: string,
   ) {
-    return this.stock.removeCategory(user, shopId, id);
+    const kind = this.resolveKind(kindRaw);
+    this.assertPermission(user, shopId, stockManagePermission(kind));
+    return this.stock.removeCategory(user, shopId, kind, id);
   }
 
   @Get('products')
-  @RequirePermissions('stock.read')
   listProducts(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
+    @Query('kind') kindRaw?: string,
     @Query('includeInactive') includeInactive?: string,
   ) {
-    return this.stock.listProducts(user, shopId, includeInactive === 'true');
+    const kind = this.resolveKind(kindRaw);
+    this.assertPermission(user, shopId, stockReadPermission(kind));
+    return this.stock.listProducts(user, shopId, kind, includeInactive === 'true');
   }
 
   @Get('admins')
-  @RequirePermissions('stock.read')
   listStockAdmins(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
+    @Query('kind') kindRaw?: string,
   ) {
-    return this.stock.listStockAdmins(user, shopId);
+    const kind = this.resolveKind(kindRaw);
+    this.assertPermission(user, shopId, stockReadPermission(kind));
+    return this.stock.listStockAdmins(user, shopId, kind);
   }
 
   @Post('share')
-  @RequirePermissions('stock.read')
   shareStock(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
     @Body() dto: ShareStockDto,
+    @Query('kind') kindRaw?: string,
   ) {
-    return this.stock.shareStock(user, shopId, dto.recipientUserIds);
+    const kind = this.resolveKind(kindRaw);
+    this.assertPermission(user, shopId, stockReadPermission(kind));
+    return this.stock.shareStock(user, shopId, kind, dto.recipientUserIds);
   }
 
   @Post('products')
-  @RequirePermissions('stock.manage')
   createProduct(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
     @Body() dto: CreateProductDto,
+    @Query('kind') kindRaw?: string,
   ) {
-    return this.stock.createProduct(user, shopId, dto);
+    const kind = this.resolveKind(kindRaw);
+    this.assertPermission(user, shopId, stockManagePermission(kind));
+    return this.stock.createProduct(user, shopId, kind, dto);
   }
 
   @Patch('products/:id')
-  @RequirePermissions('stock.manage')
   updateProduct(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
     @Param('id') id: string,
     @Body() dto: UpdateProductDto,
+    @Query('kind') kindRaw?: string,
   ) {
-    return this.stock.updateProduct(user, shopId, id, dto);
+    const kind = this.resolveKind(kindRaw);
+    this.assertPermission(user, shopId, stockManagePermission(kind));
+    return this.stock.updateProduct(user, shopId, kind, id, dto);
   }
 
   @Post('products/restock')
-  @RequirePermissions('stock.manage')
   restock(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
     @Body() dto: RestockProductsDto,
+    @Query('kind') kindRaw?: string,
   ) {
-    return this.stock.restockProducts(user, shopId, dto.productIds);
+    const kind = this.resolveKind(kindRaw);
+    this.assertPermission(user, shopId, stockManagePermission(kind));
+    return this.stock.restockProducts(user, shopId, kind, dto.productIds);
   }
 
   @Post('products/:id/adjust')
-  @RequirePermissions('stock.manage')
   adjust(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
     @Param('id') id: string,
     @Body() dto: AdjustQuantityDto,
+    @Query('kind') kindRaw?: string,
   ) {
+    const kind = this.resolveKind(kindRaw);
+    this.assertPermission(user, shopId, stockManagePermission(kind));
     if (dto.delta !== 1 && dto.delta !== -1) {
       throw new BadRequestException('El ajuste debe ser +1 o -1');
     }
-    return this.stock.adjustQuantity(user, shopId, id, dto.delta);
+    return this.stock.adjustQuantity(user, shopId, kind, id, dto.delta);
   }
 
   @Delete('products/:id')
-  @RequirePermissions('stock.manage')
   removeProduct(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
     @Param('id') id: string,
+    @Query('kind') kindRaw?: string,
   ) {
-    return this.stock.removeProduct(user, shopId, id);
+    const kind = this.resolveKind(kindRaw);
+    this.assertPermission(user, shopId, stockManagePermission(kind));
+    return this.stock.removeProduct(user, shopId, kind, id);
   }
 }

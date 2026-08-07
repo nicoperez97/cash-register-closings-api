@@ -1,12 +1,17 @@
-import { Column, Entity, JoinColumn, ManyToOne } from 'typeorm';
+import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 import { BaseEntity } from './base.entity';
 import { Shop } from './shop.entity';
 import { StockCategory } from './stock-category.entity';
 
 @Entity({ name: 'stock_products' })
+@Index('idx_stock_products_shop_kind', ['shopId', 'kind'])
 export class StockProduct extends BaseEntity {
   @Column()
   shopId: string;
+
+  /** 'food' | 'beverage' — alimentos vs bebidas. */
+  @Column({ type: 'varchar', length: 20, default: 'food' })
+  kind: string;
 
   @Column()
   categoryId: string;

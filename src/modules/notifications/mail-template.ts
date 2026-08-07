@@ -25,16 +25,28 @@ type TypeMeta = {
 
 const TYPE_META: Record<string, TypeMeta> = {
   [NotificationType.STOCK_BELOW_MINIMUM]: {
-    label: 'Stock',
+    label: 'Stock alimentos',
     tone: '#c62828',
     toneSoft: '#fdecea',
-    hint: 'Revisá el inventario y reponé el producto cuanto antes.',
+    hint: 'Revisá el inventario de alimentos y reponé el producto cuanto antes.',
   },
   [NotificationType.STOCK_SHARED]: {
-    label: 'Stock',
+    label: 'Stock alimentos',
     tone: '#2e7d32',
     toneSoft: '#e8f5e9',
-    hint: 'Te compartieron el stock actual del local. Abrí la app para verlo o reenviarlo.',
+    hint: 'Te compartieron el stock de alimentos del local. Abrí la app para verlo o reenviarlo.',
+  },
+  [NotificationType.BEVERAGE_STOCK_BELOW_MINIMUM]: {
+    label: 'Stock bebidas',
+    tone: '#c62828',
+    toneSoft: '#fdecea',
+    hint: 'Revisá el inventario de bebidas y reponé el producto cuanto antes.',
+  },
+  [NotificationType.BEVERAGE_STOCK_SHARED]: {
+    label: 'Stock bebidas',
+    tone: '#2e7d32',
+    toneSoft: '#e8f5e9',
+    hint: 'Te compartieron el stock de bebidas del local. Abrí la app para verlo o reenviarlo.',
   },
   [NotificationType.PAYMENT_VALIDATE]: {
     label: 'Pagos',
