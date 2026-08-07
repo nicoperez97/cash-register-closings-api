@@ -67,7 +67,7 @@ export class ReservationsService implements OnModuleInit {
     return {
       id: r.id,
       shopId: r.shopId,
-      businessDate: String(r.businessDate).slice(0, 10),
+      businessDate: this.dateKey(r.businessDate) || String(r.businessDate).slice(0, 10),
       guestName: r.guestName ?? '',
       partySize: Number(r.partySize ?? 0),
       area: r.area ?? ReservationArea.INSIDE,
@@ -152,15 +152,113 @@ export class ReservationsService implements OnModuleInit {
         : resolveShopCalendarDate(new Date(), {
             timezone: shop?.timezone,
           });
-    const rows = await this.reservations.find({
-      where: { shopId, businessDate, active: true },
-      order: { reservationTime: 'ASC', createdAt: 'ASC' },
-    });
+    // Comparar como fecha calendario (evita desfases de timezone del driver MySQL)
+    const rows = await this.reservations
+      .createQueryBuilder('r')
+      .where('r.shopId = :shopId', { shopId })
+      .andWhere('r.active = true')
+      .andWhere(`DATE_FORMAT(r.businessDate, '%Y-%m-%d') = :businessDate`, {
+        businessDate,
+      })
+      .orderBy('r.reservationTime', 'ASC')
+      .addOrderBy('r.createdAt', 'ASC')
+      .getMany();
     return {
       shopId,
       businessDate,
       reservations: rows.map((r) => this.toReservationDto(r)),
     };
+  }
+
+  async reservationsSummary(
+    user: AuthUser,
+    shopId: string,
+    from?: string,
+    to?: string,
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    await this.shops.assertReservationsEnabled(shopId);
+    const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
+    const today = resolveShopCalendarDate(new Date(), {
+      timezone: shop?.timezone,
+    });
+    const monthStart = `${today.slice(0, 7)}-01`;
+    const fromDate =
+      from && /^\d{4}-\d{2}-\d{2}$/.test(from) ? from : monthStart;
+    const toDate = to && /^\d{4}-\d{2}-\d{2}$/.test(to) ? to : today;
+    if (fromDate > toDate) {
+      throw new BadRequestException('Rango de fechas inválido');
+    }
+
+    const rows = await this.reservations
+      .createQueryBuilder('r')
+      .select(`DATE_FORMAT(r.businessDate, '%Y-%m-%d')`, 'day')
+      .addSelect('COUNT(*)', 'parties')
+      .addSelect('COALESCE(SUM(r.partySize), 0)', 'guests')
+      .addSelect(
+        `COALESCE(SUM(CASE WHEN r.area = 'OUTSIDE' THEN r.partySize ELSE 0 END), 0)`,
+        'outside',
+      )
+      .addSelect(
+        `COALESCE(SUM(CASE WHEN r.area = 'OUTSIDE' THEN 0 ELSE r.partySize END), 0)`,
+        'inside',
+      )
+      .where('r.shopId = :shopId', { shopId })
+      .andWhere('r.active = true')
+      .andWhere(`DATE_FORMAT(r.businessDate, '%Y-%m-%d') BETWEEN :from AND :to`, {
+        from: fromDate,
+        to: toDate,
+      })
+      .andWhere('r.status != :cancelled', {
+        cancelled: ReservationStatus.CANCELLED,
+      })
+      .groupBy(`DATE_FORMAT(r.businessDate, '%Y-%m-%d')`)
+      .orderBy(`DATE_FORMAT(r.businessDate, '%Y-%m-%d')`, 'ASC')
+      .getRawMany<Record<string, unknown>>();
+
+    const days = rows
+      .map((r) => {
+        const businessDate = this.dateKey(
+          r['day'] ?? r['Day'] ?? Object.values(r).find((v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v))),
+        );
+        if (!businessDate) return null;
+        return {
+          businessDate,
+          parties: Number(r['parties']) || 0,
+          guests: Number(r['guests']) || 0,
+          inside: Number(r['inside']) || 0,
+          outside: Number(r['outside']) || 0,
+        };
+      })
+      .filter((d): d is NonNullable<typeof d> => !!d);
+
+    return {
+      shopId,
+      from: fromDate,
+      to: toDate,
+      days,
+    };
+  }
+
+  /**
+   * Normaliza DATE de MySQL/TypeORM a YYYY-MM-DD sin corrimiento por timezone.
+   * Preferir string; si viene Date, usar componentes UTC (DATE suele mapearse a medianoche UTC).
+   */
+  private dateKey(value: unknown): string {
+    if (typeof value === 'string') {
+      const m = value.trim().match(/^(\d{4}-\d{2}-\d{2})/);
+      if (m) return m[1];
+    }
+    if (value instanceof Date && !Number.isNaN(value.getTime())) {
+      const y = value.getUTCFullYear();
+      const m = String(value.getUTCMonth() + 1).padStart(2, '0');
+      const d = String(value.getUTCDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+    const raw = String(value ?? '').trim();
+    const m = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (m) return m[1];
+    return '';
   }
 
   async createReservation(user: AuthUser, shopId: string, dto: UpsertReservationDto) {
@@ -313,14 +411,16 @@ export class ReservationsService implements OnModuleInit {
             timezone: shop.timezone,
           });
 
-    const rows = await this.reservations.find({
-      where: {
-        shopId: shop.id,
+    const rows = await this.reservations
+      .createQueryBuilder('r')
+      .where('r.shopId = :shopId', { shopId: shop.id })
+      .andWhere('r.active = true')
+      .andWhere(`DATE_FORMAT(r.businessDate, '%Y-%m-%d') = :businessDate`, {
         businessDate,
-        active: true,
-      },
-      order: { reservationTime: 'ASC', createdAt: 'ASC' },
-    });
+      })
+      .orderBy('r.reservationTime', 'ASC')
+      .addOrderBy('r.createdAt', 'ASC')
+      .getMany();
 
     const visible = rows.filter(
       (r) =>

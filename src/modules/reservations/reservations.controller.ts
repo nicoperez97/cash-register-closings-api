@@ -118,6 +118,17 @@ class UpdateWaitingDto {
 export class ReservationsController {
   constructor(private readonly reservations: ReservationsService) {}
 
+  @Get('reservations/summary')
+  @RequirePermissions('reservations.read')
+  reservationsSummary(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.reservations.reservationsSummary(user, shopId, from, to);
+  }
+
   @Get('reservations')
   @RequirePermissions('reservations.read')
   listReservations(
