@@ -146,7 +146,13 @@ export class MailService {
       type === NotificationType.STOCK_BELOW_MINIMUM ||
       type === NotificationType.STOCK_SHARED
     ) {
-      return { path: '/stock', label: 'Abrir stock' };
+      return { path: '/stock', label: 'Abrir stock alimentos' };
+    }
+    if (
+      type === NotificationType.BEVERAGE_STOCK_BELOW_MINIMUM ||
+      type === NotificationType.BEVERAGE_STOCK_SHARED
+    ) {
+      return { path: '/beverage-stock', label: 'Abrir stock bebidas' };
     }
     if (type === NotificationType.CLOSING_CREATED) {
       return { path: '/closings', label: 'Ver cierres' };
