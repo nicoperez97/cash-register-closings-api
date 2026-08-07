@@ -21,6 +21,13 @@ import { ShopsService } from '../shops/shops.service';
 import { resolveShopCalendarDate } from '../../common/business-date';
 import { isEntityActive } from '../../common/active.util';
 import { normalizeLogoUrl } from '../../common/drive-url';
+import { isIsoDateOnly, toIsoDateOnly } from '../../common/iso-date';
+
+/** Estados que cuentan para totales / capacidad (excluye canceladas y no-show). */
+const ACTIVE_RESERVATION_STATUSES = [
+  ReservationStatus.CONFIRMED,
+  ReservationStatus.SEATED,
+] as const;
 
 export interface UpsertReservationDto {
   businessDate?: string;
@@ -64,10 +71,14 @@ export class ReservationsService implements OnModuleInit {
   }
 
   private toReservationDto(r: Reservation) {
+    const businessDate = toIsoDateOnly(r.businessDate);
+    if (!businessDate) {
+      throw new BadRequestException('Fecha de reserva inválida en base de datos');
+    }
     return {
       id: r.id,
       shopId: r.shopId,
-      businessDate: this.dateKey(r.businessDate) || String(r.businessDate).slice(0, 10),
+      businessDate,
       guestName: r.guestName ?? '',
       partySize: Number(r.partySize ?? 0),
       area: r.area ?? ReservationArea.INSIDE,
@@ -129,6 +140,9 @@ export class ReservationsService implements OnModuleInit {
       throw new BadRequestException('Hora inválida (usá HH:mm)');
     }
     const [h, m] = t.split(':').map(Number);
+    if (h < 0 || h > 23 || m < 0 || m > 59) {
+      throw new BadRequestException('Hora inválida (usá HH:mm)');
+    }
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   }
 
@@ -144,21 +158,22 @@ export class ReservationsService implements OnModuleInit {
 
   async listReservations(user: AuthUser, shopId: string, date?: string) {
     this.shops.assertShopAccess(user, shopId);
-    await this.shops.assertReservationsEnabled(shopId);
-    const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
-    const businessDate =
-      date && /^\d{4}-\d{2}-\d{2}$/.test(date)
-        ? date
-        : resolveShopCalendarDate(new Date(), {
-            timezone: shop?.timezone,
-          });
-    // Comparar como fecha calendario (evita desfases de timezone del driver MySQL)
+    const shop = await this.shops.assertReservationsEnabled(shopId);
+    if (date != null && String(date).trim() !== '' && !isIsoDateOnly(date)) {
+      throw new BadRequestException('Fecha inválida');
+    }
+    const businessDate = isIsoDateOnly(date)
+      ? date
+      : resolveShopCalendarDate(new Date(), {
+          timezone: shop.timezone,
+        });
     const rows = await this.reservations
       .createQueryBuilder('r')
       .where('r.shopId = :shopId', { shopId })
       .andWhere('r.active = true')
-      .andWhere(`DATE_FORMAT(r.businessDate, '%Y-%m-%d') = :businessDate`, {
-        businessDate,
+      .andWhere('r.businessDate = :businessDate', { businessDate })
+      .andWhere('r.status IN (:...statuses)', {
+        statuses: [...ACTIVE_RESERVATION_STATUSES],
       })
       .orderBy('r.reservationTime', 'ASC')
       .addOrderBy('r.createdAt', 'ASC')
@@ -177,15 +192,19 @@ export class ReservationsService implements OnModuleInit {
     to?: string,
   ) {
     this.shops.assertShopAccess(user, shopId);
-    await this.shops.assertReservationsEnabled(shopId);
-    const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
+    const shop = await this.shops.assertReservationsEnabled(shopId);
+    if (from != null && String(from).trim() !== '' && !isIsoDateOnly(from)) {
+      throw new BadRequestException('Fecha desde inválida');
+    }
+    if (to != null && String(to).trim() !== '' && !isIsoDateOnly(to)) {
+      throw new BadRequestException('Fecha hasta inválida');
+    }
     const today = resolveShopCalendarDate(new Date(), {
-      timezone: shop?.timezone,
+      timezone: shop.timezone,
     });
     const monthStart = `${today.slice(0, 7)}-01`;
-    const fromDate =
-      from && /^\d{4}-\d{2}-\d{2}$/.test(from) ? from : monthStart;
-    const toDate = to && /^\d{4}-\d{2}-\d{2}$/.test(to) ? to : today;
+    const fromDate = isIsoDateOnly(from) ? from : monthStart;
+    const toDate = isIsoDateOnly(to) ? to : today;
     if (fromDate > toDate) {
       throw new BadRequestException('Rango de fechas inválido');
     }
@@ -205,29 +224,33 @@ export class ReservationsService implements OnModuleInit {
       )
       .where('r.shopId = :shopId', { shopId })
       .andWhere('r.active = true')
-      .andWhere(`DATE_FORMAT(r.businessDate, '%Y-%m-%d') BETWEEN :from AND :to`, {
+      .andWhere('r.businessDate BETWEEN :from AND :to', {
         from: fromDate,
         to: toDate,
       })
-      .andWhere('r.status != :cancelled', {
-        cancelled: ReservationStatus.CANCELLED,
+      .andWhere('r.status IN (:...statuses)', {
+        statuses: [...ACTIVE_RESERVATION_STATUSES],
       })
       .groupBy(`DATE_FORMAT(r.businessDate, '%Y-%m-%d')`)
       .orderBy(`DATE_FORMAT(r.businessDate, '%Y-%m-%d')`, 'ASC')
-      .getRawMany<Record<string, unknown>>();
+      .getRawMany<{
+        day: string;
+        parties: string;
+        guests: string;
+        inside: string;
+        outside: string;
+      }>();
 
     const days = rows
       .map((r) => {
-        const businessDate = this.dateKey(
-          r['day'] ?? r['Day'] ?? Object.values(r).find((v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v))),
-        );
+        const businessDate = toIsoDateOnly(r.day);
         if (!businessDate) return null;
         return {
           businessDate,
-          parties: Number(r['parties']) || 0,
-          guests: Number(r['guests']) || 0,
-          inside: Number(r['inside']) || 0,
-          outside: Number(r['outside']) || 0,
+          parties: Number(r.parties) || 0,
+          guests: Number(r.guests) || 0,
+          inside: Number(r.inside) || 0,
+          outside: Number(r.outside) || 0,
         };
       })
       .filter((d): d is NonNullable<typeof d> => !!d);
@@ -240,35 +263,13 @@ export class ReservationsService implements OnModuleInit {
     };
   }
 
-  /**
-   * Normaliza DATE de MySQL/TypeORM a YYYY-MM-DD sin corrimiento por timezone.
-   * Preferir string; si viene Date, usar componentes UTC (DATE suele mapearse a medianoche UTC).
-   */
-  private dateKey(value: unknown): string {
-    if (typeof value === 'string') {
-      const m = value.trim().match(/^(\d{4}-\d{2}-\d{2})/);
-      if (m) return m[1];
-    }
-    if (value instanceof Date && !Number.isNaN(value.getTime())) {
-      const y = value.getUTCFullYear();
-      const m = String(value.getUTCMonth() + 1).padStart(2, '0');
-      const d = String(value.getUTCDate()).padStart(2, '0');
-      return `${y}-${m}-${d}`;
-    }
-    const raw = String(value ?? '').trim();
-    const m = raw.match(/^(\d{4}-\d{2}-\d{2})/);
-    if (m) return m[1];
-    return '';
-  }
-
   async createReservation(user: AuthUser, shopId: string, dto: UpsertReservationDto) {
     this.shops.assertShopAccess(user, shopId);
-    await this.shops.assertReservationsEnabled(shopId);
-    const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
+    const shop = await this.shops.assertReservationsEnabled(shopId);
     const businessDate = dto.businessDate
       ? this.normalizeDate(dto.businessDate)
       : resolveShopCalendarDate(new Date(), {
-          timezone: shop?.timezone,
+          timezone: shop.timezone,
         });
     const row = await this.reservations.save(
       this.reservations.create({
@@ -278,7 +279,7 @@ export class ReservationsService implements OnModuleInit {
         partySize: this.normalizePartySize(dto.partySize),
         area: this.normalizeArea(dto.area),
         notes: dto.notes?.trim() || null,
-        status: dto.status ?? ReservationStatus.CONFIRMED,
+        status: ReservationStatus.CONFIRMED,
         reservationTime: this.normalizeTime(dto.reservationTime),
         active: true,
       }),
@@ -315,9 +316,9 @@ export class ReservationsService implements OnModuleInit {
     this.shops.assertShopAccess(user, shopId);
     await this.shops.assertReservationsEnabled(shopId);
     const row = await this.reservations.findOne({ where: { id, shopId } });
-    if (!row) throw new NotFoundException('Reserva no encontrada');
-    row.active = false;
-    await this.reservations.save(row);
+    if (!row || !isEntityActive(row.active)) {
+      throw new NotFoundException('Reserva no encontrada');
+    }
     await this.reservations.softRemove(row);
     return { ok: true };
   }
@@ -387,46 +388,38 @@ export class ReservationsService implements OnModuleInit {
     this.shops.assertShopAccess(user, shopId);
     await this.shops.assertWaitingListEnabled(shopId);
     const row = await this.waiting.findOne({ where: { id, shopId } });
-    if (!row) throw new NotFoundException('Entrada no encontrada');
-    row.active = false;
-    await this.waiting.save(row);
+    if (!row || !isEntityActive(row.active)) {
+      throw new NotFoundException('Entrada no encontrada');
+    }
     await this.waiting.softRemove(row);
     return { ok: true };
   }
 
-  /** Público: reservas del día calendario actual (o fecha indicada) por slug. */
-  async publicBoard(slug: string, date?: string) {
-    const shop = await this.shopsRepo.findOne({
-      where: { slug: String(slug ?? '').trim().toLowerCase(), active: true },
-    });
+  /** Público: solo el día calendario actual del local (sin histórico arbitrario). */
+  async publicBoard(slug: string) {
+    const shop = await this.shops.findActiveBySlug(String(slug ?? '').trim().toLowerCase());
     if (!shop) throw new NotFoundException('Local no encontrado');
     if (!shop.reservationsEnabled) {
       throw new NotFoundException('Reservas no disponibles en este local');
     }
 
-    const businessDate =
-      date && /^\d{4}-\d{2}-\d{2}$/.test(date)
-        ? date
-        : resolveShopCalendarDate(new Date(), {
-            timezone: shop.timezone,
-          });
+    const businessDate = resolveShopCalendarDate(new Date(), {
+      timezone: shop.timezone,
+    });
 
     const rows = await this.reservations
       .createQueryBuilder('r')
       .where('r.shopId = :shopId', { shopId: shop.id })
       .andWhere('r.active = true')
-      .andWhere(`DATE_FORMAT(r.businessDate, '%Y-%m-%d') = :businessDate`, {
-        businessDate,
+      .andWhere('r.businessDate = :businessDate', { businessDate })
+      .andWhere('r.status IN (:...statuses)', {
+        statuses: [...ACTIVE_RESERVATION_STATUSES],
       })
       .orderBy('r.reservationTime', 'ASC')
       .addOrderBy('r.createdAt', 'ASC')
       .getMany();
 
-    const visible = rows.filter(
-      (r) =>
-        r.status === ReservationStatus.CONFIRMED ||
-        r.status === ReservationStatus.SEATED,
-    );
+    const visible = rows;
 
     const inside = visible.filter((r) => r.area === ReservationArea.INSIDE);
     const outside = visible.filter((r) => r.area === ReservationArea.OUTSIDE);
@@ -528,9 +521,8 @@ export class ReservationsService implements OnModuleInit {
       throw new NotFoundException('Lista de espera no disponible en este local');
     }
 
-    // Valida ?appOrigin= (contrato del endpoint); el manifest usa paths `/...`
-    // resolubles contra el origen de la página (mismo host vía proxy).
-    normalizeAppOrigin(appOriginRaw);
+    // ?appOrigin= opcional (contrato legacy del endpoint); el manifest usa paths relativos.
+    assertOptionalAppOrigin(appOriginRaw);
 
     const pathPrefix = kind === 'reservations' ? 'r' : 'w';
     const startPath = `/${pathPrefix}/${encodeURIComponent(shop.slug)}`;
@@ -627,9 +619,9 @@ function guessImageMime(url: string): string {
   return 'image/png';
 }
 
-function normalizeAppOrigin(raw?: string): string {
-  const fallback = process.env.PUBLIC_APP_ORIGIN?.trim() || 'http://localhost:4200';
-  const candidate = String(raw || fallback).trim();
+function assertOptionalAppOrigin(raw?: string): void {
+  if (raw == null || String(raw).trim() === '') return;
+  const candidate = String(raw).trim();
   let url: URL;
   try {
     url = new URL(candidate);
@@ -639,5 +631,4 @@ function normalizeAppOrigin(raw?: string): string {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new BadRequestException('appOrigin debe ser http(s)');
   }
-  return url.origin;
 }

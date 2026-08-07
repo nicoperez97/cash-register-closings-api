@@ -30,6 +30,12 @@ const TYPE_META: Record<string, TypeMeta> = {
     toneSoft: '#fdecea',
     hint: 'Revisá el inventario y reponé el producto cuanto antes.',
   },
+  [NotificationType.STOCK_SHARED]: {
+    label: 'Stock',
+    tone: '#2e7d32',
+    toneSoft: '#e8f5e9',
+    hint: 'Te compartieron el stock actual del local. Abrí la app para verlo o reenviarlo.',
+  },
   [NotificationType.PAYMENT_VALIDATE]: {
     label: 'Pagos',
     tone: '#e65100',
@@ -89,6 +95,11 @@ function escapeHtml(value: string): string {
     .replace(/"/g, '&quot;');
 }
 
+/** Conserva saltos de línea del cuerpo en el HTML del mail. */
+function formatBodyHtml(value: string): string {
+  return escapeHtml(value).replace(/\r\n|\r|\n/g, '<br />');
+}
+
 function normalizeHex(raw?: string | null, fallback = '#1d65a0'): string {
   const v = String(raw ?? '').trim();
   if (/^#[0-9a-fA-F]{6}$/.test(v)) return v.toUpperCase();
@@ -132,7 +143,7 @@ export function buildNotificationEmailHtml(input: MailTemplateInput): string {
   const brand = normalizeHex(input.accentColor, meta.tone);
   const shopName = escapeHtml((input.shopName ?? '').trim() || 'Notificación');
   const title = escapeHtml(input.title);
-  const body = escapeHtml(input.body);
+  const body = formatBodyHtml(input.body);
   const recipient = escapeHtml((input.recipientName ?? '').trim());
   const greeting = recipient ? `Hola ${recipient},` : 'Hola,';
   const logoUrl = isHttpUrl(input.shopLogoUrl) ? String(input.shopLogoUrl).trim() : '';

@@ -142,7 +142,10 @@ export class MailService {
   }
 
   private actionForType(type: string): { path: string; label: string } {
-    if (type === NotificationType.STOCK_BELOW_MINIMUM) {
+    if (
+      type === NotificationType.STOCK_BELOW_MINIMUM ||
+      type === NotificationType.STOCK_SHARED
+    ) {
       return { path: '/stock', label: 'Abrir stock' };
     }
     if (type === NotificationType.CLOSING_CREATED) {

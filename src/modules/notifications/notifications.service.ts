@@ -17,6 +17,7 @@ function deepLinkFor(type: NotificationType, opts: {
   if (type === NotificationType.CASH_WITHDRAWAL_PICKED) return '/cash-withdrawals';
   if (type === NotificationType.PRODUCTION_HOURS_LOGGED) return '/production-attendance';
   if (type === NotificationType.STOCK_BELOW_MINIMUM) return '/stock';
+  if (type === NotificationType.STOCK_SHARED) return '/stock';
   if (String(type).startsWith('PAYMENT_')) return '/payments/suppliers';
   return '/';
 }
@@ -74,11 +75,20 @@ export class NotificationsService implements OnModuleInit {
             'CLOSING_CREATED',
             'CASH_WITHDRAWAL_PICKED',
             'PRODUCTION_HOURS_LOGGED',
-            'STOCK_BELOW_MINIMUM'
+            'STOCK_BELOW_MINIMUM',
+            'STOCK_SHARED'
           ) NOT NULL
       `);
     } catch {
       // motor sin enum o ya actualizado
+    }
+    try {
+      await this.notifications.query(`
+        ALTER TABLE notifications
+          MODIFY COLUMN body VARCHAR(2000) NOT NULL
+      `);
+    } catch {
+      // ya actualizado
     }
   }
 

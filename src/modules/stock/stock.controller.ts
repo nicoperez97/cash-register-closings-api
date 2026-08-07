@@ -83,6 +83,18 @@ class RestockProductsDto {
   productIds: string[];
 }
 
+class ShareStockDto {
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      'IDs de administradores de stock a notificar. Si se omite, se notifica a todos.',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('4', { each: true })
+  recipientUserIds?: string[];
+}
+
 @ApiTags('stock')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'), PermissionsGuard)
@@ -139,6 +151,25 @@ export class StockController {
     @Query('includeInactive') includeInactive?: string,
   ) {
     return this.stock.listProducts(user, shopId, includeInactive === 'true');
+  }
+
+  @Get('admins')
+  @RequirePermissions('stock.read')
+  listStockAdmins(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+  ) {
+    return this.stock.listStockAdmins(user, shopId);
+  }
+
+  @Post('share')
+  @RequirePermissions('stock.read')
+  shareStock(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: ShareStockDto,
+  ) {
+    return this.stock.shareStock(user, shopId, dto.recipientUserIds);
   }
 
   @Post('products')

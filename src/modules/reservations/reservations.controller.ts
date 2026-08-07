@@ -18,6 +18,7 @@ import {
   IsOptional,
   IsString,
   Max,
+  MaxLength,
   Min,
   MinLength,
 } from 'class-validator';
@@ -30,7 +31,11 @@ import { ReservationsService } from './reservations.service';
 
 class CreateReservationDto {
   @ApiPropertyOptional() @IsOptional() @IsString() businessDate?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() guestName?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  guestName?: string;
   @ApiProperty({ example: 2 })
   @Type(() => Number)
   @IsInt()
@@ -41,17 +46,21 @@ class CreateReservationDto {
   @IsOptional()
   @IsEnum(ReservationArea)
   area?: ReservationArea;
-  @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() reservationTime?: string;
-  @ApiPropertyOptional({ enum: ReservationStatus })
+  @ApiPropertyOptional()
   @IsOptional()
-  @IsEnum(ReservationStatus)
-  status?: ReservationStatus;
+  @IsString()
+  @MaxLength(500)
+  notes?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() reservationTime?: string;
 }
 
 class UpdateReservationDto {
   @ApiPropertyOptional() @IsOptional() @IsString() businessDate?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() guestName?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  guestName?: string;
   @ApiPropertyOptional()
   @IsOptional()
   @Type(() => Number)
@@ -63,7 +72,11 @@ class UpdateReservationDto {
   @IsOptional()
   @IsEnum(ReservationArea)
   area?: ReservationArea;
-  @ApiPropertyOptional() @IsOptional() @IsString() notes?: string | null;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  notes?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsString() reservationTime?: string | null;
   @ApiPropertyOptional({ enum: ReservationStatus })
   @IsOptional()
@@ -72,7 +85,7 @@ class UpdateReservationDto {
 }
 
 class CreateWaitingDto {
-  @ApiProperty() @IsString() @MinLength(1) guestName: string;
+  @ApiProperty() @IsString() @MinLength(1) @MaxLength(120) guestName: string;
   @ApiProperty({ example: 2 })
   @Type(() => Number)
   @IsInt()
@@ -82,16 +95,26 @@ class CreateWaitingDto {
   @ApiPropertyOptional({ example: '+59899123456' })
   @IsOptional()
   @IsString()
+  @MaxLength(40)
   phone?: string;
   @ApiPropertyOptional({ enum: ReservationArea, default: ReservationArea.INSIDE })
   @IsOptional()
   @IsEnum(ReservationArea)
   area?: ReservationArea;
-  @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  notes?: string;
 }
 
 class UpdateWaitingDto {
-  @ApiPropertyOptional() @IsOptional() @IsString() @MinLength(1) guestName?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(120)
+  guestName?: string;
   @ApiPropertyOptional()
   @IsOptional()
   @Type(() => Number)
@@ -99,12 +122,20 @@ class UpdateWaitingDto {
   @Min(1)
   @Max(99)
   partySize?: number;
-  @ApiPropertyOptional() @IsOptional() @IsString() phone?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  phone?: string;
   @ApiPropertyOptional({ enum: ReservationArea })
   @IsOptional()
   @IsEnum(ReservationArea)
   area?: ReservationArea;
-  @ApiPropertyOptional() @IsOptional() @IsString() notes?: string | null;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  notes?: string | null;
   @ApiPropertyOptional({ enum: WaitingListStatus })
   @IsOptional()
   @IsEnum(WaitingListStatus)
@@ -219,8 +250,8 @@ export class PublicReservationsController {
 
   @Public()
   @Get(':slug/reservations')
-  board(@Param('slug') slug: string, @Query('date') date?: string) {
-    return this.reservations.publicBoard(slug, date);
+  board(@Param('slug') slug: string) {
+    return this.reservations.publicBoard(slug);
   }
 
   @Public()

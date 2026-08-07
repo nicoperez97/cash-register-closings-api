@@ -18,7 +18,7 @@ export class AppNotification extends BaseEntity {
   @Column({ type: 'varchar', length: 200 })
   title: string;
 
-  @Column({ type: 'varchar', length: 500 })
+  @Column({ type: 'varchar', length: 2000 })
   body: string;
 
   @Column({ type: 'varchar', nullable: true })
