@@ -566,7 +566,7 @@ export class ReservationsService implements OnModuleInit {
     };
   }
 
-  /** Público: marcar reserva CONFIRMADA → SEATED (solo día actual del local). */
+  /** Público: toggle pendiente ↔ mesa marcada (solo día actual del local). */
   async publicSeatReservation(slug: string, id: string) {
     const shop = await this.shops.findActiveBySlug(String(slug ?? '').trim().toLowerCase());
     if (!shop) throw new NotFoundException('Local no encontrado');
@@ -584,9 +584,11 @@ export class ReservationsService implements OnModuleInit {
     }
     const rowDate = toIsoDateOnly(row.businessDate);
     if (rowDate !== businessDate) {
-      throw new BadRequestException('Solo se puede sentar reservas de hoy');
+      throw new BadRequestException('Solo se pueden marcar reservas de hoy');
     }
     if (row.status === ReservationStatus.SEATED) {
+      row.status = ReservationStatus.CONFIRMED;
+      await this.reservations.save(row);
       return {
         id: row.id,
         status: row.status,
@@ -596,7 +598,7 @@ export class ReservationsService implements OnModuleInit {
       };
     }
     if (row.status !== ReservationStatus.CONFIRMED) {
-      throw new BadRequestException('La reserva no se puede marcar como sentada');
+      throw new BadRequestException('La reserva no se puede marcar');
     }
     row.status = ReservationStatus.SEATED;
     await this.reservations.save(row);
@@ -607,6 +609,34 @@ export class ReservationsService implements OnModuleInit {
       partySize: Number(row.partySize ?? 0),
       area: row.area,
     };
+  }
+
+  /** Público: quitar de la vista una liberada (SEATED soft-deleted del día). */
+  async publicDismissRemovedReservation(slug: string, id: string) {
+    const shop = await this.shops.findActiveBySlug(String(slug ?? '').trim().toLowerCase());
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    if (!shop.reservationsEnabled) {
+      throw new NotFoundException('Reservas no disponibles en este local');
+    }
+    const businessDate = resolveShopCalendarDate(new Date(), {
+      timezone: shop.timezone,
+    });
+    const row = await this.reservations.findOne({
+      where: { id, shopId: shop.id },
+      withDeleted: true,
+    });
+    if (!row || !row.deletedAt) {
+      throw new NotFoundException('Reserva liberada no encontrada');
+    }
+    const rowDate = toIsoDateOnly(row.businessDate);
+    if (rowDate !== businessDate) {
+      throw new BadRequestException('Solo se pueden quitar liberadas de hoy');
+    }
+    if (row.status !== ReservationStatus.SEATED) {
+      throw new BadRequestException('Solo se pueden quitar reservas liberadas post-mesa');
+    }
+    await this.reservations.delete({ id: row.id, shopId: shop.id });
+    return { ok: true };
   }
 
   /** Público: cola de espera activa por slug. */

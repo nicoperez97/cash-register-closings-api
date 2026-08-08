@@ -185,7 +185,7 @@ export const MODULE_DEFS: ModuleDef[] = [
   },
   {
     key: 'shortages',
-    label: 'Faltantes',
+    label: 'Stock faltantes',
     levels: [
       { value: 'none', label: 'Ninguno' },
       { value: 'read', label: 'Ver' },

@@ -290,6 +290,15 @@ export class PublicReservationsController {
   }
 
   @Public()
+  @Delete(':slug/reservations/:id/dismiss')
+  dismiss(
+    @Param('slug') slug: string,
+    @Param('id') id: string,
+  ) {
+    return this.reservations.publicDismissRemovedReservation(slug, id);
+  }
+
+  @Public()
   @Get(':slug/waiting-list')
   waitingBoard(@Param('slug') slug: string) {
     return this.reservations.publicWaitingBoard(slug);
