@@ -12,7 +12,10 @@ export type PushPayload = {
   url?: string;
   tag?: string;
   shopId?: string | null;
+  shopName?: string | null;
   notificationId?: string | null;
+  /** URL absoluta del logo del local (icono de la notificación). */
+  icon?: string | null;
   /** Total de no leídas del usuario (para badge del ícono PWA). */
   unreadCount?: number;
 };
@@ -132,7 +135,9 @@ export class PushService implements OnModuleInit {
       url: payload.url || '/',
       tag: payload.tag || 'crc-notification',
       shopId: payload.shopId ?? null,
+      shopName: payload.shopName ?? null,
       notificationId: payload.notificationId ?? null,
+      icon: payload.icon || undefined,
       unreadCount:
         typeof payload.unreadCount === 'number' && payload.unreadCount > 0
           ? Math.floor(payload.unreadCount)
