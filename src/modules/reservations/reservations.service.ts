@@ -530,6 +530,7 @@ export class ReservationsService implements OnModuleInit {
       partySize: Number(r.partySize ?? 0),
       area: r.area,
       reservationTime: r.reservationTime ?? null,
+      notes: r.notes?.trim() || null,
       status: r.status,
       number,
       createdAt: r.createdAt,
