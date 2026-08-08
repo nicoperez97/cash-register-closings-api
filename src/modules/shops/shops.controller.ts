@@ -17,7 +17,7 @@ import { AuthGuard } from '@nestjs/passport';
 import type { Response } from 'express';
 import { ShopsService } from './shops.service';
 import { ShopBackupService } from './shop-backup.service';
-import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
+import { CurrentUser, AuthUser, RequirePermissions, Public } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { CreateShopDto, UpdateShopDto } from './dto/shop.dto';
 
@@ -114,5 +114,25 @@ export class ShopsController {
     @Body() dto: UpdateShopDto,
   ) {
     return this.shops.update(user, id, dto);
+  }
+}
+
+/** Logo público same-origin para iconos de push (el SW no puede usar Drive a veces). */
+@ApiTags('public-shops')
+@Controller('public/shops')
+export class PublicShopsController {
+  constructor(private readonly shops: ShopsService) {}
+
+  @Public()
+  @Get(':shopId/logo')
+  async logo(@Param('shopId') shopId: string, @Res() res: Response) {
+    const result = await this.shops.fetchPublicLogo(shopId);
+    if (!result) {
+      res.status(404).end();
+      return;
+    }
+    res.setHeader('Content-Type', result.contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+    res.send(result.buffer);
   }
 }
