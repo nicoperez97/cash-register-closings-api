@@ -7,7 +7,7 @@ import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
 import { Concept } from '../../entities/concept.entity';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
-import { ShopsController } from './shops.controller';
+import { ShopsController, PublicShopsController } from './shops.controller';
 import { ShopsService } from './shops.service';
 import { ShopBackupService } from './shop-backup.service';
 
@@ -22,7 +22,7 @@ import { ShopBackupService } from './shop-backup.service';
       Concept,
     ]),
   ],
-  controllers: [ShopsController],
+  controllers: [ShopsController, PublicShopsController],
   providers: [ShopsService, ShopBackupService, CatalogSeedService],
   exports: [ShopsService, ShopBackupService],
 })

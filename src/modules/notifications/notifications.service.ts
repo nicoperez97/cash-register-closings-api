@@ -6,6 +6,7 @@ import { AppNotification } from '../../entities/notification.entity';
 import { Shop } from '../../entities/shop.entity';
 import { NotificationType } from '../../common/enums';
 import { AuthUser } from '../../common/decorators';
+import { normalizeLogoUrl } from '../../common/drive-url';
 import { PushService } from './push.service';
 import { MailService } from './mail.service';
 
@@ -157,7 +158,8 @@ export class NotificationsService implements OnModuleInit {
         shopName: branding.name,
         notificationId: row.id,
         unreadCount,
-        icon: branding.logoUrl,
+        icon: branding.pushIconUrl,
+        image: branding.pushIconUrl,
       })
       .catch(() => undefined);
     void this.mail
@@ -214,6 +216,7 @@ export class NotificationsService implements OnModuleInit {
         const branding = brandingByShop.get(row.shopId ?? '') ?? {
           name: null,
           logoUrl: null,
+          pushIconUrl: null,
         };
         const unreadCount = await this.countUnreadForUser(userId);
         await this.push
@@ -230,7 +233,8 @@ export class NotificationsService implements OnModuleInit {
             shopName: branding.name,
             notificationId: row.id,
             unreadCount,
-            icon: branding.logoUrl,
+            icon: branding.pushIconUrl,
+            image: branding.pushIconUrl,
           })
           .catch(() => undefined);
       }),
@@ -252,6 +256,7 @@ export class NotificationsService implements OnModuleInit {
       const branding = brandingByShop.get(r.shopId ?? '') ?? {
         name: null,
         logoUrl: null,
+        pushIconUrl: null,
       };
       return {
         ...this.toDto(r),
@@ -281,6 +286,7 @@ export class NotificationsService implements OnModuleInit {
       const branding = brandingByShop.get(r.shopId ?? '') ?? {
         name: null,
         logoUrl: null,
+        pushIconUrl: null,
       };
       return {
         ...this.toDto(r),
@@ -362,35 +368,58 @@ export class NotificationsService implements OnModuleInit {
   }
 
   private absoluteLogoUrl(raw?: string | null): string | null {
-    const v = String(raw ?? '').trim();
-    if (!v) return null;
-    if (isHttpUrl(v)) return v;
-    if (v.startsWith('/')) return `${this.appOrigin}${v}`;
+    const normalized =
+      normalizeLogoUrl(raw) ?? (String(raw ?? '').trim() || null);
+    if (!normalized) return null;
+    if (isHttpUrl(normalized)) return normalized;
+    if (normalized.startsWith('/')) return `${this.appOrigin}${normalized}`;
     return null;
+  }
+
+  /** Icono same-origin para Web Push (más fiable que Drive en el SW). */
+  private pushIconForShop(shopId: string, hasLogo: boolean): string | null {
+    if (!shopId || !hasLogo) return null;
+    return `${this.appOrigin}/api/v1/public/shops/${shopId}/logo`;
   }
 
   private async resolveShopBranding(
     shopId?: string | null,
-  ): Promise<{ name: string | null; logoUrl: string | null }> {
-    if (!shopId) return { name: null, logoUrl: null };
+  ): Promise<{
+    name: string | null;
+    logoUrl: string | null;
+    pushIconUrl: string | null;
+  }> {
+    if (!shopId) return { name: null, logoUrl: null, pushIconUrl: null };
     const map = await this.resolveShopBrandingMap([shopId]);
-    return map.get(shopId) ?? { name: null, logoUrl: null };
+    return (
+      map.get(shopId) ?? { name: null, logoUrl: null, pushIconUrl: null }
+    );
   }
 
   private async resolveShopBrandingMap(
     shopIds: Array<string | null | undefined>,
-  ): Promise<Map<string, { name: string | null; logoUrl: string | null }>> {
+  ): Promise<
+    Map<
+      string,
+      { name: string | null; logoUrl: string | null; pushIconUrl: string | null }
+    >
+  > {
     const ids = [...new Set(shopIds.filter((id): id is string => !!id))];
-    const out = new Map<string, { name: string | null; logoUrl: string | null }>();
+    const out = new Map<
+      string,
+      { name: string | null; logoUrl: string | null; pushIconUrl: string | null }
+    >();
     if (!ids.length) return out;
     const shops = await this.shops.find({
       where: { id: In(ids) },
       select: ['id', 'name', 'logoUrl'],
     });
     for (const shop of shops) {
+      const logoUrl = this.absoluteLogoUrl(shop.logoUrl);
       out.set(shop.id, {
         name: shop.name?.trim() || null,
-        logoUrl: this.absoluteLogoUrl(shop.logoUrl),
+        logoUrl,
+        pushIconUrl: this.pushIconForShop(shop.id, !!logoUrl),
       });
     }
     return out;

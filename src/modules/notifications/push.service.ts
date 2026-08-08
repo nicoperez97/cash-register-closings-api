@@ -16,6 +16,8 @@ export type PushPayload = {
   notificationId?: string | null;
   /** URL absoluta del logo del local (icono de la notificación). */
   icon?: string | null;
+  /** Imagen grande (Android/Chrome expanded). */
+  image?: string | null;
   /** Total de no leídas del usuario (para badge del ícono PWA). */
   unreadCount?: number;
 };
@@ -138,6 +140,7 @@ export class PushService implements OnModuleInit {
       shopName: payload.shopName ?? null,
       notificationId: payload.notificationId ?? null,
       icon: payload.icon || undefined,
+      image: payload.image || undefined,
       unreadCount:
         typeof payload.unreadCount === 'number' && payload.unreadCount > 0
           ? Math.floor(payload.unreadCount)

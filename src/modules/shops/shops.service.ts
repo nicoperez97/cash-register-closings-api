@@ -459,6 +459,36 @@ export class ShopsService implements OnModuleInit {
     return [...new Set(raw.map((x) => String(x ?? '').trim()).filter(Boolean))];
   }
 
+  /**
+   * Descarga el logo del local (Drive normalizado) para servir same-origin
+   * en notificaciones push / SW.
+   */
+  async fetchPublicLogo(
+    shopId: string,
+  ): Promise<{ buffer: Buffer; contentType: string } | null> {
+    const shop = await this.shops.findOne({
+      where: { id: shopId, active: true },
+      select: ['id', 'logoUrl'],
+    });
+    const raw = normalizeLogoUrl(shop?.logoUrl) ?? shop?.logoUrl?.trim() ?? null;
+    if (!raw || !/^https?:\/\//i.test(raw)) return null;
+
+    try {
+      const upstream = await fetch(raw, {
+        redirect: 'follow',
+        headers: { Accept: 'image/*,*/*;q=0.8' },
+      });
+      if (!upstream.ok) return null;
+      const contentType = upstream.headers.get('content-type') || 'image/jpeg';
+      if (!contentType.toLowerCase().startsWith('image/')) return null;
+      const buffer = Buffer.from(await upstream.arrayBuffer());
+      if (!buffer.length) return null;
+      return { buffer, contentType };
+    } catch {
+      return null;
+    }
+  }
+
   toDto(s: Shop, opts?: { emailSmtpConfigured?: boolean }) {
     return {
       id: s.id,
