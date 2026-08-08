@@ -3,7 +3,7 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { AuthUser } from '../../common/decorators';
 import {
   DEFAULT_RESTOSOFT_PAYMENT_MAP,
@@ -25,6 +25,23 @@ import type { PosPaymentField } from './parsers/sales-system-parser';
 import { SalesProductsAnalyticsService } from './sales-products-analytics.service';
 
 const money = (n: number) => Number(n ?? 0).toFixed(2);
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  if (!items.length) return [];
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    out.push(items.slice(i, i + size));
+  }
+  return out;
+}
+
+function normalizeProductCode(raw: string | null | undefined): string | null {
+  if (raw == null) return null;
+  const trimmed = String(raw).trim();
+  if (!trimmed) return null;
+  if (/^\d+\.0+$/.test(trimmed)) return String(parseInt(trimmed, 10));
+  return trimmed.replace(/\.0+$/, '');
+}
 
 type PaymentBreakdown = Record<
   'cashAmount' | 'cardAmount' | 'mercadoPagoAmount' | 'deliveryAppsAmount' | 'transferAmount' | 'accountDniAmount' | 'otherAmount',
@@ -118,88 +135,118 @@ export class SalesReportImportService {
       }),
     );
 
-    const allLineItems = parsed.tickets.flatMap((t) => t.lines);
-    const labelsByCode = await this.productsAnalytics.upsertFromLines(shopId, allLineItems);
-
+    // Último ticket gana si el archivo trae externalId repetido.
+    const ticketsByExt = new Map<string, ParsedTicket>();
     for (const t of parsed.tickets) {
-      let ticket = await this.tickets.findOne({
+      ticketsByExt.set(t.externalId, t);
+    }
+    const uniqueTickets = [...ticketsByExt.values()];
+    const allLineItems = uniqueTickets.flatMap((t) => t.lines);
+    const labelsByCode = await this.productsAnalytics.upsertFromLines(
+      shopId,
+      allLineItems,
+    );
+
+    const existingByExt = new Map<string, PosSaleTicket>();
+    for (const ids of chunkArray([...ticketsByExt.keys()], 400)) {
+      const rows = await this.tickets.find({
         where: {
           shopId,
           salesSystemId: system.id,
-          externalId: t.externalId,
+          externalId: In(ids),
         },
       });
-      if (ticket) {
-        Object.assign(ticket, {
-          importId: imp.id,
-          businessDate: t.businessDate,
-          ticketType: t.ticketType,
-          total: money(t.total),
-          subtotal: money(t.subtotal),
-          discount: money(t.discount),
-          paymentCode: t.paymentCode,
-          covers: t.covers,
-          externalClosingId: t.externalClosingId,
-          occurredAt: t.occurredAt,
-          active: true,
-        });
-        await this.tickets.save(ticket);
-        await this.lines.delete({ ticketId: ticket.id });
+      for (const row of rows) existingByExt.set(row.externalId, row);
+    }
+
+    const toUpdate: PosSaleTicket[] = [];
+    const toInsert: PosSaleTicket[] = [];
+    for (const t of uniqueTickets) {
+      const fields = {
+        importId: imp.id,
+        businessDate: t.businessDate,
+        ticketType: t.ticketType,
+        total: money(t.total),
+        subtotal: money(t.subtotal),
+        discount: money(t.discount),
+        paymentCode: t.paymentCode,
+        covers: t.covers,
+        externalClosingId: t.externalClosingId,
+        occurredAt: t.occurredAt,
+        active: true,
+      };
+      const existing = existingByExt.get(t.externalId);
+      if (existing) {
+        Object.assign(existing, fields);
+        toUpdate.push(existing);
       } else {
-        ticket = await this.tickets.save(
+        toInsert.push(
           this.tickets.create({
             shopId,
-            importId: imp.id,
             salesSystemId: system.id,
-            businessDate: t.businessDate,
             externalId: t.externalId,
-            ticketType: t.ticketType,
-            total: money(t.total),
-            subtotal: money(t.subtotal),
-            discount: money(t.discount),
-            paymentCode: t.paymentCode,
-            covers: t.covers,
-            externalClosingId: t.externalClosingId,
-            occurredAt: t.occurredAt,
-            active: true,
-          }),
-        );
-      }
-      if (t.lines.length) {
-        await this.lines.save(
-          t.lines.map((l) => {
-            const rawCode = (l.productCode || l.productName || '').trim();
-            const code = /^\d+\.0+$/.test(rawCode)
-              ? String(parseInt(rawCode, 10))
-              : rawCode.replace(/\.0+$/, '');
-            const labels = code ? labelsByCode.get(code) : null;
-            return this.lines.create({
-              ticketId: ticket!.id,
-              productCode: l.productCode
-                ? (/^\d+\.0+$/.test(String(l.productCode).trim())
-                    ? String(parseInt(String(l.productCode), 10))
-                    : String(l.productCode).trim().replace(/\.0+$/, ''))
-                : l.productCode,
-              productName: l.productName,
-              category: labels?.category ?? null,
-              subcategory: labels?.subcategory ?? null,
-              qty: String(l.qty),
-              amount: money(l.amount),
-              active: true,
-            });
+            ...fields,
           }),
         );
       }
     }
 
+    const savedTickets: PosSaleTicket[] = [];
+    for (const batch of chunkArray(toUpdate, 200)) {
+      savedTickets.push(...(await this.tickets.save(batch)));
+    }
+    for (const batch of chunkArray(toInsert, 200)) {
+      savedTickets.push(...(await this.tickets.save(batch)));
+    }
+
+    const ticketByExt = new Map(savedTickets.map((t) => [t.externalId, t]));
+    const ticketIds = savedTickets.map((t) => t.id);
+    for (const ids of chunkArray(ticketIds, 400)) {
+      await this.lines.delete({ ticketId: In(ids) });
+    }
+
+    const lineEntities: PosSaleTicketLine[] = [];
+    for (const t of uniqueTickets) {
+      const ticket = ticketByExt.get(t.externalId);
+      if (!ticket || !t.lines.length) continue;
+      for (const l of t.lines) {
+        const code =
+          normalizeProductCode(l.productCode) ??
+          normalizeProductCode(l.productName);
+        const labels = code ? labelsByCode.get(code) : null;
+        lineEntities.push(
+          this.lines.create({
+            ticketId: ticket.id,
+            productCode: normalizeProductCode(l.productCode) ?? l.productCode,
+            productName: l.productName,
+            category: labels?.category ?? null,
+            subcategory: labels?.subcategory ?? null,
+            qty: String(l.qty),
+            amount: money(l.amount),
+            active: true,
+          }),
+        );
+      }
+    }
+    for (const batch of chunkArray(lineEntities, 500)) {
+      await this.lines.save(batch);
+    }
+
+    const dayDates = preview.days.map((d) => d.businessDate);
+    const existingDailies = dayDates.length
+      ? await this.dailies.find({
+          where: {
+            shopId,
+            salesSystemId: system.id,
+            businessDate: In(dayDates),
+          },
+        })
+      : [];
+    const dailyByDate = new Map(
+      existingDailies.map((d) => [d.businessDate, d]),
+    );
+    const dailiesToSave: PosSaleDaily[] = [];
     for (const day of preview.days) {
-      let daily = await this.dailies.findOne({
-        where: {
-          shopId,
-          businessDate: day.businessDate,
-          salesSystemId: system.id,
-        },
-      });
       const dailyPayload = {
         importId: imp.id,
         totalAmount: money(day.totalAmount),
@@ -214,11 +261,12 @@ export class SalesReportImportService {
         otherAmount: money(day.otherAmount),
         active: true,
       };
-      if (daily) {
-        Object.assign(daily, dailyPayload);
-        await this.dailies.save(daily);
+      const existing = dailyByDate.get(day.businessDate);
+      if (existing) {
+        Object.assign(existing, dailyPayload);
+        dailiesToSave.push(existing);
       } else {
-        await this.dailies.save(
+        dailiesToSave.push(
           this.dailies.create({
             shopId,
             businessDate: day.businessDate,
@@ -227,6 +275,9 @@ export class SalesReportImportService {
           }),
         );
       }
+    }
+    for (const batch of chunkArray(dailiesToSave, 100)) {
+      await this.dailies.save(batch);
     }
 
     return {

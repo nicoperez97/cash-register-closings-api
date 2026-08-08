@@ -478,11 +478,16 @@ export class SalesProductsAnalyticsService {
     };
 
     const codes = [...byCode.keys()];
-    const existing = await this.products
-      .createQueryBuilder('p')
-      .where('p.shopId = :shopId', { shopId })
-      .andWhere('p.productCode IN (:...codes)', { codes })
-      .getMany();
+    const existing: PosProduct[] = [];
+    for (let i = 0; i < codes.length; i += 400) {
+      const slice = codes.slice(i, i + 400);
+      const rows = await this.products
+        .createQueryBuilder('p')
+        .where('p.shopId = :shopId', { shopId })
+        .andWhere('p.productCode IN (:...codes)', { codes: slice })
+        .getMany();
+      existing.push(...rows);
+    }
     const existingByCode = new Map(existing.map((p) => [p.productCode, p]));
 
     const toSave: PosProduct[] = [];
@@ -526,12 +531,14 @@ export class SalesProductsAnalyticsService {
       }
     }
     if (toSave.length) {
-      const saved = await this.products.save(toSave);
-      for (const s of saved) {
-        map.set(s.productCode, {
-          category: s.category ?? null,
-          subcategory: s.subcategory ?? null,
-        });
+      for (let i = 0; i < toSave.length; i += 200) {
+        const saved = await this.products.save(toSave.slice(i, i + 200));
+        for (const s of saved) {
+          map.set(s.productCode, {
+            category: s.category ?? null,
+            subcategory: s.subcategory ?? null,
+          });
+        }
       }
     }
     return map;
