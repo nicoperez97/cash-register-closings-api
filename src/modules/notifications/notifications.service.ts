@@ -1,7 +1,9 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { AppNotification } from '../../entities/notification.entity';
+import { Shop } from '../../entities/shop.entity';
 import { NotificationType } from '../../common/enums';
 import { AuthUser } from '../../common/decorators';
 import { PushService } from './push.service';
@@ -31,14 +33,28 @@ function deepLinkFor(type: NotificationType, opts: {
   return '/';
 }
 
+function isHttpUrl(raw?: string | null): boolean {
+  return /^https?:\/\//i.test(String(raw ?? '').trim());
+}
+
 @Injectable()
 export class NotificationsService implements OnModuleInit {
+  private readonly appOrigin: string;
+
   constructor(
     @InjectRepository(AppNotification)
     private readonly notifications: Repository<AppNotification>,
+    @InjectRepository(Shop)
+    private readonly shops: Repository<Shop>,
+    private readonly config: ConfigService,
     private readonly push: PushService,
     private readonly mail: MailService,
-  ) {}
+  ) {
+    this.appOrigin = (
+      this.config.get<string>('publicAppOrigin') ??
+      'https://d1jr8rgm5npiqn.cloudfront.net'
+    ).replace(/\/$/, '');
+  }
 
   async onModuleInit() {
     try {
@@ -129,16 +145,19 @@ export class NotificationsService implements OnModuleInit {
       }),
     );
     const dto = this.toDto(row);
+    const branding = await this.resolveShopBranding(input.shopId);
     const unreadCount = await this.countUnreadForUser(input.userId);
     void this.push
       .sendToUsers([input.userId], {
-        title: input.title,
+        title: this.pushTitle(input.title, branding.name),
         body: input.body,
         url: deepLinkFor(input.type, input),
         tag: `crc-${input.type}-${row.id}`,
         shopId: input.shopId ?? null,
+        shopName: branding.name,
         notificationId: row.id,
         unreadCount,
+        icon: branding.logoUrl,
       })
       .catch(() => undefined);
     void this.mail
@@ -150,7 +169,7 @@ export class NotificationsService implements OnModuleInit {
         body: input.body,
       })
       .catch(() => undefined);
-    return dto;
+    return { ...dto, shopName: branding.name, shopLogoUrl: branding.logoUrl };
   }
 
   async createMany(
@@ -181,6 +200,10 @@ export class NotificationsService implements OnModuleInit {
       ),
     );
 
+    const brandingByShop = await this.resolveShopBrandingMap(
+      rows.map((r) => r.shopId),
+    );
+
     // Un push por destinatario (mismo contenido agrupado).
     const byUser = new Map<string, (typeof rows)[number]>();
     for (const row of rows) {
@@ -188,10 +211,14 @@ export class NotificationsService implements OnModuleInit {
     }
     void Promise.all(
       [...byUser.entries()].map(async ([userId, row]) => {
+        const branding = brandingByShop.get(row.shopId ?? '') ?? {
+          name: null,
+          logoUrl: null,
+        };
         const unreadCount = await this.countUnreadForUser(userId);
         await this.push
           .sendToUsers([userId], {
-            title: row.title,
+            title: this.pushTitle(row.title, branding.name),
             body: row.body,
             url: deepLinkFor(row.type, {
               shopId: row.shopId,
@@ -200,8 +227,10 @@ export class NotificationsService implements OnModuleInit {
             }),
             tag: `crc-${row.type}-${row.id}`,
             shopId: row.shopId ?? null,
+            shopName: branding.name,
             notificationId: row.id,
             unreadCount,
+            icon: branding.logoUrl,
           })
           .catch(() => undefined);
       }),
@@ -219,7 +248,17 @@ export class NotificationsService implements OnModuleInit {
       )
       .catch(() => undefined);
 
-    return rows.map((r) => this.toDto(r));
+    return rows.map((r) => {
+      const branding = brandingByShop.get(r.shopId ?? '') ?? {
+        name: null,
+        logoUrl: null,
+      };
+      return {
+        ...this.toDto(r),
+        shopName: branding.name,
+        shopLogoUrl: branding.logoUrl,
+      };
+    });
   }
 
   async list(user: AuthUser, opts?: { shopId?: string; unreadOnly?: boolean }) {
@@ -235,7 +274,20 @@ export class NotificationsService implements OnModuleInit {
     }
     qb.orderBy('n.createdAt', 'DESC').take(80);
     const rows = await qb.getMany();
-    return rows.map((r) => this.toDto(r));
+    const brandingByShop = await this.resolveShopBrandingMap(
+      rows.map((r) => r.shopId),
+    );
+    return rows.map((r) => {
+      const branding = brandingByShop.get(r.shopId ?? '') ?? {
+        name: null,
+        logoUrl: null,
+      };
+      return {
+        ...this.toDto(r),
+        shopName: branding.name,
+        shopLogoUrl: branding.logoUrl,
+      };
+    });
   }
 
   async unreadCount(user: AuthUser, shopId?: string) {
@@ -300,6 +352,48 @@ export class NotificationsService implements OnModuleInit {
     return this.notifications.count({
       where: { userId, active: true, isRead: false },
     });
+  }
+
+  private pushTitle(title: string, shopName: string | null): string {
+    const name = (shopName ?? '').trim();
+    if (!name) return title;
+    if (title.includes(name)) return title;
+    return `${title} · ${name}`;
+  }
+
+  private absoluteLogoUrl(raw?: string | null): string | null {
+    const v = String(raw ?? '').trim();
+    if (!v) return null;
+    if (isHttpUrl(v)) return v;
+    if (v.startsWith('/')) return `${this.appOrigin}${v}`;
+    return null;
+  }
+
+  private async resolveShopBranding(
+    shopId?: string | null,
+  ): Promise<{ name: string | null; logoUrl: string | null }> {
+    if (!shopId) return { name: null, logoUrl: null };
+    const map = await this.resolveShopBrandingMap([shopId]);
+    return map.get(shopId) ?? { name: null, logoUrl: null };
+  }
+
+  private async resolveShopBrandingMap(
+    shopIds: Array<string | null | undefined>,
+  ): Promise<Map<string, { name: string | null; logoUrl: string | null }>> {
+    const ids = [...new Set(shopIds.filter((id): id is string => !!id))];
+    const out = new Map<string, { name: string | null; logoUrl: string | null }>();
+    if (!ids.length) return out;
+    const shops = await this.shops.find({
+      where: { id: In(ids) },
+      select: ['id', 'name', 'logoUrl'],
+    });
+    for (const shop of shops) {
+      out.set(shop.id, {
+        name: shop.name?.trim() || null,
+        logoUrl: this.absoluteLogoUrl(shop.logoUrl),
+      });
+    }
+    return out;
   }
 
   private toDto(n: AppNotification) {
