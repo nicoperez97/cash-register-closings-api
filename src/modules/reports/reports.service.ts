@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, Repository } from 'typeorm';
 import * as ExcelJS from 'exceljs';
@@ -8,6 +8,8 @@ import { AttendanceDay } from '../../entities/attendance-day.entity';
 import { ShopsService } from '../shops/shops.service';
 import { MovementsService } from '../movements/movements.service';
 import { PayrollService } from '../payroll/payroll.service';
+import { SalesProductsAnalyticsService } from '../sales-reports/sales-products-analytics.service';
+import { ReservationsService } from '../reservations/reservations.service';
 import { AuthUser } from '../../common/decorators';
 import { closingStatusLabel } from '../../common/labels.es';
 import {
@@ -27,6 +29,8 @@ export class ReportsService {
     private readonly shops: ShopsService,
     private readonly movementsService: MovementsService,
     private readonly payroll: PayrollService,
+    private readonly salesProducts: SalesProductsAnalyticsService,
+    private readonly reservations: ReservationsService,
   ) {}
 
   private async filteredRows(shopId: string, filters: ClosingListFilters) {
@@ -37,6 +41,122 @@ export class ReportsService {
     applyClosingFilters(qb, 'c', filters);
     qb.orderBy('c.businessDate', 'ASC');
     return qb.getMany();
+  }
+
+  /**
+   * Dashboard mixto: cierres + ventas POS + reservas.
+   * Solo lectura; el import POS no escribe aquí ni en cierres/saldos.
+   */
+  async dashboard(user: AuthUser, shopId: string, filters: ClosingListFilters) {
+    this.shops.assertShopAccess(user, shopId);
+    const from = filters.from;
+    const to = filters.to;
+    if (!from || !to) {
+      return {
+        shopId,
+        from: from ?? null,
+        to: to ?? null,
+        closings: null,
+        pos: null,
+        reservations: null,
+      };
+    }
+
+    const [closings, pos, reservations] = await Promise.all([
+      this.summary(user, shopId, { from, to }),
+      this.salesProducts.summary(user, shopId, { from, to }),
+      this.safeReservationsSummary(user, shopId, from, to),
+    ]);
+
+    return {
+      shopId,
+      from,
+      to,
+      closings: {
+        count: closings.count,
+        totals: {
+          declared: closings.totals.declared,
+          cash: closings.totals.cash,
+          withdrawn: closings.totals.withdrawn,
+          covers: closings.totals.covers,
+          units: closings.totals.units,
+          difference: closings.totals.difference,
+        },
+        byDay: closings.days.map((d) => ({
+          businessDate: d.businessDate,
+          declaredTotal: d.declaredTotal,
+          cashAmount: d.cashAmount,
+          cashWithdrawn: d.cashWithdrawn,
+          status: d.status,
+        })),
+      },
+      pos: {
+        totals: {
+          amount: pos.totals.amount,
+          qty: pos.totals.qty,
+          ticketCount: pos.totals.ticketCount,
+          productCount: pos.totals.productCount,
+          avgTicketAmount: pos.totals.avgTicketAmount,
+        },
+        byDay: pos.byDay.map((d) => ({
+          businessDate: d.date,
+          amount: d.amount,
+          qty: d.qty,
+          ticketCount: d.ticketCount,
+        })),
+      },
+      reservations,
+    };
+  }
+
+  private async safeReservationsSummary(
+    user: AuthUser,
+    shopId: string,
+    from: string,
+    to: string,
+  ) {
+    try {
+      const summary = await this.reservations.reservationsSummary(
+        user,
+        shopId,
+        from,
+        to,
+      );
+      const totals = summary.days.reduce(
+        (acc, d) => {
+          acc.parties += d.parties;
+          acc.guests += d.guests;
+          acc.inside += d.inside;
+          acc.outside += d.outside;
+          return acc;
+        },
+        { parties: 0, guests: 0, inside: 0, outside: 0 },
+      );
+      return {
+        enabled: true,
+        from: summary.from,
+        to: summary.to,
+        totals,
+        byDay: summary.days,
+      };
+    } catch (err) {
+      if (err instanceof ForbiddenException) {
+        return {
+          enabled: false,
+          from,
+          to,
+          totals: { parties: 0, guests: 0, inside: 0, outside: 0 },
+          byDay: [] as Array<{
+            businessDate: string;
+            parties: number;
+            guests: number;
+            inside: number;
+            outside: number;
+          }>,
+        };
+      }
+      throw err;
+    }
   }
 
   async summary(user: AuthUser, shopId: string, filters: ClosingListFilters) {

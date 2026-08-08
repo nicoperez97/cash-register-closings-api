@@ -14,6 +14,16 @@ import { parseClosingFilters } from '../closings/closing-filters';
 export class ReportsController {
   constructor(private readonly reports: ReportsService) {}
 
+  @Get('dashboard')
+  @RequirePermissions('reports.view')
+  dashboard(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Query() query: Record<string, string | undefined>,
+  ) {
+    return this.reports.dashboard(user, shopId, parseClosingFilters(query));
+  }
+
   @Get('summary')
   @RequirePermissions('reports.view')
   summary(
