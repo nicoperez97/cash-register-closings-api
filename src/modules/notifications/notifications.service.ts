@@ -20,6 +20,13 @@ function deepLinkFor(type: NotificationType, opts: {
   if (type === NotificationType.STOCK_SHARED) return '/stock';
   if (type === NotificationType.BEVERAGE_STOCK_BELOW_MINIMUM) return '/beverage-stock';
   if (type === NotificationType.BEVERAGE_STOCK_SHARED) return '/beverage-stock';
+  if (
+    type === NotificationType.SHORTAGE_CREATED ||
+    type === NotificationType.SHORTAGE_LEVEL_LOW ||
+    type === NotificationType.SHORTAGE_RESOLVED
+  ) {
+    return '/shortages';
+  }
   if (String(type).startsWith('PAYMENT_')) return '/payments/suppliers';
   return '/';
 }
@@ -80,7 +87,10 @@ export class NotificationsService implements OnModuleInit {
             'STOCK_BELOW_MINIMUM',
             'STOCK_SHARED',
             'BEVERAGE_STOCK_BELOW_MINIMUM',
-            'BEVERAGE_STOCK_SHARED'
+            'BEVERAGE_STOCK_SHARED',
+            'SHORTAGE_CREATED',
+            'SHORTAGE_LEVEL_LOW',
+            'SHORTAGE_RESOLVED'
           ) NOT NULL
       `);
     } catch {

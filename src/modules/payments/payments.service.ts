@@ -1021,6 +1021,65 @@ export class PaymentsService implements OnModuleInit {
     return this.toDto(await this.load(shopId, id));
   }
 
+  /**
+   * Reenvía el aviso de validar (PENDING_VALIDATION → validator)
+   * o de abonar (VALIDATED → payer), mismo pipeline que create/validate.
+   */
+  async resendNotification(
+    user: AuthUser,
+    shopId: string,
+    id: string,
+    kind: 'VALIDATE' | 'PAY',
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    if (!this.canManage(user, shopId)) {
+      throw new ForbiddenException('Sin permiso para reenviar avisos de pago');
+    }
+    const row = await this.load(shopId, id);
+
+    if (kind === 'VALIDATE') {
+      if (row.status !== PaymentStatus.PENDING_VALIDATION) {
+        throw new BadRequestException(
+          'Solo se puede reenviar el aviso de validación si el pago está pendiente de validar',
+        );
+      }
+      if (!row.validatorUserId) {
+        throw new BadRequestException('El pago no tiene asignado quién valida');
+      }
+      await this.notifications.create({
+        userId: row.validatorUserId,
+        shopId,
+        type: NotificationType.PAYMENT_VALIDATE,
+        title: 'Pago para validar',
+        body: `"${this.displayTitle(row)}" · $${n(row.amount).toLocaleString('es-AR')}${
+          row.dueDate ? ` · vence ${row.dueDate}` : ''
+        }`,
+        paymentId: row.id,
+      });
+      return { ok: true, kind, notifiedUserId: row.validatorUserId };
+    }
+
+    if (row.status !== PaymentStatus.VALIDATED) {
+      throw new BadRequestException(
+        'Solo se puede reenviar el aviso de pago si el pago está validado (pendiente de abonar)',
+      );
+    }
+    if (!row.payerUserId) {
+      throw new BadRequestException('El pago no tiene asignado quién paga');
+    }
+    await this.notifications.create({
+      userId: row.payerUserId,
+      shopId,
+      type: NotificationType.PAYMENT_PAY,
+      title: 'Pago para abonar',
+      body: `"${this.displayTitle(row)}" · $${n(row.amount).toLocaleString('es-AR')}${
+        row.dueDate ? ` · vence ${row.dueDate}` : ''
+      }`,
+      paymentId: row.id,
+    });
+    return { ok: true, kind, notifiedUserId: row.payerUserId };
+  }
+
   async cancel(user: AuthUser, shopId: string, id: string) {
     this.shops.assertShopAccess(user, shopId);
     if (!this.canManage(user, shopId)) {

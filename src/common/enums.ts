@@ -28,6 +28,13 @@ export enum PaymentStatus {
   CANCELLED = 'CANCELLED',
 }
 
+export enum ShortageLevel {
+  NONE = 'NONE',
+  LOW = 'LOW',
+  NORMAL = 'NORMAL',
+  HIGH = 'HIGH',
+}
+
 export enum NotificationType {
   PAYMENT_VALIDATE = 'PAYMENT_VALIDATE',
   PAYMENT_PAY = 'PAYMENT_PAY',
@@ -46,6 +53,12 @@ export enum NotificationType {
   BEVERAGE_STOCK_BELOW_MINIMUM = 'BEVERAGE_STOCK_BELOW_MINIMUM',
   /** Alguien compartió el snapshot de stock bebidas con admins. */
   BEVERAGE_STOCK_SHARED = 'BEVERAGE_STOCK_SHARED',
+  /** Faltante creado con nivel Nada/Poco. */
+  SHORTAGE_CREATED = 'SHORTAGE_CREATED',
+  /** Faltante bajó de Normal/Mucho a Nada/Poco. */
+  SHORTAGE_LEVEL_LOW = 'SHORTAGE_LEVEL_LOW',
+  /** Faltante subió de Nada/Poco a Normal/Mucho. */
+  SHORTAGE_RESOLVED = 'SHORTAGE_RESOLVED',
 }
 
 /** Etiquetas para UI de configuración de mails del local. */
@@ -61,6 +74,9 @@ export const NOTIFICATION_TYPE_LABELS: Record<NotificationType, string> = {
   [NotificationType.STOCK_SHARED]: 'Stock alimentos · compartido',
   [NotificationType.BEVERAGE_STOCK_BELOW_MINIMUM]: 'Stock bebidas · bajo el mínimo',
   [NotificationType.BEVERAGE_STOCK_SHARED]: 'Stock bebidas · compartido',
+  [NotificationType.SHORTAGE_CREATED]: 'Faltantes · crítico cargado',
+  [NotificationType.SHORTAGE_LEVEL_LOW]: 'Faltantes · bajó a crítico',
+  [NotificationType.SHORTAGE_RESOLVED]: 'Faltantes · resuelto',
 };
 
 export const ALL_NOTIFICATION_TYPES: NotificationType[] = Object.values(NotificationType);
@@ -155,6 +171,8 @@ export const PERMISSIONS = [
   'stock.manage',
   'beverageStock.read',
   'beverageStock.manage',
+  'shortages.read',
+  'shortages.manage',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -196,6 +214,8 @@ export const ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     'stock.manage',
     'beverageStock.read',
     'beverageStock.manage',
+    'shortages.read',
+    'shortages.manage',
   ],
   [GlobalRole.CASHIER]: ['closings.create'],
   [GlobalRole.VIEWER]: [
@@ -213,6 +233,7 @@ export const ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     'suppliers.read',
     'stock.read',
     'beverageStock.read',
+    'shortages.read',
   ],
   [GlobalRole.PARTNER]: [
     'closings.read',
