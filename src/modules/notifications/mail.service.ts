@@ -163,6 +163,13 @@ export class MailService {
     if (type === NotificationType.PRODUCTION_HOURS_LOGGED) {
       return { path: '/production-attendance', label: 'Ver producción' };
     }
+    if (
+      type === NotificationType.SHORTAGE_CREATED ||
+      type === NotificationType.SHORTAGE_LEVEL_LOW ||
+      type === NotificationType.SHORTAGE_RESOLVED
+    ) {
+      return { path: '/shortages', label: 'Abrir faltantes' };
+    }
     if (String(type).startsWith('PAYMENT_')) {
       return { path: '/payments/suppliers', label: 'Ver pagos' };
     }

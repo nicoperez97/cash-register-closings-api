@@ -48,6 +48,24 @@ const TYPE_META: Record<string, TypeMeta> = {
     toneSoft: '#e8f5e9',
     hint: 'Te compartieron el stock de bebidas del local. Abrí la app para verlo o reenviarlo.',
   },
+  [NotificationType.SHORTAGE_CREATED]: {
+    label: 'Faltantes',
+    tone: '#c62828',
+    toneSoft: '#fdecea',
+    hint: 'Se cargó un faltante crítico (Nada/Poco). Revisá el módulo Faltantes.',
+  },
+  [NotificationType.SHORTAGE_LEVEL_LOW]: {
+    label: 'Faltantes',
+    tone: '#e65100',
+    toneSoft: '#fff3e0',
+    hint: 'Un faltante bajó a nivel crítico. Revisá el módulo Faltantes.',
+  },
+  [NotificationType.SHORTAGE_RESOLVED]: {
+    label: 'Faltantes',
+    tone: '#2e7d32',
+    toneSoft: '#e8f5e9',
+    hint: 'Un faltante dejó de estar crítico. Abrí Faltantes para confirmar.',
+  },
   [NotificationType.PAYMENT_VALIDATE]: {
     label: 'Pagos',
     tone: '#e65100',

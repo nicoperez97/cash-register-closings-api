@@ -23,6 +23,7 @@ import { PaymentsModule } from './modules/payments/payments.module';
 import { SuppliersModule } from './modules/suppliers/suppliers.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { StockModule } from './modules/stock/stock.module';
+import { ShortagesModule } from './modules/shortages/shortages.module';
 import { JwtAuthGuard, PermissionsGuard } from './common/guards';
 
 @Module({
@@ -50,6 +51,7 @@ import { JwtAuthGuard, PermissionsGuard } from './common/guards';
     PaymentsModule,
     SuppliersModule,
     StockModule,
+    ShortagesModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

@@ -18,6 +18,7 @@ import {
   ApiBearerAuth,
   ApiBody,
   ApiConsumes,
+  ApiProperty,
   ApiPropertyOptional,
   ApiTags,
 } from '@nestjs/swagger';
@@ -25,6 +26,7 @@ import { AuthGuard } from '@nestjs/passport';
 import { Response } from 'express';
 import {
   IsDateString,
+  IsIn,
   IsNumber,
   IsOptional,
   IsString,
@@ -186,6 +188,12 @@ class PayPaymentDto {
 
 class RejectPaymentDto {
   @ApiPropertyOptional() @IsOptional() @IsString() reason?: string;
+}
+
+class ResendPaymentNotificationDto {
+  @ApiProperty({ enum: ['VALIDATE', 'PAY'] })
+  @IsIn(['VALIDATE', 'PAY'])
+  kind: 'VALIDATE' | 'PAY';
 }
 
 @ApiTags('payments')
@@ -456,6 +464,17 @@ export class PaymentsController {
     @Body() dto: PayPaymentDto,
   ) {
     return this.payments.pay(user, shopId, id, dto);
+  }
+
+  @Post(':id/resend-notification')
+  @RequirePermissions('payments.manage')
+  resendNotification(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+    @Body() dto: ResendPaymentNotificationDto,
+  ) {
+    return this.payments.resendNotification(user, shopId, id, dto.kind);
   }
 
   @Post(':id/cancel')

@@ -18,6 +18,7 @@ export type ModuleKey =
   | 'suppliers'
   | 'stock'
   | 'beverageStock'
+  | 'shortages'
   | 'shop'
   | 'users';
 
@@ -183,6 +184,15 @@ export const MODULE_DEFS: ModuleDef[] = [
     ],
   },
   {
+    key: 'shortages',
+    label: 'Faltantes',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
     key: 'shop',
     label: 'Local / POS',
     levels: [
@@ -269,6 +279,7 @@ export function expandModulePermissions(
   pair('suppliers', 'suppliers.read', 'suppliers.manage');
   pair('stock', 'stock.read', 'stock.manage');
   pair('beverageStock', 'beverageStock.read', 'beverageStock.manage');
+  pair('shortages', 'shortages.read', 'shortages.manage');
   // Quien gestiona pagos puede elegir / crear proveedores en el formulario.
   if (modules.payments === 'manage') add(set, 'suppliers.read', 'suppliers.manage');
   if (modules.payments === 'read') add(set, 'suppliers.read');
@@ -330,6 +341,7 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
     suppliers: level('suppliers.read', 'suppliers.manage'),
     stock: level('stock.read', 'stock.manage'),
     beverageStock: level('beverageStock.read', 'beverageStock.manage'),
+    shortages: level('shortages.read', 'shortages.manage'),
     accounts: has('accounts.manage') ? 'manage' : 'none',
     concepts: has('concepts.manage') ? 'manage' : 'none',
     shop: has('shops.manage') ? 'manage' : 'none',

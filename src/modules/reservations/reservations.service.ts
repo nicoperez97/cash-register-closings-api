@@ -196,15 +196,17 @@ export class ReservationsService implements OnModuleInit {
       .andWhere('r.status IN (:...statuses)', {
         statuses: [...ACTIVE_RESERVATION_STATUSES],
       })
-      .orderBy('r.reservationTime', 'ASC')
-      .addOrderBy('r.createdAt', 'ASC')
+      .orderBy('r.createdAt', 'DESC')
       .getMany();
     const notice = await this.findDayNoticeMessage(shopId, businessDate);
     return {
       shopId,
       businessDate,
       notice,
-      reservations: rows.map((r) => this.toReservationDto(r)),
+      reservations: rows.map((r, index) => ({
+        ...this.toReservationDto(r),
+        number: index + 1,
+      })),
     };
   }
 
@@ -496,7 +498,7 @@ export class ReservationsService implements OnModuleInit {
       timezone: shop.timezone,
     });
 
-    const rows = await this.reservations
+    const activeRows = await this.reservations
       .createQueryBuilder('r')
       .where('r.shopId = :shopId', { shopId: shop.id })
       .andWhere('r.active = true')
@@ -504,14 +506,45 @@ export class ReservationsService implements OnModuleInit {
       .andWhere('r.status IN (:...statuses)', {
         statuses: [...ACTIVE_RESERVATION_STATUSES],
       })
-      .orderBy('r.reservationTime', 'ASC')
-      .addOrderBy('r.createdAt', 'ASC')
+      .orderBy('r.createdAt', 'DESC')
       .getMany();
 
-    const visible = rows;
+    // SEATED soft-deleted del día: siguen visibles (tachadas) en la pantalla pública.
+    const removedSeated = await this.reservations
+      .createQueryBuilder('r')
+      .withDeleted()
+      .where('r.shopId = :shopId', { shopId: shop.id })
+      .andWhere('r.businessDate = :businessDate', { businessDate })
+      .andWhere('r.status = :status', { status: ReservationStatus.SEATED })
+      .andWhere('r.deletedAt IS NOT NULL')
+      .orderBy('r.createdAt', 'DESC')
+      .getMany();
 
-    const inside = visible.filter((r) => r.area === ReservationArea.INSIDE);
-    const outside = visible.filter((r) => r.area === ReservationArea.OUTSIDE);
+    const mapRow = (
+      r: Reservation,
+      number: number,
+      removedAfterSeated: boolean,
+    ) => ({
+      id: r.id,
+      guestName: r.guestName || 'Reserva',
+      partySize: Number(r.partySize ?? 0),
+      area: r.area,
+      reservationTime: r.reservationTime ?? null,
+      status: r.status,
+      number,
+      createdAt: r.createdAt,
+      removedAfterSeated,
+    });
+
+    const activeMapped = activeRows.map((r, i) => mapRow(r, i + 1, false));
+    const removedMapped = removedSeated.map((r, i) =>
+      mapRow(r, activeMapped.length + i + 1, true),
+    );
+    const visible = [...activeMapped, ...removedMapped];
+
+    const forTotals = activeMapped;
+    const inside = forTotals.filter((r) => r.area === ReservationArea.INSIDE);
+    const outside = forTotals.filter((r) => r.area === ReservationArea.OUTSIDE);
     const notice = await this.findDayNoticeMessage(shop.id, businessDate);
 
     return {
@@ -524,19 +557,55 @@ export class ReservationsService implements OnModuleInit {
       businessDate,
       notice,
       totals: {
-        parties: visible.length,
-        guests: visible.reduce((s, r) => s + Number(r.partySize ?? 0), 0),
+        parties: forTotals.length,
+        guests: forTotals.reduce((s, r) => s + Number(r.partySize ?? 0), 0),
         inside: inside.reduce((s, r) => s + Number(r.partySize ?? 0), 0),
         outside: outside.reduce((s, r) => s + Number(r.partySize ?? 0), 0),
       },
-      reservations: visible.map((r) => ({
-        id: r.id,
-        guestName: r.guestName || 'Reserva',
-        partySize: Number(r.partySize ?? 0),
-        area: r.area,
-        reservationTime: r.reservationTime ?? null,
-        status: r.status,
-      })),
+      reservations: visible,
+    };
+  }
+
+  /** Público: marcar reserva CONFIRMADA → SEATED (solo día actual del local). */
+  async publicSeatReservation(slug: string, id: string) {
+    const shop = await this.shops.findActiveBySlug(String(slug ?? '').trim().toLowerCase());
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    if (!shop.reservationsEnabled) {
+      throw new NotFoundException('Reservas no disponibles en este local');
+    }
+    const businessDate = resolveShopCalendarDate(new Date(), {
+      timezone: shop.timezone,
+    });
+    const row = await this.reservations.findOne({
+      where: { id, shopId: shop.id },
+    });
+    if (!row || !isEntityActive(row.active)) {
+      throw new NotFoundException('Reserva no encontrada');
+    }
+    const rowDate = toIsoDateOnly(row.businessDate);
+    if (rowDate !== businessDate) {
+      throw new BadRequestException('Solo se puede sentar reservas de hoy');
+    }
+    if (row.status === ReservationStatus.SEATED) {
+      return {
+        id: row.id,
+        status: row.status,
+        guestName: row.guestName || 'Reserva',
+        partySize: Number(row.partySize ?? 0),
+        area: row.area,
+      };
+    }
+    if (row.status !== ReservationStatus.CONFIRMED) {
+      throw new BadRequestException('La reserva no se puede marcar como sentada');
+    }
+    row.status = ReservationStatus.SEATED;
+    await this.reservations.save(row);
+    return {
+      id: row.id,
+      status: row.status,
+      guestName: row.guestName || 'Reserva',
+      partySize: Number(row.partySize ?? 0),
+      area: row.area,
     };
   }
 
