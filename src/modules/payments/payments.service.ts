@@ -1022,6 +1022,47 @@ export class PaymentsService implements OnModuleInit {
   }
 
   /**
+   * Retrocede un paso del flujo:
+   * - VALIDATED → PENDING_VALIDATION (volver a validar)
+   * - PAID → VALIDATED (marcar como no pagado; anula el movimiento de egreso)
+   */
+  async revertStatus(user: AuthUser, shopId: string, id: string) {
+    this.shops.assertShopAccess(user, shopId);
+    if (!this.canManage(user, shopId)) {
+      throw new ForbiddenException('Sin permiso para revertir el estado del pago');
+    }
+    const row = await this.load(shopId, id);
+
+    if (row.status === PaymentStatus.VALIDATED) {
+      row.status = PaymentStatus.PENDING_VALIDATION;
+      row.validatedAt = null;
+      row.validatedByUserId = null;
+      await this.payments.save(row);
+      return this.toDto(await this.load(shopId, id));
+    }
+
+    if (row.status === PaymentStatus.PAID) {
+      const movementId = row.movementId;
+      row.status = PaymentStatus.VALIDATED;
+      row.paidAt = null;
+      row.movementId = null;
+      await this.payments.save(row);
+      if (movementId) {
+        try {
+          await this.movements.remove(user, shopId, movementId);
+        } catch {
+          // El pago ya quedó como no abonado; el movimiento puede haberse borrado antes.
+        }
+      }
+      return this.toDto(await this.load(shopId, id));
+    }
+
+    throw new BadRequestException(
+      'Solo se puede revertir un pago validado (a pendiente) o pagado (a por pagar)',
+    );
+  }
+
+  /**
    * Reenvía el aviso de validar (PENDING_VALIDATION → validator)
    * o de abonar (VALIDATED → payer), mismo pipeline que create/validate.
    */
