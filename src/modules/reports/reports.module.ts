@@ -7,6 +7,8 @@ import { PayrollPeriod } from '../../entities/payroll-period.entity';
 import { ShopsModule } from '../shops/shops.module';
 import { MovementsModule } from '../movements/movements.module';
 import { PayrollModule } from '../payroll/payroll.module';
+import { SalesReportsModule } from '../sales-reports/sales-reports.module';
+import { ReservationsModule } from '../reservations/reservations.module';
 import { ReportsController } from './reports.controller';
 import { ReportsService } from './reports.service';
 
@@ -16,6 +18,8 @@ import { ReportsService } from './reports.service';
     ShopsModule,
     MovementsModule,
     PayrollModule,
+    SalesReportsModule,
+    ReservationsModule,
   ],
   controllers: [ReportsController],
   providers: [ReportsService],
