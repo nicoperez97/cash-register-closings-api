@@ -466,6 +466,16 @@ export class PaymentsController {
     return this.payments.pay(user, shopId, id, dto);
   }
 
+  @Post(':id/revert')
+  @RequirePermissions('payments.manage')
+  revert(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+  ) {
+    return this.payments.revertStatus(user, shopId, id);
+  }
+
   @Post(':id/resend-notification')
   @RequirePermissions('payments.manage')
   resendNotification(
