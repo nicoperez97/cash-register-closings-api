@@ -65,6 +65,12 @@ class CreateUserDto {
   @IsOptional()
   @IsBoolean()
   isBeverageStockAdmin?: boolean;
+  @ApiPropertyOptional({
+    description: 'Si es true, recibe notificaciones y mails del módulo Faltantes',
+  })
+  @IsOptional()
+  @IsBoolean()
+  isShortageAdmin?: boolean;
 }
 
 class UpdateUserDto {
@@ -106,6 +112,12 @@ class UpdateUserDto {
   @IsOptional()
   @IsBoolean()
   isBeverageStockAdmin?: boolean;
+  @ApiPropertyOptional({
+    description: 'Si es true, recibe notificaciones y mails del módulo Faltantes',
+  })
+  @IsOptional()
+  @IsBoolean()
+  isShortageAdmin?: boolean;
 }
 
 @ApiTags('users')

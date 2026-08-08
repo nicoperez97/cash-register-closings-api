@@ -45,6 +45,10 @@ export class UserShop {
   @Column({ default: false })
   isBeverageStockAdmin: boolean;
 
+  /** Recibe notificaciones/mails del módulo Faltantes. */
+  @Column({ default: false })
+  isShortageAdmin: boolean;
+
   @ManyToOne(() => User, (u) => u.userShops, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'userId' })
   user: User;

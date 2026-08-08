@@ -8,20 +8,10 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Shortage } from '../../entities/shortage.entity';
-import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { AuthUser } from '../../common/decorators';
 import { isEntityActive } from '../../common/active.util';
-import {
-  GlobalRole,
-  NotificationType,
-  ShortageLevel,
-} from '../../common/enums';
-import {
-  deriveModulesFromRole,
-  expandModulePermissions,
-  ModulePermissionsMap,
-} from '../../common/module-permissions';
+import { NotificationType, ShortageLevel } from '../../common/enums';
 import { ShopsService } from '../shops/shops.service';
 import { NotificationsService } from '../notifications/notifications.service';
 
@@ -54,8 +44,6 @@ export class ShortagesService implements OnModuleInit {
     private readonly shortages: Repository<Shortage>,
     @InjectRepository(UserShop)
     private readonly userShops: Repository<UserShop>,
-    @InjectRepository(User)
-    private readonly users: Repository<User>,
     private readonly shops: ShopsService,
     private readonly notifications: NotificationsService,
   ) {}
@@ -237,42 +225,18 @@ export class ShortagesService implements OnModuleInit {
     return { ok: true };
   }
 
-  /** Destinatarios: usuarios del local con shortages.read o admins (OWNER/ADMIN) + owners globales. */
+  /** Destinatarios: administradores de faltantes del local (flag isShortageAdmin). */
   private async resolveRecipientIds(
     shopId: string,
     actorId: string,
   ): Promise<string[]> {
     const links = await this.userShops.find({ where: { shopId } });
-    const recipientIds = new Set<string>();
-
-    for (const link of links) {
-      const role = (link.shopRole ?? GlobalRole.VIEWER) as GlobalRole;
-      if (role === GlobalRole.OWNER || role === GlobalRole.ADMIN) {
-        recipientIds.add(link.userId);
-        continue;
-      }
-      let modules: ModulePermissionsMap;
-      if (link.modulePermissions != null) {
-        modules = link.modulePermissions as ModulePermissionsMap;
-      } else {
-        modules = deriveModulesFromRole(role);
-      }
-      const perms = expandModulePermissions(modules);
-      if (perms.includes('shortages.read')) {
-        recipientIds.add(link.userId);
-      }
-    }
-
-    const globalOwners = await this.users.find({
-      where: { globalRole: GlobalRole.OWNER },
-      select: ['id', 'active'],
-    });
-    for (const u of globalOwners) {
-      if (isEntityActive(u.active)) recipientIds.add(u.id);
-    }
-
-    recipientIds.delete(actorId);
-    return [...recipientIds];
+    const recipientIds = [
+      ...new Set(
+        links.filter((l) => !!l.isShortageAdmin).map((l) => l.userId),
+      ),
+    ];
+    return recipientIds.filter((id) => id !== actorId);
   }
 
   private async notifyShortage(
