@@ -7,7 +7,7 @@ import {
   StreamableFile,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { createReadStream } from 'fs';
 import * as ExcelJS from 'exceljs';
 import { Payment } from '../../entities/payment.entity';
@@ -17,7 +17,7 @@ import { UserShop } from '../../entities/user-shop.entity';
 import { Supplier } from '../../entities/supplier.entity';
 import { Employee } from '../../entities/employee.entity';
 import { AuthUser } from '../../common/decorators';
-import { NotificationType, PaymentStatus } from '../../common/enums';
+import { GlobalRole, NotificationType, PaymentStatus } from '../../common/enums';
 import { ShopsService } from '../shops/shops.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MovementsService } from '../movements/movements.service';
@@ -1003,22 +1003,59 @@ export class PaymentsService implements OnModuleInit {
     row.movementId = movement.id;
     await this.payments.save(row);
 
-    const notifyIds = new Set(
-      [row.validatorUserId, row.createdByUserId].filter(Boolean) as string[],
-    );
-    notifyIds.delete(user.id);
-    for (const uid of notifyIds) {
-      await this.notifications.create({
-        userId: uid,
-        shopId,
-        type: NotificationType.PAYMENT_PAID,
-        title: 'Pago realizado',
-        body: `"${this.displayTitle(row)}" · $${n(row.amount).toLocaleString('es-AR')} · ${paidAt}`,
-        paymentId: row.id,
-      });
-    }
+    void this.notifyAdminsPaymentPaid(user, shopId, row, paidAt).catch(() => undefined);
 
     return this.toDto(await this.load(shopId, id));
+  }
+
+  /** Notifica a admins del local (OWNER/ADMIN) + owners globales cuando un pago queda abonado. */
+  private async notifyAdminsPaymentPaid(
+    actor: AuthUser,
+    shopId: string,
+    payment: Payment,
+    paidAt: string,
+  ) {
+    const shop = await this.shops.findOne(actor, shopId);
+    const shopName = shop?.name?.trim() || 'Local';
+
+    const links = await this.userShops.find({
+      where: {
+        shopId,
+        shopRole: In([GlobalRole.OWNER, GlobalRole.ADMIN]),
+      },
+    });
+    const recipientIds = new Set(links.map((l) => l.userId));
+
+    const globalOwners = await this.users.find({
+      where: { globalRole: GlobalRole.OWNER },
+      select: ['id', 'active'],
+    });
+    for (const u of globalOwners) {
+      if (isEntityActive(u.active)) recipientIds.add(u.id);
+    }
+
+    recipientIds.delete(actor.id);
+    if (!recipientIds.size) return;
+
+    const title = 'Pago realizado';
+    const body = [
+      shopName,
+      `"${this.displayTitle(payment)}"`,
+      `$${n(payment.amount).toLocaleString('es-AR')}`,
+      paidAt,
+      `por ${actor.fullName || actor.email}`,
+    ].join(' · ');
+
+    await this.notifications.createMany(
+      [...recipientIds].map((userId) => ({
+        userId,
+        shopId,
+        type: NotificationType.PAYMENT_PAID,
+        title,
+        body,
+        paymentId: payment.id,
+      })),
+    );
   }
 
   /**
