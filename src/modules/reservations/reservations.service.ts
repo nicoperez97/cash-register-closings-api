@@ -548,6 +548,23 @@ export class ReservationsService implements OnModuleInit {
     const outside = forTotals.filter((r) => r.area === ReservationArea.OUTSIDE);
     const notice = await this.findDayNoticeMessage(shop.id, businessDate);
 
+    let waitingCount = 0;
+    let waitingGuests = 0;
+    if (shop.waitingListEnabled) {
+      const waitingRows = await this.waiting.find({
+        where: {
+          shopId: shop.id,
+          status: WaitingListStatus.WAITING,
+          active: true,
+        },
+      });
+      waitingCount = waitingRows.length;
+      waitingGuests = waitingRows.reduce(
+        (s, r) => s + Number(r.partySize ?? 0),
+        0,
+      );
+    }
+
     return {
       shop: {
         name: shop.name,
@@ -557,6 +574,11 @@ export class ReservationsService implements OnModuleInit {
       },
       businessDate,
       notice,
+      waiting: {
+        enabled: !!shop.waitingListEnabled,
+        parties: waitingCount,
+        guests: waitingGuests,
+      },
       totals: {
         parties: forTotals.length,
         guests: forTotals.reduce((s, r) => s + Number(r.partySize ?? 0), 0),
