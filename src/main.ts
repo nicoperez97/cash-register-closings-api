@@ -35,6 +35,18 @@ async function bootstrap() {
       }
       next();
     });
+    // Tableros públicos legacy: /ipad/r/:slug y /ipad/w/:slug
+    const sendLegacyBoard = (file: string) =>
+      (
+        _req: unknown,
+        res: { sendFile: (path: string) => void },
+      ) => {
+        res.sendFile(join(legacyDir, file));
+      };
+    express.get('/ipad/r/:slug', sendLegacyBoard('board-r.html'));
+    express.get('/ipad/r/:slug/', sendLegacyBoard('board-r.html'));
+    express.get('/ipad/w/:slug', sendLegacyBoard('board-w.html'));
+    express.get('/ipad/w/:slug/', sendLegacyBoard('board-w.html'));
     app.useStaticAssets(legacyDir, { prefix: '/ipad/', index: 'index.html' });
   }
 
