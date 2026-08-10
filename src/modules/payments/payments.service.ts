@@ -17,7 +17,7 @@ import { UserShop } from '../../entities/user-shop.entity';
 import { Supplier } from '../../entities/supplier.entity';
 import { Employee } from '../../entities/employee.entity';
 import { AuthUser } from '../../common/decorators';
-import { GlobalRole, NotificationType, PaymentStatus } from '../../common/enums';
+import { GlobalRole, NotificationType, PaymentMethod, PaymentStatus } from '../../common/enums';
 import { ShopsService } from '../shops/shops.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MovementsService } from '../movements/movements.service';
@@ -29,6 +29,8 @@ import { ocrAndParseInvoice, ParsedInvoice } from './invoice-ocr.parser';
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
 
+const PAYMENT_METHODS = new Set<string>(Object.values(PaymentMethod));
+
 export interface UpsertPaymentDto {
   title?: string | null;
   notes?: string | null;
@@ -38,6 +40,7 @@ export interface UpsertPaymentDto {
   payerUserId?: string | null;
   validatorUserId?: string | null;
   accountId?: string | null;
+  paymentMethod?: PaymentMethod | string | null;
   supplierId?: string | null;
   employeeId?: string | null;
   invoiceLegalName?: string | null;
@@ -122,6 +125,7 @@ export class PaymentsService implements OnModuleInit {
       `ALTER TABLE payments ADD COLUMN receiptFilePath VARCHAR(500) NULL`,
       `ALTER TABLE payments ADD COLUMN receiptFileName VARCHAR(255) NULL`,
       `ALTER TABLE payments ADD COLUMN receiptFileMime VARCHAR(120) NULL`,
+      `ALTER TABLE payments ADD COLUMN paymentMethod VARCHAR(32) NULL`,
     ]) {
       try {
         await this.payments.query(sql);
@@ -162,6 +166,7 @@ export class PaymentsService implements OnModuleInit {
       validatorName: p.validator?.fullName ?? null,
       accountId: p.accountId ?? null,
       accountName: p.account?.name ?? null,
+      paymentMethod: p.paymentMethod ?? null,
       supplierId: p.supplierId ?? null,
       supplierName: p.supplier?.name ?? null,
       supplierBankAlias: p.supplier?.bankAlias ?? null,
@@ -200,6 +205,20 @@ export class PaymentsService implements OnModuleInit {
     if (v === null || v === ('' as any)) return null;
     if (n(v) < 0) throw new BadRequestException('El monto no puede ser negativo');
     return money(n(v));
+  }
+
+  private parsePaymentMethod(
+    value: string | null | undefined,
+    opts?: { required?: boolean },
+  ): PaymentMethod | null {
+    if (value === undefined || value === null || value === '') {
+      if (opts?.required) throw new BadRequestException('Indicá la forma de pago');
+      return null;
+    }
+    if (!PAYMENT_METHODS.has(value)) {
+      throw new BadRequestException('Forma de pago inválida');
+    }
+    return value as PaymentMethod;
   }
 
   private async syncSupplierBilling(
@@ -588,9 +607,21 @@ export class PaymentsService implements OnModuleInit {
       { header: 'Quién paga', key: 'payer', width: 20 },
       { header: 'Quién valida', key: 'validator', width: 20 },
       { header: 'Cuenta', key: 'account', width: 18 },
+      { header: 'Forma de pago', key: 'paymentMethod', width: 16 },
       { header: 'Notas', key: 'notes', width: 32 },
       { header: 'Creado', key: 'createdAt', width: 12 },
     ];
+
+    const methodLabel = (m?: string | null) =>
+      m === PaymentMethod.CASH
+        ? 'Efectivo'
+        : m === PaymentMethod.TRANSFER
+          ? 'Transferencia'
+          : m === PaymentMethod.CARD
+            ? 'Tarjeta'
+            : m === PaymentMethod.OTHER
+              ? 'Otra'
+              : '';
 
     const ws = wb.addWorksheet(kindLabel);
     ws.columns = columns;
@@ -607,6 +638,7 @@ export class PaymentsService implements OnModuleInit {
         payer: r.payerName || '',
         validator: r.validatorName || '',
         account: r.accountName || '',
+        paymentMethod: methodLabel(r.paymentMethod),
         notes: r.notes || '',
         createdAt: r.createdAt
           ? new Date(r.createdAt).toISOString().slice(0, 10)
@@ -654,6 +686,10 @@ export class PaymentsService implements OnModuleInit {
     const payerUserId = this.emptyToNull(dto.payerUserId) ?? null;
     const validatorUserId = this.emptyToNull(dto.validatorUserId) ?? null;
     const accountId = this.emptyToNull(dto.accountId) ?? null;
+    const paymentMethod =
+      dto.paymentMethod === undefined
+        ? null
+        : this.parsePaymentMethod(dto.paymentMethod as string | null);
     let supplierId = this.emptyToNull(dto.supplierId) ?? null;
     let employeeId = this.emptyToNull(dto.employeeId) ?? null;
     const dueDate = this.emptyToNull(dto.dueDate) ?? null;
@@ -684,6 +720,7 @@ export class PaymentsService implements OnModuleInit {
         payerUserId,
         validatorUserId,
         accountId,
+        paymentMethod,
         supplierId,
         employeeId,
         invoiceLegalName: this.emptyToNull(dto.invoiceLegalName)?.trim() || null,
@@ -783,6 +820,16 @@ export class PaymentsService implements OnModuleInit {
       }
       if (nextAccountId) await this.assertAccount(shopId, nextAccountId);
       patch.accountId = nextAccountId;
+    }
+
+    if (dto.paymentMethod !== undefined) {
+      const nextMethod = this.parsePaymentMethod(dto.paymentMethod as string | null, {
+        required: wasPaid,
+      });
+      if (wasPaid && !nextMethod) {
+        throw new BadRequestException('Un pago abonado necesita la forma de pago');
+      }
+      patch.paymentMethod = nextMethod;
     }
 
     let nextSupplierId = row.supplierId ?? null;
@@ -954,7 +1001,7 @@ export class PaymentsService implements OnModuleInit {
     user: AuthUser,
     shopId: string,
     id: string,
-    body?: { paidAt?: string; accountId?: string },
+    body?: { paidAt?: string; accountId?: string; paymentMethod?: string },
   ) {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.load(shopId, id);
@@ -974,6 +1021,12 @@ export class PaymentsService implements OnModuleInit {
     }
     await this.assertAccount(shopId, accountId);
     row.accountId = accountId;
+
+    const paymentMethod = this.parsePaymentMethod(
+      body?.paymentMethod ?? row.paymentMethod ?? null,
+      { required: true },
+    );
+    row.paymentMethod = paymentMethod;
 
     const paidAt = body?.paidAt || new Date().toISOString().slice(0, 10);
 
