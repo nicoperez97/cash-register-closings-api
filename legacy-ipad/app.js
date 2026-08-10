@@ -9,8 +9,19 @@
   var SHOP_KEY = cfg.shopKey || 'crc_legacy_shop';
 
   var EXPENSE_CATEGORIES = [
+    { value: 'VEGETABLES', label: 'Verdulería' },
+    { value: 'CHEESE', label: 'Quesería' },
+    { value: 'MEAT', label: 'Carnicería' },
+    { value: 'FISH', label: 'Pescadería' },
+    { value: 'BAKERY', label: 'Panadería' },
+    { value: 'DELI', label: 'Fiambrería' },
+    { value: 'GROCERY', label: 'Almacén / secos' },
+    { value: 'DAIRY', label: 'Lácteos' },
+    { value: 'BEVERAGES', label: 'Bebidas' },
+    { value: 'BAR', label: 'Cerveza y bar' },
+    { value: 'COFFEE', label: 'Café' },
     { value: 'RAW_MATERIALS', label: 'Materia prima' },
-    { value: 'DRINKS', label: 'Bebida' },
+    { value: 'DRINKS', label: 'Bebidas (genérico)' },
     { value: 'SALARIES', label: 'Sueldos' },
     { value: 'COMMISSIONS', label: 'Comisiones' },
     { value: 'RENT', label: 'Alquiler' },
@@ -19,7 +30,7 @@
     { value: 'DISPOSABLES', label: 'Descartables' },
     { value: 'UTILITIES', label: 'Servicios' },
     { value: 'MARKETING', label: 'Marketing' },
-    { value: 'SUPPLIES', label: 'Insumos' },
+    { value: 'SUPPLIES', label: 'Insumos cocina' },
     { value: 'SERVICES', label: 'Servicios' },
     { value: 'TRANSFER_SHOP', label: 'Transferencia locales' },
     { value: 'OTHER', label: 'Otros' }
