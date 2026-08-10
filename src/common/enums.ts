@@ -186,6 +186,9 @@ export const PERMISSIONS = [
   'beverageStock.manage',
   'shortages.read',
   'shortages.manage',
+  'tips.read',
+  'tips.create',
+  'tips.manage',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -229,8 +232,11 @@ export const ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     'beverageStock.manage',
     'shortages.read',
     'shortages.manage',
+    'tips.read',
+    'tips.create',
+    'tips.manage',
   ],
-  [GlobalRole.CASHIER]: ['closings.create'],
+  [GlobalRole.CASHIER]: ['closings.create', 'tips.create', 'tips.read'],
   [GlobalRole.VIEWER]: [
     'closings.read',
     'reports.view',
@@ -247,6 +253,7 @@ export const ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     'stock.read',
     'beverageStock.read',
     'shortages.read',
+    'tips.read',
   ],
   [GlobalRole.PARTNER]: [
     'closings.read',

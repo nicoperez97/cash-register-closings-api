@@ -23,6 +23,13 @@ import { CreateShopDto, UpdateShopDto } from './dto/shop.dto';
 import { PosnetType, ShopPosnet } from '../../common/posnet';
 import { randomUUID } from 'crypto';
 import { normalizeUserVisibility, UserVisibility } from '../../common/user-visibility';
+import {
+  deleteUploadIfExists,
+  resolveUploadPath,
+  saveUploadFile,
+} from '../../common/uploads';
+import { readFileSync } from 'fs';
+import { extname } from 'path';
 
 const SHOP_ADMIN_ROLES = new Set([
   GlobalRole.OWNER,
@@ -32,6 +39,27 @@ const SHOP_ADMIN_ROLES = new Set([
 
 const HEX_COLOR = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 const POSNET_TYPES = new Set(Object.values(PosnetType));
+const IMAGE_MIME = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+  'image/svg+xml',
+]);
+
+function isUploadedLogoPath(raw?: string | null): boolean {
+  const v = (raw ?? '').trim().replace(/\\/g, '/');
+  return !!v && !/^https?:\/\//i.test(v) && v.startsWith('shops/');
+}
+
+function mimeFromLogoPath(relativePath: string): string {
+  const ext = extname(relativePath).toLowerCase();
+  if (ext === '.png') return 'image/png';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.gif') return 'image/gif';
+  if (ext === '.svg') return 'image/svg+xml';
+  return 'image/jpeg';
+}
 
 @Injectable()
 export class ShopsService implements OnModuleInit {
@@ -126,6 +154,14 @@ export class ShopsService implements OnModuleInit {
     } catch {
       // columna ya existe
     }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN tipsEnabled TINYINT(1) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // columna ya existe
+    }
   }
 
   assertShopAccess(user: AuthUser, shopId: string) {
@@ -151,6 +187,19 @@ export class ShopsService implements OnModuleInit {
       throw new ForbiddenException('Lista de espera deshabilitada en este local');
     }
     return shop;
+  }
+
+  async assertTipsEnabled(shopId: string) {
+    const shop = await this.shops.findOne({ where: { id: shopId } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    if (!shop.tipsEnabled) {
+      throw new ForbiddenException('Propinas deshabilitadas en este local');
+    }
+    return shop;
+  }
+
+  async getShopEntity(shopId: string) {
+    return this.shops.findOne({ where: { id: shopId } });
   }
 
   async findActiveBySlug(slug: string) {
@@ -259,6 +308,7 @@ export class ShopsService implements OnModuleInit {
         coversEnabled: dto.coversEnabled ?? false,
         reservationsEnabled: dto.reservationsEnabled ?? true,
         waitingListEnabled: dto.waitingListEnabled ?? true,
+        tipsEnabled: dto.tipsEnabled ?? false,
         defaultChangeAmount: String(dto.defaultChangeAmount ?? 0),
         productionDefaultHours: String(
           dto.productionDefaultHours !== undefined && dto.productionDefaultHours !== null
@@ -308,6 +358,9 @@ export class ShopsService implements OnModuleInit {
     if (dto.waitingListEnabled !== undefined) {
       shop.waitingListEnabled = dto.waitingListEnabled;
     }
+    if (dto.tipsEnabled !== undefined) {
+      shop.tipsEnabled = dto.tipsEnabled;
+    }
     if (dto.timezone !== undefined) shop.timezone = dto.timezone;
     if (dto.openingTime !== undefined) {
       shop.openingTime = normalizeOpeningTime(dto.openingTime);
@@ -326,7 +379,11 @@ export class ShopsService implements OnModuleInit {
       );
     }
     if (dto.logoUrl !== undefined) {
-      shop.logoUrl = normalizeLogoUrl(dto.logoUrl);
+      const next = normalizeLogoUrl(dto.logoUrl);
+      if (isUploadedLogoPath(shop.logoUrl) && shop.logoUrl !== next) {
+        deleteUploadIfExists(shop.logoUrl);
+      }
+      shop.logoUrl = next;
     }
     if (dto.accentColor !== undefined) {
       shop.accentColor = this.normalizeAccent(dto.accentColor);
@@ -473,8 +530,46 @@ export class ShopsService implements OnModuleInit {
   }
 
   /**
-   * Descarga el logo del local (Drive normalizado) para servir same-origin
-   * en notificaciones push / SW.
+   * Guarda logo subido en uploads/shops/:id y actualiza logoUrl (path relativo).
+   */
+  async uploadLogo(user: AuthUser, shopId: string, file: Express.Multer.File) {
+    this.assertShopManage(user, shopId);
+    const shop = await this.shops.findOne({ where: { id: shopId } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    if (!file?.buffer?.length && !(file as Express.Multer.File & { path?: string })?.path) {
+      throw new BadRequestException('Archivo requerido');
+    }
+    const mime = (file.mimetype || '').toLowerCase();
+    if (mime && !IMAGE_MIME.has(mime) && !mime.startsWith('image/')) {
+      throw new BadRequestException('El logo debe ser una imagen (PNG, JPG, WEBP…)');
+    }
+    if (isUploadedLogoPath(shop.logoUrl)) {
+      deleteUploadIfExists(shop.logoUrl);
+    }
+    let buffer = file.buffer;
+    if (!buffer?.length && (file as Express.Multer.File & { path?: string }).path) {
+      buffer = readFileSync((file as Express.Multer.File & { path: string }).path);
+    }
+    if (!buffer?.length) {
+      throw new BadRequestException('Archivo requerido');
+    }
+    const saved = saveUploadFile({
+      relativeDir: `shops/${shopId}`,
+      basename: 'logo',
+      buffer,
+      originalName: file.originalname,
+      mime: file.mimetype,
+    });
+    shop.logoUrl = saved.relativePath;
+    await this.shops.save(shop);
+    return this.toDto(shop, {
+      emailSmtpConfigured: await this.hasSmtpPassword(shop.id),
+    });
+  }
+
+  /**
+   * Descarga el logo del local (archivo subido o URL externa) para same-origin
+   * en notificaciones push / SW / <img>.
    */
   async fetchPublicLogo(
     shopId: string,
@@ -483,11 +578,26 @@ export class ShopsService implements OnModuleInit {
       where: { id: shopId, active: true },
       select: ['id', 'logoUrl'],
     });
-    const raw = normalizeLogoUrl(shop?.logoUrl) ?? shop?.logoUrl?.trim() ?? null;
-    if (!raw || !/^https?:\/\//i.test(raw)) return null;
+    const raw = shop?.logoUrl?.trim() ?? null;
+    if (!raw) return null;
+
+    if (isUploadedLogoPath(raw)) {
+      const abs = resolveUploadPath(raw);
+      if (!abs) return null;
+      try {
+        const buffer = readFileSync(abs);
+        if (!buffer.length) return null;
+        return { buffer, contentType: mimeFromLogoPath(raw) };
+      } catch {
+        return null;
+      }
+    }
+
+    const url = normalizeLogoUrl(raw) ?? raw;
+    if (!/^https?:\/\//i.test(url)) return null;
 
     try {
-      const upstream = await fetch(raw, {
+      const upstream = await fetch(url, {
         redirect: 'follow',
         headers: { Accept: 'image/*,*/*;q=0.8' },
       });
@@ -515,6 +625,7 @@ export class ShopsService implements OnModuleInit {
       coversEnabled: !!s.coversEnabled,
       reservationsEnabled: !!s.reservationsEnabled,
       waitingListEnabled: !!s.waitingListEnabled,
+      tipsEnabled: !!s.tipsEnabled,
       defaultChangeAmount: Number(s.defaultChangeAmount),
       productionDefaultHours: Number(s.productionDefaultHours ?? 8) || 8,
       logoUrl: s.logoUrl ?? null,

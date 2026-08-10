@@ -67,6 +67,11 @@ export class CreateShopDto {
   @IsBoolean()
   waitingListEnabled?: boolean;
 
+  @ApiPropertyOptional({ description: 'Habilita el módulo de propinas en este local' })
+  @IsOptional()
+  @IsBoolean()
+  tipsEnabled?: boolean;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsNumber()

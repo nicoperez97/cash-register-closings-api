@@ -24,6 +24,7 @@ import { SuppliersModule } from './modules/suppliers/suppliers.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { StockModule } from './modules/stock/stock.module';
 import { ShortagesModule } from './modules/shortages/shortages.module';
+import { TipsModule } from './modules/tips/tips.module';
 import { JwtAuthGuard, PermissionsGuard } from './common/guards';
 
 @Module({
@@ -52,6 +53,7 @@ import { JwtAuthGuard, PermissionsGuard } from './common/guards';
     SuppliersModule,
     StockModule,
     ShortagesModule,
+    TipsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
