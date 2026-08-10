@@ -567,6 +567,7 @@ export class ReservationsService implements OnModuleInit {
 
     return {
       shop: {
+        id: shop.id,
         name: shop.name,
         slug: shop.slug,
         logoUrl: shop.logoUrl ?? null,
@@ -688,6 +689,7 @@ export class ReservationsService implements OnModuleInit {
 
     return {
       shop: {
+        id: shop.id,
         name: shop.name,
         slug: shop.slug,
         logoUrl: shop.logoUrl ?? null,

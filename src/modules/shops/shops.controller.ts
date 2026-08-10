@@ -115,6 +115,25 @@ export class ShopsController {
   ) {
     return this.shops.update(user, id, dto);
   }
+
+  @Post(':id/logo')
+  @RequirePermissions('shops.manage')
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { file: { type: 'string', format: 'binary' } },
+      required: ['file'],
+    },
+  })
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }))
+  uploadLogo(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.shops.uploadLogo(user, id, file);
+  }
 }
 
 /** Logo público same-origin para iconos de push (el SW no puede usar Drive a veces). */

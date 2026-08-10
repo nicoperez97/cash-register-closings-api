@@ -49,6 +49,10 @@ export class Shop extends BaseEntity {
   @Column({ type: 'tinyint', default: 1 })
   waitingListEnabled: boolean;
 
+  /** Si es true, el módulo de propinas está disponible en este local. */
+  @Column({ type: 'tinyint', default: 0 })
+  tipsEnabled: boolean;
+
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
   defaultChangeAmount: string;
 

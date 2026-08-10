@@ -98,6 +98,32 @@ export class CreateClosingDto {
   @IsUUID()
   cashWithdrawnToAccountId?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) tipsAmount?: number;
+  @ApiPropertyOptional({ description: 'Desglose propinas: efectivo' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  tipCashAmount?: number;
+  @ApiPropertyOptional({ description: 'Desglose propinas: transferencia' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  tipTransferAmount?: number;
+  @ApiPropertyOptional({ description: 'Desglose propinas: tickets' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  tipTicketsAmount?: number;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  tipNotes?: string | null;
+  @ApiPropertyOptional({
+    type: 'array',
+    description: 'Reparto de propinas por empleado',
+  })
+  @IsOptional()
+  @IsArray()
+  tipAllocations?: Array<{ employeeId: string; amount: number; delivered?: boolean }>;
   @ApiPropertyOptional() @IsOptional() @IsNumber() declaredTotal?: number;
   @ApiPropertyOptional() @IsOptional() @IsString() differenceReason?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
