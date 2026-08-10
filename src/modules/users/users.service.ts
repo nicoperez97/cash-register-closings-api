@@ -22,6 +22,12 @@ import {
   sanitizeModulePermissions,
 } from '../../common/module-permissions';
 import { isEntityActive } from '../../common/active.util';
+import {
+  defaultUserVisibility,
+  mergeUserVisibility,
+  normalizeUserVisibility,
+  UserVisibility,
+} from '../../common/user-visibility';
 
 const SHOP_ADMIN_ROLES = new Set([GlobalRole.OWNER, GlobalRole.ADMIN]);
 
@@ -44,8 +50,10 @@ export class CreateUserBody {
   ledgerAccountIds?: string[] | null;
   /** Compat 1 cuenta. */
   ledgerAccountId?: string | null;
-  /** Ocultar en “Quién se lo lleva” (para el shopId del request). */
+  /** @deprecated Preferir `visibility.cashWithdraw` (invertido). */
   hideFromCashWithdraw?: boolean;
+  /** Dónde se muestra (true = visible) para el shopId del request. */
+  visibility?: Partial<UserVisibility> | null;
   /** Administrador de stock alimentos: recibe alertas de stock bajo mínimo. */
   isStockAdmin?: boolean;
   /** Administrador de stock bebidas: recibe alertas de stock bebidas bajo mínimo. */
@@ -65,8 +73,10 @@ export class UpdateUserBody {
   modulePermissions?: Record<string, string> | null;
   ledgerAccountIds?: string[] | null;
   ledgerAccountId?: string | null;
-  /** Ocultar en “Quién se lo lleva” (para el shopId del request). */
+  /** @deprecated Preferir `visibility.cashWithdraw` (invertido). */
   hideFromCashWithdraw?: boolean;
+  /** Dónde se muestra (true = visible) para el shopId del request. */
+  visibility?: Partial<UserVisibility> | null;
   /** Administrador de stock alimentos: recibe alertas de stock bajo mínimo. */
   isStockAdmin?: boolean;
   /** Administrador de stock bebidas: recibe alertas de stock bebidas bajo mínimo. */
@@ -94,6 +104,30 @@ export class UsersService implements OnModuleInit {
       `);
     } catch {
       // columna ya existe
+    }
+    try {
+      await this.userShops.query(`
+        ALTER TABLE user_shops
+          ADD COLUMN visibility JSON NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.userShops.query(`
+        UPDATE user_shops
+        SET visibility = JSON_OBJECT(
+          'cashWithdraw', IF(IFNULL(hideFromCashWithdraw, 0) = 0, TRUE, FALSE),
+          'closingsFilters', TRUE,
+          'payments', TRUE,
+          'movements', TRUE,
+          'employeeLink', TRUE,
+          'usersList', TRUE
+        )
+        WHERE visibility IS NULL
+      `);
+    } catch {
+      // skip si el motor no soporta JSON_OBJECT (raro en MySQL 8)
     }
     try {
       await this.userShops.query(`
@@ -219,7 +253,7 @@ export class UsersService implements OnModuleInit {
         ...dto,
         shopRole: link?.shopRole ?? u.globalRole,
         modulePermissions: this.effectiveModulesForLink(link, u.globalRole),
-        hideFromCashWithdraw: !!link?.hideFromCashWithdraw,
+        ...this.visibilityPayload(link),
         isStockAdmin: !!link?.isStockAdmin,
         isBeverageStockAdmin: !!link?.isBeverageStockAdmin,
         isShortageAdmin: !!link?.isShortageAdmin,
@@ -265,6 +299,10 @@ export class UsersService implements OnModuleInit {
     );
 
     for (const shopId of shopIds) {
+      const visibility =
+        defaultShopId === shopId
+          ? this.resolveVisibilityFromDto(dto)
+          : defaultUserVisibility();
       await this.userShops.save(
         this.userShops.create({
           userId: user.id,
@@ -273,8 +311,8 @@ export class UsersService implements OnModuleInit {
           modulePermissions: isGlobalAdmin(dto.globalRole)
             ? null
             : (modules as Record<string, string>),
-          hideFromCashWithdraw:
-            defaultShopId === shopId ? !!dto.hideFromCashWithdraw : false,
+          visibility,
+          hideFromCashWithdraw: !visibility.cashWithdraw,
           isStockAdmin: defaultShopId === shopId ? !!dto.isStockAdmin : false,
           isBeverageStockAdmin:
             defaultShopId === shopId ? !!dto.isBeverageStockAdmin : false,
@@ -376,6 +414,8 @@ export class UsersService implements OnModuleInit {
           if (!scope.includes(sid)) continue;
           const exists = await this.userShops.findOne({ where: { userId: id, shopId: sid } });
           if (!exists) {
+            const visibility =
+              shopId === sid ? this.resolveVisibilityFromDto(dto) : defaultUserVisibility();
             await this.userShops.save(
               this.userShops.create({
                 userId: id,
@@ -387,8 +427,8 @@ export class UsersService implements OnModuleInit {
                       deriveModulesFromRole(
                         (dto.shopRole ?? user.globalRole) as GlobalRole,
                       )) as Record<string, string>),
-                hideFromCashWithdraw:
-                  shopId === sid ? !!dto.hideFromCashWithdraw : false,
+                visibility,
+                hideFromCashWithdraw: !visibility.cashWithdraw,
                 isStockAdmin: shopId === sid ? !!dto.isStockAdmin : false,
                 isBeverageStockAdmin:
                   shopId === sid ? !!dto.isBeverageStockAdmin : false,
@@ -402,11 +442,10 @@ export class UsersService implements OnModuleInit {
                 ? null
                 : (modulesIncoming as Record<string, string>);
             }
-            if (
-              shopId === sid &&
-              dto.hideFromCashWithdraw !== undefined
-            ) {
-              exists.hideFromCashWithdraw = !!dto.hideFromCashWithdraw;
+            if (shopId === sid && this.hasVisibilityPatch(dto)) {
+              const visibility = this.resolveVisibilityFromDto(dto, exists);
+              exists.visibility = visibility;
+              exists.hideFromCashWithdraw = !visibility.cashWithdraw;
             }
             if (shopId === sid && dto.isStockAdmin !== undefined) {
               exists.isStockAdmin = !!dto.isStockAdmin;
@@ -421,7 +460,9 @@ export class UsersService implements OnModuleInit {
           }
         }
       } else {
-        const prevHide = new Map(links.map((l) => [l.shopId, !!l.hideFromCashWithdraw]));
+        const prevVisibility = new Map(
+          links.map((l) => [l.shopId, this.linkVisibility(l)]),
+        );
         const prevStockAdmin = new Map(links.map((l) => [l.shopId, !!l.isStockAdmin]));
         const prevBeverageStockAdmin = new Map(
           links.map((l) => [l.shopId, !!l.isBeverageStockAdmin]),
@@ -431,10 +472,13 @@ export class UsersService implements OnModuleInit {
         );
         await this.userShops.delete({ userId: id });
         for (const sid of nextIds) {
-          const hide =
-            shopId === sid && dto.hideFromCashWithdraw !== undefined
-              ? !!dto.hideFromCashWithdraw
-              : (prevHide.get(sid) ?? false);
+          const visibility =
+            shopId === sid && this.hasVisibilityPatch(dto)
+              ? this.resolveVisibilityFromDto(dto, {
+                  visibility: prevVisibility.get(sid),
+                  hideFromCashWithdraw: !prevVisibility.get(sid)?.cashWithdraw,
+                } as UserShop)
+              : (prevVisibility.get(sid) ?? defaultUserVisibility());
           const stockAdmin =
             shopId === sid && dto.isStockAdmin !== undefined
               ? !!dto.isStockAdmin
@@ -458,7 +502,8 @@ export class UsersService implements OnModuleInit {
                     deriveModulesFromRole(
                       (dto.shopRole ?? user.globalRole) as GlobalRole,
                     )) as Record<string, string>),
-              hideFromCashWithdraw: hide,
+              visibility,
+              hideFromCashWithdraw: !visibility.cashWithdraw,
               isStockAdmin: stockAdmin,
               isBeverageStockAdmin: beverageStockAdmin,
               isShortageAdmin: shortageAdmin,
@@ -470,7 +515,7 @@ export class UsersService implements OnModuleInit {
       shopId &&
       (dto.shopRole ||
         modulesIncoming !== undefined ||
-        dto.hideFromCashWithdraw !== undefined ||
+        this.hasVisibilityPatch(dto) ||
         dto.isStockAdmin !== undefined ||
         dto.isBeverageStockAdmin !== undefined ||
         dto.isShortageAdmin !== undefined)
@@ -483,8 +528,10 @@ export class UsersService implements OnModuleInit {
             ? null
             : (modulesIncoming as Record<string, string>);
         }
-        if (dto.hideFromCashWithdraw !== undefined) {
-          link.hideFromCashWithdraw = !!dto.hideFromCashWithdraw;
+        if (this.hasVisibilityPatch(dto)) {
+          const visibility = this.resolveVisibilityFromDto(dto, link);
+          link.visibility = visibility;
+          link.hideFromCashWithdraw = !visibility.cashWithdraw;
         }
         if (dto.isStockAdmin !== undefined) {
           link.isStockAdmin = !!dto.isStockAdmin;
@@ -497,6 +544,7 @@ export class UsersService implements OnModuleInit {
         }
         await this.userShops.save(link);
       } else {
+        const visibility = this.resolveVisibilityFromDto(dto);
         await this.userShops.save(
           this.userShops.create({
             userId: id,
@@ -508,7 +556,8 @@ export class UsersService implements OnModuleInit {
                   deriveModulesFromRole(
                     (dto.shopRole ?? user.globalRole) as GlobalRole,
                   )) as Record<string, string>),
-            hideFromCashWithdraw: !!dto.hideFromCashWithdraw,
+            visibility,
+            hideFromCashWithdraw: !visibility.cashWithdraw,
             isStockAdmin: !!dto.isStockAdmin,
             isBeverageStockAdmin: !!dto.isBeverageStockAdmin,
             isShortageAdmin: !!dto.isShortageAdmin,
@@ -573,7 +622,7 @@ export class UsersService implements OnModuleInit {
       ...dto,
       shopRole: link?.shopRole ?? u.globalRole,
       modulePermissions: this.effectiveModulesForLink(link, u.globalRole),
-      hideFromCashWithdraw: !!link?.hideFromCashWithdraw,
+      ...this.visibilityPayload(link),
       isStockAdmin: !!link?.isStockAdmin,
       isBeverageStockAdmin: !!link?.isBeverageStockAdmin,
       isShortageAdmin: !!link?.isShortageAdmin,
@@ -582,6 +631,44 @@ export class UsersService implements OnModuleInit {
       ledgerAccountId: accountIds[0] ?? null,
       ledgerAccountName: names.join(', ') || null,
     };
+  }
+
+  private linkVisibility(link?: UserShop | null): UserVisibility {
+    return normalizeUserVisibility(link?.visibility as Partial<UserVisibility> | null, {
+      hideFromCashWithdraw: !!link?.hideFromCashWithdraw,
+    });
+  }
+
+  private visibilityPayload(link?: UserShop | null) {
+    const visibility = this.linkVisibility(link);
+    return {
+      visibility,
+      hideFromCashWithdraw: !visibility.cashWithdraw,
+    };
+  }
+
+  private hasVisibilityPatch(dto: {
+    visibility?: Partial<UserVisibility> | null;
+    hideFromCashWithdraw?: boolean;
+  }): boolean {
+    return dto.visibility !== undefined || dto.hideFromCashWithdraw !== undefined;
+  }
+
+  private resolveVisibilityFromDto(
+    dto: {
+      visibility?: Partial<UserVisibility> | null;
+      hideFromCashWithdraw?: boolean;
+    },
+    existing?: UserShop | null,
+  ): UserVisibility {
+    const base = existing ? this.linkVisibility(existing) : defaultUserVisibility();
+    if (dto.visibility !== undefined) {
+      return mergeUserVisibility(base, dto.visibility);
+    }
+    if (dto.hideFromCashWithdraw !== undefined) {
+      return { ...base, cashWithdraw: !dto.hideFromCashWithdraw };
+    }
+    return base;
   }
 
   private effectiveModulesForLink(

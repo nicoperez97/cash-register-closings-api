@@ -22,6 +22,7 @@ import { normalizeOpeningTime } from '../../common/business-date';
 import { CreateShopDto, UpdateShopDto } from './dto/shop.dto';
 import { PosnetType, ShopPosnet } from '../../common/posnet';
 import { randomUUID } from 'crypto';
+import { normalizeUserVisibility, UserVisibility } from '../../common/user-visibility';
 
 const SHOP_ADMIN_ROLES = new Set([
   GlobalRole.OWNER,
@@ -222,14 +223,26 @@ export class ShopsService implements OnModuleInit {
       list.push({ id: acc.id, name: acc.name, code: acc.code });
       accountsByUser.set(link.userId, list);
     }
-    const hideByUser = new Map(links.map((l) => [l.userId, !!l.hideFromCashWithdraw]));
-    return rows.map((u) => ({
-      id: u.id,
-      fullName: u.fullName,
-      email: u.email,
-      hideFromCashWithdraw: hideByUser.get(u.id) ?? false,
-      ledgerAccounts: accountsByUser.get(u.id) ?? [],
-    }));
+    const visibilityByUser = new Map<string, ReturnType<typeof normalizeUserVisibility>>();
+    for (const l of links) {
+      visibilityByUser.set(
+        l.userId,
+        normalizeUserVisibility(l.visibility as Partial<UserVisibility> | null, {
+          hideFromCashWithdraw: !!l.hideFromCashWithdraw,
+        }),
+      );
+    }
+    return rows.map((u) => {
+      const visibility = visibilityByUser.get(u.id) ?? normalizeUserVisibility(null);
+      return {
+        id: u.id,
+        fullName: u.fullName,
+        email: u.email,
+        visibility,
+        hideFromCashWithdraw: !visibility.cashWithdraw,
+        ledgerAccounts: accountsByUser.get(u.id) ?? [],
+      };
+    });
   }
 
   async create(user: AuthUser, dto: CreateShopDto) {
