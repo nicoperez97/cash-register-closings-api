@@ -60,7 +60,7 @@ export class PushService implements OnModuleInit {
     const subject =
       this.config.get<string>('webPush.subject') ??
       this.config.get<string>('publicAppOrigin') ??
-      'https://d1jr8rgm5npiqn.cloudfront.net';
+      'https://cierres.perezcompany.com.ar';
     if (!publicKey || !privateKey) {
       this.logger.warn('Web Push deshabilitado: faltan VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY');
       return;

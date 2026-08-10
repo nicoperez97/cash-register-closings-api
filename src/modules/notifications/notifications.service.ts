@@ -53,7 +53,7 @@ export class NotificationsService implements OnModuleInit {
   ) {
     this.appOrigin = (
       this.config.get<string>('publicAppOrigin') ??
-      'https://d1jr8rgm5npiqn.cloudfront.net'
+      'https://cierres.perezcompany.com.ar'
     ).replace(/\/$/, '');
   }
 

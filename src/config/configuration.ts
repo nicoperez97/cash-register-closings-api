@@ -22,12 +22,15 @@ export default () => {
       autoLoadEntities: true,
     },
     cors: {
-      // Coma-separado: http://localhost:4200,http://192.168.0.2:3000
+      // Coma-separado: localhost + CloudFront + dominio custom
       origin: parseCorsOrigin(env.CORS_ORIGIN ?? 'http://localhost:4200'),
       credentials: true,
     },
-    /** Origen del front (links en mails / PWA). */
-    publicAppOrigin: (env.PUBLIC_APP_ORIGIN ?? env.CORS_ORIGIN?.split(',')[0] ?? '').trim(),
+    /** Origen canónico del front (links en mails / deep links push). */
+    publicAppOrigin: (
+      env.PUBLIC_APP_ORIGIN ??
+      'https://cierres.perezcompany.com.ar'
+    ).trim(),
     webPush: {
       publicKey: (env.VAPID_PUBLIC_KEY ?? '').trim(),
       privateKey: (env.VAPID_PRIVATE_KEY ?? '').trim(),
@@ -35,7 +38,7 @@ export default () => {
       subject: (
         env.VAPID_SUBJECT ??
         env.PUBLIC_APP_ORIGIN ??
-        'https://d1jr8rgm5npiqn.cloudfront.net'
+        'https://cierres.perezcompany.com.ar'
       ).trim(),
     },
     smtp: {
