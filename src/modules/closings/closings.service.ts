@@ -421,6 +421,7 @@ export class ClosingsService implements OnModuleInit {
         tipCashAmount?: number;
         tipTransferAmount?: number;
         tipTicketsAmount?: number;
+        tipReceipts?: number[];
         tipNotes?: string | null;
         tipAllocations?: Array<{ employeeId: string; amount: number; delivered?: boolean }>;
       });
@@ -428,6 +429,7 @@ export class ClosingsService implements OnModuleInit {
         cashAmount: tip.tipCashAmount,
         transferAmount: tip.tipTransferAmount,
         ticketsAmount: tip.tipTicketsAmount,
+        receipts: tip.tipReceipts,
         notes: tip.tipNotes,
         tipsAmount: dto.tipsAmount,
         closingId,

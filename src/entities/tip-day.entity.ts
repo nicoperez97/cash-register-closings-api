@@ -23,6 +23,10 @@ export class TipDay extends BaseEntity {
   @Column({ type: 'decimal', precision: 14, scale: 2, default: 0 })
   ticketsAmount: string;
 
+  /** Montos de recibos individuales (transferencias/comprobantes). La suma alimenta transferAmount. */
+  @Column({ type: 'simple-json', nullable: true })
+  receipts?: number[] | null;
+
   @Column({ type: 'decimal', precision: 14, scale: 2, default: 0 })
   totalAmount: string;
 
