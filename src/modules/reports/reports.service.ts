@@ -10,6 +10,7 @@ import { MovementsService } from '../movements/movements.service';
 import { PayrollService } from '../payroll/payroll.service';
 import { SalesProductsAnalyticsService } from '../sales-reports/sales-products-analytics.service';
 import { ReservationsService } from '../reservations/reservations.service';
+import { TipsService } from '../tips/tips.service';
 import { AuthUser } from '../../common/decorators';
 import { closingStatusLabel } from '../../common/labels.es';
 import {
@@ -18,6 +19,32 @@ import {
 } from '../closings/closing-filters';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
+
+function isoDate(d: Date): string {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function previousPeriod(from: string, to: string): { from: string; to: string } {
+  const fromD = new Date(`${from}T12:00:00.000Z`);
+  const toD = new Date(`${to}T12:00:00.000Z`);
+  const days =
+    Math.round((toD.getTime() - fromD.getTime()) / (24 * 60 * 60 * 1000)) + 1;
+  const prevTo = new Date(fromD);
+  prevTo.setUTCDate(prevTo.getUTCDate() - 1);
+  const prevFrom = new Date(prevTo);
+  prevFrom.setUTCDate(prevFrom.getUTCDate() - (days - 1));
+  return { from: isoDate(prevFrom), to: isoDate(prevTo) };
+}
+
+function pctDelta(current: number, previous: number): number | null {
+  if (!Number.isFinite(previous) || previous === 0) {
+    return current === 0 ? 0 : null;
+  }
+  return Math.round(((current - previous) / Math.abs(previous)) * 1000) / 10;
+}
 
 @Injectable()
 export class ReportsService {
@@ -31,6 +58,7 @@ export class ReportsService {
     private readonly payroll: PayrollService,
     private readonly salesProducts: SalesProductsAnalyticsService,
     private readonly reservations: ReservationsService,
+    private readonly tips: TipsService,
   ) {}
 
   private async filteredRows(shopId: string, filters: ClosingListFilters) {
@@ -44,7 +72,7 @@ export class ReportsService {
   }
 
   /**
-   * Dashboard mixto: cierres + ventas POS + reservas.
+   * Dashboard mixto: cierres + ventas POS + reservas + propinas.
    * Solo lectura; el import POS no escribe aquí ni en cierres/saldos.
    */
   async dashboard(user: AuthUser, shopId: string, filters: ClosingListFilters) {
@@ -59,14 +87,62 @@ export class ReportsService {
         closings: null,
         pos: null,
         reservations: null,
+        tips: null,
+        comparison: null,
+        paymentMix: null,
+        weekday: null,
       };
     }
 
-    const [closings, pos, reservations] = await Promise.all([
-      this.summary(user, shopId, { from, to }),
-      this.salesProducts.summary(user, shopId, { from, to }),
-      this.safeReservationsSummary(user, shopId, from, to),
-    ]);
+    const prev = previousPeriod(from, to);
+    const [closings, pos, reservations, tips, prevClosings, prevPos, prevTips] =
+      await Promise.all([
+        this.summary(user, shopId, { from, to }),
+        this.salesProducts.summary(user, shopId, { from, to }),
+        this.safeReservationsSummary(user, shopId, from, to),
+        this.tips.summary(user, shopId, from, to),
+        this.summary(user, shopId, { from: prev.from, to: prev.to }),
+        this.salesProducts.summary(user, shopId, { from: prev.from, to: prev.to }),
+        this.tips.summary(user, shopId, prev.from, prev.to),
+      ]);
+
+    const rows = await this.filteredRows(shopId, { from, to });
+    const diffDays = rows.filter((r) => Math.abs(n(r.difference)) > 0.02);
+    const covers = closings.totals.covers;
+    const avgTicketBox =
+      covers > 0 ? Math.round((closings.totals.declared / covers) * 100) / 100 : null;
+
+    const paymentMix = {
+      cash: closings.totals.cash,
+      card: closings.totals.card,
+      mercadoPago: closings.totals.mp,
+      transfer: closings.totals.transfer,
+      accountDni: closings.totals.dni,
+      deliveryApps: closings.totals.delivery,
+      other: closings.totals.other,
+    };
+
+    const weekdayMap = new Map<number, { amount: number; count: number }>();
+    for (const d of pos.byDay) {
+      const dt = new Date(`${d.date}T12:00:00.000Z`);
+      const wd = dt.getUTCDay();
+      const cur = weekdayMap.get(wd) ?? { amount: 0, count: 0 };
+      cur.amount += n(d.amount);
+      cur.count += 1;
+      weekdayMap.set(wd, cur);
+    }
+    const weekdayLabels = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+    const weekday = weekdayLabels.map((label, day) => {
+      const cur = weekdayMap.get(day) ?? { amount: 0, count: 0 };
+      return {
+        day,
+        label,
+        amount: Math.round(cur.amount * 100) / 100,
+        avgAmount:
+          cur.count > 0 ? Math.round((cur.amount / cur.count) * 100) / 100 : 0,
+        count: cur.count,
+      };
+    });
 
     return {
       shopId,
@@ -81,6 +157,11 @@ export class ReportsService {
           covers: closings.totals.covers,
           units: closings.totals.units,
           difference: closings.totals.difference,
+          avgTicket: avgTicketBox,
+          differenceDayCount: diffDays.length,
+          differenceAbsSum: Math.round(
+            diffDays.reduce((s, r) => s + Math.abs(n(r.difference)), 0) * 100,
+          ) / 100,
         },
         byDay: closings.days.map((d) => ({
           businessDate: d.businessDate,
@@ -88,6 +169,9 @@ export class ReportsService {
           cashAmount: d.cashAmount,
           cashWithdrawn: d.cashWithdrawn,
           status: d.status,
+          tipsAmount:
+            tips.byDay.find((t) => t.businessDate === d.businessDate)?.totalAmount ??
+            0,
         })),
       },
       pos: {
@@ -106,6 +190,41 @@ export class ReportsService {
         })),
       },
       reservations,
+      tips: {
+        enabled: tips.enabled,
+        totals: {
+          ...tips.totals,
+          tipsToBoxRatio:
+            closings.totals.declared > 0
+              ? Math.round((tips.totals.total / closings.totals.declared) * 1000) / 10
+              : null,
+          tipsToPosRatio:
+            pos.totals.amount > 0
+              ? Math.round((tips.totals.total / pos.totals.amount) * 1000) / 10
+              : null,
+        },
+        byDay: tips.byDay,
+        byEmployee: tips.byEmployee,
+      },
+      paymentMix,
+      weekday,
+      comparison: {
+        previousFrom: prev.from,
+        previousTo: prev.to,
+        posAmountDeltaPct: pctDelta(pos.totals.amount, prevPos.totals.amount),
+        boxDeclaredDeltaPct: pctDelta(
+          closings.totals.declared,
+          prevClosings.totals.declared,
+        ),
+        coversDeltaPct: pctDelta(closings.totals.covers, prevClosings.totals.covers),
+        tipsDeltaPct: pctDelta(tips.totals.total, prevTips.totals.total),
+        previous: {
+          posAmount: prevPos.totals.amount,
+          boxDeclared: prevClosings.totals.declared,
+          covers: prevClosings.totals.covers,
+          tipsTotal: prevTips.totals.total,
+        },
+      },
     };
   }
 

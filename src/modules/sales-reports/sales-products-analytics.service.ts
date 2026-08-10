@@ -34,6 +34,10 @@ export interface SalesProductRow {
   ticketCount: number;
   share: number;
   avgTicketAmount: number;
+  /** Contribución al ticket promedio del período. */
+  ticketContribution: number;
+  /** Δ % vs período anterior (mismo filtro de fechas corrido). */
+  trendPct: number | null;
 }
 
 export interface SalesCategoryRow {
@@ -83,6 +87,11 @@ export interface SalesProductsSummary {
     subcategoryCount: number;
     ticketCount: number;
     avgTicketAmount: number;
+    maxTicketAmount: number;
+    minTicketAmount: number;
+    dishesPerTicket: number;
+    top10Share: number;
+    amountDeltaPct: number | null;
   };
   products: SalesProductRow[];
   categories: SalesCategoryRow[];
@@ -91,6 +100,18 @@ export interface SalesProductsSummary {
   byDay: SalesDayRow[];
   /** Desglose por forma de pago POS. */
   byPayment: SalesPaymentRow[];
+  /** Pareto acumulado de platos (ordenados por importe). */
+  pareto: Array<{ label: string; amount: number; cumulativeShare: number }>;
+  /** Evolución diaria por rubro (top 5 + otros). */
+  categoryByDay: Array<{ date: string; category: string; amount: number }>;
+  /** Comparación mismo día de la semana anterior (por fecha del período). */
+  sameWeekdayCompare: Array<{
+    date: string;
+    amount: number;
+    previousDate: string;
+    previousAmount: number;
+    deltaPct: number | null;
+  }>;
   filterOptions: {
     categories: string[];
     subcategories: string[];
@@ -236,6 +257,8 @@ export class SalesProductsAnalyticsService {
         ticketCount: tc,
         share: totalAmount > 0 ? amount / totalAmount : 0,
         avgTicketAmount: tc > 0 ? amount / tc : 0,
+        ticketContribution: 0,
+        trendPct: null,
       };
     });
 
@@ -284,6 +307,164 @@ export class SalesProductsAnalyticsService {
 
     const filterOptions = await this.filterOptions(shopId, filters.from, filters.to);
 
+    const ticketAgg = await base
+      .clone()
+      .select('t.id', 'ticketId')
+      .addSelect('SUM(l.amount)', 'amount')
+      .addSelect('SUM(l.qty)', 'qty')
+      .groupBy('t.id')
+      .getRawMany();
+    const ticketAmounts = ticketAgg.map((r) => n(r.amount)).filter((v) => v > 0);
+    const maxTicketAmount = ticketAmounts.length ? Math.max(...ticketAmounts) : 0;
+    const minTicketAmount = ticketAmounts.length ? Math.min(...ticketAmounts) : 0;
+    const dishesPerTicket =
+      ticketCount > 0 ? Math.round((n(totalsRaw?.qty) / ticketCount) * 100) / 100 : 0;
+    const top10Amount = products.slice(0, 10).reduce((s, p) => s + p.amount, 0);
+    const top10Share = totalAmount > 0 ? top10Amount / totalAmount : 0;
+
+    let cum = 0;
+    const pareto = products.slice(0, 30).map((p) => {
+      cum += p.amount;
+      return {
+        label: p.productName || p.productCode || '—',
+        amount: p.amount,
+        cumulativeShare: totalAmount > 0 ? cum / totalAmount : 0,
+      };
+    });
+
+    const topCats = categories.slice(0, 5).map((c) => c.category);
+    const catDayRaw = await base
+      .clone()
+      .select('t.businessDate', 'date')
+      .addSelect("COALESCE(NULLIF(TRIM(l.category), ''), 'Sin rubro')", 'category')
+      .addSelect('SUM(l.amount)', 'amount')
+      .groupBy('t.businessDate')
+      .addGroupBy("COALESCE(NULLIF(TRIM(l.category), ''), 'Sin rubro')")
+      .orderBy('t.businessDate', 'ASC')
+      .getRawMany();
+    const categoryByDay = catDayRaw.map((r) => {
+      const cat = String(r.category ?? 'Sin rubro');
+      return {
+        date: toIsoDateOnly(r.date),
+        category: topCats.includes(cat) ? cat : 'Otros',
+        amount: n(r.amount),
+      };
+    });
+
+    // Período anterior de igual duración
+    const fromD = new Date(`${filters.from}T12:00:00.000Z`);
+    const toD = new Date(`${filters.to}T12:00:00.000Z`);
+    const days =
+      Math.round((toD.getTime() - fromD.getTime()) / (24 * 60 * 60 * 1000)) + 1;
+    const prevTo = new Date(fromD);
+    prevTo.setUTCDate(prevTo.getUTCDate() - 1);
+    const prevFrom = new Date(prevTo);
+    prevFrom.setUTCDate(prevFrom.getUTCDate() - (days - 1));
+    const prevFromIso = toIsoDateOnly(prevFrom);
+    const prevToIso = toIsoDateOnly(prevTo);
+
+    const prevBase = this.lines
+      .createQueryBuilder('l')
+      .innerJoin('l.ticket', 't')
+      .where('t.shopId = :shopId', { shopId })
+      .andWhere('t.active = 1')
+      .andWhere('l.active = 1')
+      .andWhere('t.businessDate BETWEEN :from AND :to', {
+        from: prevFromIso,
+        to: prevToIso,
+      });
+    this.applyFilters(prevBase, { ...filters, from: prevFromIso, to: prevToIso });
+
+    const prevTotalsRaw = await prevBase
+      .clone()
+      .select('SUM(l.amount)', 'amount')
+      .getRawOne();
+    const prevAmount = n(prevTotalsRaw?.amount);
+    const amountDeltaPct =
+      prevAmount > 0
+        ? Math.round(((totalAmount - prevAmount) / prevAmount) * 1000) / 10
+        : totalAmount === 0
+          ? 0
+          : null;
+
+    const prevProductRaw = await prevBase
+      .clone()
+      .select('l.productCode', 'productCode')
+      .addSelect('l.productName', 'productName')
+      .addSelect('SUM(l.amount)', 'amount')
+      .groupBy('l.productCode')
+      .addGroupBy('l.productName')
+      .getRawMany();
+    const prevByKey = new Map<string, number>();
+    for (const r of prevProductRaw) {
+      const key = `${r.productCode ?? ''}|${r.productName ?? ''}`;
+      prevByKey.set(key, n(r.amount));
+    }
+    for (const p of products) {
+      const key = `${p.productCode ?? ''}|${p.productName ?? ''}`;
+      const prev = prevByKey.get(key) ?? 0;
+      p.trendPct =
+        prev > 0
+          ? Math.round(((p.amount - prev) / prev) * 1000) / 10
+          : p.amount === 0
+            ? 0
+            : null;
+      p.ticketContribution =
+        ticketCount > 0 ? Math.round((p.amount / ticketCount) * 100) / 100 : 0;
+    }
+
+    const weekdayFrom = new Date(fromD);
+    weekdayFrom.setUTCDate(weekdayFrom.getUTCDate() - 7);
+    const weekdayTo = new Date(toD);
+    weekdayTo.setUTCDate(weekdayTo.getUTCDate() - 7);
+    const weekdayFromIso = toIsoDateOnly(weekdayFrom);
+    const weekdayToIso = toIsoDateOnly(weekdayTo);
+    const weekdayBase = this.lines
+      .createQueryBuilder('l')
+      .innerJoin('l.ticket', 't')
+      .where('t.shopId = :shopId', { shopId })
+      .andWhere('t.active = 1')
+      .andWhere('l.active = 1')
+      .andWhere('t.businessDate BETWEEN :from AND :to', {
+        from: weekdayFromIso,
+        to: weekdayToIso,
+      });
+    this.applyFilters(weekdayBase, {
+      ...filters,
+      from: weekdayFromIso,
+      to: weekdayToIso,
+    });
+    const weekdayDayRaw = await weekdayBase
+      .clone()
+      .select('t.businessDate', 'date')
+      .addSelect('SUM(l.amount)', 'amount')
+      .groupBy('t.businessDate')
+      .getRawMany();
+    const weekdayDayMap = new Map<string, number>();
+    for (const r of weekdayDayRaw) {
+      weekdayDayMap.set(toIsoDateOnly(r.date), n(r.amount));
+    }
+    const sameWeekdayCompare = byDay.map((d) => {
+      const dt = new Date(`${d.date}T12:00:00.000Z`);
+      const prevDt = new Date(dt);
+      prevDt.setUTCDate(prevDt.getUTCDate() - 7);
+      const previousDate = toIsoDateOnly(prevDt);
+      const previousAmount = weekdayDayMap.get(previousDate) ?? 0;
+      const deltaPct =
+        previousAmount > 0
+          ? Math.round(((d.amount - previousAmount) / previousAmount) * 1000) / 10
+          : d.amount === 0
+            ? 0
+            : null;
+      return {
+        date: d.date,
+        amount: d.amount,
+        previousDate,
+        previousAmount,
+        deltaPct,
+      };
+    });
+
     return {
       shopId,
       from: filters.from,
@@ -297,12 +478,20 @@ export class SalesProductsAnalyticsService {
         subcategoryCount: subcategories.filter((s) => s.subcategory !== 'Sin subrubro').length,
         ticketCount,
         avgTicketAmount: ticketCount > 0 ? totalAmount / ticketCount : 0,
+        maxTicketAmount,
+        minTicketAmount,
+        dishesPerTicket,
+        top10Share,
+        amountDeltaPct,
       },
       products,
       categories,
       subcategories,
       byDay,
       byPayment,
+      pareto,
+      categoryByDay,
+      sameWeekdayCompare,
       filterOptions,
     };
   }
@@ -562,6 +751,8 @@ export class SalesProductsAnalyticsService {
       { header: 'Importe', key: 'amount', width: 14 },
       { header: 'Tickets', key: 'tickets', width: 10 },
       { header: '%', key: 'share', width: 10 },
+      { header: '$/ticket', key: 'ticketContribution', width: 12 },
+      { header: 'Tendencia %', key: 'trendPct', width: 12 },
     ];
     for (const p of summary.products) {
       wsP.addRow({
@@ -573,10 +764,13 @@ export class SalesProductsAnalyticsService {
         amount: p.amount,
         tickets: p.ticketCount,
         share: p.share,
+        ticketContribution: p.ticketContribution,
+        trendPct: p.trendPct,
       });
     }
     wsP.getColumn('amount').numFmt = moneyFmt;
     wsP.getColumn('share').numFmt = pctFmt;
+    wsP.getColumn('ticketContribution').numFmt = moneyFmt;
 
     const wsC = wb.addWorksheet('Rubros');
     wsC.columns = [

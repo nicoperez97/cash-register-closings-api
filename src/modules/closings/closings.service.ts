@@ -35,6 +35,7 @@ import { CreateClosingDto, UpdateClosingDto } from './dto/closing.dto';
 import { applyClosingFilters, ClosingListFilters } from './closing-filters';
 import { ClosingPosnetAmount, sumPosnetsByType } from '../../common/posnet';
 import { CashWithdrawalsService } from './cash-withdrawals.service';
+import { TipsService } from '../tips/tips.service';
 
 const n = (v?: number | string | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
@@ -58,6 +59,7 @@ export class ClosingsService implements OnModuleInit {
     private readonly accounts: AccountsService,
     private readonly notifications: NotificationsService,
     private readonly cashWithdrawals: CashWithdrawalsService,
+    private readonly tips: TipsService,
   ) {}
 
   async onModuleInit() {
@@ -304,6 +306,7 @@ export class ClosingsService implements OnModuleInit {
     }));
     await this.replaceChildren(closing.id, normalized as CreateClosingDto);
     await this.syncMovements(closing.id);
+    await this.syncTipsFromClosing(user, shopId, closing.id, normalized as CreateClosingDto);
     const created = await this.getOne(user, shopId, closing.id);
     void this.notifyAdminsClosingCreated(user, shopId, created).catch((err) => {
       this.logger.warn(
@@ -403,7 +406,38 @@ export class ClosingsService implements OnModuleInit {
       });
     }
     await this.syncMovements(row.id);
+    await this.syncTipsFromClosing(user, shopId, row.id, merged);
     return this.getOne(user, shopId, id);
+  }
+
+  private async syncTipsFromClosing(
+    user: AuthUser,
+    shopId: string,
+    closingId: string,
+    dto: CreateClosingDto,
+  ) {
+    try {
+      const tip = (dto as CreateClosingDto & {
+        tipCashAmount?: number;
+        tipTransferAmount?: number;
+        tipTicketsAmount?: number;
+        tipNotes?: string | null;
+        tipAllocations?: Array<{ employeeId: string; amount: number; delivered?: boolean }>;
+      });
+      await this.tips.syncFromClosing(user, shopId, dto.businessDate, {
+        cashAmount: tip.tipCashAmount,
+        transferAmount: tip.tipTransferAmount,
+        ticketsAmount: tip.tipTicketsAmount,
+        notes: tip.tipNotes,
+        tipsAmount: dto.tipsAmount,
+        closingId,
+        allocations: tip.tipAllocations,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `No se pudo sincronizar propinas del cierre ${closingId}: ${(err as Error)?.message ?? err}`,
+      );
+    }
   }
 
   async lock(user: AuthUser, shopId: string, id: string) {

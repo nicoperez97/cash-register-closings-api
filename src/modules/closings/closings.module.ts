@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CashClosing } from '../../entities/cash-closing.entity';
 import { ClosingExpense } from '../../entities/closing-expense.entity';
@@ -12,6 +12,7 @@ import { ShopsModule } from '../shops/shops.module';
 import { MovementsModule } from '../movements/movements.module';
 import { AccountsModule } from '../accounts/accounts.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { TipsModule } from '../tips/tips.module';
 import { ClosingsController } from './closings.controller';
 import { ClosingsService } from './closings.service';
 import { CashWithdrawalsController } from './cash-withdrawals.controller';
@@ -35,6 +36,7 @@ import { ExcelImportService } from './excel-import.service';
     MovementsModule,
     AccountsModule,
     NotificationsModule,
+    forwardRef(() => TipsModule),
   ],
   controllers: [ClosingsController, CashWithdrawalsController],
   providers: [

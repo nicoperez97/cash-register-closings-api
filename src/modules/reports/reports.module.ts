@@ -9,6 +9,7 @@ import { MovementsModule } from '../movements/movements.module';
 import { PayrollModule } from '../payroll/payroll.module';
 import { SalesReportsModule } from '../sales-reports/sales-reports.module';
 import { ReservationsModule } from '../reservations/reservations.module';
+import { TipsModule } from '../tips/tips.module';
 import { ReportsController } from './reports.controller';
 import { ReportsService } from './reports.service';
 
@@ -20,6 +21,7 @@ import { ReportsService } from './reports.service';
     PayrollModule,
     SalesReportsModule,
     ReservationsModule,
+    TipsModule,
   ],
   controllers: [ReportsController],
   providers: [ReportsService],
