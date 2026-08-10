@@ -67,6 +67,11 @@ class CreatePaymentDto {
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
   @IsUUID()
   accountId?: string | null;
+  @ApiPropertyOptional({ enum: ['cash', 'transfer', 'card', 'other'] })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsIn(['cash', 'transfer', 'card', 'other'])
+  paymentMethod?: 'cash' | 'transfer' | 'card' | 'other' | null;
   @ApiPropertyOptional()
   @IsOptional()
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
@@ -141,6 +146,11 @@ class UpdatePaymentDto {
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
   @IsUUID()
   accountId?: string | null;
+  @ApiPropertyOptional({ enum: ['cash', 'transfer', 'card', 'other'] })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsIn(['cash', 'transfer', 'card', 'other'])
+  paymentMethod?: 'cash' | 'transfer' | 'card' | 'other' | null;
   @ApiPropertyOptional()
   @IsOptional()
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
@@ -184,6 +194,10 @@ class UpdatePaymentDto {
 class PayPaymentDto {
   @ApiPropertyOptional() @IsOptional() @IsDateString() paidAt?: string;
   @ApiPropertyOptional() @IsOptional() @IsUUID() accountId?: string;
+  @ApiPropertyOptional({ enum: ['cash', 'transfer', 'card', 'other'] })
+  @IsOptional()
+  @IsIn(['cash', 'transfer', 'card', 'other'])
+  paymentMethod?: 'cash' | 'transfer' | 'card' | 'other';
 }
 
 class RejectPaymentDto {

@@ -6,7 +6,7 @@ import { LedgerAccount } from './ledger-account.entity';
 import { Movement } from './movement.entity';
 import { Supplier } from './supplier.entity';
 import { Employee } from './employee.entity';
-import { PaymentStatus } from '../common/enums';
+import { PaymentMethod, PaymentStatus } from '../common/enums';
 
 @Entity({ name: 'payments' })
 export class Payment extends BaseEntity {
@@ -35,6 +35,10 @@ export class Payment extends BaseEntity {
   /** Cuenta desde la que se paga (egreso). */
   @Column({ type: 'varchar', nullable: true })
   accountId?: string | null;
+
+  /** Efectivo / transferencia / tarjeta / otra. */
+  @Column({ type: 'varchar', length: 32, nullable: true })
+  paymentMethod?: PaymentMethod | null;
 
   @Column({ type: 'varchar', nullable: true })
   supplierId?: string | null;
