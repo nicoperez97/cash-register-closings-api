@@ -82,6 +82,19 @@ export const NOTIFICATION_TYPE_LABELS: Record<NotificationType, string> = {
 export const ALL_NOTIFICATION_TYPES: NotificationType[] = Object.values(NotificationType);
 
 export enum ExpenseCategory {
+  // Rubros gastronómicos
+  VEGETABLES = 'VEGETABLES',
+  CHEESE = 'CHEESE',
+  MEAT = 'MEAT',
+  FISH = 'FISH',
+  BAKERY = 'BAKERY',
+  DELI = 'DELI',
+  GROCERY = 'GROCERY',
+  DAIRY = 'DAIRY',
+  BEVERAGES = 'BEVERAGES',
+  BAR = 'BAR',
+  COFFEE = 'COFFEE',
+  // Operación (legacy + actuales)
   SUPPLIES = 'SUPPLIES',
   SERVICES = 'SERVICES',
   TRANSFER_SHOP = 'TRANSFER_SHOP',
