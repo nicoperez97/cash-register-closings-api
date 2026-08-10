@@ -16,6 +16,7 @@ import {
   IsEmail,
   IsEnum,
   IsArray,
+  IsObject,
   IsOptional,
   IsString,
   IsUUID,
@@ -48,11 +49,20 @@ class CreateUserDto {
   @IsUUID()
   ledgerAccountId?: string | null;
   @ApiPropertyOptional({
-    description: 'Si es true, no aparece en “Quién se lo lleva” del local (shopId)',
+    description: 'Legacy: si true, oculta en “Quién se lo lleva” (preferir visibility)',
   })
   @IsOptional()
   @IsBoolean()
   hideFromCashWithdraw?: boolean;
+  @ApiPropertyOptional({
+    description:
+      'Dónde se muestra el usuario (true = visible). Keys: cashWithdraw, closingsFilters, payments, movements, employeeLink, usersList',
+    type: 'object',
+    additionalProperties: { type: 'boolean' },
+  })
+  @IsOptional()
+  @IsObject()
+  visibility?: Record<string, boolean> | null;
   @ApiPropertyOptional({
     description: 'Si es true, recibe alertas cuando el stock de alimentos baja del mínimo',
   })
@@ -95,11 +105,20 @@ class UpdateUserDto {
   @IsUUID()
   ledgerAccountId?: string | null;
   @ApiPropertyOptional({
-    description: 'Si es true, no aparece en “Quién se lo lleva” del local (shopId)',
+    description: 'Legacy: si true, oculta en “Quién se lo lleva” (preferir visibility)',
   })
   @IsOptional()
   @IsBoolean()
   hideFromCashWithdraw?: boolean;
+  @ApiPropertyOptional({
+    description:
+      'Dónde se muestra el usuario (true = visible). Keys: cashWithdraw, closingsFilters, payments, movements, employeeLink, usersList',
+    type: 'object',
+    additionalProperties: { type: 'boolean' },
+  })
+  @IsOptional()
+  @IsObject()
+  visibility?: Record<string, boolean> | null;
   @ApiPropertyOptional({
     description: 'Si es true, recibe alertas cuando el stock de alimentos baja del mínimo',
   })
