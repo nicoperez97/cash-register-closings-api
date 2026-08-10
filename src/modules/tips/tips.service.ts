@@ -37,10 +37,26 @@ export type UpsertTipDayInput = {
   cashAmount?: number;
   transferAmount?: number;
   ticketsAmount?: number;
+  /** Montos de recibos; si viene, define transferAmount y deja tickets en 0. */
+  receipts?: number[] | null;
   notes?: string | null;
   closingId?: string | null;
   allocations?: TipAllocationInput[];
 };
+
+function normalizeReceipts(
+  raw?: number[] | null,
+  transfer = 0,
+  tickets = 0,
+): number[] {
+  if (Array.isArray(raw)) {
+    return raw.map((v) => round2(Math.max(0, n(v)))).filter((v) => v > 0);
+  }
+  const out: number[] = [];
+  if (transfer > 0) out.push(round2(transfer));
+  if (tickets > 0) out.push(round2(tickets));
+  return out;
+}
 
 @Injectable()
 export class TipsService implements OnModuleInit {
@@ -93,6 +109,7 @@ export class TipsService implements OnModuleInit {
         KEY idx_tip_alloc_emp (employeeId),
         KEY idx_tip_alloc_delivered (delivered)
       )`,
+      `ALTER TABLE tip_days ADD COLUMN receipts TEXT NULL`,
     ]) {
       try {
         await this.tipDays.query(sql);
@@ -118,13 +135,17 @@ export class TipsService implements OnModuleInit {
   private toDayDto(day: TipDay) {
     const allocations = (day.allocations ?? []).map((a) => this.toAllocationDto(a));
     const pendingCount = allocations.filter((a) => !a.delivered).length;
+    const transferAmount = n(day.transferAmount);
+    const ticketsAmount = n(day.ticketsAmount);
+    const receipts = normalizeReceipts(day.receipts, transferAmount, ticketsAmount);
     return {
       id: day.id,
       shopId: day.shopId,
       businessDate: String(day.businessDate).slice(0, 10),
       cashAmount: n(day.cashAmount),
-      transferAmount: n(day.transferAmount),
-      ticketsAmount: n(day.ticketsAmount),
+      transferAmount,
+      ticketsAmount,
+      receipts,
       totalAmount: n(day.totalAmount),
       notes: day.notes ?? null,
       closingId: day.closingId ?? null,
@@ -164,6 +185,7 @@ export class TipsService implements OnModuleInit {
         cashAmount: 0,
         transferAmount: 0,
         ticketsAmount: 0,
+        receipts: [],
         totalAmount: 0,
         notes: null,
         closingId: null,
@@ -190,9 +212,17 @@ export class TipsService implements OnModuleInit {
     }
 
     const cash = Math.max(0, n(dto.cashAmount));
-    const transfer = Math.max(0, n(dto.transferAmount));
-    const tickets = Math.max(0, n(dto.ticketsAmount));
-    const total = round2(cash + transfer + tickets);
+    const receipts =
+      dto.receipts !== undefined
+        ? normalizeReceipts(dto.receipts)
+        : normalizeReceipts(
+            null,
+            Math.max(0, n(dto.transferAmount)),
+            Math.max(0, n(dto.ticketsAmount)),
+          );
+    const transfer = round2(receipts.reduce((s, v) => s + v, 0));
+    const tickets = 0;
+    const total = round2(cash + transfer);
 
     const allocInputs = dto.allocations ?? [];
     if (allocInputs.length) {
@@ -230,6 +260,7 @@ export class TipsService implements OnModuleInit {
     day.cashAmount = money(cash);
     day.transferAmount = money(transfer);
     day.ticketsAmount = money(tickets);
+    day.receipts = receipts.length ? receipts : null;
     day.totalAmount = money(total);
     if (dto.notes !== undefined) day.notes = dto.notes?.trim() || null;
     if (dto.closingId !== undefined) day.closingId = dto.closingId || null;
@@ -304,18 +335,25 @@ export class TipsService implements OnModuleInit {
       input.cashAmount != null ||
       input.transferAmount != null ||
       input.ticketsAmount != null ||
+      input.receipts != null ||
       (input.allocations && input.allocations.length > 0);
 
     if (hasBreakdown) {
       const cash = Math.max(0, n(input.cashAmount));
-      const transfer = Math.max(0, n(input.transferAmount));
-      const tickets = Math.max(0, n(input.ticketsAmount));
-      let total = round2(cash + transfer + tickets);
+      const receipts =
+        input.receipts !== undefined
+          ? normalizeReceipts(input.receipts)
+          : normalizeReceipts(
+              null,
+              Math.max(0, n(input.transferAmount)),
+              Math.max(0, n(input.ticketsAmount)),
+            );
+      const transfer = round2(receipts.reduce((s, v) => s + v, 0));
+      const total = round2(cash + transfer);
       if (total <= 0 && input.tipsAmount != null) {
         return this.upsert(user, shopId, businessDate, {
           cashAmount: n(input.tipsAmount),
-          transferAmount: 0,
-          ticketsAmount: 0,
+          receipts: [],
           notes: input.notes,
           closingId: input.closingId,
           allocations: input.allocations,
@@ -323,8 +361,7 @@ export class TipsService implements OnModuleInit {
       }
       return this.upsert(user, shopId, businessDate, {
         cashAmount: cash,
-        transferAmount: transfer,
-        ticketsAmount: tickets,
+        receipts,
         notes: input.notes,
         closingId: input.closingId,
         allocations: input.allocations,
@@ -340,12 +377,15 @@ export class TipsService implements OnModuleInit {
       const ratio =
         n(existing.totalAmount) > 0 ? n(input.tipsAmount) / n(existing.totalAmount) : 1;
       const cash = round2(n(existing.cashAmount) * ratio);
-      const transfer = round2(n(existing.transferAmount) * ratio);
-      const tickets = round2(n(input.tipsAmount) - cash - transfer);
+      const prevReceipts = normalizeReceipts(
+        existing.receipts,
+        n(existing.transferAmount),
+        n(existing.ticketsAmount),
+      );
+      const receipts = prevReceipts.map((v) => round2(v * ratio));
       return this.upsert(user, shopId, businessDate, {
         cashAmount: cash,
-        transferAmount: transfer,
-        ticketsAmount: Math.max(0, tickets),
+        receipts,
         closingId: input.closingId ?? existing.closingId,
         allocations: (existing.allocations ?? []).map((a) => ({
           employeeId: a.employeeId,
@@ -356,8 +396,7 @@ export class TipsService implements OnModuleInit {
     }
     return this.upsert(user, shopId, businessDate, {
       cashAmount: n(input.tipsAmount),
-      transferAmount: 0,
-      ticketsAmount: 0,
+      receipts: [],
       closingId: input.closingId,
       allocations: [],
     });

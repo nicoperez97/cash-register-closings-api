@@ -61,6 +61,15 @@ class UpsertTipDayDto {
   @Min(0)
   ticketsAmount?: number;
 
+  @ApiPropertyOptional({
+    type: [Number],
+    description: 'Montos de recibos (reemplaza transferencia/tickets)',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsNumber({}, { each: true })
+  receipts?: number[];
+
   @ApiPropertyOptional({ nullable: true })
   @IsOptional()
   @IsString()

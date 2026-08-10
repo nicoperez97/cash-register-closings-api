@@ -113,6 +113,13 @@ export class CreateClosingDto {
   @IsNumber()
   @Min(0)
   tipTicketsAmount?: number;
+  @ApiPropertyOptional({
+    type: [Number],
+    description: 'Desglose propinas: recibos individuales',
+  })
+  @IsOptional()
+  @IsArray()
+  tipReceipts?: number[];
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
