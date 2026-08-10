@@ -28,6 +28,14 @@ export enum PaymentStatus {
   CANCELLED = 'CANCELLED',
 }
 
+/** Forma de pago al abonar (egreso a proveedor/empleado). */
+export enum PaymentMethod {
+  CASH = 'cash',
+  TRANSFER = 'transfer',
+  CARD = 'card',
+  OTHER = 'other',
+}
+
 export enum ShortageLevel {
   NONE = 'NONE',
   LOW = 'LOW',
