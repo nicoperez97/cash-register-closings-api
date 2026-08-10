@@ -461,6 +461,7 @@ export class AuthService implements OnModuleInit {
         coversEnabled: !!s.coversEnabled,
         reservationsEnabled: !!s.reservationsEnabled,
         waitingListEnabled: !!s.waitingListEnabled,
+        tipsEnabled: !!s.tipsEnabled,
         defaultChangeAmount: Number(s.defaultChangeAmount),
         productionDefaultHours: Number(s.productionDefaultHours ?? 8) || 8,
         currency: s.currency,
@@ -470,8 +471,14 @@ export class AuthService implements OnModuleInit {
         logoUrl: s.logoUrl ?? null,
         accentColor: s.accentColor ?? null,
         accentSecondary: s.accentSecondary ?? null,
+        email: s.email ?? null,
+        emailNotificationsEnabled:
+          s.emailNotificationsEnabled === undefined || s.emailNotificationsEnabled === null
+            ? true
+            : !!s.emailNotificationsEnabled,
         salesSystemId: s.salesSystemId ?? null,
         posnets: s.posnets ?? [],
+        active: true,
       })),
     };
   }
