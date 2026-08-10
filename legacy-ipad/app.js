@@ -397,11 +397,19 @@
     return false;
   }
 
+  function isVisibleInCashWithdraw(u) {
+    if (u && u.visibility && typeof u.visibility === 'object') {
+      if (u.visibility.cashWithdraw === false) return false;
+      if (u.visibility.cashWithdraw === true) return true;
+    }
+    return !u.hideFromCashWithdraw;
+  }
+
   function withdrawUsers() {
     var out = [];
     var i;
     for (i = 0; i < state.users.length; i++) {
-      if (!state.users[i].hideFromCashWithdraw) out.push(state.users[i]);
+      if (isVisibleInCashWithdraw(state.users[i])) out.push(state.users[i]);
     }
     return out;
   }

@@ -138,7 +138,7 @@ export class PaymentsService implements OnModuleInit {
   private async load(shopId: string, id: string) {
     const row = await this.payments.findOne({
       where: { id, shopId, active: true },
-      relations: ['payer', 'validator', 'account', 'supplier', 'employee'],
+      relations: ['payer', 'validator', 'account', 'supplier', 'employee', 'createdBy'],
     });
     if (!row) throw new NotFoundException('Pago no encontrado');
     return row;
@@ -174,6 +174,7 @@ export class PaymentsService implements OnModuleInit {
       validatedAt: p.validatedAt ?? null,
       validatedByUserId: p.validatedByUserId ?? null,
       createdByUserId: p.createdByUserId ?? null,
+      createdByName: p.createdBy?.fullName ?? null,
       movementId: p.movementId ?? null,
       invoiceLegalName: p.invoiceLegalName ?? null,
       invoiceTaxId: p.invoiceTaxId ?? null,
@@ -394,6 +395,7 @@ export class PaymentsService implements OnModuleInit {
       .leftJoinAndSelect('p.account', 'account')
       .leftJoinAndSelect('p.supplier', 'supplier')
       .leftJoinAndSelect('p.employee', 'employee')
+      .leftJoinAndSelect('p.createdBy', 'createdBy')
       .where('p.shopId = :shopId', { shopId })
       .andWhere('p.active = true');
     const statuses = this.parseStatuses(opts?.status);

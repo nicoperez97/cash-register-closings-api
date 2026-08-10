@@ -121,6 +121,10 @@ export class Payment extends BaseEntity {
   @JoinColumn({ name: 'validatorUserId' })
   validator?: User | null;
 
+  @ManyToOne(() => User, { nullable: true })
+  @JoinColumn({ name: 'createdByUserId' })
+  createdBy?: User | null;
+
   @ManyToOne(() => LedgerAccount, { nullable: true })
   @JoinColumn({ name: 'accountId' })
   account?: LedgerAccount | null;
