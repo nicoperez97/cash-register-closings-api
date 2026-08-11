@@ -17,7 +17,7 @@ import { UserShop } from '../../entities/user-shop.entity';
 import { Supplier } from '../../entities/supplier.entity';
 import { Employee } from '../../entities/employee.entity';
 import { AuthUser } from '../../common/decorators';
-import { GlobalRole, NotificationType, PaymentMethod, PaymentStatus } from '../../common/enums';
+import { GlobalRole, NotificationType, PaymentMethod, PaymentPriority, PaymentStatus } from '../../common/enums';
 import { ShopsService } from '../shops/shops.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MovementsService } from '../movements/movements.service';
@@ -30,12 +30,14 @@ const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
 
 const PAYMENT_METHODS = new Set<string>(Object.values(PaymentMethod));
+const PAYMENT_PRIORITIES = new Set<string>(Object.values(PaymentPriority));
 
 export interface UpsertPaymentDto {
   title?: string | null;
   notes?: string | null;
   amount?: number | null;
   dueDate?: string | null;
+  priority?: PaymentPriority | string | null;
   paidAt?: string | null;
   payerUserId?: string | null;
   validatorUserId?: string | null;
@@ -126,6 +128,7 @@ export class PaymentsService implements OnModuleInit {
       `ALTER TABLE payments ADD COLUMN receiptFileName VARCHAR(255) NULL`,
       `ALTER TABLE payments ADD COLUMN receiptFileMime VARCHAR(120) NULL`,
       `ALTER TABLE payments ADD COLUMN paymentMethod VARCHAR(32) NULL`,
+      `ALTER TABLE payments ADD COLUMN priority VARCHAR(16) NULL`,
     ]) {
       try {
         await this.payments.query(sql);
@@ -160,6 +163,7 @@ export class PaymentsService implements OnModuleInit {
       notes: p.notes ?? null,
       amount: n(p.amount),
       dueDate: p.dueDate ?? null,
+      priority: p.priority ?? null,
       payerUserId: p.payerUserId ?? null,
       payerName: p.payer?.fullName ?? null,
       validatorUserId: p.validatorUserId ?? null,
@@ -219,6 +223,14 @@ export class PaymentsService implements OnModuleInit {
       throw new BadRequestException('Forma de pago inválida');
     }
     return value as PaymentMethod;
+  }
+
+  private parsePaymentPriority(value: string | null | undefined): PaymentPriority | null {
+    if (value === undefined || value === null || value === '') return null;
+    if (!PAYMENT_PRIORITIES.has(value)) {
+      throw new BadRequestException('Prioridad inválida');
+    }
+    return value as PaymentPriority;
   }
 
   private async syncSupplierBilling(
@@ -486,7 +498,12 @@ export class PaymentsService implements OnModuleInit {
     if (amountMax != null && Number.isFinite(amountMax)) {
       qb.andWhere('p.amount IS NOT NULL AND p.amount <= :amountMax', { amountMax });
     }
-    qb.orderBy('p.dueDate', 'ASC').addOrderBy('p.createdAt', 'DESC');
+    qb.orderBy(
+      `CASE p.priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END`,
+      'ASC',
+    )
+      .addOrderBy('p.dueDate', 'ASC')
+      .addOrderBy('p.createdAt', 'DESC');
     const rows = await qb.getMany();
     return rows.map((r) => this.toDto(r));
   }
@@ -600,6 +617,7 @@ export class PaymentsService implements OnModuleInit {
       { header: 'Concepto', key: 'title', width: 28 },
       { header: 'Monto', key: 'amount', width: 14 },
       { header: 'Estado', key: 'status', width: 22 },
+      { header: 'Prioridad', key: 'priority', width: 12 },
       { header: 'Vence', key: 'dueDate', width: 12 },
       { header: 'Pagado', key: 'paidAt', width: 12 },
       { header: 'Proveedor', key: 'supplier', width: 22 },
@@ -623,6 +641,15 @@ export class PaymentsService implements OnModuleInit {
               ? 'Otra'
               : '';
 
+    const priorityLabel = (p?: string | null) =>
+      p === PaymentPriority.HIGH
+        ? 'Alta'
+        : p === PaymentPriority.MEDIUM
+          ? 'Media'
+          : p === PaymentPriority.LOW
+            ? 'Baja'
+            : '';
+
     const ws = wb.addWorksheet(kindLabel);
     ws.columns = columns;
     ws.getRow(1).font = { bold: true };
@@ -631,6 +658,7 @@ export class PaymentsService implements OnModuleInit {
         title: r.title || 'Sin concepto',
         amount: n(r.amount),
         status: statusLabel(r.status),
+        priority: priorityLabel(r.priority),
         dueDate: r.dueDate || '',
         paidAt: r.paidAt || '',
         supplier: r.supplierName || '',
@@ -717,6 +745,10 @@ export class PaymentsService implements OnModuleInit {
         notes: dto.notes?.trim() || null,
         amount: amount === null ? null : money(amount),
         dueDate,
+        priority:
+          dto.priority === undefined
+            ? null
+            : this.parsePaymentPriority(dto.priority as string | null),
         payerUserId,
         validatorUserId,
         accountId,
@@ -790,6 +822,9 @@ export class PaymentsService implements OnModuleInit {
       }
     }
     if (dto.dueDate !== undefined) patch.dueDate = this.emptyToNull(dto.dueDate) ?? null;
+    if (dto.priority !== undefined) {
+      patch.priority = this.parsePaymentPriority(dto.priority as string | null);
+    }
     if (dto.paidAt !== undefined) {
       if (!wasPaid) {
         throw new BadRequestException('La fecha de pago solo aplica a pagos abonados');
