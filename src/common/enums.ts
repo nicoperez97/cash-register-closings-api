@@ -36,6 +36,13 @@ export enum PaymentMethod {
   OTHER = 'other',
 }
 
+/** Prioridad opcional del pago. */
+export enum PaymentPriority {
+  LOW = 'low',
+  MEDIUM = 'medium',
+  HIGH = 'high',
+}
+
 export enum ShortageLevel {
   NONE = 'NONE',
   LOW = 'LOW',

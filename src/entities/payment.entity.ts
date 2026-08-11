@@ -6,7 +6,7 @@ import { LedgerAccount } from './ledger-account.entity';
 import { Movement } from './movement.entity';
 import { Supplier } from './supplier.entity';
 import { Employee } from './employee.entity';
-import { PaymentMethod, PaymentStatus } from '../common/enums';
+import { PaymentMethod, PaymentPriority, PaymentStatus } from '../common/enums';
 
 @Entity({ name: 'payments' })
 export class Payment extends BaseEntity {
@@ -25,6 +25,10 @@ export class Payment extends BaseEntity {
   /** Fecha tentativa de pago. */
   @Column({ type: 'date', nullable: true })
   dueDate?: string | null;
+
+  /** Baja / media / alta (opcional). */
+  @Column({ type: 'varchar', length: 16, nullable: true })
+  priority?: PaymentPriority | null;
 
   @Column({ type: 'varchar', nullable: true })
   payerUserId?: string | null;
