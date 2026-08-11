@@ -11,7 +11,24 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const config = app.get(ConfigService);
 
+  const isProd = (config.get<string>('environment') ?? 'development') === 'production';
+  if (isProd) {
+    app.set('trust proxy', 1);
+  }
   app.enableCors(config.get('cors'));
+  app.use(
+    (
+      _req: unknown,
+      res: { setHeader: (name: string, value: string) => void },
+      next: () => void,
+    ) => {
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+      res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+      res.setHeader('X-DNS-Prefetch-Control', 'off');
+      next();
+    },
+  );
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

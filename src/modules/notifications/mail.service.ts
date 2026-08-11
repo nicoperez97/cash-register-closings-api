@@ -6,6 +6,7 @@ import * as nodemailer from 'nodemailer';
 import type Transporter from 'nodemailer/lib/mailer';
 import { User } from '../../entities/user.entity';
 import { Shop } from '../../entities/shop.entity';
+import { UserShop } from '../../entities/user-shop.entity';
 import { NotificationType } from '../../common/enums';
 import { isEntityActive } from '../../common/active.util';
 import {
@@ -49,6 +50,7 @@ export class MailService {
     private readonly config: ConfigService,
     @InjectRepository(User) private readonly users: Repository<User>,
     @InjectRepository(Shop) private readonly shops: Repository<Shop>,
+    @InjectRepository(UserShop) private readonly userShops: Repository<UserShop>,
   ) {
     this.defaultFrom = (this.config.get<string>('smtp.from') ?? '').trim();
     this.smtpHost = (this.config.get<string>('smtp.host') ?? '').trim();
@@ -105,6 +107,19 @@ export class MailService {
     if (userIds !== null && !userIds.includes(userId)) return false;
 
     return true;
+  }
+
+  private isReservationMailType(type: string): boolean {
+    return (
+      type === NotificationType.RESERVATION_REQUEST ||
+      type === 'RESERVATION_ACCEPTED' ||
+      type === 'RESERVATION_REJECTED'
+    );
+  }
+
+  private async userIsReservationAdmin(shopId: string, userId: string): Promise<boolean> {
+    const link = await this.userShops.findOne({ where: { shopId, userId } });
+    return !!link?.isReservationAdmin;
   }
 
   private async loadShop(shopId: string): Promise<ShopMailRow | null> {
@@ -173,6 +188,9 @@ export class MailService {
     if (String(type).startsWith('PAYMENT_')) {
       return { path: '/payments/suppliers', label: 'Ver pagos' };
     }
+    if (type === NotificationType.RESERVATION_REQUEST) {
+      return { path: '/reservations', label: 'Ver solicitudes' };
+    }
     return { path: '/', label: 'Abrir la app' };
   }
 
@@ -201,7 +219,23 @@ export class MailService {
     let shop: ShopMailRow | null = null;
     if (input.shopId) {
       shop = await this.loadShop(input.shopId);
-      if (!this.shopAllowsEmail(shop, String(input.type), input.userId)) return;
+      const type = String(input.type);
+      let allowed = this.shopAllowsEmail(shop, type, input.userId);
+      if (!allowed && shop && this.isReservationMailType(type)) {
+        const enabled =
+          shop.emailNotificationsEnabled === undefined ||
+          shop.emailNotificationsEnabled === null
+            ? true
+            : !!shop.emailNotificationsEnabled;
+        const types = Array.isArray(shop.emailNotificationTypes)
+          ? shop.emailNotificationTypes
+          : null;
+        const typeOk = types === null || types.includes(type);
+        if (enabled && typeOk) {
+          allowed = await this.userIsReservationAdmin(shop.id, input.userId);
+        }
+      }
+      if (!allowed) return;
     }
 
     const { transporter, fromEmail } = this.transporterForShop(shop);
@@ -241,6 +275,55 @@ export class MailService {
     } catch (err) {
       this.logger.warn(
         `No se pudo enviar email a ${user.email}: ${(err as Error)?.message ?? err}`,
+      );
+    }
+  }
+
+  /** Mail a un comensal (no es usuario del sistema). No respeta filtros de staff. */
+  async sendGuestEmail(input: {
+    to: string;
+    guestName: string;
+    shopId: string;
+    type: string;
+    title: string;
+    body: string;
+  }): Promise<void> {
+    const to = String(input.to ?? '').trim();
+    if (!to) return;
+    const shop = await this.loadShop(input.shopId);
+    const { transporter, fromEmail } = this.transporterForShop(shop);
+    if (!transporter || !fromEmail) {
+      this.logger.warn(
+        'Sin SMTP: no se envió el mail al comensal. Configurá email + contraseña en el local.',
+      );
+      return;
+    }
+    const shopName = shop?.name?.trim() || null;
+    const fromHeader = shopName ? `"${shopName}" <${fromEmail}>` : fromEmail;
+    const tpl = {
+      type: input.type,
+      title: input.title,
+      body: input.body,
+      recipientName: input.guestName,
+      shopName,
+      shopLogoUrl: shop?.logoUrl ?? null,
+      accentColor: shop?.accentColor ?? null,
+      accentSecondary: shop?.accentSecondary ?? null,
+      actionUrl: null,
+      actionLabel: null,
+    };
+    try {
+      await transporter.sendMail({
+        from: fromHeader,
+        to,
+        subject: input.title,
+        text: buildNotificationEmailText(tpl),
+        html: buildNotificationEmailHtml(tpl),
+        replyTo: shop?.email?.trim() || undefined,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `No se pudo enviar email al comensal ${to}: ${(err as Error)?.message ?? err}`,
       );
     }
   }

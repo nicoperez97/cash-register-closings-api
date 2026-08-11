@@ -4,6 +4,7 @@ import { AppNotification } from '../../entities/notification.entity';
 import { PushSubscription } from '../../entities/push-subscription.entity';
 import { User } from '../../entities/user.entity';
 import { Shop } from '../../entities/shop.entity';
+import { UserShop } from '../../entities/user-shop.entity';
 import { NotificationsService } from './notifications.service';
 import { NotificationsController } from './notifications.controller';
 import { PushService } from './push.service';
@@ -12,7 +13,7 @@ import { MailService } from './mail.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([AppNotification, PushSubscription, User, Shop]),
+    TypeOrmModule.forFeature([AppNotification, PushSubscription, User, Shop, UserShop]),
   ],
   controllers: [NotificationsController, PushController],
   providers: [NotificationsService, PushService, MailService],

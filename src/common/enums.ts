@@ -74,6 +74,8 @@ export enum NotificationType {
   SHORTAGE_LEVEL_LOW = 'SHORTAGE_LEVEL_LOW',
   /** Faltante subió de Nada/Poco a Normal/Mucho. */
   SHORTAGE_RESOLVED = 'SHORTAGE_RESOLVED',
+  /** Solicitud de reserva pública pendiente. */
+  RESERVATION_REQUEST = 'RESERVATION_REQUEST',
 }
 
 /** Etiquetas para UI de configuración de mails del local. */
@@ -92,6 +94,7 @@ export const NOTIFICATION_TYPE_LABELS: Record<NotificationType, string> = {
   [NotificationType.SHORTAGE_CREATED]: 'Faltantes · crítico cargado',
   [NotificationType.SHORTAGE_LEVEL_LOW]: 'Faltantes · bajó a crítico',
   [NotificationType.SHORTAGE_RESOLVED]: 'Faltantes · resuelto',
+  [NotificationType.RESERVATION_REQUEST]: 'Reservas · solicitud nueva',
 };
 
 export const ALL_NOTIFICATION_TYPES: NotificationType[] = Object.values(NotificationType);

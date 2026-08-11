@@ -26,6 +26,7 @@ import { StockModule } from './modules/stock/stock.module';
 import { ShortagesModule } from './modules/shortages/shortages.module';
 import { TipsModule } from './modules/tips/tips.module';
 import { JwtAuthGuard, PermissionsGuard } from './common/guards';
+import { PublicAbuseGuard } from './common/public-abuse.guard';
 
 @Module({
   imports: [
@@ -58,6 +59,7 @@ import { JwtAuthGuard, PermissionsGuard } from './common/guards';
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },
+    { provide: APP_GUARD, useClass: PublicAbuseGuard },
   ],
 })
 export class AppModule {}

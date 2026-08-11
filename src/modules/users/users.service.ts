@@ -60,6 +60,8 @@ export class CreateUserBody {
   isBeverageStockAdmin?: boolean;
   /** Administrador de faltantes: recibe notificaciones/mails del módulo Faltantes. */
   isShortageAdmin?: boolean;
+  /** Administrador de reservas: recibe notificaciones y mails de solicitudes. */
+  isReservationAdmin?: boolean;
 }
 
 export class UpdateUserBody {
@@ -83,6 +85,8 @@ export class UpdateUserBody {
   isBeverageStockAdmin?: boolean;
   /** Administrador de faltantes: recibe notificaciones/mails del módulo Faltantes. */
   isShortageAdmin?: boolean;
+  /** Administrador de reservas: recibe notificaciones y mails de solicitudes. */
+  isReservationAdmin?: boolean;
 }
 
 @Injectable()
@@ -149,6 +153,14 @@ export class UsersService implements OnModuleInit {
       await this.userShops.query(`
         ALTER TABLE user_shops
           ADD COLUMN isShortageAdmin TINYINT(1) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.userShops.query(`
+        ALTER TABLE user_shops
+          ADD COLUMN isReservationAdmin TINYINT(1) NOT NULL DEFAULT 0
       `);
     } catch {
       // columna ya existe
@@ -257,6 +269,7 @@ export class UsersService implements OnModuleInit {
         isStockAdmin: !!link?.isStockAdmin,
         isBeverageStockAdmin: !!link?.isBeverageStockAdmin,
         isShortageAdmin: !!link?.isShortageAdmin,
+        isReservationAdmin: !!link?.isReservationAdmin,
         ledgerAccountIds,
         ledgerAccountNames,
         ledgerAccountId: ledgerAccountIds[0] ?? null,
@@ -317,6 +330,7 @@ export class UsersService implements OnModuleInit {
           isBeverageStockAdmin:
             defaultShopId === shopId ? !!dto.isBeverageStockAdmin : false,
           isShortageAdmin: defaultShopId === shopId ? !!dto.isShortageAdmin : false,
+          isReservationAdmin: defaultShopId === shopId ? !!dto.isReservationAdmin : false,
         }),
       );
     }
@@ -433,6 +447,7 @@ export class UsersService implements OnModuleInit {
                 isBeverageStockAdmin:
                   shopId === sid ? !!dto.isBeverageStockAdmin : false,
                 isShortageAdmin: shopId === sid ? !!dto.isShortageAdmin : false,
+                isReservationAdmin: shopId === sid ? !!dto.isReservationAdmin : false,
               }),
             );
           } else {
@@ -456,6 +471,9 @@ export class UsersService implements OnModuleInit {
             if (shopId === sid && dto.isShortageAdmin !== undefined) {
               exists.isShortageAdmin = !!dto.isShortageAdmin;
             }
+            if (shopId === sid && dto.isReservationAdmin !== undefined) {
+              exists.isReservationAdmin = !!dto.isReservationAdmin;
+            }
             await this.userShops.save(exists);
           }
         }
@@ -469,6 +487,9 @@ export class UsersService implements OnModuleInit {
         );
         const prevShortageAdmin = new Map(
           links.map((l) => [l.shopId, !!l.isShortageAdmin]),
+        );
+        const prevReservationAdmin = new Map(
+          links.map((l) => [l.shopId, !!l.isReservationAdmin]),
         );
         await this.userShops.delete({ userId: id });
         for (const sid of nextIds) {
@@ -491,6 +512,10 @@ export class UsersService implements OnModuleInit {
             shopId === sid && dto.isShortageAdmin !== undefined
               ? !!dto.isShortageAdmin
               : (prevShortageAdmin.get(sid) ?? false);
+          const reservationAdmin =
+            shopId === sid && dto.isReservationAdmin !== undefined
+              ? !!dto.isReservationAdmin
+              : (prevReservationAdmin.get(sid) ?? false);
           await this.userShops.save(
             this.userShops.create({
               userId: id,
@@ -507,6 +532,7 @@ export class UsersService implements OnModuleInit {
               isStockAdmin: stockAdmin,
               isBeverageStockAdmin: beverageStockAdmin,
               isShortageAdmin: shortageAdmin,
+              isReservationAdmin: reservationAdmin,
             }),
           );
         }
@@ -518,7 +544,8 @@ export class UsersService implements OnModuleInit {
         this.hasVisibilityPatch(dto) ||
         dto.isStockAdmin !== undefined ||
         dto.isBeverageStockAdmin !== undefined ||
-        dto.isShortageAdmin !== undefined)
+        dto.isShortageAdmin !== undefined ||
+        dto.isReservationAdmin !== undefined)
     ) {
       const link = await this.userShops.findOne({ where: { userId: id, shopId } });
       if (link) {
@@ -542,6 +569,9 @@ export class UsersService implements OnModuleInit {
         if (dto.isShortageAdmin !== undefined) {
           link.isShortageAdmin = !!dto.isShortageAdmin;
         }
+        if (dto.isReservationAdmin !== undefined) {
+          link.isReservationAdmin = !!dto.isReservationAdmin;
+        }
         await this.userShops.save(link);
       } else {
         const visibility = this.resolveVisibilityFromDto(dto);
@@ -561,6 +591,7 @@ export class UsersService implements OnModuleInit {
             isStockAdmin: !!dto.isStockAdmin,
             isBeverageStockAdmin: !!dto.isBeverageStockAdmin,
             isShortageAdmin: !!dto.isShortageAdmin,
+            isReservationAdmin: !!dto.isReservationAdmin,
           }),
         );
       }
@@ -626,6 +657,7 @@ export class UsersService implements OnModuleInit {
       isStockAdmin: !!link?.isStockAdmin,
       isBeverageStockAdmin: !!link?.isBeverageStockAdmin,
       isShortageAdmin: !!link?.isShortageAdmin,
+      isReservationAdmin: !!link?.isReservationAdmin,
       ledgerAccountIds: accountIds,
       ledgerAccountNames: names,
       ledgerAccountId: accountIds[0] ?? null,

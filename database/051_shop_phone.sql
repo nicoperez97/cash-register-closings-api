@@ -1,0 +1,2 @@
+ALTER TABLE shops
+  ADD COLUMN phone VARCHAR(40) NULL;

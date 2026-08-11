@@ -108,6 +108,24 @@ const TYPE_META: Record<string, TypeMeta> = {
     toneSoft: '#e0f2f1',
     hint: 'Se actualizaron horas de producción.',
   },
+  [NotificationType.RESERVATION_REQUEST]: {
+    label: 'Reservas',
+    tone: '#6a1b9a',
+    toneSoft: '#f3e5f5',
+    hint: 'Hay una solicitud de reserva para aceptar o rechazar.',
+  },
+  RESERVATION_ACCEPTED: {
+    label: 'Reserva confirmada',
+    tone: '#2e7d32',
+    toneSoft: '#e8f5e9',
+    hint: 'Tu mesa quedó reservada. Te esperamos.',
+  },
+  RESERVATION_REJECTED: {
+    label: 'Reserva',
+    tone: '#c62828',
+    toneSoft: '#fdecea',
+    hint: 'Esta vez no pudimos confirmar tu reserva.',
+  },
 };
 
 const FALLBACK_META: TypeMeta = {

@@ -14,6 +14,8 @@ import {
 import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import {
+  IsBoolean,
+  IsEmail,
   IsEnum,
   IsInt,
   IsOptional,
@@ -29,6 +31,7 @@ import { PermissionsGuard } from '../../common/guards';
 import { ReservationArea, ReservationStatus } from '../../entities/reservation.entity';
 import { WaitingListStatus } from '../../entities/waiting-list-entry.entity';
 import { ReservationsService } from './reservations.service';
+import { ReservationRequestsService } from './reservation-requests.service';
 
 class CreateReservationDto {
   @ApiPropertyOptional() @IsOptional() @IsString() businessDate?: string;
@@ -143,6 +146,84 @@ class UpdateWaitingDto {
   status?: WaitingListStatus;
 }
 
+class CreatePublicReservationRequestDto {
+  @ApiProperty()
+  @IsString()
+  @MinLength(2)
+  @MaxLength(120)
+  guestName: string;
+
+  @ApiProperty()
+  @IsEmail()
+  @MaxLength(180)
+  guestEmail: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  instagramHandle?: string | null;
+
+  @ApiProperty({ example: 2 })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(99)
+  partySize: number;
+
+  @ApiProperty({ example: '2026-08-15' })
+  @IsString()
+  businessDate: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  reservationTime?: string | null;
+
+  @ApiPropertyOptional({ enum: ReservationArea })
+  @IsOptional()
+  @IsEnum(ReservationArea)
+  area?: ReservationArea;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(400)
+  guestComment?: string | null;
+
+  /** Honeypot anti-spam: debe ir vacío. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  website?: string | null;
+}
+
+class DecideReservationRequestDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  staffNote?: string | null;
+}
+
+class SetReservationSignupDto {
+  @ApiProperty()
+  @IsBoolean()
+  enabled: boolean;
+}
+
+class SetReservationAreasDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  inside?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  outside?: boolean;
+}
+
 class UpsertDayNoticeDto {
   @ApiPropertyOptional({ description: 'YYYY-MM-DD; default hoy del local' })
   @IsOptional()
@@ -163,7 +244,10 @@ class UpsertDayNoticeDto {
 @UseGuards(AuthGuard('jwt'), PermissionsGuard)
 @Controller('shops/:shopId')
 export class ReservationsController {
-  constructor(private readonly reservations: ReservationsService) {}
+  constructor(
+    private readonly reservations: ReservationsService,
+    private readonly requests: ReservationRequestsService,
+  ) {}
 
   @Get('reservations/summary')
   @RequirePermissions('reservations.read')
@@ -184,6 +268,67 @@ export class ReservationsController {
     @Query('date') date?: string,
   ) {
     return this.reservations.listReservations(user, shopId, date);
+  }
+
+  @Patch('reservation-signup')
+  @RequirePermissions('reservations.manage')
+  setReservationSignup(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: SetReservationSignupDto,
+  ) {
+    return this.requests.setSignupEnabled(user, shopId, dto.enabled);
+  }
+
+  @Patch('reservation-areas')
+  @RequirePermissions('reservations.manage')
+  setReservationAreas(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: SetReservationAreasDto,
+  ) {
+    return this.requests.setAreasEnabled(user, shopId, dto);
+  }
+
+  @Get('reservation-requests')
+  @RequirePermissions('reservations.read')
+  listReservationRequests(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Query('status') status?: string,
+  ) {
+    return this.requests.list(user, shopId, status);
+  }
+
+  @Get('reservation-requests/pending-count')
+  @RequirePermissions('reservations.read')
+  pendingReservationRequests(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+  ) {
+    return this.requests.pendingCount(user, shopId);
+  }
+
+  @Post('reservation-requests/:id/accept')
+  @RequirePermissions('reservations.manage')
+  acceptReservationRequest(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+    @Body() dto: DecideReservationRequestDto,
+  ) {
+    return this.requests.accept(user, shopId, id, dto?.staffNote);
+  }
+
+  @Post('reservation-requests/:id/reject')
+  @RequirePermissions('reservations.manage')
+  rejectReservationRequest(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+    @Body() dto: DecideReservationRequestDto,
+  ) {
+    return this.requests.reject(user, shopId, id, dto?.staffNote);
   }
 
   @Put('reservation-day-notices')
@@ -272,7 +417,25 @@ export class ReservationsController {
 @ApiTags('public-reservations')
 @Controller('public/shops')
 export class PublicReservationsController {
-  constructor(private readonly reservations: ReservationsService) {}
+  constructor(
+    private readonly reservations: ReservationsService,
+    private readonly requests: ReservationRequestsService,
+  ) {}
+
+  @Public()
+  @Get(':slug/reservation-signup')
+  signupInfo(@Param('slug') slug: string) {
+    return this.requests.publicSignupInfo(slug);
+  }
+
+  @Public()
+  @Post(':slug/reservation-requests')
+  createPublicRequest(
+    @Param('slug') slug: string,
+    @Body() dto: CreatePublicReservationRequestDto,
+  ) {
+    return this.requests.createPublic(slug, dto);
+  }
 
   @Public()
   @Get(':slug/reservations')

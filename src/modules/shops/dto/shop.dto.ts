@@ -11,6 +11,7 @@ import {
   IsString,
   IsUUID,
   Max,
+  MaxLength,
   Min,
   MinLength,
   ValidateIf,
@@ -61,6 +62,21 @@ export class CreateShopDto {
   @IsOptional()
   @IsBoolean()
   reservationsEnabled?: boolean;
+
+  @ApiPropertyOptional({ description: 'Habilita el formulario público de reservas' })
+  @IsOptional()
+  @IsBoolean()
+  reservationSignupEnabled?: boolean;
+
+  @ApiPropertyOptional({ description: 'Habilita reservas en el sector adentro' })
+  @IsOptional()
+  @IsBoolean()
+  reservationInsideEnabled?: boolean;
+
+  @ApiPropertyOptional({ description: 'Habilita reservas en el sector afuera' })
+  @IsOptional()
+  @IsBoolean()
+  reservationOutsideEnabled?: boolean;
 
   @ApiPropertyOptional({ description: 'Habilita el módulo de lista de espera en este local' })
   @IsOptional()
@@ -144,6 +160,24 @@ export class CreateShopDto {
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
   @IsEmail()
   email?: string | null;
+
+  @ApiPropertyOptional({
+    example: 'tuttopassa',
+    description: 'Usuario de Instagram del local (sin @)',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  instagramHandle?: string | null;
+
+  @ApiPropertyOptional({
+    example: '+598 99 123 456',
+    description: 'Teléfono del local con código de país (WhatsApp a futuro)',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  phone?: string | null;
 
   @ApiPropertyOptional({
     description:

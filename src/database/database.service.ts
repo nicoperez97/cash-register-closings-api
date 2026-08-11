@@ -18,6 +18,9 @@ export class DatabaseService implements TypeOrmOptionsFactory {
       autoLoadEntities: true,
       synchronize: db.synchronize,
       timezone: 'Z',
+      // DATE como 'YYYY-MM-DD'. Si mysql2 lo infla a Date UTC, TypeORM lo pasa
+      // a hora local y en AR/UY queda el día anterior.
+      dateStrings: ['DATE'],
     };
   }
 }

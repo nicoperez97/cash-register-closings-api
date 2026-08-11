@@ -101,6 +101,30 @@ export class ShopsService implements OnModuleInit {
     try {
       await this.shops.query(`
         ALTER TABLE shops
+          ADD COLUMN reservationSignupEnabled TINYINT(1) NOT NULL DEFAULT 1
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN reservationInsideEnabled TINYINT(1) NOT NULL DEFAULT 1
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN reservationOutsideEnabled TINYINT(1) NOT NULL DEFAULT 1
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
           ADD COLUMN productionDefaultHours DECIMAL(6,2) NOT NULL DEFAULT 8.00
       `);
     } catch {
@@ -118,6 +142,22 @@ export class ShopsService implements OnModuleInit {
       await this.shops.query(`
         ALTER TABLE shops
           ADD COLUMN email VARCHAR(180) NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN instagramHandle VARCHAR(30) NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN phone VARCHAR(40) NULL
       `);
     } catch {
       // columna ya existe
@@ -307,6 +347,9 @@ export class ShopsService implements OnModuleInit {
         unitsLabel: dto.unitsLabel ?? null,
         coversEnabled: dto.coversEnabled ?? false,
         reservationsEnabled: dto.reservationsEnabled ?? true,
+        reservationSignupEnabled: dto.reservationSignupEnabled ?? true,
+        reservationInsideEnabled: dto.reservationInsideEnabled ?? true,
+        reservationOutsideEnabled: dto.reservationOutsideEnabled ?? true,
         waitingListEnabled: dto.waitingListEnabled ?? true,
         tipsEnabled: dto.tipsEnabled ?? false,
         defaultChangeAmount: String(dto.defaultChangeAmount ?? 0),
@@ -323,6 +366,8 @@ export class ShopsService implements OnModuleInit {
         accentColor: this.normalizeAccent(dto.accentColor),
         accentSecondary: this.normalizeAccent(dto.accentSecondary),
         email: this.normalizeEmail(dto.email),
+        instagramHandle: this.normalizeInstagram(dto.instagramHandle),
+        phone: this.normalizePhone(dto.phone),
         emailSmtpPassword: this.normalizeSmtpPassword(dto.emailSmtpPassword) ?? null,
         emailNotificationsEnabled: dto.emailNotificationsEnabled ?? true,
         emailNotificationTypes: this.normalizeStringList(dto.emailNotificationTypes),
@@ -354,6 +399,18 @@ export class ShopsService implements OnModuleInit {
     if (dto.coversEnabled !== undefined) shop.coversEnabled = dto.coversEnabled;
     if (dto.reservationsEnabled !== undefined) {
       shop.reservationsEnabled = dto.reservationsEnabled;
+    }
+    if (dto.reservationSignupEnabled !== undefined) {
+      shop.reservationSignupEnabled = dto.reservationSignupEnabled;
+    }
+    if (dto.reservationInsideEnabled !== undefined) {
+      shop.reservationInsideEnabled = dto.reservationInsideEnabled;
+    }
+    if (dto.reservationOutsideEnabled !== undefined) {
+      shop.reservationOutsideEnabled = dto.reservationOutsideEnabled;
+    }
+    if (shop.reservationInsideEnabled === false && shop.reservationOutsideEnabled === false) {
+      throw new BadRequestException('Dejá al menos un sector habilitado (adentro o afuera)');
     }
     if (dto.waitingListEnabled !== undefined) {
       shop.waitingListEnabled = dto.waitingListEnabled;
@@ -393,6 +450,12 @@ export class ShopsService implements OnModuleInit {
     }
     if (dto.email !== undefined) {
       shop.email = this.normalizeEmail(dto.email);
+    }
+    if (dto.instagramHandle !== undefined) {
+      shop.instagramHandle = this.normalizeInstagram(dto.instagramHandle);
+    }
+    if (dto.phone !== undefined) {
+      shop.phone = this.normalizePhone(dto.phone);
     }
     // Contraseña con select:false: no asignar al entity cargado (TypeORM la pisaría en save).
     const smtpPasswordPatch =
@@ -506,6 +569,28 @@ export class ShopsService implements OnModuleInit {
     const v = raw?.trim().toLowerCase();
     if (!v) return null;
     return v;
+  }
+
+  private normalizePhone(raw?: string | null): string | null {
+    const phone = String(raw ?? '').trim();
+    if (!phone) return null;
+    const digits = phone.replace(/\D/g, '');
+    if (digits.length < 6 || digits.length > 15) {
+      throw new BadRequestException('Teléfono inválido (incluí código de país, p.ej. +598…)');
+    }
+    return phone;
+  }
+
+  private normalizeInstagram(raw?: string | null): string | null {
+    let s = String(raw ?? '').trim();
+    if (!s) return null;
+    s = s.replace(/^@+/, '');
+    s = s.replace(/^https?:\/\/(www\.)?instagram\.com\//i, '');
+    s = s.replace(/[/?#].*$/, '').replace(/^@+/, '');
+    if (!/^[A-Za-z0-9._]{1,30}$/.test(s)) {
+      throw new BadRequestException('Instagram inválido (solo usuario, sin espacios)');
+    }
+    return s;
   }
 
   private normalizeSmtpPassword(raw?: string | null): string | null {
@@ -624,6 +709,18 @@ export class ShopsService implements OnModuleInit {
       unitsLabel: s.unitsLabel,
       coversEnabled: !!s.coversEnabled,
       reservationsEnabled: !!s.reservationsEnabled,
+      reservationSignupEnabled:
+        s.reservationSignupEnabled === undefined || s.reservationSignupEnabled === null
+          ? true
+          : !!s.reservationSignupEnabled,
+      reservationInsideEnabled:
+        s.reservationInsideEnabled === undefined || s.reservationInsideEnabled === null
+          ? true
+          : !!s.reservationInsideEnabled,
+      reservationOutsideEnabled:
+        s.reservationOutsideEnabled === undefined || s.reservationOutsideEnabled === null
+          ? true
+          : !!s.reservationOutsideEnabled,
       waitingListEnabled: !!s.waitingListEnabled,
       tipsEnabled: !!s.tipsEnabled,
       defaultChangeAmount: Number(s.defaultChangeAmount),
@@ -632,6 +729,8 @@ export class ShopsService implements OnModuleInit {
       accentColor: s.accentColor ?? null,
       accentSecondary: s.accentSecondary ?? null,
       email: s.email ?? null,
+      instagramHandle: s.instagramHandle ?? null,
+      phone: s.phone ?? null,
       emailSmtpConfigured: !!opts?.emailSmtpConfigured,
       emailNotificationsEnabled:
         s.emailNotificationsEnabled === undefined || s.emailNotificationsEnabled === null

@@ -31,6 +31,7 @@ function deepLinkFor(type: NotificationType, opts: {
     return '/shortages';
   }
   if (String(type).startsWith('PAYMENT_')) return '/payments/suppliers';
+  if (type === NotificationType.RESERVATION_REQUEST) return '/reservations';
   return '/';
 }
 
@@ -107,7 +108,8 @@ export class NotificationsService implements OnModuleInit {
             'BEVERAGE_STOCK_SHARED',
             'SHORTAGE_CREATED',
             'SHORTAGE_LEVEL_LOW',
-            'SHORTAGE_RESOLVED'
+            'SHORTAGE_RESOLVED',
+            'RESERVATION_REQUEST'
           ) NOT NULL
       `);
     } catch {

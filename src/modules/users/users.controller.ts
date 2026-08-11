@@ -81,6 +81,12 @@ class CreateUserDto {
   @IsOptional()
   @IsBoolean()
   isShortageAdmin?: boolean;
+  @ApiPropertyOptional({
+    description: 'Si es true, recibe notificaciones y mails de solicitudes de reserva',
+  })
+  @IsOptional()
+  @IsBoolean()
+  isReservationAdmin?: boolean;
 }
 
 class UpdateUserDto {
@@ -137,6 +143,12 @@ class UpdateUserDto {
   @IsOptional()
   @IsBoolean()
   isShortageAdmin?: boolean;
+  @ApiPropertyOptional({
+    description: 'Si es true, recibe notificaciones y mails de solicitudes de reserva',
+  })
+  @IsOptional()
+  @IsBoolean()
+  isReservationAdmin?: boolean;
 }
 
 @ApiTags('users')

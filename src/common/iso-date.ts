@@ -1,25 +1,30 @@
+function utcYmd(d: Date): string {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 /** Normaliza DATE/Date/string a YYYY-MM-DD (evita "Wed Mar 18" al String(date)). */
 export function toIsoDateOnly(v: unknown): string {
   if (typeof v === 'string') {
-    const m = v.trim().match(/^(\d{4}-\d{2}-\d{2})/);
+    const s = v.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    // Datetime ISO: no recortar los 10 primeros (en UTC-3 sería el día anterior).
+    if (/^\d{4}-\d{2}-\d{2}T/.test(s)) {
+      const dt = new Date(s);
+      if (!Number.isNaN(dt.getTime())) return utcYmd(dt);
+    }
+    const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
     if (m) return m[1];
   }
   if (v instanceof Date && !Number.isNaN(v.getTime())) {
-    const y = v.getUTCFullYear();
-    const m = String(v.getUTCMonth() + 1).padStart(2, '0');
-    const d = String(v.getUTCDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
+    return utcYmd(v);
   }
   const s = String(v ?? '').trim();
-  const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
-  if (m) return m[1];
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
   const d = new Date(s);
-  if (!Number.isNaN(d.getTime())) {
-    const y = d.getUTCFullYear();
-    const mo = String(d.getUTCMonth() + 1).padStart(2, '0');
-    const day = String(d.getUTCDate()).padStart(2, '0');
-    return `${y}-${mo}-${day}`;
-  }
+  if (!Number.isNaN(d.getTime())) return utcYmd(d);
   return '';
 }
 

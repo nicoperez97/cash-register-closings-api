@@ -45,6 +45,18 @@ export class Shop extends BaseEntity {
   @Column({ type: 'tinyint', default: 1 })
   reservationsEnabled: boolean;
 
+  /** Si es false, el formulario público de solicitud de reserva está cerrado. */
+  @Column({ type: 'tinyint', default: 1 })
+  reservationSignupEnabled: boolean;
+
+  /** Si es false, no se puede pedir mesa adentro. */
+  @Column({ type: 'tinyint', default: 1 })
+  reservationInsideEnabled: boolean;
+
+  /** Si es false, no se puede pedir mesa afuera. */
+  @Column({ type: 'tinyint', default: 1 })
+  reservationOutsideEnabled: boolean;
+
   /** Si es false, el módulo de lista de espera no está disponible en este local. */
   @Column({ type: 'tinyint', default: 1 })
   waitingListEnabled: boolean;
@@ -77,6 +89,14 @@ export class Shop extends BaseEntity {
   /** Email del local (remitente de notificaciones por correo). */
   @Column({ type: 'varchar', length: 180, nullable: true })
   email?: string | null;
+
+  /** Usuario de Instagram del local (sin @). */
+  @Column({ type: 'varchar', length: 30, nullable: true })
+  instagramHandle?: string | null;
+
+  /** Teléfono del local (con código de país). Para WhatsApp a futuro. */
+  @Column({ type: 'varchar', length: 40, nullable: true })
+  phone?: string | null;
 
   /**
    * Contraseña SMTP / contraseña de aplicación (p.ej. Gmail).

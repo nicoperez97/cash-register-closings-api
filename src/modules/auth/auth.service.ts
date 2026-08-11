@@ -460,6 +460,18 @@ export class AuthService implements OnModuleInit {
         unitsLabel: s.unitsLabel,
         coversEnabled: !!s.coversEnabled,
         reservationsEnabled: !!s.reservationsEnabled,
+        reservationSignupEnabled:
+          s.reservationSignupEnabled === undefined || s.reservationSignupEnabled === null
+            ? true
+            : !!s.reservationSignupEnabled,
+        reservationInsideEnabled:
+          s.reservationInsideEnabled === undefined || s.reservationInsideEnabled === null
+            ? true
+            : !!s.reservationInsideEnabled,
+        reservationOutsideEnabled:
+          s.reservationOutsideEnabled === undefined || s.reservationOutsideEnabled === null
+            ? true
+            : !!s.reservationOutsideEnabled,
         waitingListEnabled: !!s.waitingListEnabled,
         tipsEnabled: !!s.tipsEnabled,
         defaultChangeAmount: Number(s.defaultChangeAmount),
@@ -472,6 +484,8 @@ export class AuthService implements OnModuleInit {
         accentColor: s.accentColor ?? null,
         accentSecondary: s.accentSecondary ?? null,
         email: s.email ?? null,
+        instagramHandle: s.instagramHandle ?? null,
+        phone: s.phone ?? null,
         emailNotificationsEnabled:
           s.emailNotificationsEnabled === undefined || s.emailNotificationsEnabled === null
             ? true

@@ -20,7 +20,7 @@ export class Reservation extends BaseEntity {
   @Column()
   shopId: string;
 
-  @Column({ type: 'date' })
+  @Column({ type: 'date', utc: true })
   businessDate: string;
 
   @Column({ type: 'varchar', length: 120, default: '' })

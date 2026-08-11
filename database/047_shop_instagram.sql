@@ -1,0 +1,2 @@
+ALTER TABLE shops
+  ADD COLUMN instagramHandle VARCHAR(30) NULL;

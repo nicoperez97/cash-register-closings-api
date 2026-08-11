@@ -1,0 +1,2 @@
+ALTER TABLE user_shops
+  ADD COLUMN isReservationAdmin TINYINT(1) NOT NULL DEFAULT 0;

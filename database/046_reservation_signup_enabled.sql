@@ -1,0 +1,2 @@
+ALTER TABLE shops
+  ADD COLUMN reservationSignupEnabled TINYINT(1) NOT NULL DEFAULT 1;

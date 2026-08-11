@@ -59,6 +59,10 @@ export class UserShop {
   @Column({ default: false })
   isShortageAdmin: boolean;
 
+  /** Recibe notificaciones y mails de solicitudes/reservas. */
+  @Column({ default: false })
+  isReservationAdmin: boolean;
+
   @ManyToOne(() => User, (u) => u.userShops, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'userId' })
   user: User;

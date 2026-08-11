@@ -10,7 +10,7 @@ export class ReservationDayNotice extends BaseEntity {
   @Column()
   shopId: string;
 
-  @Column({ type: 'date' })
+  @Column({ type: 'date', utc: true })
   businessDate: string;
 
   @Column({ type: 'text' })
