@@ -127,7 +127,8 @@ export class PayrollService {
     for (const emp of employees) {
       const empDays = days.filter((d) => d.employeeId === emp.id);
       const daysWorked = empDays.filter((d) => d.isPresent).length;
-      const holidayDays = empDays.filter((d) => d.isHoliday).length;
+      // Feriado solo suma si no se marcó presente (evita doble conteo).
+      const holidayDays = empDays.filter((d) => d.isHoliday && !d.isPresent).length;
       const overtimeHours = empDays.reduce((s, d) => s + n(d.overtimeHours), 0);
       const base = n(emp.baseSalary);
       const daily = base / WORK_DAYS_BASE;
