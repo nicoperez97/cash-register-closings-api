@@ -23,6 +23,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { MovementsService } from '../movements/movements.service';
 import { resolveUserPermissions } from '../../common/guards';
 import { isEntityActive } from '../../common/active.util';
+import { resolveShopCalendarDate } from '../../common/business-date';
 import { deletePaymentUploads, deleteUploadIfExists, resolveUploadPath, saveUploadFile } from '../../common/uploads';
 import { ocrAndParseInvoice, ParsedInvoice } from './invoice-ocr.parser';
 
@@ -140,6 +141,28 @@ export class PaymentsService implements OnModuleInit {
 
   private canManage(user: AuthUser, shopId: string) {
     return resolveUserPermissions(user, shopId).includes('payments.manage');
+  }
+
+  /** Si no hay asignado, solo manage; si hay, el asignado o manage. */
+  private assertAssignedOrManage(
+    user: AuthUser,
+    shopId: string,
+    assignedUserId: string | null | undefined,
+    roleLabel: string,
+  ) {
+    if (this.canManage(user, shopId)) return;
+    if (assignedUserId && assignedUserId === user.id) return;
+    if (!assignedUserId) {
+      throw new ForbiddenException(
+        `Sin ${roleLabel} asignado: hace falta permiso de gestión de pagos`,
+      );
+    }
+    throw new ForbiddenException(`Solo ${roleLabel} puede hacerlo`);
+  }
+
+  private async shopTodayIso(shopId: string): Promise<string> {
+    const shop = await this.shops.getShopEntity(shopId);
+    return resolveShopCalendarDate(new Date(), { timezone: shop?.timezone });
   }
 
   private async load(shopId: string, id: string) {
@@ -340,7 +363,7 @@ export class PaymentsService implements OnModuleInit {
       throw new BadRequestException('No hay cuenta EGRESO activa en el local');
     }
     const paidAt =
-      this.toDateOnly(payment.paidAt) || new Date().toISOString().slice(0, 10);
+      this.toDateOnly(payment.paidAt) || (await this.shopTodayIso(shopId));
     const basePayload = {
       businessDate: paidAt,
       fromAccountId: payment.accountId,
@@ -963,13 +986,7 @@ export class PaymentsService implements OnModuleInit {
     if (row.status !== PaymentStatus.PENDING_VALIDATION) {
       throw new BadRequestException('El pago no está pendiente de validación');
     }
-    if (
-      row.validatorUserId &&
-      row.validatorUserId !== user.id &&
-      !this.canManage(user, shopId)
-    ) {
-      throw new ForbiddenException('Solo quien valida puede aprobar este pago');
-    }
+    this.assertAssignedOrManage(user, shopId, row.validatorUserId, 'quien valida');
 
     row.status = PaymentStatus.VALIDATED;
     row.validatedAt = new Date();
@@ -998,13 +1015,7 @@ export class PaymentsService implements OnModuleInit {
     if (row.status !== PaymentStatus.PENDING_VALIDATION) {
       throw new BadRequestException('El pago no está pendiente de validación');
     }
-    if (
-      row.validatorUserId &&
-      row.validatorUserId !== user.id &&
-      !this.canManage(user, shopId)
-    ) {
-      throw new ForbiddenException('Solo quien valida puede rechazar este pago');
-    }
+    this.assertAssignedOrManage(user, shopId, row.validatorUserId, 'quien valida');
 
     row.status = PaymentStatus.REJECTED;
     row.validatedAt = new Date();
@@ -1043,9 +1054,7 @@ export class PaymentsService implements OnModuleInit {
     if (row.status !== PaymentStatus.VALIDATED) {
       throw new BadRequestException('El pago debe estar validado para marcarlo como pagado');
     }
-    if (row.payerUserId && row.payerUserId !== user.id && !this.canManage(user, shopId)) {
-      throw new ForbiddenException('Solo quien paga puede marcar este pago como pagado');
-    }
+    this.assertAssignedOrManage(user, shopId, row.payerUserId, 'quien paga');
 
     const accountId = body?.accountId || row.accountId;
     if (!accountId) {
@@ -1055,15 +1064,17 @@ export class PaymentsService implements OnModuleInit {
       throw new BadRequestException('El pago necesita un monto mayor a 0 para abonarlo');
     }
     await this.assertAccount(shopId, accountId);
-    row.accountId = accountId;
 
     const paymentMethod = this.parsePaymentMethod(
       body?.paymentMethod ?? row.paymentMethod ?? null,
       { required: true },
     );
-    row.paymentMethod = paymentMethod;
 
-    const paidAt = body?.paidAt || new Date().toISOString().slice(0, 10);
+    const paidAt =
+      this.toDateOnly(body?.paidAt) || (await this.shopTodayIso(shopId));
+    if (!paidAt) {
+      throw new BadRequestException('Fecha de pago inválida');
+    }
 
     const egreso = await this.accounts.findOne({
       where: { shopId, code: 'EGRESO', active: true },
@@ -1072,26 +1083,62 @@ export class PaymentsService implements OnModuleInit {
       throw new BadRequestException('No hay cuenta EGRESO en el local');
     }
 
-    const movement = await this.movements.create(user, shopId, {
-      businessDate: paidAt,
-      fromAccountId: accountId,
-      toAccountId: egreso.id,
-      fromUserId: row.payerUserId ?? null,
-      employeeId: row.employeeId ?? null,
-      description: [
-        `Pago: ${this.displayTitle(row)}`,
-        row.supplier?.name ? `Proveedor: ${row.supplier.name}` : null,
-        row.employee?.fullName ? `Empleado: ${row.employee.fullName}` : null,
-      ]
-        .filter(Boolean)
-        .join(' · '),
-      amountUyu: n(row.amount),
-    });
+    // Claim atómico: evita doble egreso por doble clic / reintento.
+    const claim = await this.payments
+      .createQueryBuilder()
+      .update(Payment)
+      .set({
+        status: PaymentStatus.PAID,
+        paidAt,
+        accountId,
+        paymentMethod,
+      })
+      .where('id = :id AND shopId = :shopId AND status = :st AND active = true', {
+        id,
+        shopId,
+        st: PaymentStatus.VALIDATED,
+      })
+      .execute();
+    if (!claim.affected) {
+      throw new BadRequestException('El pago ya fue abonado o cambió de estado');
+    }
 
-    row.status = PaymentStatus.PAID;
-    row.paidAt = paidAt;
-    row.movementId = movement.id;
-    await this.payments.save(row);
+    try {
+      const movement = await this.movements.create(user, shopId, {
+        businessDate: paidAt,
+        fromAccountId: accountId,
+        toAccountId: egreso.id,
+        fromUserId: row.payerUserId ?? null,
+        employeeId: row.employeeId ?? null,
+        description: [
+          `Pago: ${this.displayTitle(row)}`,
+          row.supplier?.name ? `Proveedor: ${row.supplier.name}` : null,
+          row.employee?.fullName ? `Empleado: ${row.employee.fullName}` : null,
+        ]
+          .filter(Boolean)
+          .join(' · '),
+        amountUyu: n(row.amount),
+      });
+
+      await this.payments
+        .createQueryBuilder()
+        .update(Payment)
+        .set({ movementId: movement.id })
+        .where('id = :id AND shopId = :shopId', { id, shopId })
+        .execute();
+    } catch (err) {
+      await this.payments.update(
+        { id, shopId },
+        {
+          status: PaymentStatus.VALIDATED,
+          paidAt: null,
+          movementId: null,
+          accountId: row.accountId ?? null,
+          paymentMethod: row.paymentMethod ?? null,
+        },
+      );
+      throw err;
+    }
 
     void this.notifyAdminsPaymentPaid(user, shopId, row, paidAt).catch(() => undefined);
 
