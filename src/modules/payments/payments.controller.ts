@@ -10,10 +10,12 @@ import {
   Query,
   Res,
   UploadedFile,
+  UseFilters,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -24,6 +26,7 @@ import {
 } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { Response } from 'express';
+import { MulterExceptionFilter } from '../../common/filters/multer-exception.filter';
 import {
   IsDateString,
   IsIn,
@@ -223,6 +226,7 @@ class ResendPaymentNotificationDto {
 @ApiTags('payments')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'), PermissionsGuard)
+@UseFilters(MulterExceptionFilter)
 @Controller('shops/:shopId/payments')
 export class PaymentsController {
   constructor(private readonly payments: PaymentsService) {}
@@ -321,7 +325,10 @@ export class PaymentsController {
     },
   })
   @UseInterceptors(
-    FileInterceptor('file', { limits: { fileSize: 15 * 1024 * 1024 } }),
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 15 * 1024 * 1024, fieldSize: 2 * 1024 * 1024 },
+    }),
   )
   parseInvoice(
     @CurrentUser() user: AuthUser,
@@ -377,7 +384,10 @@ export class PaymentsController {
     },
   })
   @UseInterceptors(
-    FileInterceptor('file', { limits: { fileSize: 15 * 1024 * 1024 } }),
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 15 * 1024 * 1024, fieldSize: 2 * 1024 * 1024 },
+    }),
   )
   uploadInvoice(
     @CurrentUser() user: AuthUser,
@@ -425,7 +435,10 @@ export class PaymentsController {
     },
   })
   @UseInterceptors(
-    FileInterceptor('file', { limits: { fileSize: 15 * 1024 * 1024 } }),
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 15 * 1024 * 1024, fieldSize: 2 * 1024 * 1024 },
+    }),
   )
   uploadReceipt(
     @CurrentUser() user: AuthUser,
