@@ -52,6 +52,11 @@ class CreatePaymentDto {
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
   @IsDateString()
   dueDate?: string | null;
+  @ApiPropertyOptional({ enum: ['low', 'medium', 'high'] })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsIn(['low', 'medium', 'high'])
+  priority?: 'low' | 'medium' | 'high' | null;
   @ApiPropertyOptional()
   @IsOptional()
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
@@ -126,6 +131,11 @@ class UpdatePaymentDto {
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
   @IsDateString()
   dueDate?: string | null;
+  @ApiPropertyOptional({ enum: ['low', 'medium', 'high'] })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsIn(['low', 'medium', 'high'])
+  priority?: 'low' | 'medium' | 'high' | null;
   @ApiPropertyOptional()
   @IsOptional()
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
