@@ -156,6 +156,13 @@ export class CashWithdrawalsService {
     const picker = await this.users.findOne({ where: { id: dto.userId, active: true } });
     if (!picker) throw new BadRequestException('Usuario no encontrado');
 
+    const membership = await this.userShops.findOne({
+      where: { shopId, userId: dto.userId },
+    });
+    if (!membership) {
+      throw new BadRequestException('El usuario no pertenece a este local');
+    }
+
     const account = await this.accounts.resolvePartnerAccountForUser(
       shopId,
       dto.userId,

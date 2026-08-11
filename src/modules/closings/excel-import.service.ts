@@ -5,6 +5,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
+import { randomBytes } from 'crypto';
 import * as ExcelJS from 'exceljs';
 import { CashClosing } from '../../entities/cash-closing.entity';
 import { User } from '../../entities/user.entity';
@@ -13,8 +14,6 @@ import { AuthUser } from '../../common/decorators';
 import { GlobalRole } from '../../common/enums';
 import { ShopsService } from '../shops/shops.service';
 import { ClosingsService } from './closings.service';
-
-const IMPORT_PASSWORD = '123456';
 
 export interface ExcelImportItem {
   businessDate: string;
@@ -92,7 +91,7 @@ export class ExcelImportService {
     info.addRow(['2. La Fecha es obligatoria (AAAA-MM-DD o DD/MM/AAAA).']);
     info.addRow(['3. Completá al menos PVS o Efectivo (u otros medios).']);
     info.addRow(['4. Si Total queda vacío, se calcula sumando los medios.']);
-    info.addRow(['5. "Quién se lo lleva": nombre de un usuario del local (si no existe, se crea como Visor / 123456).']);
+    info.addRow(['5. "Quién se lo lleva": nombre de un usuario del local (si no existe, se crea como Visor con contraseña aleatoria; no se puede usar hasta reset).']);
     info.addRow(['6. No cambies los nombres de las columnas de la fila 1.']);
     info.addRow(['7. Borrá la fila de ejemplo antes de importar, o dejala si querés cargar ese día.']);
 
@@ -497,7 +496,7 @@ export class ExcelImportService {
   }
 
   private async createViewerUser(fullName: string, shopId: string): Promise<User> {
-    const passwordHash = await bcrypt.hash(IMPORT_PASSWORD, 10);
+    const passwordHash = await bcrypt.hash(randomBytes(24).toString('base64url'), 10);
     const email = await this.uniqueImportEmail(fullName);
     const user = await this.users.save(
       this.users.create({

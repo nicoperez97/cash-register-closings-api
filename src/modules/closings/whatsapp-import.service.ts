@@ -5,6 +5,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
+import { randomBytes } from 'crypto';
 import AdmZip from 'adm-zip';
 import { CashClosing } from '../../entities/cash-closing.entity';
 import { Shop } from '../../entities/shop.entity';
@@ -19,8 +20,6 @@ import {
   parseWhatsAppChat,
   ParsedClosingDraft,
 } from './whatsapp-chat.parser';
-
-const IMPORT_PASSWORD = '123456';
 
 export interface WhatsappImportItem {
   businessDate: string;
@@ -233,7 +232,7 @@ export class WhatsappImportService {
   }
 
   private async createViewerUser(fullName: string, shopId: string): Promise<User> {
-    const passwordHash = await bcrypt.hash(IMPORT_PASSWORD, 10);
+    const passwordHash = await bcrypt.hash(randomBytes(24).toString('base64url'), 10);
     const email = await this.uniqueImportEmail(fullName);
     const user = await this.users.save(
       this.users.create({
