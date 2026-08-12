@@ -7,12 +7,14 @@ import {
   Headers,
   Post,
   Query,
+  UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiProperty, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
+import { ConfigService } from '@nestjs/config';
 import { Type } from 'class-transformer';
-import { IsObject, IsString, ValidateNested } from 'class-validator';
+import { IsObject, IsOptional, IsString, ValidateNested } from 'class-validator';
 import { CurrentUser, AuthUser, Public } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { PushService } from './push.service';
@@ -31,10 +33,34 @@ class SubscribePushDto {
   keys: PushKeysDto;
 }
 
+class BroadcastAppUpdateDto {
+  @ApiPropertyOptional({ description: 'Identificador de versión (ej. commit SHA)' })
+  @IsOptional()
+  @IsString()
+  version?: string;
+}
+
 @ApiTags('push')
 @Controller('push')
 export class PushController {
-  constructor(private readonly push: PushService) {}
+  constructor(
+    private readonly push: PushService,
+    private readonly config: ConfigService,
+  ) {}
+
+  /** Webhook post-deploy: notifica push a todos los suscriptores (sin mail). */
+  @Public()
+  @Post('broadcast-app-update')
+  broadcastAppUpdate(
+    @Headers('x-deploy-secret') secret: string | undefined,
+    @Body() dto?: BroadcastAppUpdateDto,
+  ) {
+    const expected = this.config.get<string>('deployWebhookSecret') ?? '';
+    if (!expected || !secret || secret !== expected) {
+      throw new UnauthorizedException('No autorizado');
+    }
+    return this.push.broadcastAppUpdate(dto?.version);
+  }
 
   /** Clave pública VAPID (necesaria para suscribir el navegador). */
   @Public()
