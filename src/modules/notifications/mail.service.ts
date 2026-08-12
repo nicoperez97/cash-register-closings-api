@@ -203,16 +203,17 @@ export class MailService {
   private async renderMail(input: MailPayload, shop: ShopMailRow | null, user: User) {
     const action = this.actionForType(String(input.type));
     const actionUrl = this.appOrigin ? `${this.appOrigin}${action.path}` : null;
-    const logo = await loadEmailSafeShopLogo(shop?.logoUrl);
+    const { shopLogoUrl, logo } = await this.resolveMailLogo(
+      input.shopId,
+      shop?.logoUrl,
+    );
     const tpl: MailTemplateInput = {
       type: String(input.type),
       title: input.title,
       body: input.body,
       recipientName: user.fullName,
       shopName: shop?.name ?? null,
-      shopLogoUrl: logo
-        ? `cid:${logo.cid}`
-        : this.emailLogoUrl(input.shopId, shop?.logoUrl),
+      shopLogoUrl,
       accentColor: shop?.accentColor ?? null,
       accentSecondary: shop?.accentSecondary ?? null,
       actionUrl,
@@ -225,10 +226,27 @@ export class MailService {
     };
   }
 
+  /**
+   * Preferir URL https pública: Gmail lista cualquier CID como adjunto (logo.png / noname).
+   * CID solo si no hay origen público usable.
+   */
+  private async resolveMailLogo(
+    shopId: string | null | undefined,
+    logoUrlRaw?: string | null,
+  ): Promise<{ shopLogoUrl: string | null; logo: EmailLogoAsset | null }> {
+    const hosted = this.emailLogoUrl(shopId, logoUrlRaw);
+    if (hosted) {
+      return { shopLogoUrl: hosted, logo: null };
+    }
+    const logo = await loadEmailSafeShopLogo(logoUrlRaw);
+    if (logo) {
+      return { shopLogoUrl: `cid:${logo.cid}`, logo };
+    }
+    return { shopLogoUrl: null, logo: null };
+  }
+
   private logoAttachments(logo: EmailLogoAsset | null) {
     if (!logo) return undefined;
-    // Sin filename: Gmail/Outlook listan "logo.png" como adjunto aunque sea CID inline.
-    // Con `cid` + image/*, Nodemailer lo mete en multipart/related (no hace falta forzar disposition).
     return [
       {
         filename: false as const,
@@ -337,16 +355,17 @@ export class MailService {
     }
     const shopName = shop?.name?.trim() || null;
     const fromHeader = shopName ? `"${shopName}" <${fromEmail}>` : fromEmail;
-    const logo = await loadEmailSafeShopLogo(shop?.logoUrl);
+    const { shopLogoUrl, logo } = await this.resolveMailLogo(
+      input.shopId,
+      shop?.logoUrl,
+    );
     const tpl: MailTemplateInput = {
       type: input.type,
       title: input.title,
       body: input.body,
       recipientName: input.guestName,
       shopName,
-      shopLogoUrl: logo
-        ? `cid:${logo.cid}`
-        : this.emailLogoUrl(input.shopId, shop?.logoUrl),
+      shopLogoUrl,
       accentColor: shop?.accentColor ?? null,
       accentSecondary: shop?.accentSecondary ?? null,
       actionUrl: null,
