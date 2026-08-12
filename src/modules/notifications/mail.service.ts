@@ -9,6 +9,7 @@ import { Shop } from '../../entities/shop.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { NotificationType } from '../../common/enums';
 import { isEntityActive } from '../../common/active.util';
+import { resolveShopLogoUrlForEmail } from '../../common/shop-branding.util';
 import {
   buildNotificationEmailHtml,
   buildNotificationEmailText,
@@ -203,7 +204,7 @@ export class MailService {
       body: input.body,
       recipientName: user.fullName,
       shopName: shop?.name ?? null,
-      shopLogoUrl: shop?.logoUrl ?? null,
+      shopLogoUrl: this.emailLogoUrl(input.shopId, shop?.logoUrl),
       accentColor: shop?.accentColor ?? null,
       accentSecondary: shop?.accentSecondary ?? null,
       actionUrl,
@@ -213,6 +214,13 @@ export class MailService {
       text: buildNotificationEmailText(tpl),
       html: buildNotificationEmailHtml(tpl),
     };
+  }
+
+  private emailLogoUrl(
+    shopId: string | null | undefined,
+    logoUrlRaw?: string | null,
+  ): string | null {
+    return resolveShopLogoUrlForEmail(this.appOrigin, shopId, logoUrlRaw);
   }
 
   async sendNotificationEmail(input: MailPayload): Promise<void> {
@@ -306,7 +314,7 @@ export class MailService {
       body: input.body,
       recipientName: input.guestName,
       shopName,
-      shopLogoUrl: shop?.logoUrl ?? null,
+      shopLogoUrl: this.emailLogoUrl(input.shopId, shop?.logoUrl),
       accentColor: shop?.accentColor ?? null,
       accentSecondary: shop?.accentSecondary ?? null,
       actionUrl: null,
