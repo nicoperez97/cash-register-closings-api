@@ -227,13 +227,14 @@ export class MailService {
 
   private logoAttachments(logo: EmailLogoAsset | null) {
     if (!logo) return undefined;
+    // Sin filename: Gmail/Outlook listan "logo.png" como adjunto aunque sea CID inline.
+    // Con `cid` + image/*, Nodemailer lo mete en multipart/related (no hace falta forzar disposition).
     return [
       {
-        filename: `logo.${logo.contentType === 'image/png' ? 'png' : logo.contentType === 'image/gif' ? 'gif' : 'jpg'}`,
+        filename: false as const,
         content: logo.buffer,
         contentType: logo.contentType,
         cid: logo.cid,
-        contentDisposition: 'inline' as const,
       },
     ];
   }
