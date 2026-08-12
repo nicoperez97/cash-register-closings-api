@@ -24,6 +24,32 @@ function isEmailSafeMime(contentType: string): boolean {
   return EMAIL_SAFE_MIME.has(base);
 }
 
+/** Sniff por magic bytes (Content-Type de CDNs a veces miente). */
+function mimeFromMagic(buf: Buffer): string | null {
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  if (
+    buf.length >= 8 &&
+    buf[0] === 0x89 &&
+    buf[1] === 0x50 &&
+    buf[2] === 0x4e &&
+    buf[3] === 0x47
+  ) {
+    return 'image/png';
+  }
+  if (
+    buf.length >= 6 &&
+    buf[0] === 0x47 &&
+    buf[1] === 0x49 &&
+    buf[2] === 0x46 &&
+    buf[3] === 0x38
+  ) {
+    return 'image/gif';
+  }
+  return null;
+}
+
 export type EmailLogoAsset = {
   buffer: Buffer;
   contentType: string;
@@ -32,6 +58,31 @@ export type EmailLogoAsset = {
 };
 
 export const EMAIL_LOGO_CID = 'shop-logo@crc';
+
+/**
+ * Comprueba que una URL https sirva JPEG/PNG/GIF (usable en Gmail).
+ * Evita poner en el mail un link que después se vea roto (p.ej. API local
+ * apuntando a PUBLIC_APP_ORIGIN de prod sin ese logo).
+ */
+export async function probeEmailSafeImageUrl(url: string): Promise<boolean> {
+  const target = (url ?? '').trim();
+  if (!/^https?:\/\//i.test(target)) return false;
+  try {
+    const upstream = await fetch(target, {
+      redirect: 'follow',
+      headers: { Accept: 'image/*,*/*;q=0.8' },
+    });
+    if (!upstream.ok) return false;
+    const headerType = upstream.headers.get('content-type') || '';
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    if (!buffer.length) return false;
+    const sniffed = mimeFromMagic(buffer);
+    if (sniffed) return true;
+    return isEmailSafeMime(headerType);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Carga el logo en un formato usable en emails (JPEG/PNG/GIF).
@@ -73,6 +124,8 @@ export async function loadEmailSafeShopLogo(
   }
 
   if (!buffer?.length) return null;
+  const sniffed = mimeFromMagic(buffer);
+  if (sniffed) contentType = sniffed;
   if (!isEmailSafeMime(contentType)) return null;
 
   return {

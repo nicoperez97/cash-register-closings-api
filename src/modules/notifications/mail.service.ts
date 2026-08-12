@@ -12,6 +12,7 @@ import { isEntityActive } from '../../common/active.util';
 import { resolveShopLogoUrlForEmail } from '../../common/shop-branding.util';
 import {
   loadEmailSafeShopLogo,
+  probeEmailSafeImageUrl,
   type EmailLogoAsset,
 } from '../../common/email-logo.util';
 import {
@@ -227,15 +228,15 @@ export class MailService {
   }
 
   /**
-   * Preferir URL https pública: Gmail lista cualquier CID como adjunto (logo.png / noname).
-   * CID solo si no hay origen público usable.
+   * 1) URL https pública si realmente sirve JPEG/PNG/GIF (sin adjunto en Gmail).
+   * 2) Si no (API local → prod 404, WebP, etc.): CID embebido para que el logo se vea.
    */
   private async resolveMailLogo(
     shopId: string | null | undefined,
     logoUrlRaw?: string | null,
   ): Promise<{ shopLogoUrl: string | null; logo: EmailLogoAsset | null }> {
     const hosted = this.emailLogoUrl(shopId, logoUrlRaw);
-    if (hosted) {
+    if (hosted && (await probeEmailSafeImageUrl(hosted))) {
       return { shopLogoUrl: hosted, logo: null };
     }
     const logo = await loadEmailSafeShopLogo(logoUrlRaw);
