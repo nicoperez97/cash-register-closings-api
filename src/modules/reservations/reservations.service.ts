@@ -23,6 +23,10 @@ import { resolveShopCalendarDate } from '../../common/business-date';
 import { isEntityActive } from '../../common/active.util';
 import { normalizeLogoUrl } from '../../common/drive-url';
 import { isIsoDateOnly, toIsoDateOnly } from '../../common/iso-date';
+import {
+  dayOverridesFromRow,
+  rowHasDayContent,
+} from './reservation-day-settings.util';
 
 /** Estados que cuentan para totales / capacidad (excluye canceladas y no-show). */
 const ACTIVE_RESERVATION_STATUSES = [
@@ -88,6 +92,17 @@ export class ReservationsService implements OnModuleInit {
       `);
     } catch {
       // ya existe
+    }
+    for (const sql of [
+      `ALTER TABLE reservation_day_notices ADD COLUMN signupEnabled TINYINT(1) NULL`,
+      `ALTER TABLE reservation_day_notices ADD COLUMN insideEnabled TINYINT(1) NULL`,
+      `ALTER TABLE reservation_day_notices ADD COLUMN outsideEnabled TINYINT(1) NULL`,
+    ]) {
+      try {
+        await this.dayNotices.query(sql);
+      } catch {
+        // ya aplicado
+      }
     }
   }
 
@@ -199,10 +214,13 @@ export class ReservationsService implements OnModuleInit {
       .orderBy('r.createdAt', 'DESC')
       .getMany();
     const notice = await this.findDayNoticeMessage(shopId, businessDate);
+    const dayRow = await this.findDayNoticeRow(shopId, businessDate);
+    const daySettings = dayOverridesFromRow(dayRow);
     return {
       shopId,
       businessDate,
       notice,
+      daySettings,
       reservations: rows.map((r, index) => ({
         ...this.toReservationDto(r),
         number: index + 1,
@@ -213,7 +231,13 @@ export class ReservationsService implements OnModuleInit {
   async upsertDayNotice(
     user: AuthUser,
     shopId: string,
-    dto: { businessDate?: string; message?: string | null },
+    dto: {
+      businessDate?: string;
+      message?: string | null;
+      signupEnabled?: boolean | null;
+      insideEnabled?: boolean | null;
+      outsideEnabled?: boolean | null;
+    },
   ) {
     this.shops.assertShopAccess(user, shopId);
     const shop = await this.shops.assertReservationsEnabled(shopId);
@@ -224,44 +248,77 @@ export class ReservationsService implements OnModuleInit {
     const businessDate = isIsoDateOnly(dateRaw)
       ? dateRaw
       : resolveShopCalendarDate(new Date(), { timezone: shop.timezone });
-    const message = String(dto.message ?? '').trim();
+
+    const touchesMessage = dto.message !== undefined;
+    const touchesSettings =
+      dto.signupEnabled !== undefined ||
+      dto.insideEnabled !== undefined ||
+      dto.outsideEnabled !== undefined;
+    if (!touchesMessage && !touchesSettings) {
+      throw new BadRequestException('Indicá mensaje o configuración del día');
+    }
 
     let row = await this.dayNotices.findOne({
       where: { shopId, businessDate },
       withDeleted: true,
     });
 
-    if (!message) {
-      if (row) {
-        row.message = '';
-        row.active = false;
-        row.deletedAt = null as unknown as undefined;
-        await this.dayNotices.save(row);
-      }
-      return { shopId, businessDate, notice: null as string | null };
+    if (!row) {
+      row = this.dayNotices.create({
+        shopId,
+        businessDate,
+        message: '',
+        signupEnabled: null,
+        insideEnabled: null,
+        outsideEnabled: null,
+        active: true,
+      });
     }
 
-    if (row) {
-      row.message = message;
-      row.active = true;
+    if (touchesMessage) {
+      row.message = String(dto.message ?? '').trim();
+    }
+    if (dto.signupEnabled !== undefined) {
+      row.signupEnabled = dto.signupEnabled;
+    }
+    if (dto.insideEnabled !== undefined) {
+      row.insideEnabled = dto.insideEnabled;
+    }
+    if (dto.outsideEnabled !== undefined) {
+      row.outsideEnabled = dto.outsideEnabled;
+    }
+
+    if (!rowHasDayContent(row)) {
+      row.active = false;
       row.deletedAt = null as unknown as undefined;
       await this.dayNotices.save(row);
-    } else {
-      row = await this.dayNotices.save(
-        this.dayNotices.create({
-          shopId,
-          businessDate,
-          message,
-          active: true,
-        }),
-      );
+      return {
+        shopId,
+        businessDate,
+        notice: null as string | null,
+        daySettings: null,
+      };
     }
 
+    row.active = true;
+    row.deletedAt = null as unknown as undefined;
+    await this.dayNotices.save(row);
+
+    const noticeMsg = String(row.message ?? '').trim();
     return {
       shopId,
       businessDate,
-      notice: row.message,
+      notice: noticeMsg || null,
+      daySettings: dayOverridesFromRow(row),
     };
+  }
+
+  private async findDayNoticeRow(shopId: string, businessDate: string) {
+    const row = await this.dayNotices.findOne({
+      where: { shopId, businessDate, active: true },
+    });
+    if (!row || !isEntityActive(row.active)) return null;
+    return row;
   }
 
   private async findDayNoticeMessage(

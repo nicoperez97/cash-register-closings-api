@@ -121,6 +121,34 @@ export class PushService implements OnModuleInit {
     return { ok: true };
   }
 
+  /** Envía push a todos los usuarios con suscripción activa (sin mail ni inbox). */
+  async sendToAllSubscribers(payload: PushPayload): Promise<{ users: number }> {
+    if (!this.enabled) return { users: 0 };
+    const raw = await this.subscriptions
+      .createQueryBuilder('s')
+      .select('DISTINCT s.userId', 'userId')
+      .where('s.active = true')
+      .getRawMany<{ userId: string }>();
+    const userIds = [...new Set(raw.map((r) => String(r.userId || '').trim()).filter(Boolean))];
+    if (!userIds.length) return { users: 0 };
+    await this.sendToUsers(userIds, payload);
+    return { users: userIds.length };
+  }
+
+  async broadcastAppUpdate(version?: string): Promise<{ ok: true; users: number }> {
+    const tag = version
+      ? `crc-app-update-${String(version).trim().slice(0, 16)}`
+      : 'crc-app-update';
+    const { users } = await this.sendToAllSubscribers({
+      title: 'Nueva versión',
+      body: 'Hay una actualización disponible. Tocá para abrir la app.',
+      url: '/',
+      tag,
+    });
+    this.logger.log(`Broadcast app update (${tag}): ${users} usuario(s) con push`);
+    return { ok: true, users };
+  }
+
   async sendToUsers(userIds: string[], payload: PushPayload) {
     if (!this.enabled || !userIds.length) return;
     const unique = [...new Set(userIds.filter(Boolean))];

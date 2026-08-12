@@ -24,6 +24,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateIf,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { CurrentUser, AuthUser, RequirePermissions, Public } from '../../common/decorators';
@@ -237,6 +238,27 @@ class UpsertDayNoticeDto {
   @IsString()
   @MaxLength(2000)
   message?: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'NULL hereda del local; false cierra el formulario web ese día.',
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsBoolean()
+  signupEnabled?: boolean | null;
+
+  @ApiPropertyOptional({ nullable: true, description: 'NULL hereda; false desactiva adentro.' })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsBoolean()
+  insideEnabled?: boolean | null;
+
+  @ApiPropertyOptional({ nullable: true, description: 'NULL hereda; false desactiva afuera.' })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsBoolean()
+  outsideEnabled?: boolean | null;
 }
 
 @ApiTags('reservations')
@@ -424,8 +446,8 @@ export class PublicReservationsController {
 
   @Public()
   @Get(':slug/reservation-signup')
-  signupInfo(@Param('slug') slug: string) {
-    return this.requests.publicSignupInfo(slug);
+  signupInfo(@Param('slug') slug: string, @Query('date') date?: string) {
+    return this.requests.publicSignupInfo(slug, date);
   }
 
   @Public()

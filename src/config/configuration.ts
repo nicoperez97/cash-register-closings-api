@@ -41,6 +41,8 @@ export default () => {
         'https://cierres.perezcompany.com.ar'
       ).trim(),
     },
+    /** Secreto para webhook de deploy (broadcast push de nueva versión). */
+    deployWebhookSecret: (env.DEPLOY_WEBHOOK_SECRET ?? '').trim(),
     smtp: {
       host: (env.SMTP_HOST ?? '').trim(),
       port: parseInt(env.SMTP_PORT ?? '587', 10),

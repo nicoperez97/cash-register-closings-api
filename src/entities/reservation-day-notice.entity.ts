@@ -16,6 +16,18 @@ export class ReservationDayNotice extends BaseEntity {
   @Column({ type: 'text' })
   message: string;
 
+  /** NULL = hereda reservationSignupEnabled del local. */
+  @Column({ type: 'boolean', nullable: true })
+  signupEnabled: boolean | null;
+
+  /** NULL = hereda reservationInsideEnabled del local. */
+  @Column({ type: 'boolean', nullable: true })
+  insideEnabled: boolean | null;
+
+  /** NULL = hereda reservationOutsideEnabled del local. */
+  @Column({ type: 'boolean', nullable: true })
+  outsideEnabled: boolean | null;
+
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })
   shop: Shop;

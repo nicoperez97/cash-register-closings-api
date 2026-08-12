@@ -10,7 +10,7 @@ import { AuthUser } from '../../common/decorators';
 import { NotificationType } from '../../common/enums';
 import { isEntityActive } from '../../common/active.util';
 import { resolveShopCalendarDate } from '../../common/business-date';
-import { toIsoDateOnly } from '../../common/iso-date';
+import { isIsoDateOnly, toIsoDateOnly } from '../../common/iso-date';
 import { UserShop } from '../../entities/user-shop.entity';
 import { Shop } from '../../entities/shop.entity';
 import { Reservation, ReservationArea, ReservationStatus } from '../../entities/reservation.entity';
@@ -21,6 +21,14 @@ import {
 import { MailService } from '../notifications/mail.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { ShopsService } from '../shops/shops.service';
+import { ReservationDayNotice } from '../../entities/reservation-day-notice.entity';
+import {
+  dayOverridesFromRow,
+  effectiveReservationFlags,
+  shopInsideOpen,
+  shopOutsideOpen,
+  shopSignupOpen,
+} from './reservation-day-settings.util';
 
 export type CreatePublicReservationRequestDto = {
   guestName: string;
@@ -45,6 +53,8 @@ export class ReservationRequestsService implements OnModuleInit {
     private readonly userShops: Repository<UserShop>,
     @InjectRepository(Shop)
     private readonly shopsRepo: Repository<Shop>,
+    @InjectRepository(ReservationDayNotice)
+    private readonly dayNotices: Repository<ReservationDayNotice>,
     private readonly shops: ShopsService,
     private readonly notifications: NotificationsService,
     private readonly mail: MailService,
@@ -90,12 +100,20 @@ export class ReservationRequestsService implements OnModuleInit {
     }
   }
 
-  async publicSignupInfo(slug: string) {
+  async publicSignupInfo(slug: string, date?: string) {
     const shop = await this.requirePublicShop(slug);
+    const businessDate =
+      date != null && String(date).trim() !== '' && isIsoDateOnly(date)
+        ? date
+        : resolveShopCalendarDate(new Date(), { timezone: shop.timezone });
+    const overrides = await this.dayOverridesFor(shop.id, businessDate);
+    const flags = effectiveReservationFlags(shop, overrides);
     return {
-      signupEnabled: this.isSignupOpen(shop),
-      insideEnabled: this.isInsideOpen(shop),
-      outsideEnabled: this.isOutsideOpen(shop),
+      signupEnabled: flags.signupEnabled,
+      insideEnabled: flags.insideEnabled,
+      outsideEnabled: flags.outsideEnabled,
+      shopSignupEnabled: shopSignupOpen(shop),
+      businessDate,
       shop: {
         id: shop.id,
         name: shop.name,
@@ -128,8 +146,8 @@ export class ReservationRequestsService implements OnModuleInit {
     if (!shop) {
       throw new NotFoundException('Local no encontrado');
     }
-    const inside = patch.inside === undefined ? this.isInsideOpen(shop) : !!patch.inside;
-    const outside = patch.outside === undefined ? this.isOutsideOpen(shop) : !!patch.outside;
+    const inside = patch.inside === undefined ? shopInsideOpen(shop) : !!patch.inside;
+    const outside = patch.outside === undefined ? shopOutsideOpen(shop) : !!patch.outside;
     if (!inside && !outside) {
       throw new BadRequestException('Dejá al menos un sector habilitado (adentro o afuera)');
     }
@@ -148,8 +166,15 @@ export class ReservationRequestsService implements OnModuleInit {
       return { ok: true };
     }
     const shop = await this.requirePublicShop(slug);
-    if (!this.isSignupOpen(shop)) {
-      throw new BadRequestException('El local no está tomando reservas online por ahora');
+    const businessDate = this.normalizeDate(dto.businessDate);
+    const today = resolveShopCalendarDate(new Date(), { timezone: shop.timezone });
+    if (businessDate < today) {
+      throw new BadRequestException('La fecha no puede ser anterior a hoy');
+    }
+    const overrides = await this.dayOverridesFor(shop.id, businessDate);
+    const flags = effectiveReservationFlags(shop, overrides);
+    if (!flags.signupEnabled) {
+      throw new BadRequestException('No tomamos reservas web para ese día');
     }
     const guestName = String(dto.guestName ?? '').trim();
     if (guestName.length < 2) {
@@ -158,17 +183,12 @@ export class ReservationRequestsService implements OnModuleInit {
     const guestEmail = this.normalizeEmail(dto.guestEmail);
     const instagramHandle = this.normalizeInstagram(dto.instagramHandle);
     const partySize = this.normalizePartySize(dto.partySize);
-    const businessDate = this.normalizeDate(dto.businessDate);
-    const today = resolveShopCalendarDate(new Date(), { timezone: shop.timezone });
-    if (businessDate < today) {
-      throw new BadRequestException('La fecha no puede ser anterior a hoy');
-    }
     const reservationTime = this.normalizeTime(dto.reservationTime);
     const area = this.normalizeArea(dto.area);
-    if (area === ReservationArea.OUTSIDE && !this.isOutsideOpen(shop)) {
+    if (area === ReservationArea.OUTSIDE && !flags.outsideEnabled) {
       throw new BadRequestException('El sector afuera no está disponible');
     }
-    if (area === ReservationArea.INSIDE && !this.isInsideOpen(shop)) {
+    if (area === ReservationArea.INSIDE && !flags.insideEnabled) {
       throw new BadRequestException('El sector adentro no está disponible');
     }
     const guestComment = this.normalizeComment(dto.guestComment);
@@ -337,6 +357,14 @@ export class ReservationRequestsService implements OnModuleInit {
     return row;
   }
 
+  private async dayOverridesFor(shopId: string, businessDate: string) {
+    const row = await this.dayNotices.findOne({
+      where: { shopId, businessDate, active: true },
+    });
+    if (!row || !isEntityActive(row.active)) return null;
+    return dayOverridesFromRow(row);
+  }
+
   private async requirePublicShop(slug: string) {
     const shop = await this.shops.findActiveBySlug(String(slug ?? '').trim().toLowerCase());
     if (!shop || !shop.reservationsEnabled) {
@@ -346,24 +374,15 @@ export class ReservationRequestsService implements OnModuleInit {
   }
 
   private isSignupOpen(shop: Shop): boolean {
-    if (shop.reservationSignupEnabled === undefined || shop.reservationSignupEnabled === null) {
-      return true;
-    }
-    return !!shop.reservationSignupEnabled;
+    return shopSignupOpen(shop);
   }
 
   private isInsideOpen(shop: Shop): boolean {
-    if (shop.reservationInsideEnabled === undefined || shop.reservationInsideEnabled === null) {
-      return true;
-    }
-    return !!shop.reservationInsideEnabled;
+    return shopInsideOpen(shop);
   }
 
   private isOutsideOpen(shop: Shop): boolean {
-    if (shop.reservationOutsideEnabled === undefined || shop.reservationOutsideEnabled === null) {
-      return true;
-    }
-    return !!shop.reservationOutsideEnabled;
+    return shopOutsideOpen(shop);
   }
 
   private toDto(r: ReservationRequest) {
