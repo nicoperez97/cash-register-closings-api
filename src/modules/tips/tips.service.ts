@@ -446,6 +446,33 @@ export class TipsService implements OnModuleInit {
     return this.toAllocationDto(row);
   }
 
+  async setDeliveredAll(
+    user: AuthUser,
+    shopId: string,
+    businessDate: string,
+    delivered: boolean,
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    await this.shops.assertTipsEnabled(shopId);
+    const day = await this.tipDays.findOne({
+      where: { shopId, businessDate, active: true },
+    });
+    if (!day) throw new NotFoundException('Día de propinas no encontrado');
+    const rows = await this.allocations.find({
+      where: { tipDayId: day.id, active: true },
+      relations: ['employee'],
+    });
+    const next = !!delivered;
+    for (const row of rows) {
+      if (row.delivered === next) continue;
+      row.delivered = next;
+      row.deliveredAt = next ? new Date() : null;
+      row.deliveredByUserId = next ? user.id : null;
+    }
+    if (rows.length) await this.allocations.save(rows);
+    return rows.map((row) => this.toAllocationDto(row));
+  }
+
   async pendingCount(user: AuthUser, shopId: string) {
     this.shops.assertShopAccess(user, shopId);
     const shop = await this.shops.getShopEntity(shopId);

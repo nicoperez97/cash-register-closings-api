@@ -162,4 +162,15 @@ export class TipsController {
   ) {
     return this.tips.setDelivered(user, shopId, date, allocationId, dto.delivered);
   }
+
+  @Patch(':date/delivered')
+  @RequirePermissions('tips.create')
+  setDeliveredAll(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('date') date: string,
+    @Body() dto: SetDeliveredDto,
+  ) {
+    return this.tips.setDeliveredAll(user, shopId, date, dto.delivered);
+  }
 }
