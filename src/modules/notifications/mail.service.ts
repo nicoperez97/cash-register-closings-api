@@ -11,8 +11,13 @@ import { NotificationType } from '../../common/enums';
 import { isEntityActive } from '../../common/active.util';
 import { resolveShopLogoUrlForEmail } from '../../common/shop-branding.util';
 import {
+  loadEmailSafeShopLogo,
+  type EmailLogoAsset,
+} from '../../common/email-logo.util';
+import {
   buildNotificationEmailHtml,
   buildNotificationEmailText,
+  type MailTemplateInput,
 } from './mail-template';
 
 type MailPayload = {
@@ -195,16 +200,19 @@ export class MailService {
     return { path: '/', label: 'Abrir la app' };
   }
 
-  private renderMail(input: MailPayload, shop: ShopMailRow | null, user: User) {
+  private async renderMail(input: MailPayload, shop: ShopMailRow | null, user: User) {
     const action = this.actionForType(String(input.type));
     const actionUrl = this.appOrigin ? `${this.appOrigin}${action.path}` : null;
-    const tpl = {
+    const logo = await loadEmailSafeShopLogo(shop?.logoUrl);
+    const tpl: MailTemplateInput = {
       type: String(input.type),
       title: input.title,
       body: input.body,
       recipientName: user.fullName,
       shopName: shop?.name ?? null,
-      shopLogoUrl: this.emailLogoUrl(input.shopId, shop?.logoUrl),
+      shopLogoUrl: logo
+        ? `cid:${logo.cid}`
+        : this.emailLogoUrl(input.shopId, shop?.logoUrl),
       accentColor: shop?.accentColor ?? null,
       accentSecondary: shop?.accentSecondary ?? null,
       actionUrl,
@@ -213,13 +221,32 @@ export class MailService {
     return {
       text: buildNotificationEmailText(tpl),
       html: buildNotificationEmailHtml(tpl),
+      logo,
     };
+  }
+
+  private logoAttachments(logo: EmailLogoAsset | null) {
+    if (!logo) return undefined;
+    return [
+      {
+        filename: `logo.${logo.contentType === 'image/png' ? 'png' : logo.contentType === 'image/gif' ? 'gif' : 'jpg'}`,
+        content: logo.buffer,
+        contentType: logo.contentType,
+        cid: logo.cid,
+        contentDisposition: 'inline' as const,
+      },
+    ];
   }
 
   private emailLogoUrl(
     shopId: string | null | undefined,
     logoUrlRaw?: string | null,
   ): string | null {
+    // Solo como fallback: PNG/JPEG públicos. WebP/SVG se omiten (rompen en Gmail/Outlook).
+    const raw = (logoUrlRaw ?? '').trim().toLowerCase();
+    if (raw.endsWith('.webp') || raw.endsWith('.svg') || raw.includes('image/webp')) {
+      return null;
+    }
     return resolveShopLogoUrlForEmail(this.appOrigin, shopId, logoUrlRaw);
   }
 
@@ -269,7 +296,7 @@ export class MailService {
 
     const shopName = shop?.name?.trim() || null;
     const fromHeader = shopName ? `"${shopName}" <${from}>` : from;
-    const rendered = this.renderMail(input, shop, user);
+    const rendered = await this.renderMail(input, shop, user);
 
     try {
       await transporter.sendMail({
@@ -278,6 +305,7 @@ export class MailService {
         subject: input.title,
         text: rendered.text,
         html: rendered.html,
+        attachments: this.logoAttachments(rendered.logo),
         replyTo: shop?.email?.trim() || undefined,
       });
     } catch (err) {
@@ -308,13 +336,16 @@ export class MailService {
     }
     const shopName = shop?.name?.trim() || null;
     const fromHeader = shopName ? `"${shopName}" <${fromEmail}>` : fromEmail;
-    const tpl = {
+    const logo = await loadEmailSafeShopLogo(shop?.logoUrl);
+    const tpl: MailTemplateInput = {
       type: input.type,
       title: input.title,
       body: input.body,
       recipientName: input.guestName,
       shopName,
-      shopLogoUrl: this.emailLogoUrl(input.shopId, shop?.logoUrl),
+      shopLogoUrl: logo
+        ? `cid:${logo.cid}`
+        : this.emailLogoUrl(input.shopId, shop?.logoUrl),
       accentColor: shop?.accentColor ?? null,
       accentSecondary: shop?.accentSecondary ?? null,
       actionUrl: null,
@@ -327,6 +358,7 @@ export class MailService {
         subject: input.title,
         text: buildNotificationEmailText(tpl),
         html: buildNotificationEmailHtml(tpl),
+        attachments: this.logoAttachments(logo),
         replyTo: shop?.email?.trim() || undefined,
       });
     } catch (err) {
@@ -381,7 +413,7 @@ export class MailService {
 
       const shopName = shop?.name?.trim() || null;
       const fromHeader = shopName ? `"${shopName}" <${fromEmail}>` : fromEmail;
-      const rendered = this.renderMail(input, shop, user);
+      const rendered = await this.renderMail(input, shop, user);
       try {
         await transporter.sendMail({
           from: fromHeader,
@@ -389,6 +421,7 @@ export class MailService {
           subject: input.title,
           text: rendered.text,
           html: rendered.html,
+          attachments: this.logoAttachments(rendered.logo),
           replyTo: shop?.email?.trim() || undefined,
         });
       } catch (err) {

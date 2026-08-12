@@ -162,6 +162,12 @@ function isHttpUrl(raw?: string | null): boolean {
   return /^https?:\/\//i.test(v);
 }
 
+/** http(s) o cid: para logos embebidos en el mail. */
+function isLogoSrc(raw?: string | null): boolean {
+  const v = String(raw ?? '').trim();
+  return isHttpUrl(v) || /^cid:/i.test(v);
+}
+
 /** Cuerpo plano más legible (fallback clientes sin HTML). */
 export function buildNotificationEmailText(input: MailTemplateInput): string {
   const shop = (input.shopName ?? '').trim() || 'Tu local';
@@ -194,7 +200,7 @@ export function buildNotificationEmailHtml(input: MailTemplateInput): string {
   const body = formatBodyHtml(input.body);
   const recipient = escapeHtml((input.recipientName ?? '').trim());
   const greeting = recipient ? `Hola ${recipient},` : 'Hola,';
-  const logoUrl = isHttpUrl(input.shopLogoUrl) ? String(input.shopLogoUrl).trim() : '';
+  const logoUrl = isLogoSrc(input.shopLogoUrl) ? String(input.shopLogoUrl).trim() : '';
   const actionUrl = isHttpUrl(input.actionUrl) ? String(input.actionUrl).trim() : '';
   const actionLabel = escapeHtml(input.actionLabel || 'Ver en la app');
   const year = new Date().getFullYear();
