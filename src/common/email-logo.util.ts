@@ -68,9 +68,10 @@ export async function probeEmailSafeImageUrl(url: string): Promise<boolean> {
   const target = (url ?? '').trim();
   if (!/^https?:\/\//i.test(target)) return false;
   try {
+    // Preferir JPEG/PNG/GIF: un Accept amplio a veces recibe WebP de CDNs.
     const upstream = await fetch(target, {
       redirect: 'follow',
-      headers: { Accept: 'image/*,*/*;q=0.8' },
+      headers: { Accept: 'image/jpeg,image/png,image/gif,image/*;q=0.05' },
     });
     if (!upstream.ok) return false;
     const headerType = upstream.headers.get('content-type') || '';

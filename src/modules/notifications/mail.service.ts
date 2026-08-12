@@ -228,16 +228,22 @@ export class MailService {
   }
 
   /**
-   * 1) URL https pública si realmente sirve JPEG/PNG/GIF (sin adjunto en Gmail).
-   * 2) Si no (API local → prod 404, WebP, etc.): CID embebido para que el logo se vea.
+   * Preferir logo de producción (URL pública) si responde JPEG/PNG/GIF → sin adjunto.
+   * Si no se puede leer (404, WebP, red): CID local → logo visible (Gmail puede mostrar “noname”).
    */
   private async resolveMailLogo(
     shopId: string | null | undefined,
     logoUrlRaw?: string | null,
   ): Promise<{ shopLogoUrl: string | null; logo: EmailLogoAsset | null }> {
     const hosted = this.emailLogoUrl(shopId, logoUrlRaw);
-    if (hosted && (await probeEmailSafeImageUrl(hosted))) {
-      return { shopLogoUrl: hosted, logo: null };
+    if (hosted) {
+      const ok = await probeEmailSafeImageUrl(hosted);
+      if (ok) {
+        return { shopLogoUrl: hosted, logo: null };
+      }
+      this.logger.warn(
+        `Logo público no usable para mail (${hosted}); se embebe por CID`,
+      );
     }
     const logo = await loadEmailSafeShopLogo(logoUrlRaw);
     if (logo) {
@@ -262,11 +268,7 @@ export class MailService {
     shopId: string | null | undefined,
     logoUrlRaw?: string | null,
   ): string | null {
-    // Solo como fallback: PNG/JPEG públicos. WebP/SVG se omiten (rompen en Gmail/Outlook).
-    const raw = (logoUrlRaw ?? '').trim().toLowerCase();
-    if (raw.endsWith('.webp') || raw.endsWith('.svg') || raw.includes('image/webp')) {
-      return null;
-    }
+    // Siempre intentar el endpoint público del origen canónico; el probe decide.
     return resolveShopLogoUrlForEmail(this.appOrigin, shopId, logoUrlRaw);
   }
 
