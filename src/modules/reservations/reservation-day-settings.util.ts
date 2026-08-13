@@ -75,6 +75,28 @@ export function effectiveReservationFlags(
   return { signupEnabled, insideEnabled, outsideEnabled };
 }
 
+/** 0=domingo … 6=sábado (igual que Date#getUTCDay / closedWeekdays del local). */
+export function isoDateWeekday(isoDate: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(isoDate ?? '').slice(0, 10));
+  if (!m) return null;
+  return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0)).getUTCDay();
+}
+
+export function normalizeClosedWeekdays(raw?: number[] | null): number[] {
+  if (!Array.isArray(raw)) return [];
+  return [...new Set(raw.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n >= 0 && n <= 6))];
+}
+
+export function isShopClosedOnDate(
+  shop: { closedWeekdays?: number[] | null },
+  isoDate: string,
+): boolean {
+  const closed = normalizeClosedWeekdays(shop.closedWeekdays);
+  if (!closed.length) return false;
+  const weekday = isoDateWeekday(isoDate);
+  return weekday != null && closed.includes(weekday);
+}
+
 export function rowHasDayContent(row: ReservationDayNotice): boolean {
   const msg = String(row.message ?? '').trim();
   if (msg) return true;

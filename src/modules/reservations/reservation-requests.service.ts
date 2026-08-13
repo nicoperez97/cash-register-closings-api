@@ -25,6 +25,8 @@ import { ReservationDayNotice } from '../../entities/reservation-day-notice.enti
 import {
   dayOverridesFromRow,
   effectiveReservationFlags,
+  isShopClosedOnDate,
+  normalizeClosedWeekdays,
   shopInsideOpen,
   shopOutsideOpen,
   shopSignupOpen,
@@ -108,11 +110,15 @@ export class ReservationRequestsService implements OnModuleInit {
         : resolveShopCalendarDate(new Date(), { timezone: shop.timezone });
     const overrides = await this.dayOverridesFor(shop.id, businessDate);
     const flags = effectiveReservationFlags(shop, overrides);
+    const closedWeekdays = normalizeClosedWeekdays(shop.closedWeekdays);
+    const closedDay = isShopClosedOnDate(shop, businessDate);
     return {
-      signupEnabled: flags.signupEnabled,
-      insideEnabled: flags.insideEnabled,
-      outsideEnabled: flags.outsideEnabled,
+      signupEnabled: flags.signupEnabled && !closedDay,
+      insideEnabled: closedDay ? false : flags.insideEnabled,
+      outsideEnabled: closedDay ? false : flags.outsideEnabled,
       shopSignupEnabled: shopSignupOpen(shop),
+      closedWeekdays,
+      closedDay,
       businessDate,
       shop: {
         id: shop.id,
@@ -173,6 +179,9 @@ export class ReservationRequestsService implements OnModuleInit {
     }
     const overrides = await this.dayOverridesFor(shop.id, businessDate);
     const flags = effectiveReservationFlags(shop, overrides);
+    if (isShopClosedOnDate(shop, businessDate)) {
+      throw new BadRequestException('El local no abre ese día (franco)');
+    }
     if (!flags.signupEnabled) {
       throw new BadRequestException('No tomamos reservas web para ese día');
     }
