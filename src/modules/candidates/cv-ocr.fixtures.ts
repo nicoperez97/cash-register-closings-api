@@ -2,6 +2,22 @@
  * Fixture OCR típico de CV 2 columnas (sidebar + cuerpo).
  * Mezcla realista: a veces OCR lee por filas intercalando columnas.
  */
+
+/** Nombre partido: "Tempesta," + "Victoria" en líneas separadas (como en el sidebar). */
+export const victoriaTempestaOcrSplitName = `
+Tempesta,
+Victoria
+DNI: 47.215.519
+
+PERFIL
+Estudiante de Biología orientación Zoología, Facultad de Ciencias Naturales y Museo, Universidad Nacional de La Plata
+
+CONTACTO
++54 9 221 627-2185
+vitempesta9@gmail.com
+La Plata, Buenos Aires, Argentina
+`.trim();
+
 export const victoriaTempestaOcrColumnWise = `
 Tempesta, Victoria
 DNI: 47.215.519

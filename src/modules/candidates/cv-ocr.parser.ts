@@ -534,6 +534,34 @@ function parseName(text: string, email: string | null): { firstName: string; las
     }
   }
 
+  // "Apellido," en una línea y "Nombre" en la siguiente (sidebar de muchos CVs AR)
+  {
+    const rawLines = text
+      .split(/\r?\n/)
+      .map((l) => stripTrailingSectionNoise(l.trim()))
+      .filter(Boolean);
+    for (let i = 0; i < Math.min(rawLines.length - 1, 20); i++) {
+      const lastOnly = rawLines[i].match(
+        /^([A-Za-zÁÉÍÓÚáéíóúÑñ'.-]{2,40}(?:\s+[A-Za-zÁÉÍÓÚáéíóúÑñ'.-]{2,40}){0,2}),\s*$/,
+      );
+      if (!lastOnly) continue;
+      const next = rawLines[i + 1];
+      if (/^(dni|ci\b|perfil|contacto|datos|experiencia|educaci|fecha|lugar)\b/i.test(next)) continue;
+      const firstOnly = next.match(
+        /^([A-Za-zÁÉÍÓÚáéíóúÑñ'.-]{2,40}(?:\s+[A-Za-zÁÉÍÓÚáéíóúÑñ'.-]{2,40}){0,2})\s*$/,
+      );
+      if (!firstOnly) continue;
+      const last = lastOnly[1].trim().split(/\s+/);
+      const first = firstOnly[1].trim().split(/\s+/);
+      if (looksLikePersonName([...first, ...last])) {
+        return {
+          firstName: titleCaseWords(first),
+          lastName: titleCaseWords(last),
+        };
+      }
+    }
+  }
+
   // LinkedIn / Unkedin (OCR) suele traer el nombre completo
   const liName = text.match(
     /(?:linkedin|unkedin|linked\s*in)\s*[:.]?\s*([A-Za-zÁÉÍÓÚáéíóúÑñ][A-Za-zÁÉÍÓÚáéíóúÑñ']*(?:\s+[A-Za-zÁÉÍÓÚáéíóúÑñ']+){1,4})/i,
