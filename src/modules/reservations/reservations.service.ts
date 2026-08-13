@@ -25,6 +25,7 @@ import { normalizeLogoUrl } from '../../common/drive-url';
 import { isIsoDateOnly, toIsoDateOnly } from '../../common/iso-date';
 import {
   assertPartyFitsAreaCapacity,
+  consumeDayAreaCapacity,
   dayOverridesFromRow,
   normalizeCapacityRemaining,
   rowHasDayContent,
@@ -439,6 +440,7 @@ export class ReservationsService implements OnModuleInit {
     const area = this.normalizeArea(dto.area);
     const dayRow = await this.findDayNoticeRow(shopId, businessDate);
     assertPartyFitsAreaCapacity(area, partySize, dayOverridesFromRow(dayRow));
+    await consumeDayAreaCapacity(this.dayNotices, shopId, businessDate, area, partySize);
     const row = await this.reservations.save(
       this.reservations.create({
         shopId,

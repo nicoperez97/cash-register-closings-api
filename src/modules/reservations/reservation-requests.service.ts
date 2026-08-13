@@ -24,8 +24,10 @@ import { ShopsService } from '../shops/shops.service';
 import { ReservationDayNotice } from '../../entities/reservation-day-notice.entity';
 import {
   assertPartyFitsAreaCapacity,
+  consumeDayAreaCapacity,
   dayOverridesFromRow,
   effectiveReservationFlags,
+  isAreaCapacityManaged,
   isShopClosedOnDate,
   normalizeClosedWeekdays,
   shopInsideOpen,
@@ -219,8 +221,86 @@ export class ReservationRequestsService implements OnModuleInit {
     if (recent?.createdAt) {
       const age = Date.now() - new Date(recent.createdAt).getTime();
       if (age < 10 * 60 * 1000) {
-        return { ok: true, id: recent.id, status: recent.status };
+        return { ok: true, id: recent.id, status: recent.status, autoAccepted: false };
       }
+    }
+
+    const capacityManaged = isAreaCapacityManaged(overrides, area);
+    if (capacityManaged) {
+      const consumed = await consumeDayAreaCapacity(
+        this.dayNotices,
+        shop.id,
+        businessDate,
+        area,
+        partySize,
+      );
+      const reservation = await this.reservations.save(
+        this.reservations.create({
+          shopId: shop.id,
+          businessDate,
+          guestName,
+          partySize,
+          area,
+          notes: this.contactNotesFromPublic({
+            guestEmail,
+            instagramHandle,
+            guestComment,
+          }),
+          status: ReservationStatus.CONFIRMED,
+          reservationTime,
+          active: true,
+        }),
+      );
+      const row = await this.requests.save(
+        this.requests.create({
+          shopId: shop.id,
+          businessDate,
+          guestName,
+          guestEmail,
+          instagramHandle,
+          partySize,
+          reservationTime,
+          area,
+          guestComment,
+          status: ReservationRequestStatus.ACCEPTED,
+          reservationId: reservation.id,
+          staffNote: 'Auto-aceptada por cupo del día',
+          active: true,
+        }),
+      );
+
+      const when = this.formatWhen(businessDate, reservationTime);
+      const people = `${partySize} ${partySize === 1 ? 'persona' : 'personas'}`;
+      const areaLabel = area === ReservationArea.OUTSIDE ? 'Afuera' : 'Adentro';
+      void this.mail
+        .sendGuestEmail({
+          to: guestEmail,
+          guestName,
+          shopId: shop.id,
+          type: 'RESERVATION_ACCEPTED',
+          title: `Reserva confirmada en ${shop.name}`,
+          body: `Hola ${guestName}, tu reserva quedó confirmada.\n\n${people} · ${areaLabel} · ${when}\n\nTe esperamos en ${shop.name}.`,
+        })
+        .catch(() => undefined);
+
+      const left =
+        consumed.remaining == null
+          ? ''
+          : consumed.remaining === 0
+            ? ' · Sector completo'
+            : ` · Quedan ${consumed.remaining}`;
+      await this.notifyStaff(shop.id, shop.name, {
+        title: 'Reserva auto-confirmada',
+        body: `${guestName} · ${people} · ${when} · ${areaLabel}${left}`,
+      });
+
+      return {
+        ok: true,
+        id: row.id,
+        status: row.status,
+        autoAccepted: true,
+        capacityRemaining: consumed.remaining,
+      };
     }
 
     const row = await this.requests.save(
@@ -251,6 +331,7 @@ export class ReservationRequestsService implements OnModuleInit {
       ok: true,
       id: row.id,
       status: row.status,
+      autoAccepted: false,
     };
   }
 
@@ -298,6 +379,13 @@ export class ReservationRequestsService implements OnModuleInit {
       row.area === ReservationArea.OUTSIDE ? ReservationArea.OUTSIDE : ReservationArea.INSIDE;
     const overrides = await this.dayOverridesFor(shopId, businessDate);
     assertPartyFitsAreaCapacity(area, Number(row.partySize ?? 0), overrides);
+    await consumeDayAreaCapacity(
+      this.dayNotices,
+      shopId,
+      businessDate,
+      area,
+      Number(row.partySize ?? 0),
+    );
 
     const reservation = await this.reservations.save(
       this.reservations.create({
@@ -427,13 +515,36 @@ export class ReservationRequestsService implements OnModuleInit {
   }
 
   private contactNotes(row: ReservationRequest, staffNote?: string | null): string | null {
-    const bits = [
-      row.guestEmail,
-      row.instagramHandle ? `@${row.instagramHandle}` : null,
-      row.guestComment?.trim() || null,
-      staffNote?.trim() || null,
-    ].filter(Boolean);
-    return bits.length ? bits.join(' · ') : null;
+    return this.contactNotesFromPublic(
+      {
+        guestEmail: row.guestEmail,
+        instagramHandle: row.instagramHandle,
+        guestComment: row.guestComment,
+      },
+      staffNote,
+    );
+  }
+
+  private contactNotesFromPublic(
+    data: {
+      guestEmail?: string | null;
+      instagramHandle?: string | null;
+      guestComment?: string | null;
+    },
+    staffNote?: string | null,
+  ): string | null {
+    const bits: string[] = [];
+    const email = String(data.guestEmail ?? '').trim();
+    const ig = String(data.instagramHandle ?? '')
+      .replace(/^@+/, '')
+      .trim();
+    const comment = String(data.guestComment ?? '').trim();
+    const note = String(staffNote ?? '').trim();
+    if (email) bits.push(`Mail: ${email}`);
+    if (ig) bits.push(`IG: @${ig}`);
+    if (comment) bits.push(comment);
+    if (note) bits.push(note);
+    return bits.length ? bits.join('\n') : null;
   }
 
   private async notifyStaff(

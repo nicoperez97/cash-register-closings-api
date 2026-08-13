@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { Repository } from 'typeorm';
 import { Shop } from '../../entities/shop.entity';
 import { ReservationDayNotice } from '../../entities/reservation-day-notice.entity';
 import { ReservationArea } from '../../entities/reservation.entity';
@@ -177,6 +178,84 @@ export function assertPartyFitsAreaCapacity(
       `Solo quedan ${cap} lugar${cap === 1 ? '' : 'es'} ${label}`,
     );
   }
+}
+
+/** true si el sector tiene cupo numérico configurado (auto-aceptar / descontar). */
+export function isAreaCapacityManaged(
+  overrides: ReservationDayOverrides | null | undefined,
+  area: ReservationArea | string,
+): boolean {
+  const isOutside = String(area).toUpperCase() === ReservationArea.OUTSIDE;
+  const remaining = isOutside
+    ? overrides?.outsideCapacityRemaining
+    : overrides?.insideCapacityRemaining;
+  return remaining !== null && remaining !== undefined && Number.isFinite(Number(remaining));
+}
+
+export function readAreaCapacityRemaining(
+  overrides: ReservationDayOverrides | null | undefined,
+  area: ReservationArea | string,
+): number | null {
+  if (!isAreaCapacityManaged(overrides, area)) return null;
+  const isOutside = String(area).toUpperCase() === ReservationArea.OUTSIDE;
+  return Number(
+    isOutside ? overrides!.outsideCapacityRemaining : overrides!.insideCapacityRemaining,
+  );
+}
+
+/** Descuenta cupo del día; no-op si el sector no tiene cupo configurado. */
+export async function consumeDayAreaCapacity(
+  dayNotices: Repository<ReservationDayNotice>,
+  shopId: string,
+  businessDate: string,
+  area: ReservationArea | string,
+  partySize: number,
+): Promise<{ managed: boolean; remaining: number | null }> {
+  const isOutside = String(area).toUpperCase() === ReservationArea.OUTSIDE;
+  const label = isOutside ? 'afuera' : 'adentro';
+  const size = Math.round(Number(partySize));
+  if (!Number.isFinite(size) || size < 1) {
+    throw new BadRequestException('La cantidad de personas debe ser al menos 1');
+  }
+
+  return dayNotices.manager.transaction(async (manager) => {
+    const repo = manager.getRepository(ReservationDayNotice);
+    const row = await repo
+      .createQueryBuilder('d')
+      .setLock('pessimistic_write')
+      .where('d.shopId = :shopId', { shopId })
+      .andWhere('d.businessDate = :businessDate', { businessDate })
+      .andWhere('d.active = true')
+      .getOne();
+
+    if (!row) {
+      return { managed: false, remaining: null };
+    }
+
+    const current = isOutside ? row.outsideCapacityRemaining : row.insideCapacityRemaining;
+    if (current === null || current === undefined || !Number.isFinite(Number(current))) {
+      return { managed: false, remaining: null };
+    }
+
+    const cap = Number(current);
+    if (cap <= 0) {
+      throw new BadRequestException(`No quedan lugares ${label}`);
+    }
+    if (size > cap) {
+      throw new BadRequestException(
+        `Solo quedan ${cap} lugar${cap === 1 ? '' : 'es'} ${label}`,
+      );
+    }
+
+    const next = cap - size;
+    if (isOutside) {
+      row.outsideCapacityRemaining = next;
+    } else {
+      row.insideCapacityRemaining = next;
+    }
+    await repo.save(row);
+    return { managed: true, remaining: next };
+  });
 }
 
 /** 0=domingo … 6=sábado (igual que Date#getUTCDay / closedWeekdays del local). */
