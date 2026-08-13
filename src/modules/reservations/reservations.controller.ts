@@ -225,6 +225,26 @@ class SetReservationAreasDto {
   outside?: boolean;
 }
 
+class SetReservationPartyRulesDto {
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(99)
+  insideMaxPartySize?: number | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(99)
+  outsideMinPartySize?: number | null;
+}
+
 class UpsertDayNoticeDto {
   @ApiPropertyOptional({ description: 'YYYY-MM-DD; default hoy del local' })
   @IsOptional()
@@ -334,6 +354,16 @@ export class ReservationsController {
     @Body() dto: SetReservationAreasDto,
   ) {
     return this.requests.setAreasEnabled(user, shopId, dto);
+  }
+
+  @Patch('reservation-party-rules')
+  @RequirePermissions('reservations.manage')
+  setReservationPartyRules(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: SetReservationPartyRulesDto,
+  ) {
+    return this.requests.setPartyRules(user, shopId, dto);
   }
 
   @Get('reservation-requests')

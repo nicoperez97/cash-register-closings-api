@@ -23,6 +23,7 @@ import { CreateShopDto, UpdateShopDto } from './dto/shop.dto';
 import { PosnetType, ShopPosnet } from '../../common/posnet';
 import { randomUUID } from 'crypto';
 import { normalizeUserVisibility, UserVisibility } from '../../common/user-visibility';
+import { normalizePartyRule } from '../reservations/reservation-party-rules.util';
 import {
   deleteUploadIfExists,
   resolveUploadPath,
@@ -118,6 +119,22 @@ export class ShopsService implements OnModuleInit {
       await this.shops.query(`
         ALTER TABLE shops
           ADD COLUMN reservationOutsideEnabled TINYINT(1) NOT NULL DEFAULT 1
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN reservationInsideMaxPartySize INT NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN reservationOutsideMinPartySize INT NULL
       `);
     } catch {
       // columna ya existe
@@ -350,6 +367,8 @@ export class ShopsService implements OnModuleInit {
         reservationSignupEnabled: dto.reservationSignupEnabled ?? true,
         reservationInsideEnabled: dto.reservationInsideEnabled ?? true,
         reservationOutsideEnabled: dto.reservationOutsideEnabled ?? true,
+        reservationInsideMaxPartySize: normalizePartyRule(dto.reservationInsideMaxPartySize),
+        reservationOutsideMinPartySize: normalizePartyRule(dto.reservationOutsideMinPartySize),
         waitingListEnabled: dto.waitingListEnabled ?? true,
         tipsEnabled: dto.tipsEnabled ?? false,
         defaultChangeAmount: String(dto.defaultChangeAmount ?? 0),
@@ -408,6 +427,16 @@ export class ShopsService implements OnModuleInit {
     }
     if (dto.reservationOutsideEnabled !== undefined) {
       shop.reservationOutsideEnabled = dto.reservationOutsideEnabled;
+    }
+    if (dto.reservationInsideMaxPartySize !== undefined) {
+      shop.reservationInsideMaxPartySize = normalizePartyRule(
+        dto.reservationInsideMaxPartySize,
+      );
+    }
+    if (dto.reservationOutsideMinPartySize !== undefined) {
+      shop.reservationOutsideMinPartySize = normalizePartyRule(
+        dto.reservationOutsideMinPartySize,
+      );
     }
     if (shop.reservationInsideEnabled === false && shop.reservationOutsideEnabled === false) {
       throw new BadRequestException('Dejá al menos un sector habilitado (adentro o afuera)');
@@ -721,6 +750,14 @@ export class ShopsService implements OnModuleInit {
         s.reservationOutsideEnabled === undefined || s.reservationOutsideEnabled === null
           ? true
           : !!s.reservationOutsideEnabled,
+      reservationInsideMaxPartySize:
+        s.reservationInsideMaxPartySize == null
+          ? null
+          : Number(s.reservationInsideMaxPartySize) || null,
+      reservationOutsideMinPartySize:
+        s.reservationOutsideMinPartySize == null
+          ? null
+          : Number(s.reservationOutsideMinPartySize) || null,
       waitingListEnabled: !!s.waitingListEnabled,
       tipsEnabled: !!s.tipsEnabled,
       defaultChangeAmount: Number(s.defaultChangeAmount),

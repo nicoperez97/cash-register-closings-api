@@ -57,6 +57,14 @@ export class Shop extends BaseEntity {
   @Column({ type: 'tinyint', default: 1 })
   reservationOutsideEnabled: boolean;
 
+  /** Máximo de personas por reserva adentro. NULL = sin tope. */
+  @Column({ type: 'int', nullable: true })
+  reservationInsideMaxPartySize?: number | null;
+
+  /** A partir de esta cantidad la mesa es sí o sí afuera. NULL = sin regla. */
+  @Column({ type: 'int', nullable: true })
+  reservationOutsideMinPartySize?: number | null;
+
   /** Si es false, el módulo de lista de espera no está disponible en este local. */
   @Column({ type: 'tinyint', default: 1 })
   waitingListEnabled: boolean;

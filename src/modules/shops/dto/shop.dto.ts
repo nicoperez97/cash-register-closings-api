@@ -78,6 +78,30 @@ export class CreateShopDto {
   @IsBoolean()
   reservationOutsideEnabled?: boolean;
 
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Máximo de personas adentro. NULL = sin tope.',
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(99)
+  reservationInsideMaxPartySize?: number | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'A partir de cuántas personas la mesa es sí o sí afuera. NULL = sin regla.',
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(99)
+  reservationOutsideMinPartySize?: number | null;
+
   @ApiPropertyOptional({ description: 'Habilita el módulo de lista de espera en este local' })
   @IsOptional()
   @IsBoolean()

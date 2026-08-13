@@ -34,6 +34,10 @@ import {
   shopOutsideOpen,
   shopSignupOpen,
 } from './reservation-day-settings.util';
+import {
+  assertPartyFitsShopArea,
+  normalizePartyRule,
+} from './reservation-party-rules.util';
 
 export type CreatePublicReservationRequestDto = {
   guestName: string;
@@ -121,6 +125,8 @@ export class ReservationRequestsService implements OnModuleInit {
       outsideEnabled: closedDay ? false : flags.outsideEnabled,
       insideCapacityRemaining: closedDay ? 0 : flags.insideCapacityRemaining,
       outsideCapacityRemaining: closedDay ? 0 : flags.outsideCapacityRemaining,
+      insideMaxPartySize: shop.reservationInsideMaxPartySize ?? null,
+      outsideMinPartySize: shop.reservationOutsideMinPartySize ?? null,
       shopSignupEnabled: shopSignupOpen(shop),
       closedWeekdays,
       closedDay,
@@ -172,6 +178,33 @@ export class ReservationRequestsService implements OnModuleInit {
     };
   }
 
+  async setPartyRules(
+    user: AuthUser,
+    shopId: string,
+    patch: {
+      insideMaxPartySize?: number | null;
+      outsideMinPartySize?: number | null;
+    },
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    await this.shops.assertReservationsEnabled(shopId);
+    const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
+    if (!shop) {
+      throw new NotFoundException('Local no encontrado');
+    }
+    if (patch.insideMaxPartySize !== undefined) {
+      shop.reservationInsideMaxPartySize = normalizePartyRule(patch.insideMaxPartySize);
+    }
+    if (patch.outsideMinPartySize !== undefined) {
+      shop.reservationOutsideMinPartySize = normalizePartyRule(patch.outsideMinPartySize);
+    }
+    await this.shopsRepo.save(shop);
+    return {
+      reservationInsideMaxPartySize: shop.reservationInsideMaxPartySize ?? null,
+      reservationOutsideMinPartySize: shop.reservationOutsideMinPartySize ?? null,
+    };
+  }
+
   async createPublic(slug: string, dto: CreatePublicReservationRequestDto) {
     if (String(dto.website ?? '').trim()) {
       return { ok: true };
@@ -205,6 +238,7 @@ export class ReservationRequestsService implements OnModuleInit {
     if (area === ReservationArea.INSIDE && !flags.insideEnabled) {
       throw new BadRequestException('El sector adentro no está disponible');
     }
+    assertPartyFitsShopArea(area, partySize, shop);
     assertPartyFitsAreaCapacity(area, partySize, overrides);
     const guestComment = this.normalizeComment(dto.guestComment);
 
@@ -378,6 +412,7 @@ export class ReservationRequestsService implements OnModuleInit {
     const area =
       row.area === ReservationArea.OUTSIDE ? ReservationArea.OUTSIDE : ReservationArea.INSIDE;
     const overrides = await this.dayOverridesFor(shopId, businessDate);
+    assertPartyFitsShopArea(area, Number(row.partySize ?? 0), shop);
     assertPartyFitsAreaCapacity(area, Number(row.partySize ?? 0), overrides);
     await consumeDayAreaCapacity(
       this.dayNotices,

@@ -472,6 +472,14 @@ export class AuthService implements OnModuleInit {
           s.reservationOutsideEnabled === undefined || s.reservationOutsideEnabled === null
             ? true
             : !!s.reservationOutsideEnabled,
+        reservationInsideMaxPartySize:
+          s.reservationInsideMaxPartySize == null
+            ? null
+            : Number(s.reservationInsideMaxPartySize) || null,
+        reservationOutsideMinPartySize:
+          s.reservationOutsideMinPartySize == null
+            ? null
+            : Number(s.reservationOutsideMinPartySize) || null,
         waitingListEnabled: !!s.waitingListEnabled,
         tipsEnabled: !!s.tipsEnabled,
         defaultChangeAmount: Number(s.defaultChangeAmount),

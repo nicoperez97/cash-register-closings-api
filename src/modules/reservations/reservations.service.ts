@@ -30,6 +30,7 @@ import {
   normalizeCapacityRemaining,
   rowHasDayContent,
 } from './reservation-day-settings.util';
+import { assertPartyFitsShopArea } from './reservation-party-rules.util';
 
 /** Estados que cuentan para totales / capacidad (excluye canceladas y no-show). */
 const ACTIVE_RESERVATION_STATUSES = [
@@ -449,6 +450,7 @@ export class ReservationsService implements OnModuleInit {
     const partySize = this.normalizePartySize(dto.partySize);
     const area = this.normalizeArea(dto.area);
     const dayRow = await this.findDayNoticeRow(shopId, businessDate);
+    assertPartyFitsShopArea(area, partySize, shop);
     assertPartyFitsAreaCapacity(area, partySize, dayOverridesFromRow(dayRow));
     await consumeDayAreaCapacity(this.dayNotices, shopId, businessDate, area, partySize);
     const row = await this.reservations.save(
@@ -488,6 +490,8 @@ export class ReservationsService implements OnModuleInit {
     if (dto.reservationTime !== undefined) {
       row.reservationTime = this.normalizeTime(dto.reservationTime);
     }
+    const shop = await this.shops.assertReservationsEnabled(shopId);
+    assertPartyFitsShopArea(row.area, Number(row.partySize ?? 0), shop);
     await this.reservations.save(row);
     return this.toReservationDto(row);
   }
