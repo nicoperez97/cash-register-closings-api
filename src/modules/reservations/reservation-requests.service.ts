@@ -23,6 +23,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { ShopsService } from '../shops/shops.service';
 import { ReservationDayNotice } from '../../entities/reservation-day-notice.entity';
 import {
+  assertPartyFitsAreaCapacity,
   dayOverridesFromRow,
   effectiveReservationFlags,
   isShopClosedOnDate,
@@ -116,6 +117,8 @@ export class ReservationRequestsService implements OnModuleInit {
       signupEnabled: flags.signupEnabled && !closedDay,
       insideEnabled: closedDay ? false : flags.insideEnabled,
       outsideEnabled: closedDay ? false : flags.outsideEnabled,
+      insideCapacityRemaining: closedDay ? 0 : flags.insideCapacityRemaining,
+      outsideCapacityRemaining: closedDay ? 0 : flags.outsideCapacityRemaining,
       shopSignupEnabled: shopSignupOpen(shop),
       closedWeekdays,
       closedDay,
@@ -200,6 +203,7 @@ export class ReservationRequestsService implements OnModuleInit {
     if (area === ReservationArea.INSIDE && !flags.insideEnabled) {
       throw new BadRequestException('El sector adentro no está disponible');
     }
+    assertPartyFitsAreaCapacity(area, partySize, overrides);
     const guestComment = this.normalizeComment(dto.guestComment);
 
     const recent = await this.requests.findOne({
@@ -288,14 +292,20 @@ export class ReservationRequestsService implements OnModuleInit {
     this.shops.assertShopAccess(user, shopId);
     const shop = await this.shops.assertReservationsEnabled(shopId);
     const row = await this.findPending(shopId, id);
+    const businessDate =
+      toIsoDateOnly(row.businessDate) || this.normalizeDate(String(row.businessDate));
+    const area =
+      row.area === ReservationArea.OUTSIDE ? ReservationArea.OUTSIDE : ReservationArea.INSIDE;
+    const overrides = await this.dayOverridesFor(shopId, businessDate);
+    assertPartyFitsAreaCapacity(area, Number(row.partySize ?? 0), overrides);
 
     const reservation = await this.reservations.save(
       this.reservations.create({
         shopId,
-        businessDate: toIsoDateOnly(row.businessDate) || this.normalizeDate(String(row.businessDate)),
+        businessDate,
         guestName: row.guestName,
         partySize: row.partySize,
-        area: row.area === ReservationArea.OUTSIDE ? ReservationArea.OUTSIDE : ReservationArea.INSIDE,
+        area,
         notes: this.contactNotes(row, staffNote),
         status: ReservationStatus.CONFIRMED,
         reservationTime: row.reservationTime ?? null,

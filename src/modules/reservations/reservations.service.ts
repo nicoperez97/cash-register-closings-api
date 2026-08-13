@@ -24,7 +24,9 @@ import { isEntityActive } from '../../common/active.util';
 import { normalizeLogoUrl } from '../../common/drive-url';
 import { isIsoDateOnly, toIsoDateOnly } from '../../common/iso-date';
 import {
+  assertPartyFitsAreaCapacity,
   dayOverridesFromRow,
+  normalizeCapacityRemaining,
   rowHasDayContent,
 } from './reservation-day-settings.util';
 
@@ -97,6 +99,8 @@ export class ReservationsService implements OnModuleInit {
       `ALTER TABLE reservation_day_notices ADD COLUMN signupEnabled TINYINT(1) NULL`,
       `ALTER TABLE reservation_day_notices ADD COLUMN insideEnabled TINYINT(1) NULL`,
       `ALTER TABLE reservation_day_notices ADD COLUMN outsideEnabled TINYINT(1) NULL`,
+      `ALTER TABLE reservation_day_notices ADD COLUMN insideCapacityRemaining INT NULL`,
+      `ALTER TABLE reservation_day_notices ADD COLUMN outsideCapacityRemaining INT NULL`,
     ]) {
       try {
         await this.dayNotices.query(sql);
@@ -237,6 +241,8 @@ export class ReservationsService implements OnModuleInit {
       signupEnabled?: boolean | null;
       insideEnabled?: boolean | null;
       outsideEnabled?: boolean | null;
+      insideCapacityRemaining?: number | null;
+      outsideCapacityRemaining?: number | null;
     },
   ) {
     this.shops.assertShopAccess(user, shopId);
@@ -253,7 +259,9 @@ export class ReservationsService implements OnModuleInit {
     const touchesSettings =
       dto.signupEnabled !== undefined ||
       dto.insideEnabled !== undefined ||
-      dto.outsideEnabled !== undefined;
+      dto.outsideEnabled !== undefined ||
+      dto.insideCapacityRemaining !== undefined ||
+      dto.outsideCapacityRemaining !== undefined;
     if (!touchesMessage && !touchesSettings) {
       throw new BadRequestException('Indicá mensaje o configuración del día');
     }
@@ -271,6 +279,8 @@ export class ReservationsService implements OnModuleInit {
         signupEnabled: null,
         insideEnabled: null,
         outsideEnabled: null,
+        insideCapacityRemaining: null,
+        outsideCapacityRemaining: null,
         active: true,
       });
     }
@@ -286,6 +296,12 @@ export class ReservationsService implements OnModuleInit {
     }
     if (dto.outsideEnabled !== undefined) {
       row.outsideEnabled = dto.outsideEnabled;
+    }
+    if (dto.insideCapacityRemaining !== undefined) {
+      row.insideCapacityRemaining = normalizeCapacityRemaining(dto.insideCapacityRemaining);
+    }
+    if (dto.outsideCapacityRemaining !== undefined) {
+      row.outsideCapacityRemaining = normalizeCapacityRemaining(dto.outsideCapacityRemaining);
     }
 
     if (!rowHasDayContent(row)) {
@@ -419,13 +435,17 @@ export class ReservationsService implements OnModuleInit {
       : resolveShopCalendarDate(new Date(), {
           timezone: shop.timezone,
         });
+    const partySize = this.normalizePartySize(dto.partySize);
+    const area = this.normalizeArea(dto.area);
+    const dayRow = await this.findDayNoticeRow(shopId, businessDate);
+    assertPartyFitsAreaCapacity(area, partySize, dayOverridesFromRow(dayRow));
     const row = await this.reservations.save(
       this.reservations.create({
         shopId,
         businessDate,
         guestName: String(dto.guestName ?? '').trim(),
-        partySize: this.normalizePartySize(dto.partySize),
-        area: this.normalizeArea(dto.area),
+        partySize,
+        area,
         notes: dto.notes?.trim() || null,
         status: ReservationStatus.CONFIRMED,
         reservationTime: this.normalizeTime(dto.reservationTime),

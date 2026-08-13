@@ -259,6 +259,30 @@ class UpsertDayNoticeDto {
   @ValidateIf((_, v) => v !== null)
   @IsBoolean()
   outsideEnabled?: boolean | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Cupo restante de personas adentro. NULL = sin límite; 0 = sin cupo.',
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(999)
+  insideCapacityRemaining?: number | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Cupo restante de personas afuera. NULL = sin límite; 0 = sin cupo.',
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(999)
+  outsideCapacityRemaining?: number | null;
 }
 
 @ApiTags('reservations')

@@ -28,6 +28,14 @@ export class ReservationDayNotice extends BaseEntity {
   @Column({ type: 'boolean', nullable: true })
   outsideEnabled: boolean | null;
 
+  /** NULL = sin límite de personas adentro; 0 = sin cupo. */
+  @Column({ type: 'int', nullable: true })
+  insideCapacityRemaining: number | null;
+
+  /** NULL = sin límite de personas afuera; 0 = sin cupo. */
+  @Column({ type: 'int', nullable: true })
+  outsideCapacityRemaining: number | null;
+
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })
   shop: Shop;
