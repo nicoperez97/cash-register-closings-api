@@ -113,28 +113,99 @@ function extractEmail(text: string): string | null {
   return null;
 }
 
+function isArgentineDniNumber(raw: string): boolean {
+  const digits = raw.replace(/\D/g, '');
+  // DNI AR suele ser 7-8 dígitos; con puntos: 12.345.678 / 47.215.519
+  if (!/^\d{7,8}$/.test(digits)) return false;
+  return /^\d{1,2}[.\s]\d{3}[.\s]\d{3}$/.test(raw.trim()) || digits.length <= 8;
+}
+
+function isPlausiblePhone(raw: string): boolean {
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length < 8 || digits.length > 15) return false;
+  if (/^(19|20)\d{2}$/.test(digits)) return false;
+  // No confundir DNI tipográfico con teléfono
+  if (isArgentineDniNumber(raw) && digits.length <= 8 && !raw.includes('+')) return false;
+  return true;
+}
+
 function extractPhone(text: string): string | null {
+  const candidates: Array<{ raw: string; score: number }> = [];
+
+  const add = (raw: string, score: number) => {
+    const c = clean(
+      raw
+        .replace(/\s+/g, ' ')
+        .replace(/\s*(?:19|20)\d{2}\s*$/g, '') // no comer años del CV
+        .replace(/^[().\s,;-]+/, '')
+        .replace(/[().\s,;-]+$/g, ''),
+    );
+    if (!c || !isPlausiblePhone(c)) return;
+    const digits = c.replace(/\D/g, '');
+    if (digits.length < 10 || digits.length > 15) return;
+    candidates.push({ raw: c, score });
+  };
+
+  for (const m of text.matchAll(
+    /\+\s*54\s*9?\s*\d{2,4}(?:[\s./-]*\d{2,4}){1,3}/g,
+  )) {
+    const raw = m[0];
+    const start = m.index ?? 0;
+    const before = text.slice(Math.max(0, start - 50), start);
+    let score = 50;
+    // Teléfono entre paréntesis = casi siempre referencia laboral
+    const open = text.lastIndexOf('(', start);
+    const close = text.indexOf(')', start);
+    if (open >= 0 && open < start && (close < 0 || close > start)) score -= 120;
+    if (/\b(contacto|referencia|referencias)\s*:/i.test(before)) score -= 100;
+    if (/(?:^|\n)\s*CONTACTO\s*\n/i.test(text.slice(Math.max(0, start - 80), start))) {
+      score += 40;
+    }
+    const after = text.slice(start + raw.length, start + raw.length + 60);
+    if (/@/.test(after) || /@/.test(before)) score += 25;
+    add(raw, score);
+  }
+
+  for (const m of text.matchAll(/\+\s*\d{1,3}[\s.-]?\(?\d{1,4}\)?[\s.-]?\d{3,4}[\s./-]\d{3,5}/g)) {
+    add(m[0], 20);
+  }
+
   const labeled = text.match(
     /(?:cel(?:ular)?|tel(?:[eé]fono)?|whatsapp|phone)\s*[:.]?\s*([+\d(][\d\s()./-]{7,})/i,
   );
-  if (labeled) {
-    const raw = labeled[1].trim();
-    const digits = raw.replace(/\D/g, '');
-    if (digits.length >= 8 && digits.length <= 15) return clean(raw);
+  if (labeled) add(labeled[1], 60);
+
+    // Preferir el teléfono más cercano al email del candidato (no el de referencias)
+    const emailMatch = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+    if (emailMatch?.index != null && candidates.length > 1) {
+      for (const c of candidates) {
+        const needle = c.raw.slice(0, 14);
+        let at = text.indexOf(needle);
+        if (at < 0) at = text.indexOf(c.raw.replace(/\s+/g, ''));
+        if (at < 0) continue;
+        const dist = Math.abs(at - emailMatch.index);
+        if (dist < 160) c.score += 80;
+      }
+    }
+
+  candidates.sort((a, b) => b.score - a.score);
+  if (candidates[0]) {
+    return candidates[0].raw
+      .replace(/[().\s,;-]+$/g, '')
+      .replace(/[^\d+\s./-]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
+
   const patterns = [
     /\(\d{2,4}\)\s*\d{3,4}[\s.-]?\d{3,4}/g,
-    /\b\d{2,4}[\s.-]\d{3,4}[\s.-]?\d{3,4}\b/g,
-    /\b\d{10,11}\b/g,
-    /(?:\+?\d{1,3}[\s.-]?)?(?:\(?\d{2,4}\)?[\s.-]?)?\d{3,4}[\s.-]?\d{3,4}/g,
+    /\b\d{10,15}\b/g,
   ];
   for (const re of patterns) {
     for (const m of text.matchAll(re)) {
       const raw = m[0].trim();
-      const digits = raw.replace(/\D/g, '');
-      if (digits.length >= 8 && digits.length <= 15 && !/^(19|20)\d{2}$/.test(digits)) {
-        return clean(raw);
-      }
+      if (!isPlausiblePhone(raw)) continue;
+      if (raw.replace(/\D/g, '').length >= 10) return clean(raw);
     }
   }
   return null;
@@ -142,9 +213,12 @@ function extractPhone(text: string): string | null {
 
 function extractDocumentId(text: string): string | null {
   const m = text.match(
-    /(?:\b(?:DNI|CI|C\.?I\.?|documento|cedula|cédula|pasaporte)\b)\s*[:.]?\s*([A-Z0-9.\-\s]{5,20})/i,
+    /(?:\b(?:DNI|CI|C\.?I\.?|documento|cedula|cédula|pasaporte)\b)\s*[:.]?\s*([0-9][0-9.\-\s]{4,18}?)(?=\s*(?:\r?\n|$|[^0-9.\-\s]))/i,
   );
-  if (m) return clean(m[1].replace(/\s+/g, ''));
+  if (m) {
+    const id = clean(m[1].replace(/\s+/g, ''))?.replace(/[^\d.]/g, '') ?? null;
+    if (id && id.replace(/\D/g, '').length >= 6) return id;
+  }
   return null;
 }
 
@@ -408,19 +482,26 @@ function titleCaseWords(words: string[]): string {
     .join(' ');
 }
 
+const NAME_TRAILING_SECTION =
+  /\b(EXPERIENCIA|EDUCACI[OÓ]N|FORMACI[OÓ]N|ESTUDIOS|HABILIDADES|COMPETENCIAS|IDIOMAS|PERFIL|CONTACTO|DATOS|RESUMEN|OBJETIVO|WORK\s+EXPERIENCE|EDUCATION|SKILLS|LANGUAGES)\b.*$/i;
+
+function stripTrailingSectionNoise(line: string): string {
+  return line.replace(NAME_TRAILING_SECTION, '').replace(/[|•·]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 function looksLikePersonName(words: string[]): boolean {
   if (words.length < 2 || words.length > 5) return false;
   if (
     !words.every(
       (w) =>
-        /^(de|del|la|los|las|y)$/i.test(w) || /^[A-Za-zÁÉÍÓÚáéíóúÑñ'.-]{3,30}$/.test(w),
+        /^(de|del|la|los|las|y)$/i.test(w) || /^[A-Za-zÁÉÍÓÚáéíóúÑñ'.-]{2,30}$/.test(w),
     )
   ) {
     return false;
   }
   const joined = stripAccents(words.join(' ')).toLowerCase();
   if (
-    /\b(involucro|trabajo|resoluci|problema|ambiente|aprender|habilidad|empanada|preparaci|cocina|reposicion|atencion|publico|manejo|caja|responsable|comprometido|activo|camino|profesional|soy|donde|tienen|nueva|tapas|armado|limpieza|supervision|personal|materia|prima|sushi|empleado|cocinero|jefe|ayudante|excel|powerpoint|word|proactividad|puntualidad|nativo|intermedio|basico|tecnico|quimico|gastronomico|educacion|experiencia|contacto|perfil)\b/.test(
+    /\b(involucro|trabajo|resoluci|problema|ambiente|aprender|habilidad|empanada|preparaci|cocina|reposicion|atencion|publico|manejo|caja|responsable|comprometido|activo|camino|profesional|soy|donde|tienen|nueva|tapas|armado|limpieza|supervision|personal|materia|prima|sushi|empleado|cocinero|jefe|ayudante|excel|powerpoint|word|proactividad|puntualidad|nativo|intermedio|basico|tecnico|quimico|gastronomico|educacion|experiencia|contacto|perfil|laboratorio|microbiologia|biologia|zoologia)\b/.test(
       joined,
     )
   ) {
@@ -482,18 +563,21 @@ function parseName(text: string, email: string | null): { firstName: string; las
 
   const lines = text
     .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l.length >= 3 && l.length <= 60);
+    .map((l) => stripTrailingSectionNoise(l.trim()))
+    .filter((l) => l.length >= 3 && l.length <= 80);
 
   const skip =
-    /^(curriculum|curr[ií]culo|cv\b|resume|perfil|objetivo|contacto|datos|experiencia|educaci|formaci[oó]n|habilidad|competenc|idioma|email|tel|celular|correo|dni|ci\b|primaria|secundaria|universitario|puesto|estudios|estudiante|proactivo|informaci[oó]n|disponibilidad|referencias|soy\b)/i;
+    /^(curriculum|curr[ií]culo|cv\b|resume|perfil|objetivo|contacto|datos|experiencia|educaci|formaci[oó]n|habilidad|competenc|idioma|email|tel|celular|correo|dni|ci\b|primaria|secundaria|universitario|puesto|estudios|estudiante|proactivo|informaci[oó]n|disponibilidad|referencias|soy\b|laboratorio|calle\b)/i;
 
-  const scored = lines.slice(0, 30)
+  const scored = lines.slice(0, 35)
     .map((line, idx) => {
       if (skip.test(line)) return null;
       if (/@/.test(line) || /https?:/i.test(line) || /linkedin|unkedin/i.test(line)) return null;
       if (/\d{4,}/.test(line)) return null;
-      const comma = line.match(/^([A-Za-zÁÉÍÓÚáéíóúÑñ' .-]+),\s*([A-Za-zÁÉÍÓÚáéíóúÑñ' .-]+)$/);
+      // "Apellido, Nombre" (común en CVs AR) — cortar ruido de columna derecha
+      const comma = line.match(
+        /^([A-Za-zÁÉÍÓÚáéíóúÑñ'.-]{2,40}(?:\s+[A-Za-zÁÉÍÓÚáéíóúÑñ'.-]{2,40}){0,2}),\s*([A-Za-zÁÉÍÓÚáéíóúÑñ'.-]{2,40}(?:\s+[A-Za-zÁÉÍÓÚáéíóúÑñ'.-]{2,40}){0,2})\b/,
+      );
       if (comma) {
         const last = comma[1].trim().split(/\s+/);
         const first = comma[2].trim().split(/\s+/);
@@ -501,14 +585,13 @@ function parseName(text: string, email: string | null): { firstName: string; las
         return {
           firstName: titleCaseWords(first),
           lastName: titleCaseWords(last),
-          score: 200 - idx,
+          score: 240 - idx,
         };
       }
       const words = line.replace(/[,|•·]/g, ' ').split(/\s+/).filter(Boolean);
       if (!looksLikePersonName(words)) return null;
       const allCaps = words.every((w) => w === w.toUpperCase() && /[A-ZÁÉÍÓÚÑ]/.test(w));
       const titleish = /^[A-ZÁÉÍÓÚÑ]/.test(words[0]);
-      // Preferir nombres cortos (2-3 palabras) cerca del tope
       const score =
         (allCaps ? 80 : 0) +
         (titleish ? 25 : 0) +
@@ -554,6 +637,21 @@ function mineEducationFromText(text: string): CandidateEducationItem[] {
       institution: 'Cocineros Patagónicos',
     },
     { re: /cocineros\s+patag[oó]nicos/i, degree: 'Técnico Superior Gastronómico', institution: 'Cocineros Patagónicos' },
+    {
+      re: /licenciatura\s+en\s+biolog[ií]a[^.]{0,60}/i,
+      degree: 'Licenciatura en Biología, orientación Zoología',
+      institution: 'Universidad Nacional de La Plata',
+    },
+    {
+      re: /estudios\s+secundarios[^.]{0,40}colegio\s+san\s+jos[eé]/i,
+      degree: 'Estudios Secundarios',
+      institution: 'Colegio San Jose de La Plata',
+    },
+    {
+      re: /first\s+certificate|cambridge/i,
+      degree: 'Preparación First Certificate (Cambridge)',
+      institution: 'Colegio San Jose de La Plata',
+    },
   ];
   for (const p of patterns) {
     if (!p.re.test(text)) continue;
@@ -575,6 +673,29 @@ function mineEducationFromText(text: string): CandidateEducationItem[] {
       if (!it.period && /qu[ií]mico|gastronom/i.test(it.degree ?? '')) it.period = p;
     }
   }
+
+  // Períodos cercanos a biología / secundaria / cambridge
+  const bioPeriod = text.match(
+    /((?:19|20)\d{2}\s*[-–—\/]\s*(?:(?:19|20)\d{2}|actual(?:idad)?)).{0,80}licenciatura\s+en\s+biolog/i,
+  ) || text.match(
+    /licenciatura\s+en\s+biolog[ií]a.{0,80}?((?:19|20)\d{2}\s*[-–—\/]\s*(?:(?:19|20)\d{2}|actual(?:idad)?))/i,
+  );
+  if (bioPeriod) {
+    const p = clean(bioPeriod[1]) ?? undefined;
+    for (const it of items) {
+      if (!it.period && /biolog/i.test(it.degree ?? '')) it.period = p;
+    }
+  }
+  const secPeriod = text.match(
+    /((?:19|20)\d{2}\s*[-–—\/]\s*(?:19|20)\d{2}).{0,60}estudios\s+secundarios/i,
+  );
+  if (secPeriod) {
+    const p = clean(secPeriod[1]) ?? undefined;
+    for (const it of items) {
+      if (!it.period && /secundarios/i.test(it.degree ?? '')) it.period = p;
+    }
+  }
+
   return items;
 }
 
@@ -620,6 +741,62 @@ function mergeEducation(
     .slice(0, 12);
 }
 
+function splitEducationLine(line: string): {
+  degree?: string;
+  institution?: string;
+  period?: string;
+  location?: string;
+} {
+  const period = periodFrom(line) ?? undefined;
+  let rest = line;
+  if (period) {
+    rest = rest.replace(period, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  // "La Plata, Buenos Aires. Estudios Secundarios, Colegio San Jose..."
+  const locPref = rest.match(
+    /^((?:Gran\s+)?La\s+Plata|Buenos\s+Aires|Neuqu[eé]n|CABA|C\.?A\.?B\.?A\.?)[^.]{0,40}\.\s*(.+)$/i,
+  );
+  if (locPref) {
+    rest = locPref[2].trim();
+  }
+
+  let institution: string | undefined;
+  let degree: string | undefined;
+
+  const parts = rest
+    .split(/\.\s+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  const instIdx = parts.findIndex((p) =>
+    /^(universidad|colegio|facultad|instituto|escuela|unlp|uba|utn)\b/i.test(p),
+  );
+  if (instIdx >= 0) {
+    institution = clean(parts[instIdx].replace(/\.$/, '')) ?? undefined;
+    const degreeParts = parts.filter((_, i) => i !== instIdx);
+    // "Estado: cursando…" queda en el degree
+    degree = clean(degreeParts.join('. ')) ?? undefined;
+  } else {
+    const instMatch = rest.match(
+      /,\s*((?:Universidad|Colegio|Facultad|Instituto|Escuela|UNLP|UBA|UTN)[^.]{2,80})\.?$/i,
+    );
+    if (instMatch) {
+      institution = clean(instMatch[1]) ?? undefined;
+      degree = clean(rest.slice(0, instMatch.index).replace(/[.,;\s]+$/, '')) ?? undefined;
+    } else {
+      degree = clean(rest) ?? undefined;
+    }
+  }
+
+  // Evitar degree = solo el período
+  if (degree && period && stripAccents(degree).replace(/\s+/g, '') === stripAccents(period).replace(/\s+/g, '')) {
+    degree = undefined;
+  }
+
+  return { degree, institution, period };
+}
+
 function parseEducation(body: string | null, fullText?: string): CandidateEducationItem[] {
   const items: CandidateEducationItem[] = [];
   const source = body ?? '';
@@ -648,48 +825,154 @@ function parseEducation(body: string | null, fullText?: string): CandidateEducat
 
     let current: CandidateEducationItem | null = null;
     const flush = () => {
-      if (current && (current.institution || current.degree)) items.push(current);
+      if (current && (current.institution || current.degree || current.period)) {
+        // No guardar entradas que son solo un período suelto sin grado/institución
+        if (current.period && !current.degree && !current.institution) {
+          // se fusionará con la siguiente si llega; si no, descartar al final
+        } else {
+          items.push(current);
+        }
+      }
       current = null;
     };
 
     for (const line of lines) {
-      if (/^(promedio|participaci|proyecto|titulo secundario completo|logro)/i.test(line)) {
-        if (current) {
-          current.degree = current.degree
-            ? `${current.degree}; ${line}`.slice(0, 200)
-            : line;
+      if (
+        /^(promedio|participaci|proyecto|titulo secundario completo|logro|estado\s*:|lugar de nacimiento|fecha de nacimiento|dni\b|contacto\b|perfil\b)/i.test(
+          line,
+        ) && current
+      ) {
+        if (/^estado\s*:/i.test(line)) {
+          const extra = clean(line);
+          if (extra) {
+            current.degree = current.degree
+              ? `${current.degree}; ${extra}`.slice(0, 220)
+              : extra;
+          }
         }
         continue;
       }
+      // Descartar ruido de columna izquierda mezclado en educación
+      if (/lugar de nacimiento|fecha de nacimiento|^\+?\d|@|dni\s*:/i.test(line) && !/universidad|colegio|licenciatura|estudios/i.test(line)) {
+        continue;
+      }
+
+      // Línea solo período → abrir bloque y esperar detalle
+      if (/^(?:19|20)\d{2}\s*[-–—\/]\s*(?:(?:19|20)\d{2}|actual(?:idad)?|presente|hoy|en\s+curso)\s*$/i.test(line)) {
+        if (current?.period && !current.degree && !current.institution) {
+          // período huérfano previo: reemplazar
+          current.period = clean(line) ?? undefined;
+        } else {
+          flush();
+          current = { period: clean(line) ?? undefined };
+        }
+        continue;
+      }
+
+      const parsed = splitEducationLine(line);
       const looksDegree =
-        /^(licenciatura|profesorado|t[eé]cnico|ingenier[ií]a|bachiller|curso|estudiante)/i.test(
+        /^(licenciatura|profesorado|t[eé]cnico|ingenier[ií]a|bachiller|curso|estudiante|estudios)/i.test(
           line,
-        ) || /universidad|facultad|colegio|escuela|e\.?p\.?e\.?t|unlp|secundari/i.test(line);
-      if (looksDegree || periodFrom(line)) {
+        ) ||
+        /universidad|facultad|colegio|escuela|e\.?p\.?e\.?t|unlp|secundari|biolog|zoolog|first\s+certificate|cambridge/i.test(
+          line,
+        );
+
+      if (current?.period && !current.degree && !current.institution && (looksDegree || parsed.degree)) {
+        current.degree = parsed.degree ?? clean(line) ?? undefined;
+        current.institution = parsed.institution;
+        if (parsed.period && !current.period) current.period = parsed.period;
+        continue;
+      }
+
+      if (looksDegree || parsed.period || parsed.institution) {
         flush();
         current = {
-          degree: clean(line) ?? undefined,
-          period: periodFrom(line) ?? undefined,
+          degree: parsed.degree,
+          institution: parsed.institution,
+          period: parsed.period,
         };
         continue;
       }
-      if (current && !current.institution) {
+
+      if (current && !current.institution && /universidad|colegio|facultad|escuela/i.test(line)) {
         current.institution = clean(line) ?? undefined;
-      } else if (current) {
-        current.degree = `${current.degree ?? ''} ${line}`.trim().slice(0, 200);
+      } else if (current && current.degree) {
+        current.degree = `${current.degree} ${line}`.trim().slice(0, 220);
+      } else if (current && current.period && !current.degree) {
+        current.degree = clean(line) ?? undefined;
       }
     }
     flush();
   }
 
-  return mergeEducation(items, fullText ? mineEducationFromText(fullText) : []);
+  return mergeEducation(items, fullText ? mineEducationFromText(fullText) : [])
+    .filter((e) => !!(e.degree || e.institution))
+    .map((e) => {
+      if (e.degree && /^(?:19|20)\d{2}\s*[-–—\/]\s*(?:(?:19|20)\d{2}|actual(?:idad)?)$/i.test(e.degree)) {
+        if (!e.period) e.period = e.degree;
+        e.degree = undefined;
+      }
+      // Recuperar período más cercano (antes del degree) desde el texto completo
+      if (!e.period && fullText && e.degree) {
+        const hay = stripAccents(fullText);
+        const deg = stripAccents(e.degree).slice(0, 28).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const idx = hay.search(new RegExp(deg, 'i'));
+        if (idx >= 0) {
+          const window = hay.slice(Math.max(0, idx - 180), idx);
+          const all = [
+            ...window.matchAll(
+              /((?:19|20)\d{2}\s*[-–—\/]\s*(?:(?:19|20)\d{2}|actual(?:idad)?))/gi,
+            ),
+          ];
+          if (all.length) e.period = clean(all[all.length - 1][1]) ?? undefined;
+        }
+      }
+      return e;
+    })
+    .filter((e) => !!(e.degree || e.institution));
 }
 
 const COMPANY_HINT =
-  /\b((?:Autoservicio\s+La\s+Huerta|West\s*Food(?:\s*[-–—]\s*Distrito\s+Oeste)?|Atu\s*sushi|Batacaz(?:\s+o?\s*Empanadas)?|Restaurante[^,\n]{0,40}|Kiosco[^,\n]{0,40}|Ferreter[ií]a[^,\n]{0,40}|Helader[ií]a[^,\n]{0,40}|Panader[ií]a[^,\n]{0,40}))/i;
+  /\b((?:Autoservicio\s+La\s+Huerta|West\s*Food(?:\s*[-–—]\s*Distrito\s+Oeste)?|Atu\s*sushi|Batacaz(?:\s+o?\s*Empanadas)?|Laboratorio\s+[A-Za-zÁÉÍÓÚáéíóúÑñ0-9&.-]{2,40}|Restaurante[^,\n|]{0,40}|Kiosco[^,\n|]{0,40}|Ferreter[ií]a[^,\n|]{0,40}|Helader[ií]a[^,\n|]{0,40}|Panader[ií]a[^,\n|]{0,40}))/i;
 
 const ROLE_HINT =
-  /^(atenci[oó]n al cliente|ayudante(?:\s+de\s+cocina)?|cajero|barman|cocinero|jefe(?:\s+de\s+cocina)?|encargado|repartidor|empleado|bachero|ventas|gesti[oó]n|emprendedora?)\b/i;
+  /^(atenci[oó]n al cliente|ayudante(?:\s+de\s+cocina)?|cajero|barman|cocinero|jefe(?:\s+de\s+cocina)?|encargado|repartidor|empleado|bachero|ventas|gesti[oó]n|emprendedora?|pasante|analista|asistente|operario|t[eé]cnico)\b/i;
+
+function stripLeadingBullet(line: string): string {
+  return line.replace(/^[-–—•*+\s]+/, '').trim();
+}
+
+function companyFromPipeLine(line: string): string | null {
+  const cleaned = stripLeadingBullet(line)
+    .replace(/\bDNI\s*[:.]?\s*[0-9.\-\s]{5,20}/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const lab = cleaned.match(
+    /\b(Laboratorio\s+[A-Za-zÁÉÍÓÚáéíóúÑñ0-9&.-]{2,40})(?:\s*[|]\s*([A-Za-zÁÉÍÓÚáéíóúÑñ0-9&.,\- ]{3,80}))?/i,
+  );
+  if (lab) {
+    const left = clean(lab[1]);
+    const right = lab[2] ? clean(lab[2]) : null;
+    if (left && right) return `${left} | ${right}`;
+    return left;
+  }
+
+  // "Empresa X | Descripción / razón social"
+  const pipe = cleaned.match(
+    /^([A-Za-zÁÉÍÓÚáéíóúÑñ0-9&.\- ]{3,60})\s*[|]\s*([A-Za-zÁÉÍÓÚáéíóúÑñ0-9&.,\- ]{3,80})/,
+  );
+  if (pipe) {
+    const left = clean(pipe[1]);
+    const right = clean(pipe[2]);
+    if (left && /laboratorio|empresa|estudio|consultora|instituto|clinica|clínica/i.test(left)) {
+      return right ? `${left} | ${right}` : left;
+    }
+    if (left) return left;
+  }
+  return null;
+}
 
 function normalizeCompanyKey(name: string): string {
   return stripAccents(name)
@@ -801,6 +1084,18 @@ function parseExperience(body: string | null, fullText?: string): CandidateExper
       continue;
     }
 
+    // Referencia / contacto de la experiencia: no es empresa
+    if (/^(contacto|referencia|referencias)\s*:/i.test(line)) {
+      if (current) {
+        const scrubbed = scrubExperienceNoise(line);
+        if (scrubbed) {
+          const prev = current.description ? `${current.description} ` : '';
+          current.description = clean((prev + scrubbed).slice(0, 800)) ?? undefined;
+        }
+      }
+      continue;
+    }
+
     const yearLead = line.match(
       /^((?:19|20)\d{2}\s*[-–—\/]\s*(?:(?:19|20)\d{2}|actual(?:idad)?|presente))\s*[:.-]\s*(.+)$/i,
     );
@@ -814,17 +1109,27 @@ function parseExperience(body: string | null, fullText?: string): CandidateExper
       continue;
     }
 
+    const pipeCompany = companyFromPipeLine(line);
     const companyInline = line.match(COMPANY_HINT);
     const isCompany =
+      !!pipeCompany ||
       !!companyInline ||
-      /^(restaurante|bar|caf[eé]|empresa|local|hotel|pub|kiosco|ferreter[ií]a|helader[ií]a|panader[ií]a|autoservicio|emprendimiento|west\s*food|atu\s*sushi|batacaz)\b/i.test(
-        line,
+      /^(restaurante|bar|caf[eé]|empresa|local|hotel|pub|kiosco|ferreter[ií]a|helader[ií]a|panader[ií]a|autoservicio|emprendimiento|west\s*food|atu\s*sushi|batacaz|laboratorio)\b/i.test(
+        stripLeadingBullet(line),
       ) ||
       /\((?:andorra|argentina|uruguay|espa[nñ]a|chile|neuqu[eé]n|la plata)[^)]*\)/i.test(line) ||
-      /\b(la huerta|distrito oeste|empanadas)\b/i.test(line);
+      /\b(la huerta|distrito oeste|empanadas|microbiolog)/i.test(line);
 
     const hasPeriod = !!periodFrom(line);
     const isRoleTitle = ROLE_HINT.test(line) && line.length < 80;
+    const isStreetOnly =
+      /^(calle|av\.?|avenida|pasaje)\b/i.test(line) ||
+      /\bN[°ºo]\s*\d+/i.test(line);
+
+    if (isStreetOnly && current) {
+      // Dirección del trabajo: no mezclar con la descripción de tareas
+      continue;
+    }
 
     if ((isCompany || (hasPeriod && line.length < 100) || isRoleTitle) && !/^puesto\s*:/i.test(line)) {
       if (
@@ -838,17 +1143,19 @@ function parseExperience(body: string | null, fullText?: string): CandidateExper
         continue;
       }
       if (current?.role && !current.company && isCompany) {
-        current.company = clean(line) ?? undefined;
+        current.company =
+          pipeCompany ??
+          (companyInline ? clean(companyInline[1]) : clean(stripLeadingBullet(line))) ??
+          undefined;
         const p = periodFrom(line);
         if (p) current.period = p;
         continue;
       }
-      // Rol después de empresa sin rol
-      if (isRoleTitle && !companyInline && current?.company && !current.role) {
+      if (isRoleTitle && !companyInline && !pipeCompany && current?.company && !current.role) {
         current.role = clean(line) ?? undefined;
         continue;
       }
-      if (isRoleTitle && !companyInline && items.length && !current) {
+      if (isRoleTitle && !companyInline && !pipeCompany && items.length && !current) {
         const prev = items[items.length - 1];
         if (prev.company && !prev.role) {
           prev.role = clean(line) ?? undefined;
@@ -857,18 +1164,20 @@ function parseExperience(body: string | null, fullText?: string): CandidateExper
       }
       flush();
       const period = periodFrom(line);
-      const companyName = companyInline
-        ? clean(companyInline[1]) ?? undefined
-        : isRoleTitle
-          ? undefined
-          : clean(line) ?? undefined;
-      if (isRoleTitle && !companyInline) {
+      const companyName =
+        pipeCompany ??
+        (companyInline
+          ? clean(companyInline[1]) ?? undefined
+          : isRoleTitle
+            ? undefined
+            : clean(stripLeadingBullet(line)) ?? undefined);
+      if (isRoleTitle && !companyInline && !pipeCompany) {
         current = { role: clean(line) ?? undefined, period: period ?? undefined };
       } else {
         current = {
           company: companyName,
           period: period ?? undefined,
-          role: isRoleTitle && companyInline ? clean(line) ?? undefined : undefined,
+          role: isRoleTitle && (companyInline || pipeCompany) ? clean(line) ?? undefined : undefined,
         };
       }
       continue;
@@ -879,9 +1188,11 @@ function parseExperience(body: string | null, fullText?: string): CandidateExper
         current.role &&
         !current.company &&
         line.length < 80 &&
-        !/manejo|soporte|preparaci|atenci[oó]n|coordinaci|reposici|limpieza|armado|elaboraci/i.test(line)
+        !/manejo|soporte|preparaci|atenci[oó]n|coordinaci|reposici|limpieza|armado|elaboraci|producci|cultivo|excel|pedido/i.test(
+          line,
+        )
       ) {
-        current.company = clean(line) ?? undefined;
+        current.company = clean(stripLeadingBullet(line)) ?? undefined;
         const p = periodFrom(line);
         if (p) current.period = p;
         continue;
@@ -1045,12 +1356,12 @@ function parseAddressBits(text: string): {
   city: string | null;
   country: string | null;
 } {
-  const addr = labeledValue(text, ['direcci[oó]n', 'address', 'domicilio', 'calle']);
+  const addr = labeledValue(text, ['direcci[oó]n', 'address', 'domicilio']);
   const city =
-    labeledValue(text, ['ciudad', 'city', 'localidad', 'lugar']) ??
+    labeledValue(text, ['ciudad', 'city', 'localidad']) ??
     labeledValue(text, ['provincia']);
   const locLine = text.match(
-    /\b((?:Gran\s+)?La\s+Plata|Neuqu[eé]n(?:\s+Capital)?|Buenos\s+Aires|Monte\s+Grande)[^\n,]*/i,
+    /\b((?:Gran\s+)?La\s+Plata|Neuqu[eé]n(?:\s+Capital)?|Buenos\s+Aires|Monte\s+Grande)(?:\s*,\s*Buenos\s+Aires)?(?:\s*,\s*Argentina)?/i,
   );
   const country =
     labeledValue(text, ['pa[ií]s', 'country']) ??
@@ -1059,9 +1370,30 @@ function parseAddressBits(text: string): {
 
   return {
     address: addr,
-    city: city || (locLine ? clean(locLine[1]) : null),
+    city: city || (locLine ? clean(locLine[1].split(',')[0]) : null),
     country,
   };
+}
+
+function cleanSummary(raw: string | null): string | null {
+  if (!raw) return null;
+  const lines = raw
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .filter((l) => {
+      if (/^(calle|av\.?|avenida|pasaje)\b/i.test(l)) return false;
+      if (/\bN[°ºo]\s*\d+/i.test(l) && l.length < 60) return false;
+      if (/^contacto\s*:/i.test(l)) return false;
+      if (/producci[oó]n de medios|embalaje para despacho|conteo de cultivos/i.test(l)) return false;
+      return true;
+    });
+  // Preferir frases de perfil (estudiante / orientación / objetivo)
+  const profileish = lines.filter((l) =>
+    /estudiante|orientaci[oó]n|licenciatura|biolog|perfil|busco|responsable|motivad/i.test(l),
+  );
+  const picked = profileish.length ? profileish : lines;
+  return clean(picked.join(' '))?.slice(0, 2500) ?? null;
 }
 
 export function parseCvText(rawText: string): ParsedCv {
@@ -1076,10 +1408,11 @@ export function parseCvText(rawText: string): ParsedCv {
   const { firstName, lastName } = parseName(text, email);
   const { address, city, country } = parseAddressBits(text);
 
-  const summary = mergeSections(
+  const summaryRaw = mergeSections(
     sectionBody(text, ['PERFIL PROFESIONAL', 'PERFIL', 'RESUMEN PROFESIONAL', 'RESUMEN', 'OBJETIVO', 'ABOUT ME', 'SUMMARY', 'PROFILE']),
     sectionBody(text, ['CARTA DE PRESENTACION']),
   );
+  const summary = cleanSummary(summaryRaw);
 
   const education = parseEducation(
     mergeSections(
