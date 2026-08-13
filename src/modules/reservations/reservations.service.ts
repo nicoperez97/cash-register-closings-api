@@ -148,9 +148,19 @@ export class ReservationsService implements OnModuleInit {
   }
 
   private whatsappUrl(phone: string): string {
-    const digits = String(phone ?? '').replace(/\D/g, '');
+    const digits = this.phoneDigitsForWhatsApp(phone);
     if (!digits) return '';
     return `https://wa.me/${digits}`;
+  }
+
+  /** Normaliza a dígitos internacionales (UY: 09… → 5989…). */
+  private phoneDigitsForWhatsApp(phone?: string | null): string {
+    let digits = String(phone ?? '').replace(/\D/g, '');
+    if (!digits) return '';
+    if (/^0?9\d{7}$/.test(digits)) {
+      digits = `598${digits.replace(/^0/, '')}`;
+    }
+    return digits;
   }
 
   private normalizeArea(raw?: string | null): ReservationArea {
