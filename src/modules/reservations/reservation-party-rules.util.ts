@@ -43,6 +43,25 @@ export function outsideFromPartySize(shop: ShopPartyRules | null | undefined): n
   return null;
 }
 
+export function effectivePartyRules(
+  shop: ShopPartyRules | null | undefined,
+  day?: {
+    insideMaxPartySize?: number | null;
+    outsideMinPartySize?: number | null;
+  } | null,
+): ShopPartyRules {
+  return {
+    reservationInsideMaxPartySize:
+      day?.insideMaxPartySize != null
+        ? normalizePartyRule(day.insideMaxPartySize)
+        : normalizePartyRule(shop?.reservationInsideMaxPartySize),
+    reservationOutsideMinPartySize:
+      day?.outsideMinPartySize != null
+        ? normalizePartyRule(day.outsideMinPartySize)
+        : normalizePartyRule(shop?.reservationOutsideMinPartySize),
+  };
+}
+
 export function assertPartyFitsShopArea(
   area: ReservationArea | string,
   partySize: number,

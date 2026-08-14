@@ -3,6 +3,7 @@ import { Repository } from 'typeorm';
 import { Shop } from '../../entities/shop.entity';
 import { ReservationDayNotice } from '../../entities/reservation-day-notice.entity';
 import { ReservationArea } from '../../entities/reservation.entity';
+import { normalizePartyRule } from './reservation-party-rules.util';
 
 export type ReservationDayOverrides = {
   signupEnabled: boolean | null;
@@ -11,6 +12,9 @@ export type ReservationDayOverrides = {
   /** NULL = sin límite; 0 = cerrado por cupo. */
   insideCapacityRemaining: number | null;
   outsideCapacityRemaining: number | null;
+  /** NULL = hereda del local. */
+  insideMaxPartySize: number | null;
+  outsideMinPartySize: number | null;
 };
 
 export function shopSignupOpen(shop: Shop): boolean {
@@ -67,12 +71,16 @@ export function dayOverridesFromRow(
     row.outsideCapacityRemaining === null || row.outsideCapacityRemaining === undefined
       ? null
       : Number(row.outsideCapacityRemaining);
+  const insideMaxPartySize = normalizePartyRule(row.insideMaxPartySize);
+  const outsideMinPartySize = normalizePartyRule(row.outsideMinPartySize);
   if (
     signupEnabled === null &&
     insideEnabled === null &&
     outsideEnabled === null &&
     insideCapacityRemaining === null &&
-    outsideCapacityRemaining === null
+    outsideCapacityRemaining === null &&
+    insideMaxPartySize === null &&
+    outsideMinPartySize === null
   ) {
     return null;
   }
@@ -86,6 +94,8 @@ export function dayOverridesFromRow(
     outsideCapacityRemaining: Number.isFinite(outsideCapacityRemaining as number)
       ? (outsideCapacityRemaining as number)
       : null,
+    insideMaxPartySize,
+    outsideMinPartySize,
   };
 }
 
@@ -292,6 +302,8 @@ export function rowHasDayContent(row: ReservationDayNotice): boolean {
     (row.insideEnabled !== null && row.insideEnabled !== undefined) ||
     (row.outsideEnabled !== null && row.outsideEnabled !== undefined) ||
     (row.insideCapacityRemaining !== null && row.insideCapacityRemaining !== undefined) ||
-    (row.outsideCapacityRemaining !== null && row.outsideCapacityRemaining !== undefined)
+    (row.outsideCapacityRemaining !== null && row.outsideCapacityRemaining !== undefined) ||
+    (row.insideMaxPartySize !== null && row.insideMaxPartySize !== undefined) ||
+    (row.outsideMinPartySize !== null && row.outsideMinPartySize !== undefined)
   );
 }

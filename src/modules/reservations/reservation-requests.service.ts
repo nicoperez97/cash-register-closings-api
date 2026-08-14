@@ -36,6 +36,7 @@ import {
 } from './reservation-day-settings.util';
 import {
   assertPartyFitsShopArea,
+  effectivePartyRules,
   normalizePartyRule,
   partyMustSitOutside,
 } from './reservation-party-rules.util';
@@ -118,6 +119,7 @@ export class ReservationRequestsService implements OnModuleInit {
         : resolveShopCalendarDate(new Date(), { timezone: shop.timezone });
     const overrides = await this.dayOverridesFor(shop.id, businessDate);
     const flags = effectiveReservationFlags(shop, overrides);
+    const partyRules = effectivePartyRules(shop, overrides);
     const closedWeekdays = normalizeClosedWeekdays(shop.closedWeekdays);
     const closedDay = isShopClosedOnDate(shop, businessDate);
     return {
@@ -126,8 +128,8 @@ export class ReservationRequestsService implements OnModuleInit {
       outsideEnabled: closedDay ? false : flags.outsideEnabled,
       insideCapacityRemaining: closedDay ? 0 : flags.insideCapacityRemaining,
       outsideCapacityRemaining: closedDay ? 0 : flags.outsideCapacityRemaining,
-      insideMaxPartySize: shop.reservationInsideMaxPartySize ?? null,
-      outsideMinPartySize: shop.reservationOutsideMinPartySize ?? null,
+      insideMaxPartySize: partyRules.reservationInsideMaxPartySize ?? null,
+      outsideMinPartySize: partyRules.reservationOutsideMinPartySize ?? null,
       shopSignupEnabled: shopSignupOpen(shop),
       closedWeekdays,
       closedDay,
@@ -239,7 +241,7 @@ export class ReservationRequestsService implements OnModuleInit {
     if (area === ReservationArea.INSIDE && !flags.insideEnabled) {
       throw new BadRequestException('El sector adentro no está disponible');
     }
-    assertPartyFitsShopArea(area, partySize, shop);
+    assertPartyFitsShopArea(area, partySize, effectivePartyRules(shop, overrides));
     assertPartyFitsAreaCapacity(area, partySize, overrides);
     const guestComment = this.normalizeComment(dto.guestComment);
 
@@ -414,11 +416,13 @@ export class ReservationRequestsService implements OnModuleInit {
     let area =
       row.area === ReservationArea.OUTSIDE ? ReservationArea.OUTSIDE : ReservationArea.INSIDE;
     const overrides = await this.dayOverridesFor(shopId, businessDate);
-    if (partyMustSitOutside(Number(row.partySize ?? 0), shop) && shopOutsideOpen(shop)) {
+    const flags = effectiveReservationFlags(shop, overrides);
+    const partyRules = effectivePartyRules(shop, overrides);
+    if (partyMustSitOutside(Number(row.partySize ?? 0), partyRules) && flags.outsideEnabled) {
       area = ReservationArea.OUTSIDE;
       row.area = ReservationArea.OUTSIDE;
     }
-    assertPartyFitsShopArea(area, Number(row.partySize ?? 0), shop);
+    assertPartyFitsShopArea(area, Number(row.partySize ?? 0), partyRules);
     assertPartyFitsAreaCapacity(area, Number(row.partySize ?? 0), overrides);
     await consumeDayAreaCapacity(
       this.dayNotices,

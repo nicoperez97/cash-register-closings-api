@@ -36,6 +36,14 @@ export class ReservationDayNotice extends BaseEntity {
   @Column({ type: 'int', nullable: true })
   outsideCapacityRemaining: number | null;
 
+  /** NULL = hereda reservationInsideMaxPartySize del local. */
+  @Column({ type: 'int', nullable: true })
+  insideMaxPartySize: number | null;
+
+  /** NULL = hereda reservationOutsideMinPartySize del local. */
+  @Column({ type: 'int', nullable: true })
+  outsideMinPartySize: number | null;
+
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })
   shop: Shop;

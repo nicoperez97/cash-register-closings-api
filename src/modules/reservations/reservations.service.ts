@@ -32,7 +32,7 @@ import {
   normalizeCapacityRemaining,
   rowHasDayContent,
 } from './reservation-day-settings.util';
-import { assertPartyFitsShopArea } from './reservation-party-rules.util';
+import { assertPartyFitsShopArea, effectivePartyRules, normalizePartyRule } from './reservation-party-rules.util';
 
 /** Estados que cuentan para totales / capacidad (excluye canceladas y no-show). */
 const ACTIVE_RESERVATION_STATUSES = [
@@ -109,6 +109,8 @@ export class ReservationsService implements OnModuleInit {
       `ALTER TABLE reservation_day_notices ADD COLUMN outsideEnabled TINYINT(1) NULL`,
       `ALTER TABLE reservation_day_notices ADD COLUMN insideCapacityRemaining INT NULL`,
       `ALTER TABLE reservation_day_notices ADD COLUMN outsideCapacityRemaining INT NULL`,
+      `ALTER TABLE reservation_day_notices ADD COLUMN insideMaxPartySize INT NULL`,
+      `ALTER TABLE reservation_day_notices ADD COLUMN outsideMinPartySize INT NULL`,
       `ALTER TABLE reservations ADD COLUMN guestEmail VARCHAR(180) NULL`,
     ]) {
       try {
@@ -308,6 +310,8 @@ export class ReservationsService implements OnModuleInit {
       outsideEnabled?: boolean | null;
       insideCapacityRemaining?: number | null;
       outsideCapacityRemaining?: number | null;
+      insideMaxPartySize?: number | null;
+      outsideMinPartySize?: number | null;
     },
   ) {
     this.shops.assertShopAccess(user, shopId);
@@ -326,7 +330,9 @@ export class ReservationsService implements OnModuleInit {
       dto.insideEnabled !== undefined ||
       dto.outsideEnabled !== undefined ||
       dto.insideCapacityRemaining !== undefined ||
-      dto.outsideCapacityRemaining !== undefined;
+      dto.outsideCapacityRemaining !== undefined ||
+      dto.insideMaxPartySize !== undefined ||
+      dto.outsideMinPartySize !== undefined;
     if (!touchesMessage && !touchesSettings) {
       throw new BadRequestException('Indicá mensaje o configuración del día');
     }
@@ -346,6 +352,8 @@ export class ReservationsService implements OnModuleInit {
         outsideEnabled: null,
         insideCapacityRemaining: null,
         outsideCapacityRemaining: null,
+        insideMaxPartySize: null,
+        outsideMinPartySize: null,
         active: true,
       });
     }
@@ -367,6 +375,12 @@ export class ReservationsService implements OnModuleInit {
     }
     if (dto.outsideCapacityRemaining !== undefined) {
       row.outsideCapacityRemaining = normalizeCapacityRemaining(dto.outsideCapacityRemaining);
+    }
+    if (dto.insideMaxPartySize !== undefined) {
+      row.insideMaxPartySize = normalizePartyRule(dto.insideMaxPartySize);
+    }
+    if (dto.outsideMinPartySize !== undefined) {
+      row.outsideMinPartySize = normalizePartyRule(dto.outsideMinPartySize);
     }
 
     if (!rowHasDayContent(row)) {
@@ -503,8 +517,9 @@ export class ReservationsService implements OnModuleInit {
     const partySize = this.normalizePartySize(dto.partySize);
     const area = this.normalizeArea(dto.area);
     const dayRow = await this.findDayNoticeRow(shopId, businessDate);
-    assertPartyFitsShopArea(area, partySize, shop);
-    assertPartyFitsAreaCapacity(area, partySize, dayOverridesFromRow(dayRow));
+    const overrides = dayOverridesFromRow(dayRow);
+    assertPartyFitsShopArea(area, partySize, effectivePartyRules(shop, overrides));
+    assertPartyFitsAreaCapacity(area, partySize, overrides);
     await consumeDayAreaCapacity(this.dayNotices, shopId, businessDate, area, partySize);
     const row = await this.reservations.save(
       this.reservations.create({
@@ -546,7 +561,15 @@ export class ReservationsService implements OnModuleInit {
       row.reservationTime = this.normalizeTime(dto.reservationTime);
     }
     const shop = await this.shops.assertReservationsEnabled(shopId);
-    assertPartyFitsShopArea(row.area, Number(row.partySize ?? 0), shop);
+    const dayRow = await this.findDayNoticeRow(
+      shopId,
+      toIsoDateOnly(row.businessDate) || String(row.businessDate ?? '').slice(0, 10),
+    );
+    assertPartyFitsShopArea(
+      row.area,
+      Number(row.partySize ?? 0),
+      effectivePartyRules(shop, dayOverridesFromRow(dayRow)),
+    );
     await this.reservations.save(row);
     return this.toReservationDto(row);
   }

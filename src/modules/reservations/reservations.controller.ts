@@ -321,6 +321,30 @@ class UpsertDayNoticeDto {
   @Min(0)
   @Max(999)
   outsideCapacityRemaining?: number | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Máx. personas adentro este día. NULL hereda del local.',
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(99)
+  insideMaxPartySize?: number | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Afuera desde N personas este día. NULL hereda del local.',
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(99)
+  outsideMinPartySize?: number | null;
 }
 
 @ApiTags('reservations')
