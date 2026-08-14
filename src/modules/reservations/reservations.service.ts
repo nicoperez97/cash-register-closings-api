@@ -194,6 +194,17 @@ export class ReservationsService implements OnModuleInit {
     return email;
   }
 
+  /** La pizarra pública no debe mostrar mail ni Instagram del comensal. */
+  private publicBoardNotes(notes?: string | null): string | null {
+    const cleaned = String(notes ?? '')
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !/^mail:\s*/i.test(line) && !/^ig:\s*/i.test(line))
+      .join('\n')
+      .trim();
+    return cleaned || null;
+  }
+
   private async resolveGuestEmail(row: Reservation): Promise<string | null> {
     const direct = String(row.guestEmail ?? '').trim();
     if (direct) return direct;
@@ -703,7 +714,7 @@ export class ReservationsService implements OnModuleInit {
       partySize: Number(r.partySize ?? 0),
       area: r.area,
       reservationTime: r.reservationTime ?? null,
-      notes: r.notes?.trim() || null,
+      notes: this.publicBoardNotes(r.notes),
       status: r.status,
       number,
       createdAt: r.createdAt,
