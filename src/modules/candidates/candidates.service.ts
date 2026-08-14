@@ -1,19 +1,28 @@
 import {
+  BadRequestException,
   Injectable,
   NotFoundException,
   OnModuleInit,
+  StreamableFile,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { createReadStream } from 'fs';
 import { AuthUser } from '../../common/decorators';
 import { isEntityActive } from '../../common/active.util';
 import {
   Candidate,
+  CandidateCvFile,
   CandidateStatus,
 } from '../../entities/candidate.entity';
 import { ShopsService } from '../shops/shops.service';
 import { CreateCandidateDto, UpdateCandidateDto } from './dto/candidate.dto';
 import { ocrAndParseCv, ParsedCv } from './cv-ocr.parser';
+import {
+  deleteCandidateUploads,
+  resolveUploadPath,
+  saveUploadFile,
+} from '../../common/uploads';
 
 @Injectable()
 export class CandidatesService implements OnModuleInit {
@@ -60,6 +69,13 @@ export class CandidatesService implements OnModuleInit {
     } catch {
       // ya existe o sin permisos DDL
     }
+    try {
+      await this.candidates.query(`
+        ALTER TABLE candidates ADD COLUMN cvFiles JSON NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
   }
 
   private toDto(c: Candidate) {
@@ -84,12 +100,21 @@ export class CandidatesService implements OnModuleInit {
       skills: c.skills ?? [],
       languages: c.languages ?? [],
       rawText: c.rawText ?? null,
+      cvFiles: this.cvFilesPublic(c.cvFiles),
       notes: c.notes ?? null,
       status: c.status ?? CandidateStatus.NEW,
       active: isEntityActive(c.active),
       createdAt: c.createdAt,
       updatedAt: c.updatedAt ?? null,
     };
+  }
+
+  private cvFilesPublic(files?: CandidateCvFile[] | null) {
+    return (files ?? []).map((f, index) => ({
+      index,
+      originalName: f.originalName || `cv-${index + 1}`,
+      mime: f.mime || 'application/octet-stream',
+    }));
   }
 
   async parse(
@@ -150,6 +175,53 @@ export class CandidatesService implements OnModuleInit {
     return this.toDto(saved);
   }
 
+  async attachCvFiles(
+    user: AuthUser,
+    shopId: string,
+    id: string,
+    files: Express.Multer.File[],
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    if (!files?.length) throw new BadRequestException('Archivo requerido');
+    const row = await this.candidates.findOne({ where: { id, shopId } });
+    if (!row) throw new NotFoundException('Candidato no encontrado');
+    const current = Array.isArray(row.cvFiles) ? [...row.cvFiles] : [];
+    const start = current.length;
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const saved = saveUploadFile({
+        relativeDir: `candidates/${shopId}/${id}`,
+        basename: `cv-${String(start + i + 1).padStart(2, '0')}`,
+        buffer: file.buffer,
+        originalName: file.originalname,
+        mime: file.mimetype,
+      });
+      current.push({
+        path: saved.relativePath,
+        originalName: file.originalname || saved.fileName,
+        mime: file.mimetype || 'application/octet-stream',
+      });
+    }
+    row.cvFiles = current;
+    const stored = await this.candidates.save(row);
+    return this.toDto(stored);
+  }
+
+  async downloadCvFile(user: AuthUser, shopId: string, id: string, index: number) {
+    this.shops.assertShopAccess(user, shopId);
+    const row = await this.candidates.findOne({ where: { id, shopId } });
+    if (!row) throw new NotFoundException('Candidato no encontrado');
+    const file = (row.cvFiles ?? [])[index];
+    if (!file) throw new NotFoundException('Archivo no encontrado');
+    const abs = resolveUploadPath(file.path);
+    if (!abs) throw new NotFoundException('Archivo no encontrado');
+    return {
+      stream: new StreamableFile(createReadStream(abs)),
+      fileName: file.originalName || `cv-${index + 1}`,
+      mime: file.mime || 'application/octet-stream',
+    };
+  }
+
   async update(user: AuthUser, shopId: string, id: string, dto: UpdateCandidateDto) {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.candidates.findOne({ where: { id, shopId } });
@@ -184,6 +256,7 @@ export class CandidatesService implements OnModuleInit {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.candidates.findOne({ where: { id, shopId } });
     if (!row) throw new NotFoundException('Candidato no encontrado');
+    deleteCandidateUploads(shopId, id);
     await this.candidates.softRemove(row);
     return { ok: true };
   }

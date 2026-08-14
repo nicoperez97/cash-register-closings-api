@@ -37,6 +37,7 @@ import {
 import {
   assertPartyFitsShopArea,
   normalizePartyRule,
+  partyMustSitOutside,
 } from './reservation-party-rules.util';
 
 export type CreatePublicReservationRequestDto = {
@@ -273,6 +274,7 @@ export class ReservationRequestsService implements OnModuleInit {
           shopId: shop.id,
           businessDate,
           guestName,
+          guestEmail,
           partySize,
           area,
           notes: this.contactNotesFromPublic({
@@ -409,9 +411,13 @@ export class ReservationRequestsService implements OnModuleInit {
     const row = await this.findPending(shopId, id);
     const businessDate =
       toIsoDateOnly(row.businessDate) || this.normalizeDate(String(row.businessDate));
-    const area =
+    let area =
       row.area === ReservationArea.OUTSIDE ? ReservationArea.OUTSIDE : ReservationArea.INSIDE;
     const overrides = await this.dayOverridesFor(shopId, businessDate);
+    if (partyMustSitOutside(Number(row.partySize ?? 0), shop) && shopOutsideOpen(shop)) {
+      area = ReservationArea.OUTSIDE;
+      row.area = ReservationArea.OUTSIDE;
+    }
     assertPartyFitsShopArea(area, Number(row.partySize ?? 0), shop);
     assertPartyFitsAreaCapacity(area, Number(row.partySize ?? 0), overrides);
     await consumeDayAreaCapacity(
@@ -427,6 +433,7 @@ export class ReservationRequestsService implements OnModuleInit {
         shopId,
         businessDate,
         guestName: row.guestName,
+        guestEmail: row.guestEmail,
         partySize: row.partySize,
         area,
         notes: this.contactNotes(row, staffNote),
@@ -447,6 +454,7 @@ export class ReservationRequestsService implements OnModuleInit {
     );
     const people = `${row.partySize} ${row.partySize === 1 ? 'persona' : 'personas'}`;
     const areaLabel = row.area === ReservationArea.OUTSIDE ? 'Afuera' : 'Adentro';
+    const extra = row.staffNote ? `\n\n${row.staffNote}` : '';
     void this.mail
       .sendGuestEmail({
         to: row.guestEmail,
@@ -454,7 +462,7 @@ export class ReservationRequestsService implements OnModuleInit {
         shopId,
         type: 'RESERVATION_ACCEPTED',
         title: `Reserva confirmada en ${shop.name}`,
-        body: `Hola ${row.guestName}, tu reserva quedó confirmada.\n\n${people} · ${areaLabel} · ${when}\n\nTe esperamos en ${shop.name}.`,
+        body: `Hola ${row.guestName}, tu reserva quedó confirmada.\n\n${people} · ${areaLabel} · ${when}${extra}\n\nTe esperamos en ${shop.name}.`,
       })
       .catch(() => undefined);
 

@@ -8,6 +8,7 @@ import {
   Patch,
   Post,
   Query,
+  Res,
   UploadedFiles,
   UseGuards,
   UseInterceptors,
@@ -15,6 +16,7 @@ import {
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
+import type { Response } from 'express';
 import { AuthUser, CurrentUser, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { CandidatesService } from './candidates.service';
@@ -83,6 +85,49 @@ export class CandidatesController {
     @Body() dto: CreateCandidateDto,
   ) {
     return this.candidates.create(user, shopId, dto);
+  }
+
+  @Post(':id/cv-files')
+  @RequirePermissions('candidates.manage')
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(
+    FilesInterceptor('files', 10, { limits: { fileSize: 15 * 1024 * 1024 } }),
+  )
+  attachCvFiles(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+    @UploadedFiles() files: Express.Multer.File[],
+  ) {
+    if (!files?.length) throw new BadRequestException('Archivo requerido');
+    return this.candidates.attachCvFiles(user, shopId, id, files);
+  }
+
+  @Get(':id/cv-files/:index')
+  @RequirePermissions('candidates.read')
+  async downloadCvFile(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+    @Param('index') index: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const n = Number(index);
+    if (!Number.isInteger(n) || n < 0) {
+      throw new BadRequestException('Archivo inválido');
+    }
+    const { stream, fileName, mime } = await this.candidates.downloadCvFile(
+      user,
+      shopId,
+      id,
+      n,
+    );
+    res.setHeader('Content-Type', mime);
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${encodeURIComponent(fileName)}"`,
+    );
+    return stream;
   }
 
   @Patch(':id')

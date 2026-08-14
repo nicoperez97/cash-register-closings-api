@@ -126,6 +126,12 @@ const TYPE_META: Record<string, TypeMeta> = {
     toneSoft: '#fdecea',
     hint: 'Esta vez no pudimos confirmar tu reserva.',
   },
+  RESERVATION_STAFF_MESSAGE: {
+    label: 'Mensaje del local',
+    tone: '#1d65a0',
+    toneSoft: '#e8f1f8',
+    hint: 'Te escribimos por tu reserva.',
+  },
 };
 
 const FALLBACK_META: TypeMeta = {

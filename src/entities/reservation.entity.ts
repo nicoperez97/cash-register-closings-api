@@ -26,6 +26,9 @@ export class Reservation extends BaseEntity {
   @Column({ type: 'varchar', length: 120, default: '' })
   guestName: string;
 
+  @Column({ type: 'varchar', length: 180, nullable: true })
+  guestEmail?: string | null;
+
   @Column({ type: 'int', default: 2 })
   partySize: number;
 

@@ -12,6 +12,7 @@ import {
   ReservationStatus,
 } from '../../entities/reservation.entity';
 import { ReservationDayNotice } from '../../entities/reservation-day-notice.entity';
+import { ReservationRequest } from '../../entities/reservation-request.entity';
 import {
   WaitingListEntry,
   WaitingListStatus,
@@ -19,6 +20,7 @@ import {
 import { Shop } from '../../entities/shop.entity';
 import { AuthUser } from '../../common/decorators';
 import { ShopsService } from '../shops/shops.service';
+import { MailService } from '../notifications/mail.service';
 import { resolveShopCalendarDate } from '../../common/business-date';
 import { isEntityActive } from '../../common/active.util';
 import { normalizeLogoUrl } from '../../common/drive-url';
@@ -41,6 +43,7 @@ const ACTIVE_RESERVATION_STATUSES = [
 export interface UpsertReservationDto {
   businessDate?: string;
   guestName?: string;
+  guestEmail?: string | null;
   partySize?: number;
   area?: ReservationArea;
   notes?: string | null;
@@ -67,7 +70,10 @@ export class ReservationsService implements OnModuleInit {
     @InjectRepository(WaitingListEntry)
     private readonly waiting: Repository<WaitingListEntry>,
     @InjectRepository(Shop) private readonly shopsRepo: Repository<Shop>,
+    @InjectRepository(ReservationRequest)
+    private readonly requests: Repository<ReservationRequest>,
     private readonly shops: ShopsService,
+    private readonly mail: MailService,
   ) {}
 
   async onModuleInit() {
@@ -103,6 +109,7 @@ export class ReservationsService implements OnModuleInit {
       `ALTER TABLE reservation_day_notices ADD COLUMN outsideEnabled TINYINT(1) NULL`,
       `ALTER TABLE reservation_day_notices ADD COLUMN insideCapacityRemaining INT NULL`,
       `ALTER TABLE reservation_day_notices ADD COLUMN outsideCapacityRemaining INT NULL`,
+      `ALTER TABLE reservations ADD COLUMN guestEmail VARCHAR(180) NULL`,
     ]) {
       try {
         await this.dayNotices.query(sql);
@@ -122,6 +129,7 @@ export class ReservationsService implements OnModuleInit {
       shopId: r.shopId,
       businessDate,
       guestName: r.guestName ?? '',
+      guestEmail: r.guestEmail ?? null,
       partySize: Number(r.partySize ?? 0),
       area: r.area ?? ReservationArea.INSIDE,
       notes: r.notes ?? null,
@@ -175,6 +183,40 @@ export class ReservationsService implements OnModuleInit {
       throw new BadRequestException('La cantidad de personas debe ser al menos 1');
     }
     return Math.min(n, 99);
+  }
+
+  private normalizeEmail(raw?: string | null): string | null {
+    const email = String(raw ?? '').trim().toLowerCase();
+    if (!email) return null;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new BadRequestException('Mail inválido');
+    }
+    return email;
+  }
+
+  private async resolveGuestEmail(row: Reservation): Promise<string | null> {
+    const direct = String(row.guestEmail ?? '').trim();
+    if (direct) return direct;
+    const req = await this.requests.findOne({
+      where: { shopId: row.shopId, reservationId: row.id },
+      order: { createdAt: 'DESC' },
+    });
+    const fromReq = String(req?.guestEmail ?? '').trim();
+    if (fromReq) return fromReq;
+    const fromNotes = String(row.notes ?? '').match(
+      /(?:^|\n)\s*Mail:\s*([^\s\n]+@[^\s\n]+)/i,
+    );
+    return fromNotes?.[1]?.trim() || null;
+  }
+
+  private formatReservationWhen(row: Reservation): string {
+    const iso = toIsoDateOnly(row.businessDate) || String(row.businessDate ?? '').slice(0, 10);
+    const [y, m, d] = iso.split('-');
+    const label = d && m ? `${d}/${m}${y ? `/${y}` : ''}` : iso;
+    const people = `${row.partySize} ${row.partySize === 1 ? 'persona' : 'personas'}`;
+    const area = row.area === ReservationArea.OUTSIDE ? 'Afuera' : 'Adentro';
+    const time = row.reservationTime ? ` · ${row.reservationTime}` : '';
+    return `${people} · ${area} · ${label}${time}`;
   }
 
   private normalizeDate(raw?: string | null): string {
@@ -458,6 +500,7 @@ export class ReservationsService implements OnModuleInit {
         shopId,
         businessDate,
         guestName: String(dto.guestName ?? '').trim(),
+        guestEmail: this.normalizeEmail(dto.guestEmail),
         partySize,
         area,
         notes: dto.notes?.trim() || null,
@@ -483,6 +526,7 @@ export class ReservationsService implements OnModuleInit {
     }
     if (dto.businessDate !== undefined) row.businessDate = this.normalizeDate(dto.businessDate);
     if (dto.guestName !== undefined) row.guestName = String(dto.guestName ?? '').trim();
+    if (dto.guestEmail !== undefined) row.guestEmail = this.normalizeEmail(dto.guestEmail);
     if (dto.partySize !== undefined) row.partySize = this.normalizePartySize(dto.partySize);
     if (dto.area !== undefined) row.area = this.normalizeArea(dto.area);
     if (dto.notes !== undefined) row.notes = dto.notes?.trim() || null;
@@ -494,6 +538,42 @@ export class ReservationsService implements OnModuleInit {
     assertPartyFitsShopArea(row.area, Number(row.partySize ?? 0), shop);
     await this.reservations.save(row);
     return this.toReservationDto(row);
+  }
+
+  async sendGuestMessage(user: AuthUser, shopId: string, id: string, message: string) {
+    this.shops.assertShopAccess(user, shopId);
+    const shop = await this.shops.assertReservationsEnabled(shopId);
+    const row = await this.reservations.findOne({ where: { id, shopId } });
+    if (!row || !isEntityActive(row.active)) {
+      throw new NotFoundException('Reserva no encontrada');
+    }
+    const text = String(message ?? '').trim();
+    if (text.length < 2) {
+      throw new BadRequestException('Escribí el mensaje para el comensal');
+    }
+    const email = await this.resolveGuestEmail(row);
+    if (!email) {
+      throw new BadRequestException('Esta reserva no tiene mail');
+    }
+    if (!row.guestEmail) {
+      row.guestEmail = email;
+      await this.reservations.save(row);
+    }
+    const when = this.formatReservationWhen(row);
+    const sent = await this.mail.sendGuestEmail({
+      to: email,
+      guestName: row.guestName || 'Hola',
+      shopId,
+      type: 'RESERVATION_STAFF_MESSAGE',
+      title: `Mensaje de ${shop.name}`,
+      body: `Hola ${row.guestName || ''},\n\n${text}\n\nTu reserva: ${when}\n\n${shop.name}`,
+    });
+    if (!sent) {
+      throw new BadRequestException(
+        'No se pudo enviar. Configurá el mail del local en Administrar local.',
+      );
+    }
+    return { ok: true, to: email };
   }
 
   async removeReservation(user: AuthUser, shopId: string, id: string) {

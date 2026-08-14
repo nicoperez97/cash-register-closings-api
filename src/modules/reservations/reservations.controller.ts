@@ -41,6 +41,11 @@ class CreateReservationDto {
   @IsString()
   @MaxLength(120)
   guestName?: string;
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== '')
+  @IsEmail()
+  guestEmail?: string | null;
   @ApiProperty({ example: 2 })
   @Type(() => Number)
   @IsInt()
@@ -66,6 +71,11 @@ class UpdateReservationDto {
   @IsString()
   @MaxLength(120)
   guestName?: string;
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== '')
+  @IsEmail()
+  guestEmail?: string | null;
   @ApiPropertyOptional()
   @IsOptional()
   @Type(() => Number)
@@ -243,6 +253,14 @@ class SetReservationPartyRulesDto {
   @Min(1)
   @Max(99)
   outsideMinPartySize?: number | null;
+}
+
+class SendReservationMessageDto {
+  @ApiProperty()
+  @IsString()
+  @MinLength(2)
+  @MaxLength(2000)
+  message: string;
 }
 
 class UpsertDayNoticeDto {
@@ -436,6 +454,17 @@ export class ReservationsController {
     @Body() dto: UpdateReservationDto,
   ) {
     return this.reservations.updateReservation(user, shopId, id, dto);
+  }
+
+  @Post('reservations/:id/message')
+  @RequirePermissions('reservations.manage')
+  sendReservationMessage(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+    @Body() dto: SendReservationMessageDto,
+  ) {
+    return this.reservations.sendGuestMessage(user, shopId, id, dto.message);
   }
 
   @Delete('reservations/:id')

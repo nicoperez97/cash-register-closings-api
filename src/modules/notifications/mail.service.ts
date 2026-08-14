@@ -120,7 +120,8 @@ export class MailService {
     return (
       type === NotificationType.RESERVATION_REQUEST ||
       type === 'RESERVATION_ACCEPTED' ||
-      type === 'RESERVATION_REJECTED'
+      type === 'RESERVATION_REJECTED' ||
+      type === 'RESERVATION_STAFF_MESSAGE'
     );
   }
 
@@ -345,16 +346,16 @@ export class MailService {
     type: string;
     title: string;
     body: string;
-  }): Promise<void> {
+  }): Promise<boolean> {
     const to = String(input.to ?? '').trim();
-    if (!to) return;
+    if (!to) return false;
     const shop = await this.loadShop(input.shopId);
     const { transporter, fromEmail } = this.transporterForShop(shop);
     if (!transporter || !fromEmail) {
       this.logger.warn(
         'Sin SMTP: no se envió el mail al comensal. Configurá email + contraseña en el local.',
       );
-      return;
+      return false;
     }
     const shopName = shop?.name?.trim() || null;
     const fromHeader = shopName ? `"${shopName}" <${fromEmail}>` : fromEmail;
@@ -384,10 +385,12 @@ export class MailService {
         attachments: this.logoAttachments(logo),
         replyTo: shop?.email?.trim() || undefined,
       });
+      return true;
     } catch (err) {
       this.logger.warn(
         `No se pudo enviar email al comensal ${to}: ${(err as Error)?.message ?? err}`,
       );
+      return false;
     }
   }
 

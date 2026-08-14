@@ -27,6 +27,12 @@ export type CandidateLanguageItem = {
   level?: string;
 };
 
+export type CandidateCvFile = {
+  path: string;
+  originalName: string;
+  mime: string;
+};
+
 @Entity({ name: 'candidates' })
 export class Candidate extends BaseEntity {
   @Column()
@@ -85,6 +91,10 @@ export class Candidate extends BaseEntity {
 
   @Column({ type: 'longtext', nullable: true })
   rawText?: string | null;
+
+  /** Archivos originales del CV (fotos/PDF). */
+  @Column({ type: 'simple-json', nullable: true })
+  cvFiles?: CandidateCvFile[] | null;
 
   @Column({ type: 'text', nullable: true })
   notes?: string | null;

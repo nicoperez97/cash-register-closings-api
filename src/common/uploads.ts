@@ -76,6 +76,18 @@ export function deleteUploadIfExists(relativePath: string | null | undefined): v
   }
 }
 
+/** Borra la carpeta de archivos de un candidato. */
+export function deleteCandidateUploads(shopId: string, candidateId: string): void {
+  const root = uploadsRoot();
+  const dir = resolve(root, 'candidates', shopId, candidateId);
+  if (!dir.startsWith(root) || !existsSync(dir)) return;
+  try {
+    rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // ignore
+  }
+}
+
 /** Borra todos los archivos del pago (factura + comprobante) y la carpeta. */
 export function deletePaymentUploads(shopId: string, paymentId: string): void {
   const root = uploadsRoot();
