@@ -45,6 +45,10 @@ export class Reservation extends BaseEntity {
   @Column({ type: 'varchar', length: 5, nullable: true })
   reservationTime?: string | null;
 
+  /** Número de mesa física, opcional. */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  tableNumber?: string | null;
+
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })
   shop: Shop;

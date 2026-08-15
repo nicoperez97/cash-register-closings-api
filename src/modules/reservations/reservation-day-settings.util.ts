@@ -14,6 +14,9 @@ export type ReservationDayOverrides = {
   outsideCapacityRemaining: number | null;
   /** NULL = hereda del local. */
   insideMaxPartySize: number | null;
+  /** Máximo afuera. NULL = hereda / ilimitado. */
+  outsideMaxPartySize: number | null;
+  /** @deprecated alias de outsideMaxPartySize */
   outsideMinPartySize: number | null;
 };
 
@@ -95,6 +98,7 @@ export function dayOverridesFromRow(
       ? (outsideCapacityRemaining as number)
       : null,
     insideMaxPartySize,
+    outsideMaxPartySize: outsideMinPartySize,
     outsideMinPartySize,
   };
 }

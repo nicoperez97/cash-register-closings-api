@@ -49,6 +49,7 @@ export interface UpsertReservationDto {
   notes?: string | null;
   status?: ReservationStatus;
   reservationTime?: string | null;
+  tableNumber?: string | null;
 }
 
 export interface UpsertWaitingListDto {
@@ -112,6 +113,7 @@ export class ReservationsService implements OnModuleInit {
       `ALTER TABLE reservation_day_notices ADD COLUMN insideMaxPartySize INT NULL`,
       `ALTER TABLE reservation_day_notices ADD COLUMN outsideMinPartySize INT NULL`,
       `ALTER TABLE reservations ADD COLUMN guestEmail VARCHAR(180) NULL`,
+      `ALTER TABLE reservations ADD COLUMN tableNumber VARCHAR(20) NULL`,
     ]) {
       try {
         await this.dayNotices.query(sql);
@@ -137,6 +139,7 @@ export class ReservationsService implements OnModuleInit {
       notes: r.notes ?? null,
       status: r.status ?? ReservationStatus.CONFIRMED,
       reservationTime: r.reservationTime ?? null,
+      tableNumber: (r.tableNumber ?? '').trim() || null,
       createdAt: r.createdAt,
       updatedAt: r.updatedAt ?? null,
     };
@@ -253,6 +256,12 @@ export class ReservationsService implements OnModuleInit {
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   }
 
+  private normalizeTableNumber(raw?: string | number | null): string | null {
+    if (raw == null || String(raw).trim() === '') return null;
+    const v = String(raw).trim().slice(0, 20);
+    return v || null;
+  }
+
   private normalizePhone(raw?: string | null): string {
     const phone = String(raw ?? '').trim();
     if (!phone) return '';
@@ -311,6 +320,7 @@ export class ReservationsService implements OnModuleInit {
       insideCapacityRemaining?: number | null;
       outsideCapacityRemaining?: number | null;
       insideMaxPartySize?: number | null;
+      outsideMaxPartySize?: number | null;
       outsideMinPartySize?: number | null;
     },
   ) {
@@ -332,6 +342,7 @@ export class ReservationsService implements OnModuleInit {
       dto.insideCapacityRemaining !== undefined ||
       dto.outsideCapacityRemaining !== undefined ||
       dto.insideMaxPartySize !== undefined ||
+      dto.outsideMaxPartySize !== undefined ||
       dto.outsideMinPartySize !== undefined;
     if (!touchesMessage && !touchesSettings) {
       throw new BadRequestException('Indicá mensaje o configuración del día');
@@ -379,8 +390,10 @@ export class ReservationsService implements OnModuleInit {
     if (dto.insideMaxPartySize !== undefined) {
       row.insideMaxPartySize = normalizePartyRule(dto.insideMaxPartySize);
     }
-    if (dto.outsideMinPartySize !== undefined) {
-      row.outsideMinPartySize = normalizePartyRule(dto.outsideMinPartySize);
+    const outsideMax =
+      dto.outsideMaxPartySize !== undefined ? dto.outsideMaxPartySize : dto.outsideMinPartySize;
+    if (outsideMax !== undefined) {
+      row.outsideMinPartySize = normalizePartyRule(outsideMax);
     }
 
     if (!rowHasDayContent(row)) {
@@ -532,6 +545,7 @@ export class ReservationsService implements OnModuleInit {
         notes: dto.notes?.trim() || null,
         status: ReservationStatus.CONFIRMED,
         reservationTime: this.normalizeTime(dto.reservationTime),
+        tableNumber: this.normalizeTableNumber(dto.tableNumber),
         active: true,
       }),
     );
@@ -559,6 +573,9 @@ export class ReservationsService implements OnModuleInit {
     if (dto.status !== undefined) row.status = dto.status;
     if (dto.reservationTime !== undefined) {
       row.reservationTime = this.normalizeTime(dto.reservationTime);
+    }
+    if (dto.tableNumber !== undefined) {
+      row.tableNumber = this.normalizeTableNumber(dto.tableNumber);
     }
     const shop = await this.shops.assertReservationsEnabled(shopId);
     const dayRow = await this.findDayNoticeRow(
@@ -737,6 +754,7 @@ export class ReservationsService implements OnModuleInit {
       partySize: Number(r.partySize ?? 0),
       area: r.area,
       reservationTime: r.reservationTime ?? null,
+      tableNumber: (r.tableNumber ?? '').trim() || null,
       notes: this.publicBoardNotes(r.notes),
       status: r.status,
       number,
@@ -798,7 +816,7 @@ export class ReservationsService implements OnModuleInit {
   }
 
   /** Público: toggle pendiente ↔ mesa marcada (solo día actual del local). */
-  async publicSeatReservation(slug: string, id: string) {
+  async publicSeatReservation(slug: string, id: string, tableNumber?: string | number | null) {
     const shop = await this.shops.findActiveBySlug(String(slug ?? '').trim().toLowerCase());
     if (!shop) throw new NotFoundException('Local no encontrado');
     if (!shop.reservationsEnabled) {
@@ -826,12 +844,15 @@ export class ReservationsService implements OnModuleInit {
         guestName: row.guestName || 'Reserva',
         partySize: Number(row.partySize ?? 0),
         area: row.area,
+        tableNumber: row.tableNumber?.trim() || null,
       };
     }
     if (row.status !== ReservationStatus.CONFIRMED) {
       throw new BadRequestException('La reserva no se puede marcar');
     }
     row.status = ReservationStatus.SEATED;
+    const mesa = this.normalizeTableNumber(tableNumber);
+    if (mesa) row.tableNumber = mesa;
     await this.reservations.save(row);
     return {
       id: row.id,
@@ -839,6 +860,7 @@ export class ReservationsService implements OnModuleInit {
       guestName: row.guestName || 'Reserva',
       partySize: Number(row.partySize ?? 0),
       area: row.area,
+      tableNumber: row.tableNumber?.trim() || null,
     };
   }
 

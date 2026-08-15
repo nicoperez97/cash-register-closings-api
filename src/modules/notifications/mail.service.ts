@@ -20,6 +20,7 @@ import {
   buildNotificationEmailText,
   type MailTemplateInput,
 } from './mail-template';
+import { applyEmailMessageTemplate } from './mail-message-templates.util';
 
 type MailPayload = {
   userId: string;
@@ -41,6 +42,7 @@ type ShopMailRow = Pick<
   | 'emailNotificationsEnabled'
   | 'emailNotificationTypes'
   | 'emailNotificationUserIds'
+  | 'emailMessageTemplates'
 >;
 
 @Injectable()
@@ -202,6 +204,26 @@ export class MailService {
     return { path: '/', label: 'Abrir la app' };
   }
 
+  private applyShopMailText(
+    shop: ShopMailRow | null | undefined,
+    type: string,
+    title: string,
+    body: string,
+    extra?: { guest?: string | null; name?: string | null },
+  ): { title: string; body: string } {
+    return applyEmailMessageTemplate(
+      shop?.emailMessageTemplates ?? null,
+      type,
+      { title, body },
+      {
+        shop: shop?.name ?? null,
+        guest: extra?.guest ?? extra?.name ?? null,
+        name: extra?.name ?? extra?.guest ?? null,
+        detail: body,
+      },
+    );
+  }
+
   private async renderMail(input: MailPayload, shop: ShopMailRow | null, user: User) {
     const action = this.actionForType(String(input.type));
     const actionUrl = this.appOrigin ? `${this.appOrigin}${action.path}` : null;
@@ -209,10 +231,17 @@ export class MailService {
       input.shopId,
       shop?.logoUrl,
     );
+    const custom = this.applyShopMailText(
+      shop,
+      String(input.type),
+      input.title,
+      input.body,
+      { name: user.fullName, guest: user.fullName },
+    );
     const tpl: MailTemplateInput = {
       type: String(input.type),
-      title: input.title,
-      body: input.body,
+      title: custom.title,
+      body: custom.body,
       recipientName: user.fullName,
       shopName: shop?.name ?? null,
       shopLogoUrl,
@@ -225,6 +254,7 @@ export class MailService {
       text: buildNotificationEmailText(tpl),
       html: buildNotificationEmailHtml(tpl),
       logo,
+      subject: custom.title,
     };
   }
 
@@ -325,7 +355,7 @@ export class MailService {
       await transporter.sendMail({
         from: fromHeader,
         to: user.email.trim(),
-        subject: input.title,
+        subject: rendered.subject,
         text: rendered.text,
         html: rendered.html,
         attachments: this.logoAttachments(rendered.logo),
@@ -359,14 +389,18 @@ export class MailService {
     }
     const shopName = shop?.name?.trim() || null;
     const fromHeader = shopName ? `"${shopName}" <${fromEmail}>` : fromEmail;
+    const custom = this.applyShopMailText(shop, input.type, input.title, input.body, {
+      guest: input.guestName,
+      name: input.guestName,
+    });
     const { shopLogoUrl, logo } = await this.resolveMailLogo(
       input.shopId,
       shop?.logoUrl,
     );
     const tpl: MailTemplateInput = {
       type: input.type,
-      title: input.title,
-      body: input.body,
+      title: custom.title,
+      body: custom.body,
       recipientName: input.guestName,
       shopName,
       shopLogoUrl,
@@ -379,7 +413,7 @@ export class MailService {
       await transporter.sendMail({
         from: fromHeader,
         to,
-        subject: input.title,
+        subject: custom.title,
         text: buildNotificationEmailText(tpl),
         html: buildNotificationEmailHtml(tpl),
         attachments: this.logoAttachments(logo),
@@ -444,7 +478,7 @@ export class MailService {
         await transporter.sendMail({
           from: fromHeader,
           to: user.email.trim(),
-          subject: input.title,
+          subject: rendered.subject,
           text: rendered.text,
           html: rendered.html,
           attachments: this.logoAttachments(rendered.logo),

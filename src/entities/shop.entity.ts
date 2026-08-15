@@ -61,7 +61,7 @@ export class Shop extends BaseEntity {
   @Column({ type: 'int', nullable: true })
   reservationInsideMaxPartySize?: number | null;
 
-  /** A partir de esta cantidad la mesa es sí o sí afuera. NULL = sin regla. */
+  /** Máximo de personas por reserva afuera. NULL = ilimitado. (columna histórica outsideMin) */
   @Column({ type: 'int', nullable: true })
   reservationOutsideMinPartySize?: number | null;
 
@@ -130,6 +130,14 @@ export class Shop extends BaseEntity {
    */
   @Column({ type: 'simple-json', nullable: true })
   emailNotificationUserIds?: string[] | null;
+
+  /**
+   * Asunto y cuerpo custom por tipo de mail.
+   * Placeholders: {shop} {guest} {name} {detail} {title} {body}
+   * Vacío / tipo ausente = texto automático.
+   */
+  @Column({ type: 'simple-json', nullable: true })
+  emailMessageTemplates?: Record<string, { subject?: string; body?: string }> | null;
 
   /** Sistema de ventas / POS del local (Restosoft, etc.). */
   @Column({ type: 'uuid', nullable: true })

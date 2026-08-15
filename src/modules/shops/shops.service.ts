@@ -24,6 +24,7 @@ import { PosnetType, ShopPosnet } from '../../common/posnet';
 import { randomUUID } from 'crypto';
 import { normalizeUserVisibility, UserVisibility } from '../../common/user-visibility';
 import { normalizePartyRule } from '../reservations/reservation-party-rules.util';
+import { normalizeEmailMessageTemplates } from '../notifications/mail-message-templates.util';
 import {
   deleteUploadIfExists,
   resolveUploadPath,
@@ -206,6 +207,14 @@ export class ShopsService implements OnModuleInit {
     try {
       await this.shops.query(`
         ALTER TABLE shops
+          ADD COLUMN emailMessageTemplates TEXT NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
           ADD COLUMN emailSmtpPassword VARCHAR(255) NULL
       `);
     } catch {
@@ -368,7 +377,11 @@ export class ShopsService implements OnModuleInit {
         reservationInsideEnabled: dto.reservationInsideEnabled ?? true,
         reservationOutsideEnabled: dto.reservationOutsideEnabled ?? true,
         reservationInsideMaxPartySize: normalizePartyRule(dto.reservationInsideMaxPartySize),
-        reservationOutsideMinPartySize: normalizePartyRule(dto.reservationOutsideMinPartySize),
+        reservationOutsideMinPartySize: normalizePartyRule(
+          dto.reservationOutsideMaxPartySize !== undefined
+            ? dto.reservationOutsideMaxPartySize
+            : dto.reservationOutsideMinPartySize,
+        ),
         waitingListEnabled: dto.waitingListEnabled ?? true,
         tipsEnabled: dto.tipsEnabled ?? false,
         defaultChangeAmount: String(dto.defaultChangeAmount ?? 0),
@@ -391,6 +404,7 @@ export class ShopsService implements OnModuleInit {
         emailNotificationsEnabled: dto.emailNotificationsEnabled ?? true,
         emailNotificationTypes: this.normalizeStringList(dto.emailNotificationTypes),
         emailNotificationUserIds: this.normalizeStringList(dto.emailNotificationUserIds),
+        emailMessageTemplates: normalizeEmailMessageTemplates(dto.emailMessageTemplates),
         salesSystemId: dto.salesSystemId ?? null,
         posPaymentMap: dto.posPaymentMap ?? null,
         posnets: this.normalizePosnets(dto.posnets),
@@ -433,10 +447,12 @@ export class ShopsService implements OnModuleInit {
         dto.reservationInsideMaxPartySize,
       );
     }
-    if (dto.reservationOutsideMinPartySize !== undefined) {
-      shop.reservationOutsideMinPartySize = normalizePartyRule(
-        dto.reservationOutsideMinPartySize,
-      );
+    const outsideMax =
+      dto.reservationOutsideMaxPartySize !== undefined
+        ? dto.reservationOutsideMaxPartySize
+        : dto.reservationOutsideMinPartySize;
+    if (outsideMax !== undefined) {
+      shop.reservationOutsideMinPartySize = normalizePartyRule(outsideMax);
     }
     if (shop.reservationInsideEnabled === false && shop.reservationOutsideEnabled === false) {
       throw new BadRequestException('Dejá al menos un sector habilitado (adentro o afuera)');
@@ -501,6 +517,9 @@ export class ShopsService implements OnModuleInit {
     }
     if (dto.emailNotificationUserIds !== undefined) {
       shop.emailNotificationUserIds = this.normalizeStringList(dto.emailNotificationUserIds);
+    }
+    if (dto.emailMessageTemplates !== undefined) {
+      shop.emailMessageTemplates = normalizeEmailMessageTemplates(dto.emailMessageTemplates);
     }
     if (dto.salesSystemId !== undefined) {
       shop.salesSystemId = dto.salesSystemId || null;
@@ -754,6 +773,10 @@ export class ShopsService implements OnModuleInit {
         s.reservationInsideMaxPartySize == null
           ? null
           : Number(s.reservationInsideMaxPartySize) || null,
+      reservationOutsideMaxPartySize:
+        s.reservationOutsideMinPartySize == null
+          ? null
+          : Number(s.reservationOutsideMinPartySize) || null,
       reservationOutsideMinPartySize:
         s.reservationOutsideMinPartySize == null
           ? null
@@ -779,6 +802,10 @@ export class ShopsService implements OnModuleInit {
       emailNotificationUserIds: Array.isArray(s.emailNotificationUserIds)
         ? s.emailNotificationUserIds
         : null,
+      emailMessageTemplates:
+        s.emailMessageTemplates && typeof s.emailMessageTemplates === 'object'
+          ? s.emailMessageTemplates
+          : null,
       salesSystemId: s.salesSystemId ?? null,
       posPaymentMap: s.posPaymentMap ?? null,
       posnets: s.posnets ?? [],

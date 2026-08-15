@@ -38,7 +38,7 @@ import {
   assertPartyFitsShopArea,
   effectivePartyRules,
   normalizePartyRule,
-  partyMustSitOutside,
+  partyFitsArea,
 } from './reservation-party-rules.util';
 
 export type CreatePublicReservationRequestDto = {
@@ -129,7 +129,8 @@ export class ReservationRequestsService implements OnModuleInit {
       insideCapacityRemaining: closedDay ? 0 : flags.insideCapacityRemaining,
       outsideCapacityRemaining: closedDay ? 0 : flags.outsideCapacityRemaining,
       insideMaxPartySize: partyRules.reservationInsideMaxPartySize ?? null,
-      outsideMinPartySize: partyRules.reservationOutsideMinPartySize ?? null,
+      outsideMaxPartySize: partyRules.reservationOutsideMaxPartySize ?? null,
+      outsideMinPartySize: partyRules.reservationOutsideMaxPartySize ?? null,
       shopSignupEnabled: shopSignupOpen(shop),
       closedWeekdays,
       closedDay,
@@ -186,6 +187,7 @@ export class ReservationRequestsService implements OnModuleInit {
     shopId: string,
     patch: {
       insideMaxPartySize?: number | null;
+      outsideMaxPartySize?: number | null;
       outsideMinPartySize?: number | null;
     },
   ) {
@@ -198,12 +200,17 @@ export class ReservationRequestsService implements OnModuleInit {
     if (patch.insideMaxPartySize !== undefined) {
       shop.reservationInsideMaxPartySize = normalizePartyRule(patch.insideMaxPartySize);
     }
-    if (patch.outsideMinPartySize !== undefined) {
-      shop.reservationOutsideMinPartySize = normalizePartyRule(patch.outsideMinPartySize);
+    const outside =
+      patch.outsideMaxPartySize !== undefined
+        ? patch.outsideMaxPartySize
+        : patch.outsideMinPartySize;
+    if (outside !== undefined) {
+      shop.reservationOutsideMinPartySize = normalizePartyRule(outside);
     }
     await this.shopsRepo.save(shop);
     return {
       reservationInsideMaxPartySize: shop.reservationInsideMaxPartySize ?? null,
+      reservationOutsideMaxPartySize: shop.reservationOutsideMinPartySize ?? null,
       reservationOutsideMinPartySize: shop.reservationOutsideMinPartySize ?? null,
     };
   }
@@ -418,7 +425,12 @@ export class ReservationRequestsService implements OnModuleInit {
     const overrides = await this.dayOverridesFor(shopId, businessDate);
     const flags = effectiveReservationFlags(shop, overrides);
     const partyRules = effectivePartyRules(shop, overrides);
-    if (partyMustSitOutside(Number(row.partySize ?? 0), partyRules) && flags.outsideEnabled) {
+    if (
+      !partyFitsArea(area, Number(row.partySize ?? 0), partyRules) &&
+      area === ReservationArea.INSIDE &&
+      flags.outsideEnabled &&
+      partyFitsArea(ReservationArea.OUTSIDE, Number(row.partySize ?? 0), partyRules)
+    ) {
       area = ReservationArea.OUTSIDE;
       row.area = ReservationArea.OUTSIDE;
     }

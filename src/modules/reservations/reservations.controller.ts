@@ -62,6 +62,11 @@ class CreateReservationDto {
   @MaxLength(500)
   notes?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() reservationTime?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  tableNumber?: string | null;
 }
 
 class UpdateReservationDto {
@@ -93,6 +98,11 @@ class UpdateReservationDto {
   @MaxLength(500)
   notes?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsString() reservationTime?: string | null;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  tableNumber?: string | null;
   @ApiPropertyOptional({ enum: ReservationStatus })
   @IsOptional()
   @IsEnum(ReservationStatus)
@@ -245,6 +255,15 @@ class SetReservationPartyRulesDto {
   @Max(99)
   insideMaxPartySize?: number | null;
 
+  @ApiPropertyOptional({ nullable: true, description: 'Máx. personas afuera. NULL = ilimitado.' })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(99)
+  outsideMaxPartySize?: number | null;
+
   @ApiPropertyOptional({ nullable: true })
   @IsOptional()
   @ValidateIf((_, v) => v !== null)
@@ -336,7 +355,19 @@ class UpsertDayNoticeDto {
 
   @ApiPropertyOptional({
     nullable: true,
-    description: 'Afuera desde N personas este día. NULL hereda del local.',
+    description: 'Máx. personas afuera. NULL = ilimitado.',
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(99)
+  outsideMaxPartySize?: number | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Máx. personas afuera este día. NULL hereda del local. Vacío = ilimitado.',
   })
   @IsOptional()
   @ValidateIf((_, v) => v !== null)
@@ -543,6 +574,14 @@ export class ReservationsController {
   }
 }
 
+class PublicSeatReservationDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  tableNumber?: string | null;
+}
+
 @ApiTags('public-reservations')
 @Controller('public/shops')
 export class PublicReservationsController {
@@ -577,8 +616,9 @@ export class PublicReservationsController {
   seat(
     @Param('slug') slug: string,
     @Param('id') id: string,
+    @Body() dto?: PublicSeatReservationDto,
   ) {
-    return this.reservations.publicSeatReservation(slug, id);
+    return this.reservations.publicSeatReservation(slug, id, dto?.tableNumber);
   }
 
   @Public()

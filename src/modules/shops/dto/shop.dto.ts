@@ -92,7 +92,7 @@ export class CreateShopDto {
 
   @ApiPropertyOptional({
     nullable: true,
-    description: 'A partir de cuántas personas la mesa es sí o sí afuera. NULL = sin regla.',
+    description: 'Máximo de personas afuera. NULL = ilimitado.',
   })
   @IsOptional()
   @ValidateIf((_, v) => v !== null)
@@ -101,6 +101,18 @@ export class CreateShopDto {
   @Min(1)
   @Max(99)
   reservationOutsideMinPartySize?: number | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Alias de reservationOutsideMinPartySize (afuera hasta).',
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(99)
+  reservationOutsideMaxPartySize?: number | null;
 
   @ApiPropertyOptional({ description: 'Habilita el módulo de lista de espera en este local' })
   @IsOptional()
@@ -238,6 +250,15 @@ export class CreateShopDto {
   @IsArray()
   @IsUUID('4', { each: true })
   emailNotificationUserIds?: string[] | null;
+
+  @ApiPropertyOptional({
+    description:
+      'Textos custom de email por tipo. { subject, body } con placeholders {shop} {guest} {name} {detail} {title} {body}',
+    nullable: true,
+  })
+  @IsOptional()
+  @IsObject()
+  emailMessageTemplates?: Record<string, { subject?: string; body?: string }> | null;
 
   @ApiPropertyOptional({ description: 'Sistema de ventas / POS (Restosoft, etc.)' })
   @IsOptional()
