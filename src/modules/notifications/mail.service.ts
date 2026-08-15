@@ -209,7 +209,12 @@ export class MailService {
     type: string,
     title: string,
     body: string,
-    extra?: { guest?: string | null; name?: string | null },
+    extra?: {
+      guest?: string | null;
+      name?: string | null;
+      detail?: string | null;
+      body?: string | null;
+    },
   ): { title: string; body: string } {
     return applyEmailMessageTemplate(
       shop?.emailMessageTemplates ?? null,
@@ -219,7 +224,8 @@ export class MailService {
         shop: shop?.name ?? null,
         guest: extra?.guest ?? extra?.name ?? null,
         name: extra?.name ?? extra?.guest ?? null,
-        detail: body,
+        detail: extra?.detail ?? body,
+        ...(extra && 'body' in extra ? { body: extra.body } : {}),
       },
     );
   }
@@ -376,6 +382,8 @@ export class MailService {
     type: string;
     title: string;
     body: string;
+    detail?: string;
+    content?: string;
   }): Promise<boolean> {
     const to = String(input.to ?? '').trim();
     if (!to) return false;
@@ -392,6 +400,8 @@ export class MailService {
     const custom = this.applyShopMailText(shop, input.type, input.title, input.body, {
       guest: input.guestName,
       name: input.guestName,
+      ...(input.detail != null ? { detail: input.detail } : {}),
+      ...(input.content != null ? { body: input.content } : {}),
     });
     const { shopLogoUrl, logo } = await this.resolveMailLogo(
       input.shopId,

@@ -18,7 +18,13 @@ export function applyEmailMessageTemplate(
   templates: EmailMessageTemplates | null | undefined,
   type: string,
   defaults: { title: string; body: string },
-  extra?: { shop?: string | null; guest?: string | null; name?: string | null; detail?: string | null },
+  extra?: {
+    shop?: string | null;
+    guest?: string | null;
+    name?: string | null;
+    detail?: string | null;
+    body?: string | null;
+  },
 ): { title: string; body: string } {
   const t = templates && typeof templates === 'object' ? templates[type] : undefined;
   const shop = String(extra?.shop ?? '').trim();
@@ -30,7 +36,7 @@ export function applyEmailMessageTemplate(
     name,
     detail: String(extra?.detail ?? defaults.body ?? ''),
     title: defaults.title,
-    body: defaults.body,
+    body: extra && 'body' in extra ? String(extra.body ?? '') : String(defaults.body ?? ''),
   };
   const subject = String(t?.subject ?? '').trim();
   const body = String(t?.body ?? '').trim();

@@ -618,6 +618,8 @@ export class ReservationsService implements OnModuleInit {
       type: 'RESERVATION_STAFF_MESSAGE',
       title: `Mensaje de ${shop.name}`,
       body: `Hola ${row.guestName || ''},\n\n${text}\n\nTu reserva: ${when}\n\n${shop.name}`,
+      detail: when,
+      content: text,
     });
     if (!sent) {
       throw new BadRequestException(

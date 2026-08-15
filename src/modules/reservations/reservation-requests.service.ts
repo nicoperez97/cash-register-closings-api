@@ -325,6 +325,7 @@ export class ReservationRequestsService implements OnModuleInit {
           type: 'RESERVATION_ACCEPTED',
           title: `Reserva confirmada en ${shop.name}`,
           body: `Hola ${guestName}, tu reserva quedó confirmada.\n\n${people} · ${areaLabel} · ${when}\n\nTe esperamos en ${shop.name}.`,
+          detail: `${people} · ${areaLabel} · ${when}`,
         })
         .catch(() => undefined);
 
@@ -479,6 +480,7 @@ export class ReservationRequestsService implements OnModuleInit {
         type: 'RESERVATION_ACCEPTED',
         title: `Reserva confirmada en ${shop.name}`,
         body: `Hola ${row.guestName}, tu reserva quedó confirmada.\n\n${people} · ${areaLabel} · ${when}${extra}\n\nTe esperamos en ${shop.name}.`,
+        detail: `${people} · ${areaLabel} · ${when}${extra}`,
       })
       .catch(() => undefined);
 
@@ -506,6 +508,8 @@ export class ReservationRequestsService implements OnModuleInit {
         type: 'RESERVATION_REJECTED',
         title: `No pudimos confirmar tu reserva en ${shop.name}`,
         body: `Hola ${row.guestName}, esta vez no pudimos confirmar tu reserva (${when}).${extra}\n\nSi querés, podés intentar otra fecha o escribirnos. Gracias por pensarnos.`,
+        detail: when,
+        content: extra,
       })
       .catch(() => undefined);
 
