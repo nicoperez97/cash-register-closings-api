@@ -37,6 +37,7 @@ import { assertPartyFitsShopArea, effectivePartyRules, normalizePartyRule } from
 /** Estados que cuentan para totales / capacidad (excluye canceladas y no-show). */
 const ACTIVE_RESERVATION_STATUSES = [
   ReservationStatus.CONFIRMED,
+  ReservationStatus.MARKED,
   ReservationStatus.SEATED,
 ] as const;
 
@@ -817,7 +818,7 @@ export class ReservationsService implements OnModuleInit {
     };
   }
 
-  /** Público: toggle pendiente ↔ mesa marcada (solo día actual del local). */
+  /** Público: pendiente → marcada → sentada → pendiente (solo día actual del local). */
   async publicSeatReservation(slug: string, id: string, tableNumber?: string | number | null) {
     const shop = await this.shops.findActiveBySlug(String(slug ?? '').trim().toLowerCase());
     if (!shop) throw new NotFoundException('Local no encontrado');
@@ -837,24 +838,12 @@ export class ReservationsService implements OnModuleInit {
     if (rowDate !== businessDate) {
       throw new BadRequestException('Solo se pueden marcar reservas de hoy');
     }
-    if (row.status === ReservationStatus.SEATED) {
-      row.status = ReservationStatus.CONFIRMED;
-      await this.reservations.save(row);
-      return {
-        id: row.id,
-        status: row.status,
-        guestName: row.guestName || 'Reserva',
-        partySize: Number(row.partySize ?? 0),
-        area: row.area,
-        tableNumber: row.tableNumber?.trim() || null,
-      };
+    const next = this.nextPublicBoardStatus(row.status);
+    row.status = next;
+    if (next === ReservationStatus.MARKED || next === ReservationStatus.SEATED) {
+      const mesa = this.normalizeTableNumber(tableNumber);
+      if (mesa) row.tableNumber = mesa;
     }
-    if (row.status !== ReservationStatus.CONFIRMED) {
-      throw new BadRequestException('La reserva no se puede marcar');
-    }
-    row.status = ReservationStatus.SEATED;
-    const mesa = this.normalizeTableNumber(tableNumber);
-    if (mesa) row.tableNumber = mesa;
     await this.reservations.save(row);
     return {
       id: row.id,
@@ -864,6 +853,13 @@ export class ReservationsService implements OnModuleInit {
       area: row.area,
       tableNumber: row.tableNumber?.trim() || null,
     };
+  }
+
+  private nextPublicBoardStatus(status: ReservationStatus): ReservationStatus {
+    if (status === ReservationStatus.CONFIRMED) return ReservationStatus.MARKED;
+    if (status === ReservationStatus.MARKED) return ReservationStatus.SEATED;
+    if (status === ReservationStatus.SEATED) return ReservationStatus.CONFIRMED;
+    throw new BadRequestException('La reserva no se puede marcar');
   }
 
   /** Público: quitar de la vista una liberada (SEATED soft-deleted del día). */

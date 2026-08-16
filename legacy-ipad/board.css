@@ -250,10 +250,16 @@ body {
   cursor: pointer;
 }
 
-.board-item-seated {
+.board-item-marked {
   border: 1px solid rgba(234, 179, 8, 0.7);
   background: rgba(234, 179, 8, 0.22);
   color: #fef9c3;
+}
+
+.board-item-seated {
+  border: 1px solid rgba(239, 68, 68, 0.8);
+  background: rgba(220, 38, 38, 0.34);
+  color: #fee2e2;
 }
 
 .board-item-removed {
@@ -287,6 +293,16 @@ body {
   background: rgba(234, 179, 8, 0.45);
   color: #fef9c3;
   vertical-align: middle;
+}
+
+.board-badge-marked {
+  background: rgba(234, 179, 8, 0.45);
+  color: #fef9c3;
+}
+
+.board-badge-seated {
+  background: rgba(239, 68, 68, 0.58);
+  color: #fee2e2;
 }
 
 .board-badge-removed {

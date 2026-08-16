@@ -9,6 +9,7 @@ export enum ReservationArea {
 
 export enum ReservationStatus {
   CONFIRMED = 'CONFIRMED',
+  MARKED = 'MARKED',
   SEATED = 'SEATED',
   CANCELLED = 'CANCELLED',
   NO_SHOW = 'NO_SHOW',

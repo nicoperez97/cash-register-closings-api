@@ -81,8 +81,8 @@
       var ra = a.removedAfterSeated ? 1 : 0;
       var rb = b.removedAfterSeated ? 1 : 0;
       if (ra !== rb) return ra - rb;
-      var sa = a.status === 'SEATED' ? 1 : 0;
-      var sb = b.status === 'SEATED' ? 1 : 0;
+      var sa = a.status === 'SEATED' ? 2 : a.status === 'MARKED' ? 1 : 0;
+      var sb = b.status === 'SEATED' ? 2 : b.status === 'MARKED' ? 1 : 0;
       if (sa !== sb) return sa - sb;
       var ta = a.reservationTime || '99:99';
       var tb = b.reservationTime || '99:99';
@@ -95,18 +95,22 @@
   }
 
   function canToggle(r) {
-    return !r.removedAfterSeated && (r.status === 'CONFIRMED' || r.status === 'SEATED');
+    return !r.removedAfterSeated && (r.status === 'CONFIRMED' || r.status === 'MARKED' || r.status === 'SEATED');
   }
 
   function renderItem(r) {
     var cls = 'board-item';
     if (canToggle(r)) cls += ' board-item-tap';
+    if (r.status === 'MARKED' && !r.removedAfterSeated) cls += ' board-item-marked';
     if (r.status === 'SEATED' && !r.removedAfterSeated) cls += ' board-item-seated';
     if (r.removedAfterSeated) cls += ' board-item-removed';
 
     var badges = '';
+    if (r.status === 'MARKED' && !r.removedAfterSeated) {
+      badges += '<span class="board-badge board-badge-marked">Marcada</span>';
+    }
     if (r.status === 'SEATED' && !r.removedAfterSeated) {
-      badges += '<span class="board-badge">Marcada</span>';
+      badges += '<span class="board-badge board-badge-seated">Sentada</span>';
     }
     if (r.removedAfterSeated) {
       badges += '<span class="board-badge board-badge-removed">Liberada</span>';
@@ -327,7 +331,7 @@
     var r = findRow(id);
     if (!r || !canToggle(r) || busy) return;
     var prev = r.status;
-    var next = prev === 'SEATED' ? 'CONFIRMED' : 'SEATED';
+    var next = prev === 'CONFIRMED' ? 'MARKED' : prev === 'MARKED' ? 'SEATED' : 'CONFIRMED';
     busy = true;
     patchStatus(id, next);
     render();
