@@ -24,7 +24,7 @@ export class GeminiDocumentService {
   }
 
   private model(): string {
-    return this.config.get<string>('gemini.model') || 'gemini-2.0-flash';
+    return this.config.get<string>('gemini.model') || 'gemini-3.6-flash';
   }
 
   private apiKey(): string {
@@ -110,6 +110,12 @@ export class GeminiDocumentService {
           return this.fail(
             'quota',
             'Se agotó la cuota diaria de Gemini. Se usó el parseo local.',
+          );
+        }
+        if (res.status === 404 || /no longer available|not found/i.test(errText)) {
+          return this.fail(
+            'error',
+            `El modelo Gemini configurado no está disponible. Probá GEMINI_MODEL=gemini-3.6-flash. Se usó el parseo local.`,
           );
         }
         return this.fail('error', 'Gemini no respondió bien. Se usó el parseo local.');

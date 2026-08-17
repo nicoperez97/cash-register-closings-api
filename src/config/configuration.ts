@@ -55,7 +55,7 @@ export default () => {
     /** Gemini (opcional): mejora parseo de cartas, CV y facturas. Free tier en AI Studio. */
     gemini: {
       apiKey: (env.GEMINI_API_KEY ?? '').trim(),
-      model: (env.GEMINI_MODEL ?? 'gemini-2.0-flash').trim() || 'gemini-2.0-flash',
+      model: (env.GEMINI_MODEL ?? 'gemini-3.6-flash').trim() || 'gemini-3.6-flash',
     },
   };
 };
