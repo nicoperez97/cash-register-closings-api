@@ -46,6 +46,8 @@ services:
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-https://cierres.perezcompany.com.ar}
       UPLOADS_DIR: /app/uploads
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
     volumes:
       - uploads-data:/app/uploads
     networks:
