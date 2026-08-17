@@ -20,6 +20,10 @@ export type ShopMenu = {
   slug?: string;
   title?: string | null;
   note?: string | null;
+  /** Path relativo bajo uploads/ del PDF o imagen original. */
+  sourceFile?: string | null;
+  sourceFileName?: string | null;
+  sourceMime?: string | null;
   sections: ShopMenuSection[];
 };
 
@@ -209,6 +213,9 @@ export function menuHasItems(menu?: ShopMenu | null): boolean {
 export function normalizeShopMenu(raw?: ShopMenu | null): ShopMenu {
   const title = String(raw?.title ?? '').trim().slice(0, 80) || null;
   const note = String(raw?.note ?? '').trim().slice(0, 500) || null;
+  const sourceFile = String(raw?.sourceFile ?? '').trim().replace(/\\/g, '/').slice(0, 200) || null;
+  const sourceFileName = String(raw?.sourceFileName ?? '').trim().slice(0, 120) || null;
+  const sourceMime = String(raw?.sourceMime ?? '').trim().slice(0, 80) || null;
   const sections: ShopMenuSection[] = [];
   for (const sec of raw?.sections ?? []) {
     const name = String(sec?.name ?? '').trim().slice(0, 60);
@@ -227,7 +234,7 @@ export function normalizeShopMenu(raw?: ShopMenu | null): ShopMenu {
     }
     sections.push({ name, items });
   }
-  return { title, note, sections };
+  return { title, note, sourceFile, sourceFileName, sourceMime, sections };
 }
 
 const MAX_MENUS = 8;
@@ -259,6 +266,9 @@ export function normalizeShopMenus(raw?: unknown): ShopMenuDoc[] {
       slug,
       title: content.title,
       note: content.note,
+      sourceFile: content.sourceFile,
+      sourceFileName: content.sourceFileName,
+      sourceMime: content.sourceMime,
       sections: content.sections,
     });
   }
@@ -272,6 +282,9 @@ export function emptyShopMenu(partial?: Partial<ShopMenu>): ShopMenuDoc {
     slug: slugifyMenu(partial?.slug || identity.slug) || 'carta',
     title: partial?.title ?? identity.title,
     note: partial?.note ?? null,
+    sourceFile: partial?.sourceFile ?? null,
+    sourceFileName: partial?.sourceFileName ?? null,
+    sourceMime: partial?.sourceMime ?? null,
     sections: partial?.sections ?? [],
   };
 }
