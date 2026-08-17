@@ -12,9 +12,11 @@ import { Shop } from '../../entities/shop.entity';
 import { AuthUser } from '../../common/decorators';
 import { deleteUploadIfExists, resolveUploadPath, saveUploadFile } from '../../common/uploads';
 import { ShopsService } from '../shops/shops.service';
+import { GeminiDocumentService } from '../ai/gemini-document.service';
 import {
   emptyShopMenu,
   menuHasItems,
+  menuParseScore,
   normalizeShopMenus,
   parseMenuFile,
   ShopMenu,
@@ -26,6 +28,7 @@ export class MenuService {
   constructor(
     @InjectRepository(Shop) private readonly shopsRepo: Repository<Shop>,
     private readonly shops: ShopsService,
+    private readonly gemini: GeminiDocumentService,
   ) {}
 
   private readMenus(shop: Shop): ShopMenuDoc[] {
@@ -120,8 +123,26 @@ export class MenuService {
     }
     const uploadFile = { ...file, buffer };
     try {
-      const parsed = await parseMenuFile(uploadFile);
-      const menu = emptyShopMenu(parsed.menu);
+      const classic = await parseMenuFile(uploadFile);
+      let menuPayload = classic.menu;
+      let rawText = classic.rawText;
+      let engine: 'classic' | 'gemini' = 'classic';
+
+      const weak = menuLooksWeak(classic.menu);
+      if (this.gemini.isEnabled() && (weak || !menuHasItems(classic.menu))) {
+        const ai = await this.gemini.parseMenu(uploadFile);
+        if (ai && menuHasItems(ai.menu)) {
+          const classicScore = menuParseScore(classic.menu);
+          const aiScore = menuParseScore(ai.menu);
+          if (aiScore > classicScore || (weak && aiScore >= Math.max(4, classicScore))) {
+            menuPayload = ai.menu;
+            rawText = ai.rawText;
+            engine = 'gemini';
+          }
+        }
+      }
+
+      const menu = emptyShopMenu(menuPayload);
       const saved = saveUploadFile({
         relativeDir: `menus/${shopId}`,
         basename: `src-${menu.id}`,
@@ -134,8 +155,9 @@ export class MenuService {
       menu.sourceMime = String(file.mimetype || '').slice(0, 80) || null;
       return {
         menu,
-        rawText: parsed.rawText,
+        rawText,
         fileName: file.originalname,
+        engine,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'No se pudo leer el archivo';
@@ -209,4 +231,21 @@ export class MenuService {
       mime,
     };
   }
+}
+
+function menuLooksWeak(menu: ShopMenu): boolean {
+  if (!menuHasItems(menu)) return true;
+  if (menuParseScore(menu) < 8) return true;
+  for (const sec of menu.sections ?? []) {
+    const name = String(sec.name ?? '').trim();
+    if (name.length > 10 && !/\s/.test(name) && /pasta|pizze|aperitiv|stuzzich|dolci|bibite/i.test(name)) {
+      return true;
+    }
+    for (const it of sec.items ?? []) {
+      const desc = String(it.description ?? '');
+      if (desc.length > 140 && /(\$\s*)?\d{1,3}([.\s]\d{3})+|\d{4,}/.test(desc)) return true;
+      if ((desc.match(/\$/g) || []).length >= 2) return true;
+    }
+  }
+  return false;
 }

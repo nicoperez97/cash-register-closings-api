@@ -192,7 +192,7 @@ function newMenuId(): string {
   return `m_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function menuParseScore(menu: ShopMenu): number {
+export function menuParseScore(menu: ShopMenu): number {
   let n = 0;
   for (const sec of menu.sections ?? []) {
     for (const it of sec.items ?? []) {

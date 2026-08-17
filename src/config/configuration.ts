@@ -52,6 +52,11 @@ export default () => {
       /** Remitente por defecto si el local no tiene email. */
       from: (env.SMTP_FROM ?? env.SMTP_USER ?? '').trim(),
     },
+    /** Gemini (opcional): mejora parseo de cartas, CV y facturas. Free tier en AI Studio. */
+    gemini: {
+      apiKey: (env.GEMINI_API_KEY ?? '').trim(),
+      model: (env.GEMINI_MODEL ?? 'gemini-2.0-flash').trim() || 'gemini-2.0-flash',
+    },
   };
 };
 

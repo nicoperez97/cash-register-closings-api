@@ -27,6 +27,7 @@ import { ShortagesModule } from './modules/shortages/shortages.module';
 import { TipsModule } from './modules/tips/tips.module';
 import { SalonFloorModule } from './modules/salon-floor/salon-floor.module';
 import { MenuModule } from './modules/menu/menu.module';
+import { AiModule } from './modules/ai/ai.module';
 import { JwtAuthGuard, PermissionsGuard } from './common/guards';
 import { PublicAbuseGuard } from './common/public-abuse.guard';
 
@@ -34,6 +35,7 @@ import { PublicAbuseGuard } from './common/public-abuse.guard';
   imports: [
     ConfigModule,
     DatabaseModule,
+    AiModule,
     AuthModule,
     ShopsModule,
     ClosingsModule,

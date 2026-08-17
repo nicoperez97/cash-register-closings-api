@@ -18,6 +18,7 @@ import {
 import { ShopsService } from '../shops/shops.service';
 import { CreateCandidateDto, UpdateCandidateDto } from './dto/candidate.dto';
 import { ocrAndParseCv, ParsedCv } from './cv-ocr.parser';
+import { GeminiDocumentService } from '../ai/gemini-document.service';
 import {
   deleteCandidateUploads,
   resolveUploadPath,
@@ -29,6 +30,7 @@ export class CandidatesService implements OnModuleInit {
   constructor(
     @InjectRepository(Candidate) private readonly candidates: Repository<Candidate>,
     private readonly shops: ShopsService,
+    private readonly gemini: GeminiDocumentService,
   ) {}
 
   async onModuleInit() {
@@ -123,7 +125,29 @@ export class CandidatesService implements OnModuleInit {
     files: Express.Multer.File | Express.Multer.File[],
   ): Promise<ParsedCv> {
     this.shops.assertShopAccess(user, shopId);
-    return ocrAndParseCv(files);
+    const list = (Array.isArray(files) ? files : [files]).filter((f) => !!f?.buffer?.length);
+    const classic = await ocrAndParseCv(files);
+    if (!this.gemini.isEnabled()) return classic;
+    const weak =
+      (!classic.email && !classic.phone) ||
+      (!classic.experience?.length && (classic.rawText?.length || 0) > 400) ||
+      (classic.firstName === 'Sin' && classic.lastName === 'nombre');
+    if (!weak) return classic;
+    const ai = await this.gemini.parseCv(list);
+    if (!ai) return classic;
+    const classicScore =
+      (classic.email ? 2 : 0) +
+      (classic.phone ? 1 : 0) +
+      (classic.experience?.length || 0) +
+      (classic.education?.length || 0) +
+      (classic.skills?.length ? 1 : 0);
+    const aiScore =
+      (ai.email ? 2 : 0) +
+      (ai.phone ? 1 : 0) +
+      (ai.experience?.length || 0) +
+      (ai.education?.length || 0) +
+      (ai.skills?.length ? 1 : 0);
+    return aiScore >= classicScore ? ai : classic;
   }
 
   async list(user: AuthUser, shopId: string, status?: string) {

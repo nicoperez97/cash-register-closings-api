@@ -26,6 +26,7 @@ import { isEntityActive } from '../../common/active.util';
 import { resolveShopCalendarDate } from '../../common/business-date';
 import { deletePaymentUploads, deleteUploadIfExists, resolveUploadPath, saveUploadFile } from '../../common/uploads';
 import { ocrAndParseInvoice, ParsedInvoice } from './invoice-ocr.parser';
+import { GeminiDocumentService } from '../ai/gemini-document.service';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
@@ -69,6 +70,7 @@ export class PaymentsService implements OnModuleInit {
     private readonly shops: ShopsService,
     private readonly notifications: NotificationsService,
     private readonly movements: MovementsService,
+    private readonly gemini: GeminiDocumentService,
   ) {}
 
   async onModuleInit() {
@@ -1343,7 +1345,19 @@ export class PaymentsService implements OnModuleInit {
     if (!this.canManage(user, shopId)) {
       throw new ForbiddenException('Sin permiso para cargar facturas');
     }
-    return ocrAndParseInvoice(file);
+    return this.resolveInvoiceParse(file);
+  }
+
+  private async resolveInvoiceParse(file: Express.Multer.File): Promise<ParsedInvoice> {
+    const classic = await ocrAndParseInvoice(file);
+    if (!this.gemini.isEnabled()) return classic;
+    const weak = !classic.taxId || classic.totalAmount == null;
+    if (!weak) return classic;
+    const ai = await this.gemini.parseInvoice(file);
+    if (!ai) return classic;
+    const classicScore = (classic.taxId ? 2 : 0) + (classic.totalAmount != null ? 2 : 0) + (classic.invoiceNumber ? 1 : 0);
+    const aiScore = (ai.taxId ? 2 : 0) + (ai.totalAmount != null ? 2 : 0) + (ai.invoiceNumber ? 1 : 0);
+    return aiScore >= classicScore ? { ...classic, ...ai, rawText: ai.rawText || classic.rawText } : classic;
   }
 
   async uploadInvoiceFile(
@@ -1363,7 +1377,7 @@ export class PaymentsService implements OnModuleInit {
     let parsed: ParsedInvoice | null = null;
     if (applyParsed) {
       try {
-        parsed = await ocrAndParseInvoice(file);
+        parsed = await this.resolveInvoiceParse(file);
       } catch {
         parsed = null;
       }
