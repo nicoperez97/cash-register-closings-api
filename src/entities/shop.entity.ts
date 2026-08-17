@@ -81,9 +81,25 @@ export class Shop extends BaseEntity {
   @Column({ type: 'tinyint', default: 0 })
   menuEnabled: boolean;
 
-  /** Carta publicada (secciones e ítems). */
+  /** Cartas publicadas (una o varias: menú, vinos, etc.). */
   @Column({ type: 'simple-json', nullable: true })
   menu?: {
+    menus?: Array<{
+      id: string;
+      slug: string;
+      title?: string | null;
+      note?: string | null;
+      sections?: Array<{
+        name: string;
+        items: Array<{
+          name: string;
+          description?: string | null;
+          price?: number | null;
+          priceLabel?: string | null;
+        }>;
+      }>;
+    }>;
+    /** Forma vieja: una sola carta. */
     title?: string | null;
     note?: string | null;
     sections?: Array<{

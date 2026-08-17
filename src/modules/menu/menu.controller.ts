@@ -35,7 +35,7 @@ export class MenuController {
   save(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
-    @Body() body: ShopMenu,
+    @Body() body: { menus?: ShopMenu[] } | ShopMenu,
   ) {
     return this.menus.saveAdmin(user, shopId, body);
   }
@@ -60,6 +60,15 @@ export class MenuController {
 @Controller('public/shops')
 export class PublicMenuController {
   constructor(private readonly menus: MenuService) {}
+
+  @Public()
+  @Get(':slug/menu/:menuSlug')
+  publicMenuBySlug(
+    @Param('slug') slug: string,
+    @Param('menuSlug') menuSlug: string,
+  ) {
+    return this.menus.publicMenu(slug, menuSlug);
+  }
 
   @Public()
   @Get(':slug/menu')

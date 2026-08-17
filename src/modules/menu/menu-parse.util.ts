@@ -16,13 +16,21 @@ export type ShopMenuSection = {
 };
 
 export type ShopMenu = {
+  id?: string;
+  slug?: string;
   title?: string | null;
   note?: string | null;
   sections: ShopMenuSection[];
 };
 
+export type ShopMenuDoc = ShopMenu & { id: string; slug: string };
+
+export type ShopMenusStore = {
+  menus: ShopMenu[];
+};
+
 const SECTION_HINTS =
-  /^(entradas?|minutas?|platos?|principales?|pastas?|pizzas?|hamburguesas?|sandwiches?|sándwiches?|ensaladas?|postres?|bebidas?|vinos?|tragos?|cocktails?|cafés?|cafes?|cervezas?|sin tacc|sin gluten|kids?|infantil|para compartir|especiales?|del día|carta|menú|menu|picadas?|empanadas?|guarniciones?|acompañamientos?|promos?|combos?)\b/i;
+  /^(entradas?|minutas?|platos?|principales?|pastas?|pizzas?|pizze|hamburguesas?|sandwiches?|sándwiches?|ensaladas?|postres?|dolci|stuzzichini|aperitivi|birre|bibite|bebidas?|vinos?|vini|ivini|tragos?|cocktails?|cafés?|cafes?|cervezas?|sin tacc|sin gluten|kids?|infantil|para compartir|especiales?|del día|carta|menú|menu|picadas?|empanadas?|guarniciones?|acompañamientos?|promos?|combos?|tintos?|blancos?|rosados?|espumantes?|copas?|pinot|malbec|bonarda|cabernet|chardonnay|syrah|merlot|blend|classici|speciali|vegetariano)\b/i;
 
 const PRICE_TAIL =
   /(?:\$|ars)?\s*(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{2})?)\s*(?:\.|-|—|–)?\s*$/i;
@@ -64,8 +72,16 @@ function parsePrice(raw: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function compactSpacedCaps(line: string): string {
+  const t = line.trim();
+  if (/^(?:[A-ZÁÉÍÓÚÜÑ] ){2,}[A-ZÁÉÍÓÚÜÑ]$/.test(t) && !/\d/.test(t)) {
+    return t.replace(/ /g, '');
+  }
+  return t;
+}
+
 function looksLikeSection(line: string): boolean {
-  const t = line.replace(/[:.\-–—]/g, '').trim();
+  const t = compactSpacedCaps(line.replace(/[:.\-–—]/g, '').trim());
   if (t.length < 2 || t.length > 42) return false;
   if (PRICE_TAIL.test(line)) return false;
   if (/\d/.test(t) && t.length > 8) return false;
@@ -80,7 +96,7 @@ export function parseMenuText(raw: string): ShopMenu {
   const lines = String(raw ?? '')
     .replace(/\r/g, '\n')
     .split('\n')
-    .map((l) => l.replace(/[·•]+/g, ' ').replace(/\.{3,}/g, ' ').replace(/\s+/g, ' ').trim())
+    .map((l) => compactSpacedCaps(l.replace(/[·•]+/g, ' ').replace(/\.{3,}/g, ' ').replace(/\s+/g, ' ').trim()))
     .filter((l) => l && !/^página\s+\d+/i.test(l));
 
   const sections: ShopMenuSection[] = [];
@@ -130,6 +146,52 @@ export function parseMenuText(raw: string): ShopMenu {
   };
 }
 
+export function slugifyMenu(raw: string): string {
+  return String(raw ?? '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+}
+
+export function suggestMenuIdentity(
+  fileName: string,
+  parsed?: ShopMenu | null,
+): { title: string; slug: string } {
+  const n = String(fileName ?? '').toLowerCase();
+  if (/vino/.test(n)) return { title: 'Vinos', slug: 'vinos' };
+  if (/trago|cocktail|barra|drink|aperitiv/.test(n)) return { title: 'Tragos', slug: 'tragos' };
+  if (/postre|dolci|dessert/.test(n)) return { title: 'Postres', slug: 'postres' };
+  const parsedTitle = String(parsed?.title ?? '').trim();
+  const fromTitle = slugifyMenu(parsedTitle);
+  if (fromTitle && !/^(tutto|passa|inverno|verano|menu|carta|nuevo)$/.test(fromTitle)) {
+    return { title: parsedTitle.slice(0, 80), slug: fromTitle };
+  }
+  return { title: parsedTitle || 'Carta', slug: 'carta' };
+}
+
+function uniqueSlug(base: string, used: Set<string>): string {
+  const root = slugifyMenu(base) || 'carta';
+  let slug = root;
+  let n = 2;
+  while (used.has(slug)) {
+    slug = `${root}-${n++}`.slice(0, 40);
+  }
+  used.add(slug);
+  return slug;
+}
+
+function newMenuId(): string {
+  return `m_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function menuHasItems(menu?: ShopMenu | null): boolean {
+  return !!menu?.sections?.some((s) => (s.items ?? []).some((it) => String(it?.name ?? '').trim()));
+}
+
 export function normalizeShopMenu(raw?: ShopMenu | null): ShopMenu {
   const title = String(raw?.title ?? '').trim().slice(0, 80) || null;
   const note = String(raw?.note ?? '').trim().slice(0, 500) || null;
@@ -152,6 +214,52 @@ export function normalizeShopMenu(raw?: ShopMenu | null): ShopMenu {
     sections.push({ name, items });
   }
   return { title, note, sections };
+}
+
+const MAX_MENUS = 8;
+
+function isLegacySingleMenu(raw: unknown): raw is ShopMenu {
+  if (!raw || typeof raw !== 'object') return false;
+  const o = raw as { menus?: unknown; sections?: unknown };
+  return Array.isArray(o.sections) && !Array.isArray(o.menus);
+}
+
+export function normalizeShopMenus(raw?: unknown): ShopMenuDoc[] {
+  const used = new Set<string>();
+  const usedIds = new Set<string>();
+  let list: ShopMenu[] = [];
+  if (raw && typeof raw === 'object' && Array.isArray((raw as ShopMenusStore).menus)) {
+    list = (raw as ShopMenusStore).menus;
+  } else if (isLegacySingleMenu(raw)) {
+    list = [raw];
+  }
+  const out: ShopMenuDoc[] = [];
+  for (const item of list.slice(0, MAX_MENUS)) {
+    const content = normalizeShopMenu(item);
+    let id = String(item?.id ?? '').trim().slice(0, 40);
+    if (!id || usedIds.has(id)) id = newMenuId();
+    usedIds.add(id);
+    const slug = uniqueSlug(item?.slug || content.title || 'carta', used);
+    out.push({
+      id,
+      slug,
+      title: content.title,
+      note: content.note,
+      sections: content.sections,
+    });
+  }
+  return out;
+}
+
+export function emptyShopMenu(partial?: Partial<ShopMenu>): ShopMenuDoc {
+  const identity = suggestMenuIdentity(partial?.title || 'Carta', partial as ShopMenu);
+  return {
+    id: partial?.id || newMenuId(),
+    slug: slugifyMenu(partial?.slug || identity.slug) || 'carta',
+    title: partial?.title ?? identity.title,
+    note: partial?.note ?? null,
+    sections: partial?.sections ?? [],
+  };
 }
 
 async function extractPdfText(buffer: Buffer): Promise<string> {
@@ -248,5 +356,14 @@ export async function parseMenuFile(file: Express.Multer.File): Promise<{
   rawText: string;
 }> {
   const rawText = await extractMenuFileText(file);
-  return { menu: parseMenuText(rawText), rawText: rawText.slice(0, 12000) };
+  const parsed = parseMenuText(rawText);
+  const identity = suggestMenuIdentity(file.originalname || '', parsed);
+  return {
+    menu: {
+      ...parsed,
+      title: parsed.title || identity.title,
+      slug: identity.slug,
+    },
+    rawText: rawText.slice(0, 12000),
+  };
 }
