@@ -17,9 +17,19 @@ import { isGlobalAdmin } from '../../common/guards';
 import { isEntityActive } from '../../common/active.util';
 import { ShopsService } from '../shops/shops.service';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
+import * as ExcelJS from 'exceljs';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
+
+function formatArMoney(value: number): string {
+  const num = Number(value ?? 0);
+  const abs = Math.abs(num).toLocaleString('es-AR', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  return num < 0 ? `- $${abs}` : `$${abs}`;
+}
 
 export interface MovementFilters {
   from?: string;
@@ -391,6 +401,103 @@ export class MovementsService implements OnModuleInit {
         expense: a.expense,
         balance: a.income - a.expense,
       })),
+    };
+  }
+
+  async exportBalancesXlsx(user: AuthUser, shopId: string, filters: MovementFilters = {}) {
+    this.shops.assertShopAccess(user, shopId);
+    const shop = await this.shops.getShopEntity(shopId);
+    const data = await this.balances(user, shopId, filters);
+    const accounts = data.accounts ?? [];
+    const total = accounts.reduce((sum, a) => sum + Number(a.balance ?? 0), 0);
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Cash Register Closings';
+    wb.created = new Date();
+    const ws = wb.addWorksheet('Saldos');
+    ws.getColumn(1).width = 28;
+    ws.getColumn(2).width = 18;
+
+    ws.mergeCells('A1:B1');
+    const title = ws.getCell('A1');
+    title.value = 'SALDOS';
+    title.font = { bold: true, size: 14 };
+    title.alignment = { horizontal: 'left', vertical: 'middle' };
+    title.border = {
+      top: { style: 'thin', color: { argb: 'FF000000' } },
+      left: { style: 'thin', color: { argb: 'FF000000' } },
+      bottom: { style: 'thin', color: { argb: 'FF000000' } },
+      right: { style: 'thin', color: { argb: 'FF000000' } },
+    };
+    ws.getCell('B1').border = {
+      top: { style: 'thin', color: { argb: 'FF000000' } },
+      left: { style: 'thin', color: { argb: 'FF000000' } },
+      bottom: { style: 'thin', color: { argb: 'FF000000' } },
+      right: { style: 'thin', color: { argb: 'FF000000' } },
+    };
+    ws.getRow(1).height = 22;
+
+    const header = ws.getRow(2);
+    header.values = ['Cuenta', 'Saldo'];
+    header.font = { bold: true };
+    header.eachCell((cell) => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFE7E7E7' },
+      };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FF000000' } },
+        left: { style: 'thin', color: { argb: 'FF000000' } },
+        bottom: { style: 'thin', color: { argb: 'FF000000' } },
+        right: { style: 'thin', color: { argb: 'FF000000' } },
+      };
+    });
+
+    const thin = {
+      top: { style: 'thin' as const, color: { argb: 'FF000000' } },
+      left: { style: 'thin' as const, color: { argb: 'FF000000' } },
+      bottom: { style: 'thin' as const, color: { argb: 'FF000000' } },
+      right: { style: 'thin' as const, color: { argb: 'FF000000' } },
+    };
+
+    let rowIdx = 3;
+    for (const a of accounts) {
+      const row = ws.getRow(rowIdx);
+      row.getCell(1).value = a.name;
+      row.getCell(2).value = formatArMoney(a.balance);
+      row.getCell(1).alignment = { horizontal: 'left' };
+      row.getCell(2).alignment = { horizontal: 'right' };
+      row.getCell(1).border = thin;
+      row.getCell(2).border = thin;
+      rowIdx += 1;
+    }
+
+    const totalRow = ws.getRow(rowIdx);
+    totalRow.getCell(1).value = 'TOTAL';
+    totalRow.getCell(2).value = formatArMoney(total);
+    totalRow.font = { bold: true };
+    totalRow.getCell(1).alignment = { horizontal: 'left' };
+    totalRow.getCell(2).alignment = { horizontal: 'right' };
+    const thickTop = {
+      top: { style: 'medium' as const, color: { argb: 'FF000000' } },
+      left: { style: 'thin' as const, color: { argb: 'FF000000' } },
+      bottom: { style: 'thin' as const, color: { argb: 'FF000000' } },
+      right: { style: 'thin' as const, color: { argb: 'FF000000' } },
+    };
+    totalRow.getCell(1).border = thickTop;
+    totalRow.getCell(2).border = thickTop;
+
+    const buffer = Buffer.from(await wb.xlsx.writeBuffer());
+    const slug = String(shop?.slug || shopId)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 40);
+    const stamp = new Date().toISOString().slice(0, 10);
+    return {
+      buffer,
+      filename: `saldos-${slug || 'local'}-${stamp}.xlsx`,
     };
   }
 }

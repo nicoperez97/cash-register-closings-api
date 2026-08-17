@@ -159,6 +159,27 @@ export class MovementsController {
     return this.movements.balances(user, shopId, { from, to });
   }
 
+  @Get('balances/export.xlsx')
+  @RequirePermissions('movements.read')
+  async exportBalances(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Query('from') from: string | undefined,
+    @Query('to') to: string | undefined,
+    @Res() res: Response,
+  ) {
+    const { buffer, filename } = await this.movements.exportBalancesXlsx(user, shopId, {
+      from,
+      to,
+    });
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
+  }
+
   @Get('import-template.xlsx')
   @RequirePermissions('movements.manage')
   async importTemplate(
