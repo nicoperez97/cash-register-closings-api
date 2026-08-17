@@ -123,31 +123,25 @@ export class CandidatesService implements OnModuleInit {
     user: AuthUser,
     shopId: string,
     files: Express.Multer.File | Express.Multer.File[],
-  ): Promise<ParsedCv> {
+  ): Promise<ParsedCv & { engine?: 'classic' | 'gemini'; geminiWarning?: string | null }> {
     this.shops.assertShopAccess(user, shopId);
     const list = (Array.isArray(files) ? files : [files]).filter((f) => !!f?.buffer?.length);
+
+    if (this.gemini.isEnabled()) {
+      const ai = await this.gemini.parseCv(list);
+      if (ai.ok) {
+        return { ...ai.data, engine: 'gemini', geminiWarning: null };
+      }
+      const classic = await ocrAndParseCv(files);
+      return { ...classic, engine: 'classic', geminiWarning: ai.message };
+    }
+
     const classic = await ocrAndParseCv(files);
-    if (!this.gemini.isEnabled()) return classic;
-    const weak =
-      (!classic.email && !classic.phone) ||
-      (!classic.experience?.length && (classic.rawText?.length || 0) > 400) ||
-      (classic.firstName === 'Sin' && classic.lastName === 'nombre');
-    if (!weak) return classic;
-    const ai = await this.gemini.parseCv(list);
-    if (!ai) return classic;
-    const classicScore =
-      (classic.email ? 2 : 0) +
-      (classic.phone ? 1 : 0) +
-      (classic.experience?.length || 0) +
-      (classic.education?.length || 0) +
-      (classic.skills?.length ? 1 : 0);
-    const aiScore =
-      (ai.email ? 2 : 0) +
-      (ai.phone ? 1 : 0) +
-      (ai.experience?.length || 0) +
-      (ai.education?.length || 0) +
-      (ai.skills?.length ? 1 : 0);
-    return aiScore >= classicScore ? ai : classic;
+    return {
+      ...classic,
+      engine: 'classic',
+      geminiWarning: 'Gemini no está configurado. Se usó el parseo local.',
+    };
   }
 
   async list(user: AuthUser, shopId: string, status?: string) {

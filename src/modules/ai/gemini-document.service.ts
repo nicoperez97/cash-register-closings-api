@@ -7,6 +7,12 @@ import { ParsedInvoice } from '../payments/invoice-ocr.parser';
 type InlinePart = { inlineData: { mimeType: string; data: string } };
 type TextPart = { text: string };
 
+export type GeminiFailReason = 'disabled' | 'quota' | 'error' | 'empty';
+
+export type GeminiResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; reason: GeminiFailReason; message: string };
+
 @Injectable()
 export class GeminiDocumentService {
   private readonly logger = new Logger(GeminiDocumentService.name);
@@ -25,6 +31,21 @@ export class GeminiDocumentService {
     return this.config.get<string>('gemini.apiKey') || '';
   }
 
+  private fail(reason: GeminiFailReason, message: string): GeminiResult<never> {
+    return { ok: false, reason, message };
+  }
+
+  private isQuotaError(status: number, body: string): boolean {
+    const t = body.toLowerCase();
+    return (
+      status === 429 ||
+      t.includes('resource_exhausted') ||
+      t.includes('quota') ||
+      t.includes('rate limit') ||
+      t.includes('rate_limit')
+    );
+  }
+
   private filePart(file: Express.Multer.File): InlinePart | TextPart | null {
     const buf = file?.buffer;
     if (!buf?.length) return null;
@@ -41,7 +62,6 @@ export class GeminiDocumentService {
       else if (name.endsWith('.webp')) mimeType = 'image/webp';
       else mimeType = 'application/pdf';
     }
-    // Gemini free: PDF + common images
     if (
       mimeType !== 'application/pdf' &&
       !mimeType.startsWith('image/') &&
@@ -60,9 +80,11 @@ export class GeminiDocumentService {
   private async generateJson<T>(
     parts: Array<TextPart | InlinePart>,
     system: string,
-  ): Promise<T | null> {
+  ): Promise<GeminiResult<T>> {
     const key = this.apiKey();
-    if (!key) return null;
+    if (!key) {
+      return this.fail('disabled', 'Gemini no está configurado (falta GEMINI_API_KEY).');
+    }
     const model = this.model();
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
     const controller = new AbortController();
@@ -84,26 +106,46 @@ export class GeminiDocumentService {
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
         this.logger.warn(`Gemini HTTP ${res.status}: ${errText.slice(0, 240)}`);
-        return null;
+        if (this.isQuotaError(res.status, errText)) {
+          return this.fail(
+            'quota',
+            'Se agotó la cuota diaria de Gemini. Se usó el parseo local.',
+          );
+        }
+        return this.fail('error', 'Gemini no respondió bien. Se usó el parseo local.');
       }
       const body = (await res.json()) as {
         candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
       };
       const text = body.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
-      if (!text.trim()) return null;
-      return JSON.parse(text) as T;
+      if (!text.trim()) {
+        return this.fail('empty', 'Gemini no devolvió datos. Se usó el parseo local.');
+      }
+      try {
+        return { ok: true, data: JSON.parse(text) as T };
+      } catch {
+        return this.fail('empty', 'Gemini devolvió un JSON inválido. Se usó el parseo local.');
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.warn(`Gemini falló: ${msg}`);
-      return null;
+      if (/abort/i.test(msg)) {
+        return this.fail('error', 'Gemini tardó demasiado. Se usó el parseo local.');
+      }
+      return this.fail('error', 'No se pudo contactar Gemini. Se usó el parseo local.');
     } finally {
       clearTimeout(timer);
     }
   }
 
-  async parseMenu(file: Express.Multer.File): Promise<{ menu: ShopMenu; rawText: string } | null> {
+  async parseMenu(
+    file: Express.Multer.File,
+  ): Promise<GeminiResult<{ menu: ShopMenu; rawText: string }>> {
+    if (!this.isEnabled()) {
+      return this.fail('disabled', 'Gemini no está configurado (falta GEMINI_API_KEY).');
+    }
     const part = this.filePart(file);
-    if (!part) return null;
+    if (!part) return this.fail('empty', 'No se pudo leer el archivo para Gemini.');
     const system = `Sos un extractor de cartas de restaurante. Devolvé SOLO JSON con esta forma:
 {"title":"string|null","note":"string|null","sections":[{"name":"string","items":[{"name":"string","description":"string|null","price":number|null,"priceLabel":"string|null"}]}]}
 Reglas:
@@ -134,8 +176,11 @@ Reglas:
       ],
       system,
     );
-    if (!data || !Array.isArray(data.sections)) return null;
-    const sections = data.sections
+    if (!data.ok) return data;
+    if (!Array.isArray(data.data.sections)) {
+      return this.fail('empty', 'Gemini no devolvió secciones. Se usó el parseo local.');
+    }
+    const sections = data.data.sections
       .map((s) => ({
         name: String(s?.name ?? '').trim().slice(0, 60),
         items: (s?.items ?? [])
@@ -151,20 +196,25 @@ Reglas:
           .filter((it) => it.name),
       }))
       .filter((s) => s.name && s.items.length);
-    if (!sections.length) return null;
+    if (!sections.length) {
+      return this.fail('empty', 'Gemini no encontró ítems. Se usó el parseo local.');
+    }
     const menu: ShopMenu = {
-      title: String(data.title ?? '').trim().slice(0, 80) || null,
-      note: String(data.note ?? '').trim().slice(0, 500) || null,
+      title: String(data.data.title ?? '').trim().slice(0, 80) || null,
+      note: String(data.data.note ?? '').trim().slice(0, 500) || null,
       sections,
     };
     const rawText = sections
       .flatMap((s) => [s.name, ...s.items.map((it) => `${it.name} ${it.priceLabel || it.price || ''}`)])
       .join('\n')
       .slice(0, 12000);
-    return { menu, rawText };
+    return { ok: true, data: { menu, rawText } };
   }
 
-  async parseCv(files: Express.Multer.File[]): Promise<ParsedCv | null> {
+  async parseCv(files: Express.Multer.File[]): Promise<GeminiResult<ParsedCv>> {
+    if (!this.isEnabled()) {
+      return this.fail('disabled', 'Gemini no está configurado (falta GEMINI_API_KEY).');
+    }
     const parts: Array<TextPart | InlinePart> = [
       {
         text: 'Extraé los datos del CV. Si hay varias páginas, son de la misma persona.',
@@ -174,40 +224,48 @@ Reglas:
       const p = this.filePart(f);
       if (p) parts.push(p);
     }
-    if (parts.length < 2) return null;
+    if (parts.length < 2) return this.fail('empty', 'No hay archivos para Gemini.');
     const system = `Extraé un CV. Devolvé SOLO JSON:
 {"firstName":"","lastName":"","email":null,"phone":null,"documentId":null,"address":null,"city":null,"country":null,"birthDate":null,"nationality":null,"linkedIn":null,"website":null,"summary":null,"education":[{"institution":"","degree":"","year":""}],"experience":[{"company":"","role":"","period":"","description":""}],"skills":[""],"languages":[{"name":"","level":""}],"rawText":""}
 birthDate ISO YYYY-MM-DD si se puede. rawText: resumen corto del texto leído.`;
     const data = await this.generateJson<ParsedCv>(parts, system);
-    if (!data) return null;
-    const firstName = String(data.firstName ?? '').trim();
-    const lastName = String(data.lastName ?? '').trim();
-    if (!firstName && !lastName && !data.email) return null;
+    if (!data.ok) return data;
+    const firstName = String(data.data.firstName ?? '').trim();
+    const lastName = String(data.data.lastName ?? '').trim();
+    if (!firstName && !lastName && !data.data.email) {
+      return this.fail('empty', 'Gemini no extrajo datos del CV. Se usó el parseo local.');
+    }
     return {
-      firstName: firstName || 'Sin',
-      lastName: lastName || 'nombre',
-      email: data.email ?? null,
-      phone: data.phone ?? null,
-      documentId: data.documentId ?? null,
-      address: data.address ?? null,
-      city: data.city ?? null,
-      country: data.country ?? null,
-      birthDate: data.birthDate ?? null,
-      nationality: data.nationality ?? null,
-      linkedIn: data.linkedIn ?? null,
-      website: data.website ?? null,
-      summary: data.summary ?? null,
-      education: Array.isArray(data.education) ? data.education : [],
-      experience: Array.isArray(data.experience) ? data.experience : [],
-      skills: Array.isArray(data.skills) ? data.skills.map(String) : [],
-      languages: Array.isArray(data.languages) ? data.languages : [],
-      rawText: String(data.rawText ?? '').slice(0, 20000),
+      ok: true,
+      data: {
+        firstName: firstName || 'Sin',
+        lastName: lastName || 'nombre',
+        email: data.data.email ?? null,
+        phone: data.data.phone ?? null,
+        documentId: data.data.documentId ?? null,
+        address: data.data.address ?? null,
+        city: data.data.city ?? null,
+        country: data.data.country ?? null,
+        birthDate: data.data.birthDate ?? null,
+        nationality: data.data.nationality ?? null,
+        linkedIn: data.data.linkedIn ?? null,
+        website: data.data.website ?? null,
+        summary: data.data.summary ?? null,
+        education: Array.isArray(data.data.education) ? data.data.education : [],
+        experience: Array.isArray(data.data.experience) ? data.data.experience : [],
+        skills: Array.isArray(data.data.skills) ? data.data.skills.map(String) : [],
+        languages: Array.isArray(data.data.languages) ? data.data.languages : [],
+        rawText: String(data.data.rawText ?? '').slice(0, 20000),
+      },
     };
   }
 
-  async parseInvoice(file: Express.Multer.File): Promise<ParsedInvoice | null> {
+  async parseInvoice(file: Express.Multer.File): Promise<GeminiResult<ParsedInvoice>> {
+    if (!this.isEnabled()) {
+      return this.fail('disabled', 'Gemini no está configurado (falta GEMINI_API_KEY).');
+    }
     const part = this.filePart(file);
-    if (!part) return null;
+    if (!part) return this.fail('empty', 'No se pudo leer el archivo para Gemini.');
     const system = `Extraé datos de una factura argentina. Devolvé SOLO JSON:
 {"legalName":null,"taxId":null,"invoiceType":null,"invoiceNumber":null,"netAmount":null,"ivaAmount":null,"perceptionsAmount":null,"otherTaxesAmount":null,"totalAmount":null,"rawText":""}
 taxId = CUIT (XX-XXXXXXXX-X). invoiceType = A/B/C/etc. Montos numéricos con decimales.`;
@@ -215,19 +273,24 @@ taxId = CUIT (XX-XXXXXXXX-X). invoiceType = A/B/C/etc. Montos numéricos con dec
       [{ text: `Archivo: ${file.originalname || 'factura'}` }, part],
       system,
     );
-    if (!data) return null;
-    if (!data.taxId && data.totalAmount == null && !data.invoiceNumber) return null;
+    if (!data.ok) return data;
+    if (!data.data.taxId && data.data.totalAmount == null && !data.data.invoiceNumber) {
+      return this.fail('empty', 'Gemini no extrajo la factura. Se usó el parseo local.');
+    }
     return {
-      legalName: data.legalName ?? null,
-      taxId: data.taxId ?? null,
-      invoiceType: data.invoiceType ?? null,
-      invoiceNumber: data.invoiceNumber ?? null,
-      netAmount: data.netAmount ?? null,
-      ivaAmount: data.ivaAmount ?? null,
-      perceptionsAmount: data.perceptionsAmount ?? null,
-      otherTaxesAmount: data.otherTaxesAmount ?? null,
-      totalAmount: data.totalAmount ?? null,
-      rawText: String(data.rawText ?? '').slice(0, 12000),
+      ok: true,
+      data: {
+        legalName: data.data.legalName ?? null,
+        taxId: data.data.taxId ?? null,
+        invoiceType: data.data.invoiceType ?? null,
+        invoiceNumber: data.data.invoiceNumber ?? null,
+        netAmount: data.data.netAmount ?? null,
+        ivaAmount: data.data.ivaAmount ?? null,
+        perceptionsAmount: data.data.perceptionsAmount ?? null,
+        otherTaxesAmount: data.data.otherTaxesAmount ?? null,
+        totalAmount: data.data.totalAmount ?? null,
+        rawText: String(data.data.rawText ?? '').slice(0, 12000),
+      },
     };
   }
 }

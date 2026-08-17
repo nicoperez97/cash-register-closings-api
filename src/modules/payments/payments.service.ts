@@ -1348,16 +1348,23 @@ export class PaymentsService implements OnModuleInit {
     return this.resolveInvoiceParse(file);
   }
 
-  private async resolveInvoiceParse(file: Express.Multer.File): Promise<ParsedInvoice> {
+  private async resolveInvoiceParse(
+    file: Express.Multer.File,
+  ): Promise<ParsedInvoice & { engine?: 'classic' | 'gemini'; geminiWarning?: string | null }> {
+    if (this.gemini.isEnabled()) {
+      const ai = await this.gemini.parseInvoice(file);
+      if (ai.ok) {
+        return { ...ai.data, engine: 'gemini', geminiWarning: null };
+      }
+      const classic = await ocrAndParseInvoice(file);
+      return { ...classic, engine: 'classic', geminiWarning: ai.message };
+    }
     const classic = await ocrAndParseInvoice(file);
-    if (!this.gemini.isEnabled()) return classic;
-    const weak = !classic.taxId || classic.totalAmount == null;
-    if (!weak) return classic;
-    const ai = await this.gemini.parseInvoice(file);
-    if (!ai) return classic;
-    const classicScore = (classic.taxId ? 2 : 0) + (classic.totalAmount != null ? 2 : 0) + (classic.invoiceNumber ? 1 : 0);
-    const aiScore = (ai.taxId ? 2 : 0) + (ai.totalAmount != null ? 2 : 0) + (ai.invoiceNumber ? 1 : 0);
-    return aiScore >= classicScore ? { ...classic, ...ai, rawText: ai.rawText || classic.rawText } : classic;
+    return {
+      ...classic,
+      engine: 'classic',
+      geminiWarning: 'Gemini no está configurado. Se usó el parseo local.',
+    };
   }
 
   async uploadInvoiceFile(

@@ -16,7 +16,6 @@ import { GeminiDocumentService } from '../ai/gemini-document.service';
 import {
   emptyShopMenu,
   menuHasItems,
-  menuParseScore,
   normalizeShopMenus,
   parseMenuFile,
   ShopMenu,
@@ -123,32 +122,40 @@ export class MenuService {
     }
     const uploadFile = { ...file, buffer };
     try {
-      const classic = await parseMenuFile(uploadFile);
-      let menuPayload = classic.menu;
-      let rawText = classic.rawText;
+      let menuPayload: ShopMenu | null = null;
+      let rawText = '';
       let engine: 'classic' | 'gemini' = 'classic';
+      let geminiWarning: string | null = null;
 
-      const weak = menuLooksWeak(classic.menu);
-      if (this.gemini.isEnabled() && (weak || !menuHasItems(classic.menu))) {
+      if (this.gemini.isEnabled()) {
         const ai = await this.gemini.parseMenu(uploadFile);
-        if (ai && menuHasItems(ai.menu)) {
-          const classicScore = menuParseScore(classic.menu);
-          const aiScore = menuParseScore(ai.menu);
-          if (aiScore > classicScore || (weak && aiScore >= Math.max(4, classicScore))) {
-            menuPayload = ai.menu;
-            rawText = ai.rawText;
-            engine = 'gemini';
-          }
+        if (ai.ok && menuHasItems(ai.data.menu)) {
+          menuPayload = ai.data.menu;
+          rawText = ai.data.rawText;
+          engine = 'gemini';
+        } else if (!ai.ok) {
+          geminiWarning = ai.message;
+        } else {
+          geminiWarning = 'Gemini no encontró ítems claros. Se usó el parseo local.';
         }
+      } else {
+        geminiWarning = 'Gemini no está configurado. Se usó el parseo local.';
+      }
+
+      if (!menuPayload) {
+        const classic = await parseMenuFile(uploadFile);
+        menuPayload = classic.menu;
+        rawText = classic.rawText;
+        engine = 'classic';
       }
 
       const menu = emptyShopMenu(menuPayload);
-      // El archivo físico se carga aparte (endpoint source); el parse solo arma el contenido.
       return {
         menu,
         rawText,
         fileName: file.originalname,
         engine,
+        geminiWarning,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'No se pudo leer el archivo';
@@ -288,21 +295,4 @@ export class MenuService {
       mime,
     };
   }
-}
-
-function menuLooksWeak(menu: ShopMenu): boolean {
-  if (!menuHasItems(menu)) return true;
-  if (menuParseScore(menu) < 8) return true;
-  for (const sec of menu.sections ?? []) {
-    const name = String(sec.name ?? '').trim();
-    if (name.length > 10 && !/\s/.test(name) && /pasta|pizze|aperitiv|stuzzich|dolci|bibite/i.test(name)) {
-      return true;
-    }
-    for (const it of sec.items ?? []) {
-      const desc = String(it.description ?? '');
-      if (desc.length > 140 && /(\$\s*)?\d{1,3}([.\s]\d{3})+|\d{4,}/.test(desc)) return true;
-      if ((desc.match(/\$/g) || []).length >= 2) return true;
-    }
-  }
-  return false;
 }
