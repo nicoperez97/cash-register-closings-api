@@ -228,6 +228,30 @@ export class ShopsService implements OnModuleInit {
     } catch {
       // columna ya existe
     }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN publicAttendanceEnabled TINYINT(1) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN menuEnabled TINYINT(1) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN menu TEXT NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
   }
 
   assertShopAccess(user: AuthUser, shopId: string) {
@@ -384,6 +408,8 @@ export class ShopsService implements OnModuleInit {
         ),
         waitingListEnabled: dto.waitingListEnabled ?? true,
         tipsEnabled: dto.tipsEnabled ?? false,
+        publicAttendanceEnabled: dto.publicAttendanceEnabled ?? false,
+        menuEnabled: dto.menuEnabled ?? false,
         defaultChangeAmount: String(dto.defaultChangeAmount ?? 0),
         productionDefaultHours: String(
           dto.productionDefaultHours !== undefined && dto.productionDefaultHours !== null
@@ -462,6 +488,12 @@ export class ShopsService implements OnModuleInit {
     }
     if (dto.tipsEnabled !== undefined) {
       shop.tipsEnabled = dto.tipsEnabled;
+    }
+    if (dto.publicAttendanceEnabled !== undefined) {
+      shop.publicAttendanceEnabled = dto.publicAttendanceEnabled;
+    }
+    if (dto.menuEnabled !== undefined) {
+      shop.menuEnabled = dto.menuEnabled;
     }
     if (dto.timezone !== undefined) shop.timezone = dto.timezone;
     if (dto.openingTime !== undefined) {
@@ -783,6 +815,8 @@ export class ShopsService implements OnModuleInit {
           : Number(s.reservationOutsideMinPartySize) || null,
       waitingListEnabled: !!s.waitingListEnabled,
       tipsEnabled: !!s.tipsEnabled,
+      publicAttendanceEnabled: !!s.publicAttendanceEnabled,
+      menuEnabled: !!s.menuEnabled,
       defaultChangeAmount: Number(s.defaultChangeAmount),
       productionDefaultHours: Number(s.productionDefaultHours ?? 8) || 8,
       logoUrl: s.logoUrl ?? null,

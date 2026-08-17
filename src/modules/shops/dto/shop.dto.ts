@@ -124,6 +124,16 @@ export class CreateShopDto {
   @IsBoolean()
   tipsEnabled?: boolean;
 
+  @ApiPropertyOptional({ description: 'Pantalla pública de presentismo para el personal' })
+  @IsOptional()
+  @IsBoolean()
+  publicAttendanceEnabled?: boolean;
+
+  @ApiPropertyOptional({ description: 'Carta pública del local' })
+  @IsOptional()
+  @IsBoolean()
+  menuEnabled?: boolean;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsNumber()

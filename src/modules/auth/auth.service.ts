@@ -482,6 +482,8 @@ export class AuthService implements OnModuleInit {
             : Number(s.reservationOutsideMinPartySize) || null,
         waitingListEnabled: !!s.waitingListEnabled,
         tipsEnabled: !!s.tipsEnabled,
+        publicAttendanceEnabled: !!s.publicAttendanceEnabled,
+        menuEnabled: !!s.menuEnabled,
         defaultChangeAmount: Number(s.defaultChangeAmount),
         productionDefaultHours: Number(s.productionDefaultHours ?? 8) || 8,
         currency: s.currency,

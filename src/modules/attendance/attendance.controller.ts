@@ -33,7 +33,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
+import { CurrentUser, AuthUser, RequirePermissions, Public } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { AttendanceService } from './attendance.service';
 import { AttendanceExcelImportService } from './attendance-excel-import.service';
@@ -166,5 +166,30 @@ export class AttendanceController {
     @Body() dto: BulkAttendanceDto,
   ) {
     return this.attendance.bulkUpsert(user, shopId, dto.items ?? []);
+  }
+}
+
+@ApiTags('public-attendance')
+@Controller('public/shops')
+export class PublicAttendanceController {
+  constructor(private readonly attendance: AttendanceService) {}
+
+  @Public()
+  @Get(':slug/attendance')
+  list(@Param('slug') slug: string) {
+    return this.attendance.publicEmployeeList(slug);
+  }
+
+  @Public()
+  @Get(':slug/attendance/:employeeId')
+  month(
+    @Param('slug') slug: string,
+    @Param('employeeId') employeeId: string,
+    @Query('year') year?: string,
+    @Query('month') month?: string,
+  ) {
+    const y = Number(year) || new Date().getFullYear();
+    const m = Number(month) || new Date().getMonth() + 1;
+    return this.attendance.publicEmployeeMonth(slug, employeeId, y, m);
   }
 }

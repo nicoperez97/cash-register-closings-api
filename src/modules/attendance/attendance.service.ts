@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Between, In, Repository } from 'typeorm';
 import { AttendanceDay } from '../../entities/attendance-day.entity';
 import { Employee, EmployeeType } from '../../entities/employee.entity';
+import { ProductionAttendanceDay } from '../../entities/production-attendance-day.entity';
 import { AuthUser } from '../../common/decorators';
 import { isEntityActive } from '../../common/active.util';
 import { ShopsService } from '../shops/shops.service';
@@ -19,6 +20,8 @@ export class AttendanceService {
     @InjectRepository(AttendanceDay)
     private readonly days: Repository<AttendanceDay>,
     @InjectRepository(Employee) private readonly employees: Repository<Employee>,
+    @InjectRepository(ProductionAttendanceDay)
+    private readonly prodDays: Repository<ProductionAttendanceDay>,
     private readonly shops: ShopsService,
   ) {}
 
@@ -181,5 +184,121 @@ export class AttendanceService {
         date: Between(from, to),
       },
     });
+  }
+
+  private async requirePublicAttendanceShop(slug: string) {
+    const shop = await this.shops.findActiveBySlug(String(slug ?? '').trim().toLowerCase());
+    if (!shop || !shop.publicAttendanceEnabled) {
+      throw new NotFoundException('Presentismo no disponible en este local');
+    }
+    return shop;
+  }
+
+  async publicEmployeeList(slug: string) {
+    const shop = await this.requirePublicAttendanceShop(slug);
+    const employees = await this.activeEmployees(shop.id);
+    return {
+      shop: {
+        id: shop.id,
+        name: shop.name,
+        slug: shop.slug,
+        logoUrl: shop.logoUrl ?? null,
+        accentColor: shop.accentColor ?? null,
+      },
+      employees: employees.map((e) => ({
+        id: e.id,
+        fullName: e.fullName,
+        producesFood: !!e.producesFood,
+      })),
+    };
+  }
+
+  async publicEmployeeMonth(
+    slug: string,
+    employeeId: string,
+    year: number,
+    month: number,
+  ) {
+    const shop = await this.requirePublicAttendanceShop(slug);
+    if (month < 1 || month > 12) throw new BadRequestException('Mes inválido');
+    const employees = await this.activeEmployees(shop.id);
+    const emp = employees.find((e) => e.id === employeeId);
+    if (!emp) throw new NotFoundException('Empleado no encontrado');
+    const { from, to, last } = this.monthRange(year, month);
+    const rows = await this.days.find({
+      where: { shopId: shop.id, employeeId: emp.id, date: Between(from, to) },
+    });
+    const prodRows = emp.producesFood
+      ? await this.prodDays.find({
+          where: { shopId: shop.id, employeeId: emp.id, date: Between(from, to) },
+        })
+      : [];
+    const prodByDate = new Map(prodRows.map((d) => [d.date, n(d.hours)]));
+    const days: Record<
+      string,
+      {
+        isPresent: boolean;
+        isHoliday: boolean;
+        overtimeHours: number;
+        hours: number | null;
+      }
+    > = {};
+    for (const d of rows) {
+      days[d.date] = {
+        isPresent: !!d.isPresent,
+        isHoliday: !!d.isHoliday,
+        overtimeHours: n(d.overtimeHours),
+        hours: emp.producesFood ? (prodByDate.get(d.date) ?? 0) : null,
+      };
+    }
+    if (emp.producesFood) {
+      for (const [date, hours] of prodByDate) {
+        if (!days[date]) {
+          days[date] = {
+            isPresent: hours > 0,
+            isHoliday: false,
+            overtimeHours: 0,
+            hours,
+          };
+        } else {
+          days[date].hours = hours;
+        }
+      }
+    }
+    let present = 0;
+    let holiday = 0;
+    let overtimeHours = 0;
+    let productionHours = 0;
+    for (const d of Object.values(days)) {
+      if (d.isPresent) present += 1;
+      if (d.isHoliday && !d.isPresent) holiday += 1;
+      overtimeHours += d.overtimeHours;
+      if (d.hours != null) productionHours += d.hours;
+    }
+    return {
+      shop: {
+        id: shop.id,
+        name: shop.name,
+        slug: shop.slug,
+        logoUrl: shop.logoUrl ?? null,
+        accentColor: shop.accentColor ?? null,
+      },
+      employee: {
+        id: emp.id,
+        fullName: emp.fullName,
+        producesFood: !!emp.producesFood,
+      },
+      year,
+      month,
+      daysInMonth: last,
+      closedWeekdays: Array.isArray(shop.closedWeekdays) ? shop.closedWeekdays : [],
+      days,
+      totals: {
+        present,
+        holiday,
+        overtimeHours,
+        productionHours: emp.producesFood ? productionHours : null,
+      },
+    };
   }
 }

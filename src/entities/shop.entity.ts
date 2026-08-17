@@ -73,6 +73,30 @@ export class Shop extends BaseEntity {
   @Column({ type: 'tinyint', default: 0 })
   tipsEnabled: boolean;
 
+  /** Pantalla pública para que el personal vea su presentismo. */
+  @Column({ type: 'tinyint', default: 0 })
+  publicAttendanceEnabled: boolean;
+
+  /** Carta pública del local. */
+  @Column({ type: 'tinyint', default: 0 })
+  menuEnabled: boolean;
+
+  /** Carta publicada (secciones e ítems). */
+  @Column({ type: 'simple-json', nullable: true })
+  menu?: {
+    title?: string | null;
+    note?: string | null;
+    sections?: Array<{
+      name: string;
+      items: Array<{
+        name: string;
+        description?: string | null;
+        price?: number | null;
+        priceLabel?: string | null;
+      }>;
+    }>;
+  } | null;
+
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
   defaultChangeAmount: string;
 

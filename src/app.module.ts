@@ -26,6 +26,7 @@ import { StockModule } from './modules/stock/stock.module';
 import { ShortagesModule } from './modules/shortages/shortages.module';
 import { TipsModule } from './modules/tips/tips.module';
 import { SalonFloorModule } from './modules/salon-floor/salon-floor.module';
+import { MenuModule } from './modules/menu/menu.module';
 import { JwtAuthGuard, PermissionsGuard } from './common/guards';
 import { PublicAbuseGuard } from './common/public-abuse.guard';
 
@@ -57,6 +58,7 @@ import { PublicAbuseGuard } from './common/public-abuse.guard';
     ShortagesModule,
     TipsModule,
     SalonFloorModule,
+    MenuModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
