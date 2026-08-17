@@ -143,16 +143,7 @@ export class MenuService {
       }
 
       const menu = emptyShopMenu(menuPayload);
-      const saved = saveUploadFile({
-        relativeDir: `menus/${shopId}`,
-        basename: `src-${menu.id}`,
-        buffer,
-        originalName: file.originalname,
-        mime: file.mimetype,
-      });
-      menu.sourceFile = saved.relativePath;
-      menu.sourceFileName = String(file.originalname || saved.fileName).slice(0, 120);
-      menu.sourceMime = String(file.mimetype || '').slice(0, 80) || null;
+      // El archivo físico se carga aparte (endpoint source); el parse solo arma el contenido.
       return {
         menu,
         rawText,
@@ -163,6 +154,72 @@ export class MenuService {
       const msg = err instanceof Error ? err.message : 'No se pudo leer el archivo';
       throw new BadRequestException(msg);
     }
+  }
+
+  async attachSourceFile(user: AuthUser, shopId: string, menuId: string, file?: Express.Multer.File) {
+    this.shops.assertShopManage(user, shopId);
+    let buffer = file?.buffer;
+    if (!buffer?.length && (file as Express.Multer.File & { path?: string })?.path) {
+      buffer = readFileSync((file as Express.Multer.File & { path: string }).path);
+    }
+    if (!file || !buffer?.length) {
+      throw new BadRequestException('Subí el PDF o la imagen de la carta física');
+    }
+    const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    const menus = this.readMenus(shop);
+    const idx = menus.findIndex((m) => m.id === menuId);
+    if (idx < 0) throw new NotFoundException('Carta no encontrada. Guardá la carta primero.');
+    const current = menus[idx];
+    if (current.sourceFile) deleteUploadIfExists(current.sourceFile);
+    const saved = saveUploadFile({
+      relativeDir: `menus/${shopId}`,
+      basename: `src-${current.id}`,
+      buffer,
+      originalName: file.originalname,
+      mime: file.mimetype,
+    });
+    menus[idx] = {
+      ...current,
+      sourceFile: saved.relativePath,
+      sourceFileName: String(file.originalname || saved.fileName).slice(0, 120),
+      sourceMime: String(file.mimetype || '').slice(0, 80) || null,
+    };
+    shop.menu = { menus };
+    await this.shopsRepo.save(shop);
+    return {
+      enabled: !!shop.menuEnabled,
+      slug: shop.slug,
+      menus: menus.map((m) => this.withSafeSource(m, shopId)),
+      attached: {
+        sourceFile: menus[idx].sourceFile,
+        sourceFileName: menus[idx].sourceFileName,
+        sourceMime: menus[idx].sourceMime,
+      },
+    };
+  }
+
+  async clearSourceFile(user: AuthUser, shopId: string, menuId: string) {
+    this.shops.assertShopManage(user, shopId);
+    const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    const menus = this.readMenus(shop);
+    const idx = menus.findIndex((m) => m.id === menuId);
+    if (idx < 0) throw new NotFoundException('Carta no encontrada');
+    if (menus[idx].sourceFile) deleteUploadIfExists(menus[idx].sourceFile);
+    menus[idx] = {
+      ...menus[idx],
+      sourceFile: null,
+      sourceFileName: null,
+      sourceMime: null,
+    };
+    shop.menu = { menus };
+    await this.shopsRepo.save(shop);
+    return {
+      enabled: !!shop.menuEnabled,
+      slug: shop.slug,
+      menus: menus.map((m) => this.withSafeSource(m, shopId)),
+    };
   }
 
   private publicShop(shop: Shop) {

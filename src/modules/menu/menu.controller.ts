@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Put,
@@ -19,6 +20,11 @@ import { AuthUser, CurrentUser, Public, RequirePermissions } from '../../common/
 import { PermissionsGuard } from '../../common/guards';
 import { MenuService } from './menu.service';
 import { ShopMenu } from './menu-parse.util';
+
+const menuUpload = FileInterceptor('file', {
+  storage: memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024 },
+});
 
 @ApiTags('menu')
 @ApiBearerAuth()
@@ -47,18 +53,37 @@ export class MenuController {
   @RequirePermissions('shops.manage')
   @ApiConsumes('multipart/form-data')
   @ApiBody({ schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } } })
-  @UseInterceptors(
-    FileInterceptor('file', {
-      storage: memoryStorage(),
-      limits: { fileSize: 15 * 1024 * 1024 },
-    }),
-  )
+  @UseInterceptors(menuUpload)
   parse(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
     @UploadedFile() file?: Express.Multer.File,
   ) {
     return this.menus.parseUpload(user, shopId, file);
+  }
+
+  @Post(':menuId/source')
+  @RequirePermissions('shops.manage')
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({ schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } } })
+  @UseInterceptors(menuUpload)
+  attachSource(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('menuId') menuId: string,
+    @UploadedFile() file?: Express.Multer.File,
+  ) {
+    return this.menus.attachSourceFile(user, shopId, menuId, file);
+  }
+
+  @Delete(':menuId/source')
+  @RequirePermissions('shops.manage')
+  clearSource(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('menuId') menuId: string,
+  ) {
+    return this.menus.clearSourceFile(user, shopId, menuId);
   }
 }
 
