@@ -9,6 +9,7 @@ import { CashPendingWithdrawalStatus } from '../common/enums';
 @Entity({ name: 'cash_pending_withdrawals' })
 @Index('IDX_cash_pending_withdrawals_shop_status', ['shopId', 'status'])
 @Index('IDX_cash_pending_withdrawals_closing', ['closingId'])
+@Index('IDX_cash_pending_withdrawals_pick_batch', ['shopId', 'pickBatchId'])
 export class CashPendingWithdrawal extends BaseEntity {
   @Column()
   shopId: string;
@@ -40,6 +41,15 @@ export class CashPendingWithdrawal extends BaseEntity {
 
   @Column({ type: 'datetime', precision: 6, nullable: true })
   pickedAt?: Date | null;
+
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  pickBatchId?: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  confirmedByUserId?: string | null;
+
+  @Column({ type: 'varchar', length: 200, nullable: true })
+  confirmedByName?: string | null;
 
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })

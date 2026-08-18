@@ -3,9 +3,11 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, IsNull, Not, Repository } from 'typeorm';
+import { randomUUID } from 'crypto';
 import { CashPendingWithdrawal } from '../../entities/cash-pending-withdrawal.entity';
 import { CashClosing } from '../../entities/cash-closing.entity';
 import { User } from '../../entities/user.entity';
@@ -28,7 +30,7 @@ const n = (v?: number | string | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
 
 @Injectable()
-export class CashWithdrawalsService {
+export class CashWithdrawalsService implements OnModuleInit {
   private readonly logger = new Logger(CashWithdrawalsService.name);
 
   constructor(
@@ -43,6 +45,20 @@ export class CashWithdrawalsService {
     private readonly closingMovements: ClosingMovementsSyncService,
     private readonly notifications: NotificationsService,
   ) {}
+
+  async onModuleInit() {
+    for (const sql of [
+      `ALTER TABLE cash_pending_withdrawals ADD COLUMN pickBatchId VARCHAR(36) NULL`,
+      `ALTER TABLE cash_pending_withdrawals ADD COLUMN confirmedByUserId VARCHAR(36) NULL`,
+      `ALTER TABLE cash_pending_withdrawals ADD COLUMN confirmedByName VARCHAR(200) NULL`,
+    ]) {
+      try {
+        await this.pending.query(sql);
+      } catch {
+        // ya existe
+      }
+    }
+  }
 
   /** Monto a retirar según reglas del cierre (retiro explícito o efectivo − cambio − egresos). */
   computeCashTake(closing: CashClosing): number {
@@ -138,6 +154,79 @@ export class CashWithdrawalsService {
     }));
   }
 
+  async listHistory(user: AuthUser, shopId: string) {
+    this.shops.assertShopAccess(user, shopId);
+    const rows = await this.pending.find({
+      where: {
+        shopId,
+        status: CashPendingWithdrawalStatus.PICKED,
+        active: true,
+        pickedAt: Not(IsNull()),
+      },
+      relations: ['pickedToAccount'],
+      order: { pickedAt: 'DESC', businessDate: 'DESC' },
+      take: 400,
+    });
+
+    type Group = {
+      id: string;
+      pickedAt: string;
+      pickedByUserId: string | null;
+      pickedByName: string;
+      accountId: string | null;
+      accountName: string | null;
+      confirmedByUserId: string | null;
+      confirmedByName: string | null;
+      totalAmount: number;
+      closingsCount: number;
+      items: Array<{
+        id: string;
+        closingId: string;
+        businessDate: string;
+        amount: number;
+      }>;
+    };
+
+    const groups = new Map<string, Group>();
+    for (const r of rows) {
+      const pickedAtIso = r.pickedAt ? new Date(r.pickedAt).toISOString() : '';
+      const key =
+        r.pickBatchId ||
+        [pickedAtIso, r.pickedByUserId ?? '', r.pickedToAccountId ?? ''].join('|');
+      const existing = groups.get(key);
+      const item = {
+        id: r.id,
+        closingId: r.closingId,
+        businessDate: r.businessDate,
+        amount: n(r.amount),
+      };
+      if (existing) {
+        existing.items.push(item);
+        existing.totalAmount += item.amount;
+        existing.closingsCount += 1;
+        continue;
+      }
+      groups.set(key, {
+        id: r.pickBatchId || r.id,
+        pickedAt: pickedAtIso,
+        pickedByUserId: r.pickedByUserId ?? null,
+        pickedByName: r.pickedByName?.trim() || 'Sin asignar',
+        accountId: r.pickedToAccountId ?? null,
+        accountName: r.pickedToAccount?.name ?? null,
+        confirmedByUserId: r.confirmedByUserId ?? null,
+        confirmedByName: r.confirmedByName ?? null,
+        totalAmount: item.amount,
+        closingsCount: 1,
+        items: [item],
+      });
+    }
+
+    return [...groups.values()].map((g) => ({
+      ...g,
+      items: g.items.sort((a, b) => String(b.businessDate).localeCompare(String(a.businessDate))),
+    }));
+  }
+
   async pick(user: AuthUser, shopId: string, dto: PickCashWithdrawalsDto) {
     this.shops.assertShopAccess(user, shopId);
     const ids = [...new Set(dto.ids)];
@@ -170,6 +259,8 @@ export class CashWithdrawalsService {
     );
 
     const now = new Date();
+    const pickBatchId = randomUUID();
+    const confirmedByName = actorDisplayName(user);
     let totalAmount = 0;
     for (const row of rows) {
       const closing = await this.closings.findOne({
@@ -196,6 +287,9 @@ export class CashWithdrawalsService {
       row.pickedByName = picker.fullName;
       row.pickedToAccountId = account.id;
       row.pickedAt = now;
+      row.pickBatchId = pickBatchId;
+      row.confirmedByUserId = user.id;
+      row.confirmedByName = confirmedByName;
       await this.pending.save(row);
       totalAmount += n(row.amount);
     }
@@ -212,7 +306,7 @@ export class CashWithdrawalsService {
       );
     });
 
-    return { ok: true, picked: rows.length };
+    return { ok: true, picked: rows.length, pickBatchId };
   }
 
   /** Notifica a admins del local (OWNER/ADMIN) que se retiró efectivo. */
@@ -266,4 +360,8 @@ export class CashWithdrawalsService {
       })),
     );
   }
+}
+
+function actorDisplayName(user: AuthUser): string {
+  return String(user.fullName || user.email || '').trim() || 'Usuario';
 }

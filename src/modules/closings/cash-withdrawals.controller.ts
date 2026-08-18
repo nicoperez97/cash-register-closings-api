@@ -19,6 +19,12 @@ export class CashWithdrawalsController {
     return this.withdrawals.listPending(user, shopId);
   }
 
+  @Get('history')
+  @RequirePermissions('closings.read')
+  listHistory(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
+    return this.withdrawals.listHistory(user, shopId);
+  }
+
   @Post('pick')
   @RequirePermissions('closings.update')
   pick(
