@@ -591,15 +591,44 @@ export class ClosingsService implements OnModuleInit {
       }
     }
     if (dto.sourceAmounts) {
-      await this.sourceAmounts.delete({ closingId });
+      const existing = await this.sourceAmounts.find({ where: { closingId } });
+      const settledKeep = existing.filter((s) => !!s.settledAt);
+      const settledBySourceId = new Map(
+        settledKeep
+          .filter((s) => !!s.sourceId)
+          .map((s) => [s.sourceId as string, s]),
+      );
+      if (settledKeep.length) {
+        await this.sourceAmounts
+          .createQueryBuilder()
+          .delete()
+          .from(ClosingSourceAmount)
+          .where('closingId = :closingId', { closingId })
+          .andWhere('settledAt IS NULL')
+          .execute();
+      } else {
+        await this.sourceAmounts.delete({ closingId });
+      }
       const defs = await this.sources.find({ where: { shopId } });
       const byId = new Map(defs.map((s) => [s.id, s]));
+      const incomingSettledIds = new Set<string>();
       const rows = dto.sourceAmounts
         .map((row) => {
           const src = byId.get(row.sourceId);
           if (!src) return null;
           const lines = sourceLinesOf(row.lines);
           const amount = sourceAmountOf(row);
+          const settled = settledBySourceId.get(src.id);
+          if (settled) {
+            incomingSettledIds.add(settled.id);
+            settled.name = src.name;
+            settled.includeInDeclared = !!src.includeInDeclared;
+            settled.kind = src.kind;
+            settled.accountId = src.accountId ?? null;
+            settled.amount = money(amount);
+            settled.lines = lines.length ? lines : null;
+            return settled;
+          }
           return this.sourceAmounts.create({
             closingId,
             sourceId: src.id,
@@ -612,7 +641,9 @@ export class ClosingsService implements OnModuleInit {
           });
         })
         .filter((r): r is NonNullable<typeof r> => !!r);
-      if (rows.length) await this.sourceAmounts.save(rows);
+      const leftoverSettled = settledKeep.filter((s) => !incomingSettledIds.has(s.id));
+      const toSave = [...rows, ...leftoverSettled];
+      if (toSave.length) await this.sourceAmounts.save(toSave);
     }
   }
 

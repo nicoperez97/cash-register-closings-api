@@ -7,6 +7,7 @@ import { CashPendingWithdrawal } from '../../entities/cash-pending-withdrawal.en
 import { ShopClosingSource } from '../../entities/shop-closing-source.entity';
 import { ClosingSourceAmount } from '../../entities/closing-source-amount.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
+import { Concept } from '../../entities/concept.entity';
 import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { Employee } from '../../entities/employee.entity';
@@ -22,6 +23,8 @@ import { ClosingSourcesController } from './closing-sources.controller';
 import { ClosingSourcesService } from './closing-sources.service';
 import { CashWithdrawalsController } from './cash-withdrawals.controller';
 import { CashWithdrawalsService } from './cash-withdrawals.service';
+import { SettlementsController } from './settlements.controller';
+import { SettlementsService } from './settlements.service';
 import { WhatsappImportService } from './whatsapp-import.service';
 import { ExcelImportService } from './excel-import.service';
 
@@ -35,6 +38,7 @@ import { ExcelImportService } from './excel-import.service';
       ShopClosingSource,
       ClosingSourceAmount,
       LedgerAccount,
+      Concept,
       User,
       UserShop,
       Employee,
@@ -46,14 +50,20 @@ import { ExcelImportService } from './excel-import.service';
     NotificationsModule,
     forwardRef(() => TipsModule),
   ],
-  controllers: [ClosingsController, CashWithdrawalsController, ClosingSourcesController],
+  controllers: [
+    ClosingsController,
+    CashWithdrawalsController,
+    ClosingSourcesController,
+    SettlementsController,
+  ],
   providers: [
     ClosingsService,
     CashWithdrawalsService,
     ClosingSourcesService,
+    SettlementsService,
     WhatsappImportService,
     ExcelImportService,
   ],
-  exports: [ClosingsService, CashWithdrawalsService, ClosingSourcesService],
+  exports: [ClosingsService, CashWithdrawalsService, ClosingSourcesService, SettlementsService],
 })
 export class ClosingsModule {}
