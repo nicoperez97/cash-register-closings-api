@@ -43,6 +43,10 @@ export class Employee extends BaseEntity {
   @Column({ type: 'varchar', nullable: true })
   supervisorEmployeeId?: string | null;
 
+  /** Alias o CBU para reintegros / transferencias. */
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  bankAlias?: string | null;
+
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })
   shop: Shop;

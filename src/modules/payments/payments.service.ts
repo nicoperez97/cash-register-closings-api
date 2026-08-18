@@ -17,6 +17,7 @@ import { UserShop } from '../../entities/user-shop.entity';
 import { Supplier } from '../../entities/supplier.entity';
 import { Employee } from '../../entities/employee.entity';
 import { ShopService } from '../../entities/shop-service.entity';
+import { Concept } from '../../entities/concept.entity';
 import { AuthUser } from '../../common/decorators';
 import { GlobalRole, NotificationType, PaymentMethod, PaymentPriority, PaymentStatus } from '../../common/enums';
 import { ShopsService } from '../shops/shops.service';
@@ -38,6 +39,7 @@ const PAYMENT_PRIORITIES = new Set<string>(Object.values(PaymentPriority));
 export interface UpsertPaymentDto {
   title?: string | null;
   notes?: string | null;
+  conceptId?: string | null;
   amount?: number | null;
   dueDate?: string | null;
   priority?: PaymentPriority | string | null;
@@ -71,6 +73,7 @@ export class PaymentsService implements OnModuleInit {
     @InjectRepository(Supplier) private readonly suppliers: Repository<Supplier>,
     @InjectRepository(Employee) private readonly employees: Repository<Employee>,
     @InjectRepository(ShopService) private readonly shopServices: Repository<ShopService>,
+    @InjectRepository(Concept) private readonly concepts: Repository<Concept>,
     private readonly shops: ShopsService,
     private readonly notifications: NotificationsService,
     private readonly movements: MovementsService,
@@ -137,6 +140,7 @@ export class PaymentsService implements OnModuleInit {
       `ALTER TABLE payments ADD COLUMN receiptFileMime VARCHAR(120) NULL`,
       `ALTER TABLE payments ADD COLUMN paymentMethod VARCHAR(32) NULL`,
       `ALTER TABLE payments ADD COLUMN priority VARCHAR(16) NULL`,
+      `ALTER TABLE payments ADD COLUMN conceptId CHAR(36) NULL`,
     ]) {
       try {
         await this.payments.query(sql);
@@ -175,22 +179,25 @@ export class PaymentsService implements OnModuleInit {
   private async load(shopId: string, id: string) {
     const row = await this.payments.findOne({
       where: { id, shopId, active: true },
-      relations: ['payer', 'validator', 'account', 'supplier', 'employee', 'service', 'createdBy'],
+      relations: ['payer', 'validator', 'account', 'supplier', 'employee', 'service', 'createdBy', 'concept'],
     });
     if (!row) throw new NotFoundException('Pago no encontrado');
     return row;
   }
 
   private displayTitle(p: Payment) {
-    return (p.title || '').trim() || 'Sin concepto';
+    return (p.concept?.name || p.title || '').trim() || 'Sin concepto';
   }
 
   private toDto(p: Payment) {
     return {
       id: p.id,
       shopId: p.shopId,
-      title: p.title ?? '',
-      notes: p.notes ?? null,
+      title: (p.concept?.name || p.title || '').trim(),
+      notes: (p.notes || p.concept?.description || '').trim() || null,
+      conceptId: p.conceptId ?? null,
+      conceptName: p.concept?.name ?? null,
+      conceptDescription: p.concept?.description ?? null,
       amount: n(p.amount),
       dueDate: p.dueDate ?? null,
       priority: p.priority ?? null,
@@ -389,6 +396,14 @@ export class PaymentsService implements OnModuleInit {
     if (v === undefined) return undefined;
     if (v === null || v === '') return null;
     return v;
+  }
+
+  private async resolveConcept(shopId: string, conceptId?: string | null) {
+    const id = this.emptyToNull(conceptId) ?? null;
+    if (!id) return null;
+    const row = await this.concepts.findOne({ where: { id, shopId } });
+    if (!row) throw new BadRequestException('Concepto no encontrado');
+    return row;
   }
 
   private toDateOnly(value: string | Date | null | undefined): string | null {
@@ -851,6 +866,10 @@ export class PaymentsService implements OnModuleInit {
     if (employeeId) await this.assertEmployee(shopId, employeeId);
     if (serviceId) await this.assertService(shopId, serviceId);
 
+    const concept = await this.resolveConcept(shopId, dto.conceptId);
+    const title = concept?.name?.trim() || dto.title?.trim() || null;
+    const notes = dto.notes?.trim() || concept?.description?.trim() || null;
+
     const requestedStatus = this.parseCreatedStatus(dto.status);
     if (requestedStatus === PaymentStatus.PAID) {
       if (!(amount != null && amount > 0)) {
@@ -867,8 +886,9 @@ export class PaymentsService implements OnModuleInit {
     const row = await this.payments.save(
       this.payments.create({
         shopId,
-        title: dto.title?.trim() || null,
-        notes: dto.notes?.trim() || null,
+        title,
+        notes,
+        conceptId: concept?.id ?? null,
         amount: amount === null ? null : money(amount),
         dueDate,
         priority:
@@ -995,6 +1015,15 @@ export class PaymentsService implements OnModuleInit {
 
     if (dto.title !== undefined) patch.title = dto.title?.trim() || null;
     if (dto.notes !== undefined) patch.notes = dto.notes?.trim() || null;
+    if (dto.conceptId !== undefined) {
+      const concept = await this.resolveConcept(shopId, dto.conceptId);
+      patch.conceptId = concept?.id ?? null;
+      if (concept) {
+        patch.title = concept.name;
+        const nextNotes = (dto.notes !== undefined ? dto.notes : row.notes)?.trim() || null;
+        patch.notes = nextNotes || concept.description?.trim() || null;
+      }
+    }
     if (dto.amount !== undefined) {
       if (dto.amount === null || (dto.amount as any) === '') {
         if (wasPaid) throw new BadRequestException('Un pago abonado necesita monto');
@@ -1154,6 +1183,7 @@ export class PaymentsService implements OnModuleInit {
         patch.amount !== undefined ||
         patch.paidAt !== undefined ||
         patch.title !== undefined ||
+        patch.conceptId !== undefined ||
         patch.supplierId !== undefined ||
         patch.serviceId !== undefined ||
         patch.employeeId !== undefined ||

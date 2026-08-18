@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -7,31 +8,59 @@ import {
   Patch,
   Post,
   Query,
+  Res,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
+  ApiProperty,
+  ApiPropertyOptional,
+  ApiTags,
+} from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
-import { IsBoolean, IsEnum, IsOptional, IsString, MinLength } from 'class-validator';
+import { FileInterceptor } from '@nestjs/platform-express';
+import type { Response } from 'express';
+import { IsArray, IsBoolean, IsEnum, IsOptional, IsString, MinLength } from 'class-validator';
 import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
-import { ConceptKind } from '../../common/enums';
+import { ConceptCategory, ConceptKind } from '../../common/enums';
 import { ConceptsService } from './concepts.service';
+import { ConceptsExcelService } from './concepts-excel.service';
+import { isPaymentConceptScope } from '../../common/concept-categories';
 
 class CreateConceptDto {
   @ApiProperty() @IsString() @MinLength(1) name: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() description?: string | null;
   @ApiPropertyOptional({ enum: ConceptKind })
   @IsOptional()
   @IsEnum(ConceptKind)
   kind?: ConceptKind;
+  @ApiPropertyOptional({ enum: ConceptCategory, isArray: true })
+  @IsOptional()
+  @IsArray()
+  @IsEnum(ConceptCategory, { each: true })
+  categories?: ConceptCategory[];
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() validated?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
 }
 
 class UpdateConceptDto {
   @ApiPropertyOptional() @IsOptional() @IsString() @MinLength(1) name?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() description?: string | null;
   @ApiPropertyOptional({ enum: ConceptKind })
   @IsOptional()
   @IsEnum(ConceptKind)
   kind?: ConceptKind;
+  @ApiPropertyOptional({ enum: ConceptCategory, isArray: true })
+  @IsOptional()
+  @IsArray()
+  @IsEnum(ConceptCategory, { each: true })
+  categories?: ConceptCategory[];
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() validated?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
 }
 
@@ -40,7 +69,10 @@ class UpdateConceptDto {
 @UseGuards(AuthGuard('jwt'), PermissionsGuard)
 @Controller('shops/:shopId/concepts')
 export class ConceptsController {
-  constructor(private readonly concepts: ConceptsService) {}
+  constructor(
+    private readonly concepts: ConceptsService,
+    private readonly excel: ConceptsExcelService,
+  ) {}
 
   @Get()
   @RequirePermissions('movements.read')
@@ -48,8 +80,65 @@ export class ConceptsController {
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
     @Query('kind') kind?: ConceptKind,
+    @Query('includeInactive') includeInactive?: string,
+    @Query('includeUnvalidated') includeUnvalidated?: string,
+    @Query('for') usage?: string,
   ) {
-    return this.concepts.list(user, shopId, kind);
+    return this.concepts.list(user, shopId, {
+      kind,
+      includeInactive: includeInactive === 'true',
+      includeUnvalidated: includeUnvalidated === 'true',
+      for: isPaymentConceptScope(usage) ? usage : undefined,
+    });
+  }
+
+  @Get('import-template.xlsx')
+  @RequirePermissions('concepts.manage')
+  async importTemplate(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Res() res: Response,
+  ) {
+    const { buffer, filename } = await this.excel.buildTemplate(user, shopId);
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
+  }
+
+  @Post('import-excel')
+  @RequirePermissions('concepts.manage')
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+        commit: { type: 'boolean' },
+      },
+      required: ['file'],
+    },
+  })
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }))
+  importExcel(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Query('commit') commit?: string,
+    @Body('commit') commitBody?: string | boolean,
+  ) {
+    if (!file) throw new BadRequestException('Adjuntá el Excel (.xlsx)');
+    const doCommit =
+      commit === 'true' ||
+      commit === '1' ||
+      commitBody === true ||
+      commitBody === 'true' ||
+      commitBody === '1';
+    return doCommit
+      ? this.excel.commit(user, shopId, file)
+      : this.excel.preview(user, shopId, file);
   }
 
   @Post()

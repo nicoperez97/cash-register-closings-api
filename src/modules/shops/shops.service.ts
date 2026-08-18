@@ -26,6 +26,7 @@ import { randomUUID } from 'crypto';
 import { normalizeUserVisibility, UserVisibility } from '../../common/user-visibility';
 import { normalizePartyRule } from '../reservations/reservation-party-rules.util';
 import { normalizeEmailMessageTemplates } from '../notifications/mail-message-templates.util';
+import { normalizePaymentConceptCategories } from '../../common/concept-categories';
 import {
   deleteUploadIfExists,
   resolveUploadPath,
@@ -255,6 +256,14 @@ export class ShopsService implements OnModuleInit {
     } catch {
       // columna ya existe
     }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN paymentConceptCategories JSON NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
   }
 
   assertShopAccess(user: AuthUser, shopId: string) {
@@ -440,6 +449,9 @@ export class ShopsService implements OnModuleInit {
         salesSystemId: dto.salesSystemId ?? null,
         posPaymentMap: dto.posPaymentMap ?? null,
         posnets: this.normalizePosnets(dto.posnets),
+        paymentConceptCategories: dto.paymentConceptCategories
+          ? normalizePaymentConceptCategories(dto.paymentConceptCategories)
+          : null,
         active: true,
       }),
     );
@@ -567,6 +579,11 @@ export class ShopsService implements OnModuleInit {
     }
     if (dto.posnets !== undefined) {
       shop.posnets = this.normalizePosnets(dto.posnets);
+    }
+    if (dto.paymentConceptCategories !== undefined) {
+      shop.paymentConceptCategories = dto.paymentConceptCategories
+        ? normalizePaymentConceptCategories(dto.paymentConceptCategories)
+        : null;
     }
 
     await this.shops.save(shop);
@@ -850,6 +867,7 @@ export class ShopsService implements OnModuleInit {
       salesSystemId: s.salesSystemId ?? null,
       posPaymentMap: s.posPaymentMap ?? null,
       posnets: s.posnets ?? [],
+      paymentConceptCategories: normalizePaymentConceptCategories(s.paymentConceptCategories),
       active: isEntityActive(s.active),
     };
   }

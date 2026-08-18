@@ -33,6 +33,7 @@ function deepLinkFor(type: NotificationType, opts: {
   if (String(type).startsWith('PAYMENT_')) return '/payments/suppliers';
   if (type === NotificationType.RESERVATION_REQUEST) return '/reservations';
   if (type === NotificationType.MOVEMENT_CREATED) return '/movements';
+  if (type === NotificationType.REIMBURSEMENT_CREATED) return '/reimbursements';
   return '/';
 }
 

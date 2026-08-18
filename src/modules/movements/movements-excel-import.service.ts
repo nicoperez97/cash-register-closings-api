@@ -289,6 +289,7 @@ export class MovementsExcelImportService {
               name: item.conceptName,
               kind: this.guessConceptKind(item.fromAccountName, item.toAccountName),
               active: true,
+              validated: true,
             }),
           );
           conceptCache.set(this.norm(concept.name), concept);

@@ -78,6 +78,8 @@ export enum NotificationType {
   RESERVATION_REQUEST = 'RESERVATION_REQUEST',
   /** Movimiento o gasto rápido creado a mano. */
   MOVEMENT_CREATED = 'MOVEMENT_CREATED',
+  /** Productor cargó un gasto a reintegrar. */
+  REIMBURSEMENT_CREATED = 'REIMBURSEMENT_CREATED',
 }
 
 /** Etiquetas para UI de configuración de mails del local. */
@@ -98,9 +100,17 @@ export const NOTIFICATION_TYPE_LABELS: Record<NotificationType, string> = {
   [NotificationType.SHORTAGE_RESOLVED]: 'Faltantes · resuelto',
   [NotificationType.RESERVATION_REQUEST]: 'Reservas · solicitud nueva',
   [NotificationType.MOVEMENT_CREATED]: 'Movimientos y gastos rápidos',
+  [NotificationType.REIMBURSEMENT_CREATED]: 'Reintegros · gasto de productor',
 };
 
 export const ALL_NOTIFICATION_TYPES: NotificationType[] = Object.values(NotificationType);
+
+/** Gasto de productor a reintegrar. */
+export enum ReimbursementStatus {
+  PENDING = 'PENDING',
+  PAID = 'PAID',
+  CANCELLED = 'CANCELLED',
+}
 
 export enum ExpenseCategory {
   // Rubros gastronómicos
@@ -168,6 +178,15 @@ export enum ConceptKind {
   TRANSFER = 'TRANSFER',
 }
 
+/** Dónde se puede usar un concepto (un concepto puede tener varias). */
+export enum ConceptCategory {
+  EMPLOYEES = 'EMPLOYEES',
+  SERVICES = 'SERVICES',
+  SUPPLIERS = 'SUPPLIERS',
+  MOVEMENTS = 'MOVEMENTS',
+  OTHERS = 'OTHERS',
+}
+
 export enum LinkedPaymentMethod {
   CASH = 'cash',
   CARD = 'card',
@@ -226,6 +245,9 @@ export const PERMISSIONS = [
   'tips.read',
   'tips.create',
   'tips.manage',
+  'reimbursements.self',
+  'reimbursements.read',
+  'reimbursements.manage',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -274,6 +296,8 @@ export const ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     'tips.read',
     'tips.create',
     'tips.manage',
+    'reimbursements.read',
+    'reimbursements.manage',
   ],
   [GlobalRole.CASHIER]: ['closings.create', 'tips.create', 'tips.read'],
   [GlobalRole.VIEWER]: [
@@ -294,6 +318,7 @@ export const ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     'beverageStock.read',
     'shortages.read',
     'tips.read',
+    'reimbursements.read',
   ],
   [GlobalRole.PARTNER]: [
     'closings.read',

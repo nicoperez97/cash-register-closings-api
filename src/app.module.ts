@@ -26,6 +26,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { StockModule } from './modules/stock/stock.module';
 import { ShortagesModule } from './modules/shortages/shortages.module';
 import { TipsModule } from './modules/tips/tips.module';
+import { ReimbursementsModule } from './modules/reimbursements/reimbursements.module';
 import { SalonFloorModule } from './modules/salon-floor/salon-floor.module';
 import { MenuModule } from './modules/menu/menu.module';
 import { AiModule } from './modules/ai/ai.module';
@@ -61,6 +62,7 @@ import { PublicAbuseGuard } from './common/public-abuse.guard';
     StockModule,
     ShortagesModule,
     TipsModule,
+    ReimbursementsModule,
     SalonFloorModule,
     MenuModule,
   ],

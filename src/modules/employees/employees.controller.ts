@@ -47,6 +47,10 @@ class CreateEmployeeDto {
   @IsOptional()
   @IsUUID()
   supervisorEmployeeId?: string | null;
+  @ApiPropertyOptional({ description: 'Alias o CBU para transferencias / reintegros' })
+  @IsOptional()
+  @IsString()
+  bankAlias?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
 }
 
@@ -69,6 +73,10 @@ class UpdateEmployeeDto {
   })
   @IsOptional()
   supervisorEmployeeId?: string | null;
+  @ApiPropertyOptional({ description: 'Alias o CBU para transferencias / reintegros' })
+  @IsOptional()
+  @IsString()
+  bankAlias?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
 }
 

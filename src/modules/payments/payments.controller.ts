@@ -47,6 +47,11 @@ class CreatePaymentDto {
   @ApiPropertyOptional()
   @IsOptional()
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  conceptId?: string | null;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
   @IsNumber()
   @Min(0)
   amount?: number | null;
@@ -146,6 +151,11 @@ class CreatePaymentDto {
 class UpdatePaymentDto {
   @ApiPropertyOptional() @IsOptional() @IsString() title?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string | null;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  conceptId?: string | null;
   @ApiPropertyOptional()
   @IsOptional()
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')

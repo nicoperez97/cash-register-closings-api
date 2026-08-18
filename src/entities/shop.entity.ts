@@ -197,6 +197,18 @@ export class Shop extends BaseEntity {
   @Column({ type: 'simple-json', nullable: true })
   posnets?: ShopPosnet[] | null;
 
+  /**
+   * Categorías de concepto a listar según el tipo de pago / movimiento.
+   * null = defaults (proveedores, servicios+proveedores, empleados, movimientos).
+   */
+  @Column({ type: 'json', nullable: true })
+  paymentConceptCategories?: {
+    supplier?: string[];
+    service?: string[];
+    employee?: string[];
+    movement?: string[];
+  } | null;
+
   @ManyToOne(() => SalesSystem, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'salesSystemId' })
   salesSystem?: SalesSystem | null;

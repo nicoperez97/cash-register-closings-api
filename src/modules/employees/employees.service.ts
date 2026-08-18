@@ -54,6 +54,14 @@ export class EmployeesService implements OnModuleInit {
     } catch {
       // ya existe
     }
+    try {
+      await this.employees.query(`
+        ALTER TABLE employees
+          ADD COLUMN bankAlias VARCHAR(120) NULL
+      `);
+    } catch {
+      // ya existe
+    }
   }
 
   private toDto(e: Employee) {
@@ -68,6 +76,7 @@ export class EmployeesService implements OnModuleInit {
       type: normalizeEmployeeType(e.type),
       producesFood: !!e.producesFood,
       supervisorEmployeeId: e.supervisorEmployeeId ?? null,
+      bankAlias: e.bankAlias?.trim() || null,
       active: isEntityActive(e.active),
     };
   }
@@ -155,6 +164,7 @@ export class EmployeesService implements OnModuleInit {
       type?: EmployeeType;
       producesFood?: boolean;
       supervisorEmployeeId?: string | null;
+      bankAlias?: string | null;
       active?: boolean;
     },
   ) {
@@ -173,6 +183,7 @@ export class EmployeesService implements OnModuleInit {
         type: normalizeEmployeeType(dto.type),
         producesFood,
         supervisorEmployeeId: producesFood ? (dto.supervisorEmployeeId ?? null) : null,
+        bankAlias: dto.bankAlias?.trim() || null,
         active: dto.active ?? true,
       }),
     );
@@ -192,6 +203,7 @@ export class EmployeesService implements OnModuleInit {
       type?: EmployeeType;
       producesFood?: boolean;
       supervisorEmployeeId?: string | null;
+      bankAlias?: string | null;
       active?: boolean;
     },
   ) {
@@ -208,6 +220,7 @@ export class EmployeesService implements OnModuleInit {
     if (dto.notes !== undefined) row.notes = dto.notes;
     if (dto.type !== undefined) row.type = normalizeEmployeeType(dto.type);
     if (dto.producesFood !== undefined) row.producesFood = !!dto.producesFood;
+    if (dto.bankAlias !== undefined) row.bankAlias = dto.bankAlias?.trim() || null;
     if (dto.active !== undefined) row.active = dto.active;
 
     const producesFood = !!row.producesFood;

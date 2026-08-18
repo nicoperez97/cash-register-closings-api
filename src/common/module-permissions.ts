@@ -21,6 +21,7 @@ export type ModuleKey =
   | 'beverageStock'
   | 'shortages'
   | 'tips'
+  | 'reimbursements'
   | 'shop'
   | 'users';
 
@@ -214,6 +215,16 @@ export const MODULE_DEFS: ModuleDef[] = [
     ],
   },
   {
+    key: 'reimbursements',
+    label: 'Reintegros',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'self', label: 'Solo mis gastos' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar (marcar pagos)' },
+    ],
+  },
+  {
     key: 'shop',
     label: 'Local / POS',
     levels: [
@@ -313,6 +324,17 @@ export function expandModulePermissions(
       add(set, 'tips.read', 'tips.create', 'tips.manage');
       break;
   }
+  switch (modules.reimbursements) {
+    case 'self':
+      add(set, 'reimbursements.self');
+      break;
+    case 'read':
+      add(set, 'reimbursements.read');
+      break;
+    case 'manage':
+      add(set, 'reimbursements.read', 'reimbursements.manage');
+      break;
+  }
   // Quien gestiona pagos puede elegir / crear proveedores en el formulario.
   if (modules.payments === 'manage') {
     add(set, 'suppliers.read', 'suppliers.manage', 'services.read', 'services.manage');
@@ -382,6 +404,12 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
       if (has('tips.manage')) return 'manage';
       if (has('tips.create')) return 'create';
       if (has('tips.read')) return 'read';
+      return 'none';
+    })(),
+    reimbursements: (() => {
+      if (has('reimbursements.manage')) return 'manage';
+      if (has('reimbursements.read')) return 'read';
+      if (has('reimbursements.self')) return 'self';
       return 'none';
     })(),
     accounts: has('accounts.manage') ? 'manage' : 'none',

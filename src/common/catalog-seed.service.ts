@@ -8,6 +8,7 @@ import {
   DEFAULT_LEDGER_ACCOUNTS,
   SYSTEM_LEDGER_ACCOUNTS,
 } from './catalog-seed';
+import { inferConceptCategories } from './concept-categories';
 
 @Injectable()
 export class CatalogSeedService {
@@ -64,7 +65,9 @@ export class CatalogSeedService {
           shopId,
           name: c.name,
           kind: c.kind,
+          categories: inferConceptCategories(c.name),
           active: true,
+          validated: true,
         }),
       );
     }

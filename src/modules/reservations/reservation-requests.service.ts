@@ -516,6 +516,16 @@ export class ReservationRequestsService implements OnModuleInit {
     return this.toDto(row);
   }
 
+  async remove(user: AuthUser, shopId: string, id: string) {
+    this.shops.assertShopAccess(user, shopId);
+    await this.shops.assertReservationsEnabled(shopId);
+    const row = await this.findPending(shopId, id);
+    row.active = false;
+    await this.requests.save(row);
+    await this.requests.softRemove(row);
+    return { ok: true };
+  }
+
   private async findPending(shopId: string, id: string) {
     const row = await this.requests.findOne({ where: { id, shopId } });
     if (!row || !isEntityActive(row.active)) {
