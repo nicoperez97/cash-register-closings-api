@@ -311,7 +311,7 @@
       num(form.transferAmount) +
       num(form.accountDniAmount) +
       num(form.otherAmount);
-    form.difference = num(form.declaredTotal) - num(form.posSystemAmount);
+    form.difference = num(form.posSystemAmount) - num(form.declaredTotal);
   }
 
   function emptyForm(shop, closing) {
@@ -405,12 +405,35 @@
     return !u.hideFromCashWithdraw;
   }
 
-  function withdrawUsers() {
+  function withdrawAccounts() {
+    var seen = {};
     var out = [];
+    var selectedAccountId = state.form && state.form.cashWithdrawnToAccountId;
+    var selectedUserId = state.form && state.form.cashWithdrawnByUserId;
     var i;
+    var j;
+    var u;
+    var acc;
+    var visible;
+    var label;
     for (i = 0; i < state.users.length; i++) {
-      if (isVisibleInCashWithdraw(state.users[i])) out.push(state.users[i]);
+      u = state.users[i];
+      visible = isVisibleInCashWithdraw(u) || (selectedUserId && u.id === selectedUserId);
+      for (j = 0; j < (u.ledgerAccounts || []).length; j++) {
+        acc = u.ledgerAccounts[j];
+        if (seen[acc.id]) continue;
+        if (!visible && acc.id !== selectedAccountId) continue;
+        seen[acc.id] = true;
+        label = acc.name;
+        if (u.fullName && acc.name && acc.name !== u.fullName) {
+          label = acc.name + ' · ' + u.fullName;
+        }
+        out.push({ id: acc.id, name: label, userId: u.id });
+      }
     }
+    out.sort(function (a, b) {
+      return String(a.name).localeCompare(String(b.name), 'es');
+    });
     return out;
   }
 
@@ -422,9 +445,33 @@
     return null;
   }
 
-  function accountsForUser(userId) {
-    var u = findUser(userId);
-    return (u && u.ledgerAccounts) || [];
+  function userIdForAccount(accountId) {
+    var i;
+    var j;
+    var u;
+    if (!accountId) return '';
+    for (i = 0; i < state.users.length; i++) {
+      u = state.users[i];
+      for (j = 0; j < (u.ledgerAccounts || []).length; j++) {
+        if (u.ledgerAccounts[j].id === accountId) return u.id;
+      }
+    }
+    return '';
+  }
+
+  function hydrateWithdrawnAccount() {
+    var f = state.form;
+    var u;
+    var accounts;
+    if (!f) return;
+    if (!f.cashWithdrawnToAccountId && f.cashWithdrawnByUserId) {
+      u = findUser(f.cashWithdrawnByUserId);
+      accounts = (u && u.ledgerAccounts) || [];
+      if (accounts.length === 1) f.cashWithdrawnToAccountId = accounts[0].id;
+    }
+    if (f.cashWithdrawnToAccountId) {
+      f.cashWithdrawnByUserId = userIdForAccount(f.cashWithdrawnToAccountId);
+    }
   }
 
   function readFormFromDom() {
@@ -443,8 +490,8 @@
     f.coversCount = val('f-covers');
     f.cashLeftInRegister = num(val('f-change'));
     f.cashWithdrawn = num(val('f-withdrawn'));
-    f.cashWithdrawnByUserId = val('f-who');
-    f.cashWithdrawnToAccountId = val('f-account');
+    f.cashWithdrawnToAccountId = val('f-who');
+    f.cashWithdrawnByUserId = userIdForAccount(f.cashWithdrawnToAccountId);
     f.tipsAmount = num(val('f-tips'));
     f.notes = val('f-notes');
     f.differenceReason = val('f-diff-reason');
@@ -478,13 +525,8 @@
     syncDerived(f);
     var userId = f.cashWithdrawnByUserId || null;
     var selected = findUser(userId);
-    var accounts = accountsForUser(userId);
     var accountId = f.cashWithdrawnToAccountId || null;
-    if (num(f.cashAmount) > 0 && userId && accounts.length > 1 && !accountId) {
-      return { error: 'Seleccioná la cuenta destino del efectivo' };
-    }
-    if (accounts.length === 1) accountId = accounts[0].id;
-    if (!userId) accountId = null;
+    if (!accountId) userId = null;
 
     var posnetAmounts = [];
     var i;
@@ -764,8 +806,13 @@
       !state.busy &&
       ((isEdit && canUpdate() && f.status !== 'LOCKED') || (!isEdit && canCreate()));
 
-    var accounts = accountsForUser(f.cashWithdrawnByUserId);
-    var whoOpts = optList(withdrawUsers(), 'id', 'fullName', f.cashWithdrawnByUserId, '— Sin asignar —');
+    var whoOpts = optList(
+      withdrawAccounts(),
+      'id',
+      'name',
+      f.cashWithdrawnToAccountId,
+      '— Sin asignar —'
+    );
 
     var summary =
       '<div class="summary clearfix">' +
@@ -814,18 +861,6 @@
       '<div class="field"><label for="f-who">Quién se lo lleva</label><select id="f-who">' +
       whoOpts +
       '</select></div>';
-
-    if (accounts.length > 1) {
-      main +=
-        '<div class="field"><label for="f-account">Cuenta destino</label><select id="f-account">' +
-        optList(accounts, 'id', 'name', f.cashWithdrawnToAccountId, '— Elegir —') +
-        '</select></div>';
-    } else {
-      main += '<input type="hidden" id="f-account" value="' + escapeHtml(f.cashWithdrawnToAccountId || (accounts[0] && accounts[0].id) || '') + '" />';
-      if (accounts.length === 1) {
-        main += '<p class="muted">Cuenta destino: ' + escapeHtml(accounts[0].name) + '</p>';
-      }
-    }
     main += '</div>';
 
     var posBody = '<div class="toolbar"><button type="button" class="btn btn-sm" id="btn-add-posnet">Agregar posnet</button></div>';
@@ -1017,9 +1052,6 @@
     if (el)
       el.onchange = function () {
         readFormFromDom();
-        var accounts = accountsForUser(state.form.cashWithdrawnByUserId);
-        state.form.cashWithdrawnToAccountId = accounts.length === 1 ? accounts[0].id : '';
-        render();
       };
 
     bindClicks(document.getElementsByClassName('btn-pick-shop'), function (btn) {
@@ -1147,6 +1179,8 @@
     if (!state.shopId) return;
     xhr('GET', '/shops/' + state.shopId + '/users', null, function (err, data) {
       if (!err) state.users = data || [];
+      hydrateWithdrawnAccount();
+      if (state.view === 'form') render();
     });
   }
 
@@ -1181,6 +1215,7 @@
     }
     state.editing = null;
     state.form = emptyForm(currentShop(), null);
+    hydrateWithdrawnAccount();
     state.panels = { posnets: false, dni: false, other: false, withdraw: false, expenses: false };
     if (state.form.posnetAmounts.length) state.panels.posnets = true;
     state.view = 'form';
@@ -1202,6 +1237,7 @@
       }
       state.editing = data;
       state.form = emptyForm(currentShop(), data);
+      hydrateWithdrawnAccount();
       state.panels = {
         posnets: !!(data.posnetAmounts && data.posnetAmounts.length),
         dni: false,
