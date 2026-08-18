@@ -9,7 +9,10 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Not, Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
 import { CashPendingWithdrawal } from '../../entities/cash-pending-withdrawal.entity';
+import { CashPendingWithdrawalOffset } from '../../entities/cash-pending-withdrawal-offset.entity';
 import { CashClosing } from '../../entities/cash-closing.entity';
+import { Movement } from '../../entities/movement.entity';
+import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { Shop } from '../../entities/shop.entity';
@@ -20,7 +23,9 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { AuthUser } from '../../common/decorators';
 import {
   CashPendingWithdrawalStatus,
+  ConceptKind,
   GlobalRole,
+  LinkedPaymentMethod,
   NotificationType,
 } from '../../common/enums';
 import { isEntityActive } from '../../common/active.util';
@@ -36,7 +41,12 @@ export class CashWithdrawalsService implements OnModuleInit {
   constructor(
     @InjectRepository(CashPendingWithdrawal)
     private readonly pending: Repository<CashPendingWithdrawal>,
+    @InjectRepository(CashPendingWithdrawalOffset)
+    private readonly offsets: Repository<CashPendingWithdrawalOffset>,
     @InjectRepository(CashClosing) private readonly closings: Repository<CashClosing>,
+    @InjectRepository(Movement) private readonly movements: Repository<Movement>,
+    @InjectRepository(LedgerAccount)
+    private readonly ledger: Repository<LedgerAccount>,
     @InjectRepository(User) private readonly users: Repository<User>,
     @InjectRepository(UserShop) private readonly userShops: Repository<UserShop>,
     @InjectRepository(Shop) private readonly shopRepo: Repository<Shop>,
@@ -51,6 +61,18 @@ export class CashWithdrawalsService implements OnModuleInit {
       `ALTER TABLE cash_pending_withdrawals ADD COLUMN pickBatchId VARCHAR(36) NULL`,
       `ALTER TABLE cash_pending_withdrawals ADD COLUMN confirmedByUserId VARCHAR(36) NULL`,
       `ALTER TABLE cash_pending_withdrawals ADD COLUMN confirmedByName VARCHAR(200) NULL`,
+      `CREATE TABLE IF NOT EXISTS cash_pending_withdrawal_offsets (
+        id VARCHAR(36) NOT NULL,
+        shopId VARCHAR(36) NOT NULL,
+        pendingId VARCHAR(36) NOT NULL,
+        movementId VARCHAR(36) NOT NULL,
+        amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+        createdAt DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+        PRIMARY KEY (id),
+        UNIQUE KEY UQ_cash_wd_offsets_pending_movement (pendingId, movementId),
+        KEY IDX_cash_wd_offsets_pending (pendingId),
+        KEY IDX_cash_wd_offsets_movement (movementId)
+      )`,
     ]) {
       try {
         await this.pending.query(sql);
@@ -135,23 +157,37 @@ export class CashWithdrawalsService implements OnModuleInit {
 
   async listPending(user: AuthUser, shopId: string) {
     this.shops.assertShopAccess(user, shopId);
-    const rows = await this.pending.find({
-      where: {
-        shopId,
-        status: CashPendingWithdrawalStatus.PENDING,
-        active: true,
-      },
-      order: { businessDate: 'DESC', createdAt: 'DESC' },
-    });
-    return rows.map((r) => ({
-      id: r.id,
-      shopId: r.shopId,
-      closingId: r.closingId,
-      businessDate: r.businessDate,
-      amount: n(r.amount),
-      status: r.status,
-      createdAt: r.createdAt,
-    }));
+    const view = await this.computePendingView(shopId);
+    await this.persistAllocations(shopId, view.items);
+    return {
+      items: view.items
+        .filter((i) => i.remainingAmount > 0.009)
+        .sort((a, b) => String(b.businessDate).localeCompare(String(a.businessDate)))
+        .map((i) => ({
+          id: i.id,
+          shopId: i.shopId,
+          closingId: i.closingId,
+          businessDate: i.businessDate,
+          amount: i.remainingAmount,
+          originalAmount: i.originalAmount,
+          deductedAmount: i.deductedAmount,
+          status: i.status,
+          createdAt: i.createdAt,
+        })),
+      covered: view.items
+        .filter((i) => i.remainingAmount <= 0.009)
+        .sort((a, b) => String(b.businessDate).localeCompare(String(a.businessDate)))
+        .map((i) => ({
+          id: i.id,
+          closingId: i.closingId,
+          businessDate: i.businessDate,
+          originalAmount: i.originalAmount,
+          deductedAmount: i.deductedAmount,
+        })),
+      cashExpenses: view.cashExpenses,
+      expensesTotal: view.expensesTotal,
+      availableTotal: view.availableTotal,
+    };
   }
 
   async listHistory(user: AuthUser, shopId: string) {
@@ -258,11 +294,28 @@ export class CashWithdrawalsService implements OnModuleInit {
       dto.accountId,
     );
 
+    const view = await this.computePendingView(shopId);
+    const byId = new Map(view.items.map((i) => [i.id, i]));
+    for (const row of rows) {
+      if (!byId.has(row.id)) {
+        throw new NotFoundException('Uno o más retiros pendientes no existen o ya fueron retirados');
+      }
+    }
+
+    const toPick = rows.filter((r) => (byId.get(r.id)?.remainingAmount ?? 0) > 0.009);
+    if (!toPick.length) {
+      throw new BadRequestException(
+        'No queda efectivo para retirar: ya se usó en gastos de caja',
+      );
+    }
+
     const now = new Date();
     const pickBatchId = randomUUID();
     const confirmedByName = actorDisplayName(user);
     let totalAmount = 0;
-    for (const row of rows) {
+    for (const row of toPick) {
+      const computed = byId.get(row.id)!;
+      const take = computed.remainingAmount;
       const closing = await this.closings.findOne({
         where: { id: row.closingId, shopId, active: true },
         relations: ['expenses', 'extraLines'],
@@ -277,12 +330,13 @@ export class CashWithdrawalsService implements OnModuleInit {
       closing.cashWithdrawnToAccountId = account.id;
       closing.cashPendingPickup = money(0);
       if (!(n(closing.cashWithdrawn) > 0)) {
-        closing.cashWithdrawn = money(n(row.amount));
+        closing.cashWithdrawn = money(take);
       }
       await this.closings.save(closing);
       await this.closingMovements.syncFromClosing(closing);
 
       row.status = CashPendingWithdrawalStatus.PICKED;
+      row.amount = money(take);
       row.pickedByUserId = picker.id;
       row.pickedByName = picker.fullName;
       row.pickedToAccountId = account.id;
@@ -291,22 +345,204 @@ export class CashWithdrawalsService implements OnModuleInit {
       row.confirmedByUserId = user.id;
       row.confirmedByName = confirmedByName;
       await this.pending.save(row);
-      totalAmount += n(row.amount);
+      for (const alloc of computed.allocations) {
+        const exists = await this.offsets.findOne({
+          where: { pendingId: row.id, movementId: alloc.movementId },
+        });
+        if (exists) continue;
+        await this.offsets.save(
+          this.offsets.create({
+            shopId,
+            pendingId: row.id,
+            movementId: alloc.movementId,
+            amount: money(alloc.amount),
+          }),
+        );
+      }
+      totalAmount += take;
     }
 
     void this.notifyAdminsWithdrawalPicked(user, shopId, {
-      count: rows.length,
+      count: toPick.length,
       totalAmount,
       pickedByName: picker.fullName,
       accountName: account.name,
-      closingId: rows.length === 1 ? rows[0].closingId : null,
+      closingId: toPick.length === 1 ? toPick[0].closingId : null,
     }).catch((err) => {
       this.logger.warn(
         `No se pudo notificar retiro: ${(err as Error)?.message ?? err}`,
       );
     });
 
-    return { ok: true, picked: rows.length, pickBatchId };
+    return { ok: true, picked: toPick.length, pickBatchId };
+  }
+
+  /**
+   * Resta gastos de caja (movimientos desde Efectivo, sin cierre) a los pendientes.
+   * FIFO: el gasto se imputa al retiro más viejo que ya existía cuando se registró.
+   */
+  private async computePendingView(shopId: string) {
+    const pending = await this.pending.find({
+      where: {
+        shopId,
+        status: CashPendingWithdrawalStatus.PENDING,
+        active: true,
+      },
+      order: { businessDate: 'ASC', createdAt: 'ASC' },
+    });
+
+    const savedOffsets = await this.offsets.find({ where: { shopId } });
+    const usedByMovement = new Map<string, number>();
+    const usedByPending = new Map<string, number>();
+    for (const o of savedOffsets) {
+      usedByMovement.set(o.movementId, (usedByMovement.get(o.movementId) ?? 0) + n(o.amount));
+      usedByPending.set(o.pendingId, (usedByPending.get(o.pendingId) ?? 0) + n(o.amount));
+    }
+
+    type Item = {
+      id: string;
+      shopId: string;
+      closingId: string;
+      businessDate: string;
+      status: string;
+      createdAt: Date;
+      originalAmount: number;
+      deductedAmount: number;
+      remainingAmount: number;
+      allocations: Array<{ movementId: string; amount: number }>;
+    };
+
+    const items: Item[] = pending.map((r) => {
+      const originalAmount = n(r.amount);
+      const already = usedByPending.get(r.id) ?? 0;
+      const remainingAmount = Math.max(0, Math.round((originalAmount - already) * 100) / 100);
+      return {
+        id: r.id,
+        shopId: r.shopId,
+        closingId: r.closingId,
+        businessDate: r.businessDate,
+        status: r.status,
+        createdAt: r.createdAt,
+        originalAmount,
+        deductedAmount: Math.min(originalAmount, already),
+        remainingAmount,
+        allocations: [],
+      };
+    });
+
+    const cashIds = await this.cashDrawerAccountIds(shopId);
+    const applied = new Map<string, number>();
+    const pendingIds = new Set(items.map((i) => i.id));
+    for (const o of savedOffsets) {
+      if (!pendingIds.has(o.pendingId)) continue;
+      applied.set(o.movementId, (applied.get(o.movementId) ?? 0) + n(o.amount));
+    }
+
+    if (cashIds.length && items.length) {
+      const egreso = await this.ledger.findOne({
+        where: { shopId, code: 'EGRESO', active: true },
+      });
+      const oldest = items.reduce(
+        (min, i) => (i.createdAt < min ? i.createdAt : min),
+        items[0].createdAt,
+      );
+      const movements = await this.movements
+        .createQueryBuilder('m')
+        .leftJoinAndSelect('m.concept', 'concept')
+        .where('m.shopId = :shopId', { shopId })
+        .andWhere('m.active = true')
+        .andWhere('m.closingId IS NULL')
+        .andWhere('m.fromAccountId IN (:...cashIds)', { cashIds })
+        .andWhere('m.createdAt >= :oldest', { oldest })
+        .orderBy('m.createdAt', 'ASC')
+        .getMany();
+
+      for (const m of movements) {
+        if (!this.isCashDrawerExpense(m, cashIds, egreso?.id ?? null)) continue;
+        let left = n(m.amountUyu) - (usedByMovement.get(m.id) ?? 0);
+        if (left <= 0.009) continue;
+        for (const item of items) {
+          if (left <= 0.009) break;
+          if (item.createdAt.getTime() > m.createdAt.getTime()) continue;
+          if (item.remainingAmount <= 0.009) continue;
+          const take = Math.min(item.remainingAmount, left);
+          item.remainingAmount = Math.round((item.remainingAmount - take) * 100) / 100;
+          item.deductedAmount = Math.round((item.deductedAmount + take) * 100) / 100;
+          item.allocations.push({ movementId: m.id, amount: take });
+          applied.set(m.id, (applied.get(m.id) ?? 0) + take);
+          left = Math.round((left - take) * 100) / 100;
+        }
+      }
+    }
+
+    const expenseIds = [...applied.entries()]
+      .filter(([, amount]) => amount > 0.009)
+      .map(([id]) => id);
+    const expenseRows = expenseIds.length
+      ? await this.movements.find({
+          where: { id: In(expenseIds) },
+          relations: ['concept'],
+        })
+      : [];
+    const byExpId = new Map(expenseRows.map((m) => [m.id, m]));
+    const cashExpenses = expenseIds.map((id) => {
+      const m = byExpId.get(id);
+      return {
+        id,
+        businessDate: m?.businessDate ?? '',
+        description: m?.description ?? null,
+        conceptName: m?.concept?.name ?? null,
+        amount: Math.round((applied.get(id) ?? 0) * 100) / 100,
+      };
+    });
+
+    const availableTotal = items.reduce((s, i) => s + Math.max(0, i.remainingAmount), 0);
+    const expensesTotal = cashExpenses.reduce((s, e) => s + e.amount, 0);
+    return { items, cashExpenses, expensesTotal, availableTotal };
+  }
+
+  private async persistAllocations(
+    shopId: string,
+    items: Array<{ id: string; allocations: Array<{ movementId: string; amount: number }> }>,
+  ) {
+    for (const item of items) {
+      for (const alloc of item.allocations) {
+        const exists = await this.offsets.findOne({
+          where: { pendingId: item.id, movementId: alloc.movementId },
+        });
+        if (exists) continue;
+        await this.offsets.save(
+          this.offsets.create({
+            shopId,
+            pendingId: item.id,
+            movementId: alloc.movementId,
+            amount: money(alloc.amount),
+          }),
+        );
+      }
+    }
+  }
+
+  private async cashDrawerAccountIds(shopId: string): Promise<string[]> {
+    const rows = await this.ledger.find({ where: { shopId, active: true } });
+    return rows
+      .filter(
+        (a) =>
+          a.linkedPaymentMethod === LinkedPaymentMethod.CASH ||
+          a.code?.toUpperCase() === 'EFECTIVO',
+      )
+      .map((a) => a.id);
+  }
+
+  private isCashDrawerExpense(
+    m: Movement,
+    cashIds: string[],
+    egresoId: string | null,
+  ): boolean {
+    if (m.closingId || !isEntityActive(m.active)) return false;
+    if (!m.fromAccountId || !cashIds.includes(m.fromAccountId)) return false;
+    if (egresoId && m.toAccountId === egresoId) return true;
+    return m.concept?.kind === ConceptKind.EXPENSE;
   }
 
   /** Notifica a admins del local (OWNER/ADMIN) que se retiró efectivo. */

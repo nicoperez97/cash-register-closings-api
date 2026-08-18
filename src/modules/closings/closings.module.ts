@@ -4,6 +4,7 @@ import { CashClosing } from '../../entities/cash-closing.entity';
 import { ClosingExpense } from '../../entities/closing-expense.entity';
 import { ClosingExtraLine } from '../../entities/closing-extra-line.entity';
 import { CashPendingWithdrawal } from '../../entities/cash-pending-withdrawal.entity';
+import { CashPendingWithdrawalOffset } from '../../entities/cash-pending-withdrawal-offset.entity';
 import { ShopClosingSource } from '../../entities/shop-closing-source.entity';
 import { ClosingSourceAmount } from '../../entities/closing-source-amount.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
@@ -12,6 +13,7 @@ import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { Employee } from '../../entities/employee.entity';
 import { Shop } from '../../entities/shop.entity';
+import { Movement } from '../../entities/movement.entity';
 import { ShopsModule } from '../shops/shops.module';
 import { MovementsModule } from '../movements/movements.module';
 import { AccountsModule } from '../accounts/accounts.module';
@@ -35,6 +37,7 @@ import { ExcelImportService } from './excel-import.service';
       ClosingExpense,
       ClosingExtraLine,
       CashPendingWithdrawal,
+      CashPendingWithdrawalOffset,
       ShopClosingSource,
       ClosingSourceAmount,
       LedgerAccount,
@@ -43,6 +46,7 @@ import { ExcelImportService } from './excel-import.service';
       UserShop,
       Employee,
       Shop,
+      Movement,
     ]),
     ShopsModule,
     MovementsModule,
