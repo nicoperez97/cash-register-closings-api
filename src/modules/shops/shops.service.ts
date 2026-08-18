@@ -12,8 +12,9 @@ import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
+import { ShopClosingSource } from '../../entities/shop-closing-source.entity';
 import { AuthUser } from '../../common/decorators';
-import { GlobalRole, LedgerAccountType } from '../../common/enums';
+import { ClosingSourceKind, GlobalRole, LedgerAccountType } from '../../common/enums';
 import { isGlobalAdmin, isSuperAdmin } from '../../common/guards';
 import { normalizeLogoUrl } from '../../common/drive-url';
 import { isEntityActive } from '../../common/active.util';
@@ -72,6 +73,8 @@ export class ShopsService implements OnModuleInit {
     @InjectRepository(LedgerAccount) private readonly accounts: Repository<LedgerAccount>,
     @InjectRepository(LedgerAccountUser)
     private readonly accountLinks: Repository<LedgerAccountUser>,
+    @InjectRepository(ShopClosingSource)
+    private readonly closingSources: Repository<ShopClosingSource>,
     private readonly catalogSeed: CatalogSeedService,
   ) {}
 
@@ -313,7 +316,7 @@ export class ShopsService implements OnModuleInit {
       where: { id: In(user.shopIds), active: true },
       order: { name: 'ASC' },
     });
-    return list.map((s) => this.toDto(s));
+    return this.withSettlementsEnabled(list.map((s) => this.toDto(s)));
   }
 
   async findAll(user: AuthUser) {
@@ -321,14 +324,17 @@ export class ShopsService implements OnModuleInit {
       return this.mine(user);
     }
     const list = await this.shops.find({ order: { name: 'ASC' } });
-    return list.map((s) => this.toDto(s));
+    return this.withSettlementsEnabled(list.map((s) => this.toDto(s)));
   }
 
   async findOne(user: AuthUser, id: string) {
     this.assertShopAccess(user, id);
     const shop = await this.shops.findOne({ where: { id } });
     if (!shop) throw new NotFoundException('Local no encontrado');
-    return this.toDto(shop, { emailSmtpConfigured: await this.hasSmtpPassword(id) });
+    const [dto] = await this.withSettlementsEnabled([
+      this.toDto(shop, { emailSmtpConfigured: await this.hasSmtpPassword(id) }),
+    ]);
+    return dto;
   }
 
   /** Usuarios del local (para “quién se lo lleva”, etc.). Incluye cuentas PARTNER asociadas. */
@@ -815,6 +821,7 @@ export class ShopsService implements OnModuleInit {
           : Number(s.reservationOutsideMinPartySize) || null,
       waitingListEnabled: !!s.waitingListEnabled,
       tipsEnabled: !!s.tipsEnabled,
+      settlementsEnabled: false,
       publicAttendanceEnabled: !!s.publicAttendanceEnabled,
       menuEnabled: !!s.menuEnabled,
       defaultChangeAmount: Number(s.defaultChangeAmount),
@@ -845,5 +852,21 @@ export class ShopsService implements OnModuleInit {
       posnets: s.posnets ?? [],
       active: isEntityActive(s.active),
     };
+  }
+
+  private async withSettlementsEnabled<T extends { id: string; settlementsEnabled?: boolean }>(
+    dtos: T[],
+  ): Promise<T[]> {
+    if (!dtos.length) return dtos;
+    const rows = await this.closingSources.find({
+      where: {
+        shopId: In(dtos.map((d) => d.id)),
+        active: true,
+        kind: In([ClosingSourceKind.SETTLE_CASH, ClosingSourceKind.SETTLE_ACCOUNT]),
+      },
+      select: ['shopId'],
+    });
+    const enabled = new Set(rows.map((r) => r.shopId));
+    return dtos.map((d) => ({ ...d, settlementsEnabled: enabled.has(d.id) }));
   }
 }

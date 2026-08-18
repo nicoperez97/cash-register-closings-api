@@ -10,8 +10,10 @@ import { CashClosing } from '../../entities/cash-closing.entity';
 import { ClosingExpense } from '../../entities/closing-expense.entity';
 import { ClosingExtraLine } from '../../entities/closing-extra-line.entity';
 import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
+import { ShopClosingSource } from '../../entities/shop-closing-source.entity';
 import { LoginDto } from './dto/login.dto';
 import {
+  ClosingSourceKind,
   ClosingStatus,
   ExpenseCategory,
   ExtraLineType,
@@ -48,6 +50,8 @@ export class AuthService implements OnModuleInit {
     @InjectRepository(ClosingExtraLine) private readonly extras: Repository<ClosingExtraLine>,
     @InjectRepository(LedgerAccountUser)
     private readonly accountLinks: Repository<LedgerAccountUser>,
+    @InjectRepository(ShopClosingSource)
+    private readonly closingSources: Repository<ShopClosingSource>,
     private readonly jwt: JwtService,
   ) {}
 
@@ -451,6 +455,18 @@ export class AuthService implements OnModuleInit {
       profile.shopIds.length > 0
         ? await this.shops.find({ where: { id: In(profile.shopIds), active: true } })
         : [];
+    const settleShopIds = new Set<string>();
+    if (shops.length) {
+      const settleRows = await this.closingSources.find({
+        where: {
+          shopId: In(shops.map((s) => s.id)),
+          active: true,
+          kind: In([ClosingSourceKind.SETTLE_CASH, ClosingSourceKind.SETTLE_ACCOUNT]),
+        },
+        select: ['shopId'],
+      });
+      for (const row of settleRows) settleShopIds.add(row.shopId);
+    }
     return {
       ...profile,
       shops: shops.map((s) => ({
@@ -482,6 +498,7 @@ export class AuthService implements OnModuleInit {
             : Number(s.reservationOutsideMinPartySize) || null,
         waitingListEnabled: !!s.waitingListEnabled,
         tipsEnabled: !!s.tipsEnabled,
+        settlementsEnabled: settleShopIds.has(s.id),
         publicAttendanceEnabled: !!s.publicAttendanceEnabled,
         menuEnabled: !!s.menuEnabled,
         defaultChangeAmount: Number(s.defaultChangeAmount),
