@@ -41,6 +41,10 @@ export class ClosingSourceAmount {
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
   amount: string;
 
+  /** Desglose opcional; `amount` es la suma. */
+  @Column({ type: 'json', nullable: true })
+  lines?: number[] | null;
+
   @ManyToOne(() => CashClosing, (c) => c.sourceAmounts, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'closingId' })
   closing: CashClosing;

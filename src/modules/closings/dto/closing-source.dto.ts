@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
+  IsArray,
   IsBoolean,
   IsEnum,
   IsNumber,
@@ -56,8 +57,15 @@ export class ClosingSourceAmountDto {
   @IsUUID()
   sourceId: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional({ description: 'Total; si hay lines, se usa la suma' })
+  @IsOptional()
   @IsNumber()
   @Min(0)
-  amount: number;
+  amount?: number;
+
+  @ApiPropertyOptional({ type: [Number], description: 'Montos parciales; amount debe ser la suma' })
+  @IsOptional()
+  @IsArray()
+  @IsNumber({}, { each: true })
+  lines?: number[];
 }

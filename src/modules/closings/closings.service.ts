@@ -42,6 +42,24 @@ import { TipsService } from '../tips/tips.service';
 const n = (v?: number | string | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
 
+function sourceLinesOf(raw?: unknown): number[] {
+  let value = raw;
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(value)) return [];
+  return value.map((v) => n(v)).filter((v) => v > 0);
+}
+
+function sourceAmountOf(row: { amount?: number | string | null; lines?: unknown }): number {
+  const lines = sourceLinesOf(row.lines);
+  return lines.length ? lines.reduce((sum, v) => sum + v, 0) : n(row.amount);
+}
+
 const SHOP_ADMIN_ROLES = new Set<GlobalRole>([GlobalRole.OWNER, GlobalRole.ADMIN]);
 
 @Injectable()
@@ -239,6 +257,7 @@ export class ClosingsService implements OnModuleInit {
         kind: s.kind,
         accountId: s.accountId ?? null,
         amount: n(s.amount),
+        lines: sourceLinesOf(s.lines),
       })),
     };
   }
@@ -261,7 +280,7 @@ export class ClosingsService implements OnModuleInit {
     let extra = 0;
     for (const row of rows) {
       const src = byId.get(row.sourceId);
-      if (src?.includeInDeclared) extra += n(row.amount);
+      if (src?.includeInDeclared) extra += sourceAmountOf(row);
     }
     return extra;
   }
@@ -580,6 +599,8 @@ export class ClosingsService implements OnModuleInit {
         .map((row) => {
           const src = byId.get(row.sourceId);
           if (!src) return null;
+          const lines = sourceLinesOf(row.lines);
+          const amount = sourceAmountOf(row);
           return this.sourceAmounts.create({
             closingId,
             sourceId: src.id,
@@ -587,7 +608,8 @@ export class ClosingsService implements OnModuleInit {
             includeInDeclared: !!src.includeInDeclared,
             kind: src.kind,
             accountId: src.accountId ?? null,
-            amount: money(n(row.amount)),
+            amount: money(amount),
+            lines: lines.length ? lines : null,
           });
         })
         .filter((r): r is NonNullable<typeof r> => !!r);
