@@ -12,6 +12,8 @@ import { In, Repository } from 'typeorm';
 import { CashClosing } from '../../entities/cash-closing.entity';
 import { ClosingExpense } from '../../entities/closing-expense.entity';
 import { ClosingExtraLine } from '../../entities/closing-extra-line.entity';
+import { ShopClosingSource } from '../../entities/shop-closing-source.entity';
+import { ClosingSourceAmount } from '../../entities/closing-source-amount.entity';
 import { User } from '../../entities/user.entity';
 import { Employee } from '../../entities/employee.entity';
 import { UserShop } from '../../entities/user-shop.entity';
@@ -50,6 +52,9 @@ export class ClosingsService implements OnModuleInit {
     @InjectRepository(CashClosing) private readonly closings: Repository<CashClosing>,
     @InjectRepository(ClosingExpense) private readonly expenses: Repository<ClosingExpense>,
     @InjectRepository(ClosingExtraLine) private readonly extras: Repository<ClosingExtraLine>,
+    @InjectRepository(ShopClosingSource) private readonly sources: Repository<ShopClosingSource>,
+    @InjectRepository(ClosingSourceAmount)
+    private readonly sourceAmounts: Repository<ClosingSourceAmount>,
     @InjectRepository(User) private readonly users: Repository<User>,
     @InjectRepository(Employee) private readonly employees: Repository<Employee>,
     @InjectRepository(UserShop) private readonly userShops: Repository<UserShop>,
@@ -226,17 +231,39 @@ export class ClosingsService implements OnModuleInit {
       evidenceUrl: c.evidenceUrl, status: c.status, createdByUserId: c.createdByUserId, submittedAt: c.submittedAt,
       expenses: (c.expenses ?? []).map((e) => ({ id: e.id, label: e.label, amount: n(e.amount), category: e.category })),
       extraLines: (c.extraLines ?? []).map((e) => ({ id: e.id, type: e.type, label: e.label, amount: n(e.amount), meta: e.meta })),
+      sourceAmounts: (c.sourceAmounts ?? []).map((s) => ({
+        id: s.id,
+        sourceId: s.sourceId,
+        name: s.name,
+        includeInDeclared: !!s.includeInDeclared,
+        kind: s.kind,
+        accountId: s.accountId ?? null,
+        amount: n(s.amount),
+      })),
     };
   }
 
   private async syncMovements(closingId: string) {
     const full = await this.closings.findOne({
       where: { id: closingId },
-      relations: ['expenses', 'extraLines'],
+      relations: ['expenses', 'extraLines', 'sourceAmounts'],
     });
     if (!full) return;
     await this.closingMovements.syncFromClosing(full);
     await this.cashWithdrawals.syncFromClosing(full);
+  }
+
+  private async declaredFromSources(shopId: string, dto: Partial<CreateClosingDto>): Promise<number> {
+    const rows = dto.sourceAmounts ?? [];
+    if (!rows.length) return 0;
+    const sources = await this.sources.find({ where: { shopId } });
+    const byId = new Map(sources.map((s) => [s.id, s]));
+    let extra = 0;
+    for (const row of rows) {
+      const src = byId.get(row.sourceId);
+      if (src?.includeInDeclared) extra += n(row.amount);
+    }
+    return extra;
   }
 
   async list(user: AuthUser, shopId: string, filters: ClosingListFilters = {}) {
@@ -247,14 +274,21 @@ export class ClosingsService implements OnModuleInit {
   async queryFiltered(shopId: string, filters: ClosingListFilters, withRelations = false): Promise<CashClosing[]> {
     const qb = this.closings.createQueryBuilder('c').where('c.shopId = :shopId', { shopId }).andWhere('c.active = true');
     applyClosingFilters(qb, 'c', filters);
-    if (withRelations) qb.leftJoinAndSelect('c.expenses', 'expenses').leftJoinAndSelect('c.extraLines', 'extraLines');
+    if (withRelations) {
+      qb.leftJoinAndSelect('c.expenses', 'expenses')
+        .leftJoinAndSelect('c.extraLines', 'extraLines')
+        .leftJoinAndSelect('c.sourceAmounts', 'sourceAmounts');
+    }
     qb.orderBy('c.businessDate', 'DESC');
     return qb.getMany();
   }
 
   async getOne(user: AuthUser, shopId: string, id: string) {
     this.shops.assertShopAccess(user, shopId);
-    const row = await this.closings.findOne({ where: { id, shopId }, relations: ['expenses', 'extraLines'] });
+    const row = await this.closings.findOne({
+      where: { id, shopId },
+      relations: ['expenses', 'extraLines', 'sourceAmounts'],
+    });
     if (!row) throw new NotFoundException('Cierre no encontrado');
     return this.toDto(row);
   }
@@ -269,7 +303,8 @@ export class ClosingsService implements OnModuleInit {
     const incomeExtras = (normalized.extraLines ?? [])
       .filter((e) => e.type === ExtraLineType.STUDENT_CASH || e.type === ExtraLineType.ADJUSTMENT)
       .reduce((s, e) => s + n(e.amount), 0);
-    const totals = this.calc(normalized, incomeExtras);
+    const sourceDeclared = await this.declaredFromSources(shopId, normalized);
+    const totals = this.calc(normalized, incomeExtras + sourceDeclared);
     const withdrawn = await this.resolveWithdrawnBy(
       shopId,
       normalized.cashWithdrawnByUserId,
@@ -304,7 +339,7 @@ export class ClosingsService implements OnModuleInit {
       evidenceUrl: normalized.evidenceUrl ?? null,
       status: ClosingStatus.SUBMITTED, createdByUserId: user.id, submittedAt: new Date(), active: true,
     }));
-    await this.replaceChildren(closing.id, normalized as CreateClosingDto);
+    await this.replaceChildren(closing.id, normalized as CreateClosingDto, shopId);
     await this.syncMovements(closing.id);
     await this.syncTipsFromClosing(user, shopId, closing.id, normalized as CreateClosingDto);
     const created = await this.getOne(user, shopId, closing.id);
@@ -318,7 +353,10 @@ export class ClosingsService implements OnModuleInit {
 
   async update(user: AuthUser, shopId: string, id: string, dto: UpdateClosingDto) {
     this.shops.assertShopAccess(user, shopId);
-    const row = await this.closings.findOne({ where: { id, shopId }, relations: ['expenses', 'extraLines'] });
+    const row = await this.closings.findOne({
+      where: { id, shopId },
+      relations: ['expenses', 'extraLines', 'sourceAmounts'],
+    });
     if (!row) throw new NotFoundException('Cierre no encontrado');
     if (row.status === ClosingStatus.LOCKED && !isGlobalAdmin(user.globalRole as GlobalRole)) {
       throw new BadRequestException('El cierre está bloqueado');
@@ -355,7 +393,7 @@ export class ClosingsService implements OnModuleInit {
       tipsAmount: dto.tipsAmount ?? n(row.tipsAmount), declaredTotal: dto.declaredTotal,
       differenceReason: dto.differenceReason ?? row.differenceReason ?? undefined,
       notes: dto.notes ?? row.notes ?? undefined, evidenceUrl: dto.evidenceUrl ?? row.evidenceUrl ?? undefined,
-      expenses: dto.expenses, extraLines: dto.extraLines,
+      expenses: dto.expenses, extraLines: dto.extraLines, sourceAmounts: dto.sourceAmounts,
     };
     const merged = (
       dto.posnetAmounts !== undefined ? this.applyPosnetSums(mergedRaw) : mergedRaw
@@ -368,7 +406,14 @@ export class ClosingsService implements OnModuleInit {
       .map((e: any) => ({ type: e.type, amount: n(e.amount) }))
       .filter((e) => e.type === ExtraLineType.STUDENT_CASH || e.type === ExtraLineType.ADJUSTMENT)
       .reduce((s, e) => s + e.amount, 0);
-    const totals = this.calc(merged, incomeExtras);
+    const sourceDeclared = await this.declaredFromSources(shopId, {
+      sourceAmounts:
+        merged.sourceAmounts ??
+        row.sourceAmounts
+          ?.filter((s): s is typeof s & { sourceId: string } => !!s.sourceId)
+          .map((s) => ({ sourceId: s.sourceId, amount: n(s.amount) })),
+    });
+    const totals = this.calc(merged, incomeExtras + sourceDeclared);
     const withdrawn = await this.resolveWithdrawnBy(shopId, merged.cashWithdrawnByUserId, merged.cashWithdrawnByName, merged.cashWithdrawnByEmployeeId);
     const cashWithdrawnToAccountId = await this.resolveWithdrawnToAccount(
       shopId,
@@ -399,11 +444,12 @@ export class ClosingsService implements OnModuleInit {
       evidenceUrl: merged.evidenceUrl ?? null, status: row.status,
     });
     await this.closings.save(row);
-    if (dto.expenses || dto.extraLines) {
+    if (dto.expenses || dto.extraLines || dto.sourceAmounts) {
       await this.replaceChildren(row.id, {
         expenses: dto.expenses ?? row.expenses?.map((e) => ({ label: e.label, amount: n(e.amount), category: e.category })),
         extraLines: dto.extraLines ?? row.extraLines?.map((e) => ({ type: e.type, label: e.label, amount: n(e.amount), meta: e.meta ?? undefined })),
-      });
+        sourceAmounts: dto.sourceAmounts,
+      }, shopId);
     }
     await this.syncMovements(row.id);
     await this.syncTipsFromClosing(user, shopId, row.id, merged);
@@ -444,7 +490,10 @@ export class ClosingsService implements OnModuleInit {
 
   async lock(user: AuthUser, shopId: string, id: string) {
     this.shops.assertShopAccess(user, shopId);
-    const row = await this.closings.findOne({ where: { id, shopId }, relations: ['expenses', 'extraLines'] });
+    const row = await this.closings.findOne({
+      where: { id, shopId },
+      relations: ['expenses', 'extraLines', 'sourceAmounts'],
+    });
     if (!row) throw new NotFoundException('Cierre no encontrado');
     row.status = ClosingStatus.LOCKED;
     await this.closings.save(row);
@@ -457,7 +506,10 @@ export class ClosingsService implements OnModuleInit {
       throw new ForbiddenException('Solo un super admin puede desbloquear cierres');
     }
     this.shops.assertShopAccess(user, shopId);
-    const row = await this.closings.findOne({ where: { id, shopId }, relations: ['expenses', 'extraLines'] });
+    const row = await this.closings.findOne({
+      where: { id, shopId },
+      relations: ['expenses', 'extraLines', 'sourceAmounts'],
+    });
     if (!row) throw new NotFoundException('Cierre no encontrado');
     row.status = ClosingStatus.SUBMITTED;
     await this.closings.save(row);
@@ -469,12 +521,21 @@ export class ClosingsService implements OnModuleInit {
       throw new ForbiddenException('Solo un super admin puede eliminar cierres');
     }
     this.shops.assertShopAccess(user, shopId);
-    const row = await this.closings.findOne({ where: { id, shopId }, relations: ['expenses', 'extraLines'] });
+    const row = await this.closings.findOne({
+      where: { id, shopId },
+      relations: ['expenses', 'extraLines', 'sourceAmounts'],
+    });
     if (!row) throw new NotFoundException('Cierre no encontrado');
-    await this.closingMovements.syncFromClosing({ ...row, expenses: [], extraLines: [] } as CashClosing);
+    await this.closingMovements.syncFromClosing({
+      ...row,
+      expenses: [],
+      extraLines: [],
+      sourceAmounts: [],
+    } as CashClosing);
     await this.cashWithdrawals.cancelForClosing(id);
     await this.expenses.delete({ closingId: id });
     await this.extras.delete({ closingId: id });
+    await this.sourceAmounts.delete({ closingId: id });
     row.businessDateKey = markDeletedUnique(
       row.businessDateKey || closingDateKey(row.businessDate),
       row.id,
@@ -488,7 +549,12 @@ export class ClosingsService implements OnModuleInit {
 
   private async replaceChildren(
     closingId: string,
-    dto: { expenses?: CreateClosingDto['expenses']; extraLines?: CreateClosingDto['extraLines'] },
+    dto: {
+      expenses?: CreateClosingDto['expenses'];
+      extraLines?: CreateClosingDto['extraLines'];
+      sourceAmounts?: CreateClosingDto['sourceAmounts'];
+    },
+    shopId: string,
   ) {
     if (dto.expenses) {
       await this.expenses.delete({ closingId });
@@ -505,6 +571,27 @@ export class ClosingsService implements OnModuleInit {
           closingId, type: e.type, label: e.label, amount: money(n(e.amount)), meta: e.meta ?? null,
         })));
       }
+    }
+    if (dto.sourceAmounts) {
+      await this.sourceAmounts.delete({ closingId });
+      const defs = await this.sources.find({ where: { shopId } });
+      const byId = new Map(defs.map((s) => [s.id, s]));
+      const rows = dto.sourceAmounts
+        .map((row) => {
+          const src = byId.get(row.sourceId);
+          if (!src) return null;
+          return this.sourceAmounts.create({
+            closingId,
+            sourceId: src.id,
+            name: src.name,
+            includeInDeclared: !!src.includeInDeclared,
+            kind: src.kind,
+            accountId: src.accountId ?? null,
+            amount: money(n(row.amount)),
+          });
+        })
+        .filter((r): r is NonNullable<typeof r> => !!r);
+      if (rows.length) await this.sourceAmounts.save(rows);
     }
   }
 

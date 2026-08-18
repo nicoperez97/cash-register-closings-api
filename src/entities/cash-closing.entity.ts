@@ -14,6 +14,7 @@ import { ClosingStatus } from '../common/enums';
 import { ClosingPosnetAmount } from '../common/posnet';
 import { ClosingExpense } from './closing-expense.entity';
 import { ClosingExtraLine } from './closing-extra-line.entity';
+import { ClosingSourceAmount } from './closing-source-amount.entity';
 
 @Entity({ name: 'cash_closings' })
 @Index('IDX_cash_closings_shopId', ['shopId'])
@@ -131,4 +132,7 @@ export class CashClosing extends BaseEntity {
 
   @OneToMany(() => ClosingExtraLine, (e) => e.closing, { cascade: true })
   extraLines?: ClosingExtraLine[];
+
+  @OneToMany(() => ClosingSourceAmount, (e) => e.closing, { cascade: true })
+  sourceAmounts?: ClosingSourceAmount[];
 }

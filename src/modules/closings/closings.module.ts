@@ -4,6 +4,9 @@ import { CashClosing } from '../../entities/cash-closing.entity';
 import { ClosingExpense } from '../../entities/closing-expense.entity';
 import { ClosingExtraLine } from '../../entities/closing-extra-line.entity';
 import { CashPendingWithdrawal } from '../../entities/cash-pending-withdrawal.entity';
+import { ShopClosingSource } from '../../entities/shop-closing-source.entity';
+import { ClosingSourceAmount } from '../../entities/closing-source-amount.entity';
+import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { Employee } from '../../entities/employee.entity';
@@ -15,6 +18,8 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { TipsModule } from '../tips/tips.module';
 import { ClosingsController } from './closings.controller';
 import { ClosingsService } from './closings.service';
+import { ClosingSourcesController } from './closing-sources.controller';
+import { ClosingSourcesService } from './closing-sources.service';
 import { CashWithdrawalsController } from './cash-withdrawals.controller';
 import { CashWithdrawalsService } from './cash-withdrawals.service';
 import { WhatsappImportService } from './whatsapp-import.service';
@@ -27,6 +32,9 @@ import { ExcelImportService } from './excel-import.service';
       ClosingExpense,
       ClosingExtraLine,
       CashPendingWithdrawal,
+      ShopClosingSource,
+      ClosingSourceAmount,
+      LedgerAccount,
       User,
       UserShop,
       Employee,
@@ -38,13 +46,14 @@ import { ExcelImportService } from './excel-import.service';
     NotificationsModule,
     forwardRef(() => TipsModule),
   ],
-  controllers: [ClosingsController, CashWithdrawalsController],
+  controllers: [ClosingsController, CashWithdrawalsController, ClosingSourcesController],
   providers: [
     ClosingsService,
     CashWithdrawalsService,
+    ClosingSourcesService,
     WhatsappImportService,
     ExcelImportService,
   ],
-  exports: [ClosingsService, CashWithdrawalsService],
+  exports: [ClosingsService, CashWithdrawalsService, ClosingSourcesService],
 })
 export class ClosingsModule {}

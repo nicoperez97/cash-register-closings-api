@@ -137,6 +137,18 @@ export enum ExtraLineType {
   OTHER = 'OTHER',
 }
 
+/** Qué hacer con una fuente extra del cierre (Pedidos Ya, delivery, etc.). */
+export enum ClosingSourceKind {
+  /** Se deposita el mismo día en una cuenta del local. */
+  OWN_ACCOUNT = 'OWN_ACCOUNT',
+  /** Queda pendiente: el delivery/app rinde después en efectivo. */
+  SETTLE_CASH = 'SETTLE_CASH',
+  /** Queda pendiente: se deposita después en una cuenta del local. */
+  SETTLE_ACCOUNT = 'SETTLE_ACCOUNT',
+  /** Solo se registra; no genera asiento. */
+  RECORD_ONLY = 'RECORD_ONLY',
+}
+
 export enum LedgerAccountType {
   PARTNER = 'PARTNER',
   CHANNEL = 'CHANNEL',

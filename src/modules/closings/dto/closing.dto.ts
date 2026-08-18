@@ -12,6 +12,7 @@ import {
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import { ClosingStatus, ExpenseCategory, ExtraLineType } from '../../../common/enums';
+import { ClosingSourceAmountDto } from './closing-source.dto';
 import { PosnetType } from '../../../common/posnet';
 
 export class ExpenseDto {
@@ -163,6 +164,16 @@ export class CreateClosingDto {
   @ValidateNested({ each: true })
   @Type(() => ClosingPosnetAmountDto)
   posnetAmounts?: ClosingPosnetAmountDto[] | null;
+
+  @ApiPropertyOptional({
+    type: [ClosingSourceAmountDto],
+    description: 'Montos de fuentes extra del local (Pedidos Ya, delivery, etc.)',
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ClosingSourceAmountDto)
+  sourceAmounts?: ClosingSourceAmountDto[];
 }
 
 export class UpdateClosingDto extends PartialType(CreateClosingDto) {}

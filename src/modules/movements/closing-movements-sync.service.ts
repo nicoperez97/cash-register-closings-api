@@ -5,7 +5,7 @@ import { CashClosing } from '../../entities/cash-closing.entity';
 import { Movement } from '../../entities/movement.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { Concept } from '../../entities/concept.entity';
-import { LinkedPaymentMethod } from '../../common/enums';
+import { LinkedPaymentMethod, ClosingSourceKind } from '../../common/enums';
 import { EXPENSE_CATEGORY_TO_CONCEPT } from '../../common/catalog-seed';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
 
@@ -115,6 +115,27 @@ export class ClosingMovementsSyncService {
     );
     if (n(closing.otherAmount) > 0) {
       pushIncome(LinkedPaymentMethod.OTHER, n(closing.otherAmount), 'Otros ingresos', 'Ingreso');
+    }
+
+    const ingresoAccount = ingreso;
+    for (const src of closing.sourceAmounts ?? []) {
+      const amount = n(src.amount);
+      if (amount <= 0) continue;
+      if (src.kind !== ClosingSourceKind.OWN_ACCOUNT || !src.accountId) continue;
+      const dest = accounts.find((a) => a.id === src.accountId);
+      if (!dest) continue;
+      rows.push({
+        shopId: closing.shopId,
+        businessDate: date,
+        fromAccountId: ingresoAccount.id,
+        toAccountId: dest.id,
+        description: src.name,
+        amountUyu: money(amount),
+        conceptId: findConcept('Cobro') ?? findConcept('Ingreso'),
+        closingId: closing.id,
+        invoiced: false,
+        active: true,
+      });
     }
 
     const cashChannel = byMethod.get(LinkedPaymentMethod.CASH) ?? null;
