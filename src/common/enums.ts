@@ -158,6 +158,8 @@ export enum LedgerAccountType {
   SYSTEM = 'SYSTEM',
   /** Cuenta de proveedor: no aparece en «quién se lo lleva». */
   SUPPLIER = 'SUPPLIER',
+  /** Cuenta de servicio: no aparece en «quién se lo lleva». */
+  SERVICE = 'SERVICE',
 }
 
 export enum ConceptKind {
@@ -213,6 +215,8 @@ export const PERMISSIONS = [
   'payments.manage',
   'suppliers.read',
   'suppliers.manage',
+  'services.read',
+  'services.manage',
   'stock.read',
   'stock.manage',
   'beverageStock.read',
@@ -259,6 +263,8 @@ export const ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     'payments.manage',
     'suppliers.read',
     'suppliers.manage',
+    'services.read',
+    'services.manage',
     'stock.read',
     'stock.manage',
     'beverageStock.read',
@@ -283,6 +289,7 @@ export const ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     'reservations.read',
     'payments.read',
     'suppliers.read',
+    'services.read',
     'stock.read',
     'beverageStock.read',
     'shortages.read',
@@ -295,5 +302,6 @@ export const ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     'movements.read',
     'payments.read',
     'suppliers.read',
+    'services.read',
   ],
 };

@@ -6,6 +6,7 @@ import { LedgerAccount } from './ledger-account.entity';
 import { Movement } from './movement.entity';
 import { Supplier } from './supplier.entity';
 import { Employee } from './employee.entity';
+import { ShopService } from './shop-service.entity';
 import { PaymentMethod, PaymentPriority, PaymentStatus } from '../common/enums';
 
 @Entity({ name: 'payments' })
@@ -49,6 +50,9 @@ export class Payment extends BaseEntity {
 
   @Column({ type: 'varchar', nullable: true })
   employeeId?: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  serviceId?: string | null;
 
   @Column({
     type: 'enum',
@@ -144,6 +148,10 @@ export class Payment extends BaseEntity {
   @ManyToOne(() => Employee, { nullable: true })
   @JoinColumn({ name: 'employeeId' })
   employee?: Employee | null;
+
+  @ManyToOne(() => ShopService, { nullable: true })
+  @JoinColumn({ name: 'serviceId' })
+  service?: ShopService | null;
 
   @ManyToOne(() => Movement, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'movementId' })

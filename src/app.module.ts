@@ -21,6 +21,7 @@ import { SalesSystemsModule } from './modules/sales-systems/sales-systems.module
 import { ReservationsModule } from './modules/reservations/reservations.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 import { SuppliersModule } from './modules/suppliers/suppliers.module';
+import { ServicesModule } from './modules/services/services.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { StockModule } from './modules/stock/stock.module';
 import { ShortagesModule } from './modules/shortages/shortages.module';
@@ -56,6 +57,7 @@ import { PublicAbuseGuard } from './common/public-abuse.guard';
     NotificationsModule,
     PaymentsModule,
     SuppliersModule,
+    ServicesModule,
     StockModule,
     ShortagesModule,
     TipsModule,

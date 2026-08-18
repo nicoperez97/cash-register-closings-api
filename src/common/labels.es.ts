@@ -55,6 +55,7 @@ export function accountTypeLabel(type?: string | null): string {
     CHANNEL: 'Canal',
     SYSTEM: 'Sistema',
     SUPPLIER: 'Proveedor',
+    SERVICE: 'Servicio',
   };
   return map[type ?? ''] ?? type ?? '';
 }

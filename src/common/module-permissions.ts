@@ -16,6 +16,7 @@ export type ModuleKey =
   | 'waitingList'
   | 'payments'
   | 'suppliers'
+  | 'services'
   | 'stock'
   | 'beverageStock'
   | 'shortages'
@@ -167,6 +168,15 @@ export const MODULE_DEFS: ModuleDef[] = [
     ],
   },
   {
+    key: 'services',
+    label: 'Servicios',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
     key: 'stock',
     label: 'Stock alimentos',
     levels: [
@@ -288,6 +298,7 @@ export function expandModulePermissions(
   pair('waitingList', 'waitingList.read', 'waitingList.manage');
   pair('payments', 'payments.read', 'payments.manage');
   pair('suppliers', 'suppliers.read', 'suppliers.manage');
+  pair('services', 'services.read', 'services.manage');
   pair('stock', 'stock.read', 'stock.manage');
   pair('beverageStock', 'beverageStock.read', 'beverageStock.manage');
   pair('shortages', 'shortages.read', 'shortages.manage');
@@ -303,8 +314,10 @@ export function expandModulePermissions(
       break;
   }
   // Quien gestiona pagos puede elegir / crear proveedores en el formulario.
-  if (modules.payments === 'manage') add(set, 'suppliers.read', 'suppliers.manage');
-  if (modules.payments === 'read') add(set, 'suppliers.read');
+  if (modules.payments === 'manage') {
+    add(set, 'suppliers.read', 'suppliers.manage', 'services.read', 'services.manage');
+  }
+  if (modules.payments === 'read') add(set, 'suppliers.read', 'services.read');
 
   if (modules.accounts === 'manage') add(set, 'accounts.manage', 'movements.read');
   if (modules.concepts === 'manage') add(set, 'concepts.manage', 'movements.read');
@@ -361,6 +374,7 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
     waitingList: level('waitingList.read', 'waitingList.manage'),
     payments: level('payments.read', 'payments.manage'),
     suppliers: level('suppliers.read', 'suppliers.manage'),
+    services: level('services.read', 'services.manage'),
     stock: level('stock.read', 'stock.manage'),
     beverageStock: level('beverageStock.read', 'beverageStock.manage'),
     shortages: level('shortages.read', 'shortages.manage'),

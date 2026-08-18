@@ -16,6 +16,7 @@ import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { Supplier } from '../../entities/supplier.entity';
 import { Employee } from '../../entities/employee.entity';
+import { ShopService } from '../../entities/shop-service.entity';
 import { AuthUser } from '../../common/decorators';
 import { GlobalRole, NotificationType, PaymentMethod, PaymentPriority, PaymentStatus } from '../../common/enums';
 import { ShopsService } from '../shops/shops.service';
@@ -48,6 +49,7 @@ export interface UpsertPaymentDto {
   paymentMethod?: PaymentMethod | string | null;
   supplierId?: string | null;
   employeeId?: string | null;
+  serviceId?: string | null;
   invoiceLegalName?: string | null;
   invoiceTaxId?: string | null;
   invoiceType?: string | null;
@@ -68,6 +70,7 @@ export class PaymentsService implements OnModuleInit {
     @InjectRepository(UserShop) private readonly userShops: Repository<UserShop>,
     @InjectRepository(Supplier) private readonly suppliers: Repository<Supplier>,
     @InjectRepository(Employee) private readonly employees: Repository<Employee>,
+    @InjectRepository(ShopService) private readonly shopServices: Repository<ShopService>,
     private readonly shops: ShopsService,
     private readonly notifications: NotificationsService,
     private readonly movements: MovementsService,
@@ -117,6 +120,7 @@ export class PaymentsService implements OnModuleInit {
       `ALTER TABLE payments MODIFY COLUMN accountId CHAR(36) NULL`,
       `ALTER TABLE payments ADD COLUMN supplierId CHAR(36) NULL`,
       `ALTER TABLE payments ADD COLUMN employeeId CHAR(36) NULL`,
+      `ALTER TABLE payments ADD COLUMN serviceId CHAR(36) NULL`,
       `ALTER TABLE payments ADD COLUMN invoiceLegalName VARCHAR(200) NULL`,
       `ALTER TABLE payments ADD COLUMN invoiceTaxId VARCHAR(20) NULL`,
       `ALTER TABLE payments ADD COLUMN invoiceType VARCHAR(10) NULL`,
@@ -171,7 +175,7 @@ export class PaymentsService implements OnModuleInit {
   private async load(shopId: string, id: string) {
     const row = await this.payments.findOne({
       where: { id, shopId, active: true },
-      relations: ['payer', 'validator', 'account', 'supplier', 'employee', 'createdBy'],
+      relations: ['payer', 'validator', 'account', 'supplier', 'employee', 'service', 'createdBy'],
     });
     if (!row) throw new NotFoundException('Pago no encontrado');
     return row;
@@ -204,6 +208,11 @@ export class PaymentsService implements OnModuleInit {
       supplierTaxId: p.supplier?.taxId ?? null,
       employeeId: p.employeeId ?? null,
       employeeName: p.employee?.fullName ?? null,
+      serviceId: p.serviceId ?? null,
+      serviceName: p.service?.name ?? null,
+      serviceBankAlias: p.service?.bankAlias ?? null,
+      serviceLegalName: p.service?.legalName ?? null,
+      serviceTaxId: p.service?.taxId ?? null,
       status: p.status,
       paidAt: p.paidAt ?? null,
       validatedAt: p.validatedAt ?? null,
@@ -295,6 +304,31 @@ export class PaymentsService implements OnModuleInit {
     if (changed) await this.suppliers.save(supplier);
   }
 
+  private async syncServiceBilling(
+    shopId: string,
+    serviceId: string | null | undefined,
+    legalName?: string | null,
+    taxId?: string | null,
+  ) {
+    if (!serviceId) return;
+    const service = await this.shopServices.findOne({
+      where: { id: serviceId, shopId, active: true },
+    });
+    if (!service) return;
+    let changed = false;
+    const nextLegal = (legalName ?? '').trim() || null;
+    const nextTax = (taxId ?? '').trim() || null;
+    if (nextLegal && nextLegal !== (service.legalName ?? null)) {
+      service.legalName = nextLegal;
+      changed = true;
+    }
+    if (nextTax && nextTax !== (service.taxId ?? null)) {
+      service.taxId = nextTax;
+      changed = true;
+    }
+    if (changed) await this.shopServices.save(service);
+  }
+
   private async assertShopUser(shopId: string, userId: string, label: string) {
     const link = await this.userShops.findOne({ where: { shopId, userId } });
     if (!link) throw new BadRequestException(`${label} no pertenece al local`);
@@ -330,6 +364,27 @@ export class PaymentsService implements OnModuleInit {
     return row;
   }
 
+  private async assertService(shopId: string, serviceId: string) {
+    const row = await this.shopServices.findOne({
+      where: { id: serviceId, shopId, active: true },
+    });
+    if (!row) throw new BadRequestException('Servicio inválido');
+    return row;
+  }
+
+  private assertExclusiveParties(
+    supplierId: string | null,
+    employeeId: string | null,
+    serviceId: string | null,
+  ) {
+    const n = [supplierId, employeeId, serviceId].filter(Boolean).length;
+    if (n > 1) {
+      throw new BadRequestException(
+        'Un pago no puede tener proveedor, empleado y servicio a la vez',
+      );
+    }
+  }
+
   private emptyToNull(v?: string | null) {
     if (v === undefined) return undefined;
     if (v === null || v === '') return null;
@@ -353,6 +408,7 @@ export class PaymentsService implements OnModuleInit {
     return [
       `Pago: ${this.displayTitle(p)}`,
       p.supplier?.name ? `Proveedor: ${p.supplier.name}` : null,
+      p.service?.name ? `Servicio: ${p.service.name}` : null,
       p.employee?.fullName ? `Empleado: ${p.employee.fullName}` : null,
     ]
       .filter(Boolean)
@@ -451,6 +507,7 @@ export class PaymentsService implements OnModuleInit {
       paidTo?: string;
       supplierId?: string;
       employeeId?: string;
+      serviceId?: string;
       amountMin?: string | number;
       amountMax?: string | number;
     },
@@ -463,6 +520,7 @@ export class PaymentsService implements OnModuleInit {
       .leftJoinAndSelect('p.account', 'account')
       .leftJoinAndSelect('p.supplier', 'supplier')
       .leftJoinAndSelect('p.employee', 'employee')
+      .leftJoinAndSelect('p.service', 'service')
       .leftJoinAndSelect('p.createdBy', 'createdBy')
       .where('p.shopId = :shopId', { shopId })
       .andWhere('p.active = true');
@@ -521,6 +579,12 @@ export class PaymentsService implements OnModuleInit {
     } else if (employeeIds.length > 1) {
       qb.andWhere('p.employeeId IN (:...employeeIds)', { employeeIds });
     }
+    const serviceIds = this.parseCsv(opts?.serviceId);
+    if (serviceIds.length === 1) {
+      qb.andWhere('p.serviceId = :serviceId', { serviceId: serviceIds[0] });
+    } else if (serviceIds.length > 1) {
+      qb.andWhere('p.serviceId IN (:...serviceIds)', { serviceIds });
+    }
     const amountMin =
       opts?.amountMin !== undefined && opts?.amountMin !== null && opts?.amountMin !== ''
         ? Number(opts.amountMin)
@@ -560,6 +624,7 @@ export class PaymentsService implements OnModuleInit {
       paidTo?: string;
       supplierId?: string;
       employeeId?: string;
+      serviceId?: string;
       amountMin?: string | number;
       amountMax?: string | number;
     },
@@ -578,13 +643,17 @@ export class PaymentsService implements OnModuleInit {
       paidTo: opts?.paidTo,
       supplierId: opts?.supplierId,
       employeeId: opts?.employeeId,
+      serviceId: opts?.serviceId,
       amountMin: opts?.amountMin,
       amountMax: opts?.amountMax,
     });
     const kindNorm =
-      opts?.kind === 'employee' || opts?.kind === 'supplier' ? opts.kind : undefined;
+      opts?.kind === 'employee' || opts?.kind === 'supplier' || opts?.kind === 'service'
+        ? opts.kind
+        : undefined;
     if (kindNorm === 'supplier') rows = rows.filter((r) => !!r.supplierId);
-    if (kindNorm === 'employee') rows = rows.filter((r) => !r.supplierId);
+    if (kindNorm === 'service') rows = rows.filter((r) => !!r.serviceId);
+    if (kindNorm === 'employee') rows = rows.filter((r) => !r.supplierId && !r.serviceId);
 
     const statusLabel = (s: string) =>
       (
@@ -604,9 +673,11 @@ export class PaymentsService implements OnModuleInit {
     const kindLabel =
       kindNorm === 'supplier'
         ? 'Proveedores'
-        : kindNorm === 'employee'
-          ? 'Empleados'
-          : 'Todos';
+        : kindNorm === 'service'
+          ? 'Servicios'
+          : kindNorm === 'employee'
+            ? 'Empleados'
+            : 'Todos';
 
     const info = wb.addWorksheet('Resumen');
     info.getColumn(1).width = 48;
@@ -641,6 +712,7 @@ export class PaymentsService implements OnModuleInit {
       ]);
     }
     if (opts?.supplierId) info.addRow([`Filtro proveedor: ${opts.supplierId}`]);
+    if (opts?.serviceId) info.addRow([`Filtro servicio: ${opts.serviceId}`]);
     if (opts?.employeeId) info.addRow([`Filtro empleado: ${opts.employeeId}`]);
     if (opts?.amountMin != null && opts?.amountMin !== '') {
       info.addRow([`Monto desde: ${opts.amountMin}`]);
@@ -658,6 +730,7 @@ export class PaymentsService implements OnModuleInit {
       { header: 'Vence', key: 'dueDate', width: 12 },
       { header: 'Pagado', key: 'paidAt', width: 12 },
       { header: 'Proveedor', key: 'supplier', width: 22 },
+      { header: 'Servicio', key: 'service', width: 22 },
       { header: 'Empleado', key: 'employee', width: 22 },
       { header: 'Quién paga', key: 'payer', width: 20 },
       { header: 'Quién valida', key: 'validator', width: 20 },
@@ -699,6 +772,7 @@ export class PaymentsService implements OnModuleInit {
         dueDate: r.dueDate || '',
         paidAt: r.paidAt || '',
         supplier: r.supplierName || '',
+        service: r.serviceName || '',
         employee: r.employeeName || '',
         payer: r.payerName || '',
         validator: r.validatorName || '',
@@ -718,9 +792,11 @@ export class PaymentsService implements OnModuleInit {
     const kindSlug =
       kindNorm === 'supplier'
         ? 'proveedores'
-        : kindNorm === 'employee'
-          ? 'empleados'
-          : 'todos';
+        : kindNorm === 'service'
+          ? 'servicios'
+          : kindNorm === 'employee'
+            ? 'empleados'
+            : 'todos';
     return {
       buffer,
       filename: `pagos-${kindSlug}-${slug}-${stamp}.xlsx`,
@@ -757,6 +833,7 @@ export class PaymentsService implements OnModuleInit {
         : this.parsePaymentMethod(dto.paymentMethod as string | null);
     let supplierId = this.emptyToNull(dto.supplierId) ?? null;
     let employeeId = this.emptyToNull(dto.employeeId) ?? null;
+    let serviceId = this.emptyToNull(dto.serviceId) ?? null;
     const dueDate = this.emptyToNull(dto.dueDate) ?? null;
     const amount =
       dto.amount === undefined || dto.amount === null || dto.amount === ('' as any)
@@ -766,14 +843,13 @@ export class PaymentsService implements OnModuleInit {
     if (amount !== null && amount < 0) {
       throw new BadRequestException('El monto no puede ser negativo');
     }
-    if (supplierId && employeeId) {
-      throw new BadRequestException('Un pago no puede tener proveedor y empleado a la vez');
-    }
+    this.assertExclusiveParties(supplierId, employeeId, serviceId);
     if (payerUserId) await this.assertShopUser(shopId, payerUserId, 'Quién paga');
     if (validatorUserId) await this.assertShopUser(shopId, validatorUserId, 'Quién valida');
     if (accountId) await this.assertAccount(shopId, accountId);
     if (supplierId) await this.assertSupplier(shopId, supplierId);
     if (employeeId) await this.assertEmployee(shopId, employeeId);
+    if (serviceId) await this.assertService(shopId, serviceId);
 
     const requestedStatus = this.parseCreatedStatus(dto.status);
     if (requestedStatus === PaymentStatus.PAID) {
@@ -805,6 +881,7 @@ export class PaymentsService implements OnModuleInit {
         paymentMethod,
         supplierId,
         employeeId,
+        serviceId,
         invoiceLegalName: this.emptyToNull(dto.invoiceLegalName)?.trim() || null,
         invoiceTaxId: this.emptyToNull(dto.invoiceTaxId)?.trim() || null,
         invoiceType: this.emptyToNull(dto.invoiceType)?.trim() || null,
@@ -822,6 +899,12 @@ export class PaymentsService implements OnModuleInit {
     await this.syncSupplierBilling(
       shopId,
       supplierId,
+      row.invoiceLegalName,
+      row.invoiceTaxId,
+    );
+    await this.syncServiceBilling(
+      shopId,
+      serviceId,
       row.invoiceLegalName,
       row.invoiceTaxId,
     );
@@ -972,13 +1055,16 @@ export class PaymentsService implements OnModuleInit {
 
     let nextSupplierId = row.supplierId ?? null;
     let nextEmployeeId = row.employeeId ?? null;
+    let nextServiceId = row.serviceId ?? null;
     if (dto.supplierId !== undefined) {
       nextSupplierId = this.emptyToNull(dto.supplierId) ?? null;
       if (nextSupplierId) await this.assertSupplier(shopId, nextSupplierId);
       patch.supplierId = nextSupplierId;
       if (nextSupplierId) {
         nextEmployeeId = null;
+        nextServiceId = null;
         patch.employeeId = null;
+        patch.serviceId = null;
       }
     }
     if (dto.employeeId !== undefined) {
@@ -987,12 +1073,23 @@ export class PaymentsService implements OnModuleInit {
       patch.employeeId = nextEmployeeId;
       if (nextEmployeeId) {
         nextSupplierId = null;
+        nextServiceId = null;
         patch.supplierId = null;
+        patch.serviceId = null;
       }
     }
-    if (nextSupplierId && nextEmployeeId) {
-      throw new BadRequestException('Un pago no puede tener proveedor y empleado a la vez');
+    if (dto.serviceId !== undefined) {
+      nextServiceId = this.emptyToNull(dto.serviceId) ?? null;
+      if (nextServiceId) await this.assertService(shopId, nextServiceId);
+      patch.serviceId = nextServiceId;
+      if (nextServiceId) {
+        nextSupplierId = null;
+        nextEmployeeId = null;
+        patch.supplierId = null;
+        patch.employeeId = null;
+      }
     }
+    this.assertExclusiveParties(nextSupplierId, nextEmployeeId, nextServiceId);
 
     if (dto.invoiceLegalName !== undefined) {
       patch.invoiceLegalName = this.emptyToNull(dto.invoiceLegalName)?.trim() || null;
@@ -1039,6 +1136,14 @@ export class PaymentsService implements OnModuleInit {
       patch.invoiceLegalName !== undefined ? patch.invoiceLegalName : row.invoiceLegalName,
       patch.invoiceTaxId !== undefined ? patch.invoiceTaxId : row.invoiceTaxId,
     );
+    const billingServiceId =
+      patch.serviceId !== undefined ? nextServiceId : row.serviceId;
+    await this.syncServiceBilling(
+      shopId,
+      billingServiceId,
+      patch.invoiceLegalName !== undefined ? patch.invoiceLegalName : row.invoiceLegalName,
+      patch.invoiceTaxId !== undefined ? patch.invoiceTaxId : row.invoiceTaxId,
+    );
 
     let loaded = await this.load(shopId, id);
 
@@ -1050,6 +1155,7 @@ export class PaymentsService implements OnModuleInit {
         patch.paidAt !== undefined ||
         patch.title !== undefined ||
         patch.supplierId !== undefined ||
+        patch.serviceId !== undefined ||
         patch.employeeId !== undefined ||
         patch.payerUserId !== undefined);
     if (movementFieldsChanged) {
@@ -1193,6 +1299,7 @@ export class PaymentsService implements OnModuleInit {
         description: [
           `Pago: ${this.displayTitle(row)}`,
           row.supplier?.name ? `Proveedor: ${row.supplier.name}` : null,
+          row.service?.name ? `Servicio: ${row.service.name}` : null,
           row.employee?.fullName ? `Empleado: ${row.employee.fullName}` : null,
         ]
           .filter(Boolean)
@@ -1511,6 +1618,12 @@ export class PaymentsService implements OnModuleInit {
     await this.syncSupplierBilling(
       shopId,
       row.supplierId,
+      patch.invoiceLegalName ?? row.invoiceLegalName,
+      patch.invoiceTaxId ?? row.invoiceTaxId,
+    );
+    await this.syncServiceBilling(
+      shopId,
+      row.serviceId,
       patch.invoiceLegalName ?? row.invoiceLegalName,
       patch.invoiceTaxId ?? row.invoiceTaxId,
     );

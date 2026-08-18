@@ -75,7 +75,7 @@ export class AccountsService implements OnModuleInit {
     try {
       await this.accounts.query(`
         ALTER TABLE ledger_accounts
-          MODIFY COLUMN type ENUM('PARTNER', 'CHANNEL', 'SYSTEM', 'SUPPLIER')
+          MODIFY COLUMN type ENUM('PARTNER', 'CHANNEL', 'SYSTEM', 'SUPPLIER', 'SERVICE')
           NOT NULL DEFAULT 'PARTNER'
       `);
     } catch {
@@ -164,7 +164,7 @@ export class AccountsService implements OnModuleInit {
         type: dto.type ?? LedgerAccountType.PARTNER,
         linkedPaymentMethod,
         hideFromCashWithdraw:
-          dto.type === LedgerAccountType.SUPPLIER
+          dto.type === LedgerAccountType.SUPPLIER || dto.type === LedgerAccountType.SERVICE
             ? true
             : !!dto.hideFromCashWithdraw,
         active: dto.active ?? true,
@@ -199,7 +199,7 @@ export class AccountsService implements OnModuleInit {
     if (dto.hideFromCashWithdraw !== undefined) {
       row.hideFromCashWithdraw = !!dto.hideFromCashWithdraw;
     }
-    if (row.type === LedgerAccountType.SUPPLIER) {
+    if (row.type === LedgerAccountType.SUPPLIER || row.type === LedgerAccountType.SERVICE) {
       row.hideFromCashWithdraw = true;
     }
     if (dto.active !== undefined) row.active = dto.active;

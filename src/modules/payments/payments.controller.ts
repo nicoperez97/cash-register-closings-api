@@ -108,6 +108,11 @@ class CreatePaymentDto {
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
   @IsUUID()
   employeeId?: string | null;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  serviceId?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsString() invoiceLegalName?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsString() invoiceTaxId?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsString() invoiceType?: string | null;
@@ -192,6 +197,11 @@ class UpdatePaymentDto {
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
   @IsUUID()
   employeeId?: string | null;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  serviceId?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsString() invoiceLegalName?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsString() invoiceTaxId?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsString() invoiceType?: string | null;
@@ -264,6 +274,7 @@ export class PaymentsController {
     @Query('paidTo') paidTo?: string,
     @Query('supplierId') supplierId?: string,
     @Query('employeeId') employeeId?: string,
+    @Query('serviceId') serviceId?: string,
     @Query('amountMin') amountMin?: string,
     @Query('amountMax') amountMax?: string,
   ) {
@@ -280,6 +291,7 @@ export class PaymentsController {
       paidTo,
       supplierId,
       employeeId,
+      serviceId,
       amountMin,
       amountMax,
     });
@@ -301,6 +313,7 @@ export class PaymentsController {
     @Query('paidTo') paidTo: string | undefined,
     @Query('supplierId') supplierId: string | undefined,
     @Query('employeeId') employeeId: string | undefined,
+    @Query('serviceId') serviceId: string | undefined,
     @Query('amountMin') amountMin: string | undefined,
     @Query('amountMax') amountMax: string | undefined,
     @Res() res: Response,
@@ -319,6 +332,7 @@ export class PaymentsController {
       paidTo,
       supplierId,
       employeeId,
+      serviceId,
       amountMin,
       amountMax,
     });

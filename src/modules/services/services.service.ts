@@ -6,17 +6,20 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Supplier } from '../../entities/supplier.entity';
+import { ShopService } from '../../entities/shop-service.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { AuthUser } from '../../common/decorators';
 import { LedgerAccountType } from '../../common/enums';
 import { isEntityActive } from '../../common/active.util';
 import { ShopsService } from '../shops/shops.service';
 
+const LEDGER_TYPE_ENUM =
+  "ENUM('PARTNER', 'CHANNEL', 'SYSTEM', 'SUPPLIER', 'SERVICE')";
+
 @Injectable()
-export class SuppliersService implements OnModuleInit {
+export class ServicesService implements OnModuleInit {
   constructor(
-    @InjectRepository(Supplier) private readonly suppliers: Repository<Supplier>,
+    @InjectRepository(ShopService) private readonly services: Repository<ShopService>,
     @InjectRepository(LedgerAccount)
     private readonly accounts: Repository<LedgerAccount>,
     private readonly shops: ShopsService,
@@ -24,20 +27,22 @@ export class SuppliersService implements OnModuleInit {
 
   async onModuleInit() {
     try {
-      await this.suppliers.query(`
+      await this.services.query(`
         ALTER TABLE ledger_accounts
-          MODIFY COLUMN type ENUM('PARTNER', 'CHANNEL', 'SYSTEM', 'SUPPLIER', 'SERVICE')
+          MODIFY COLUMN type ${LEDGER_TYPE_ENUM}
           NOT NULL DEFAULT 'PARTNER'
       `);
     } catch {
       // enum ya actualizado o motor distinto
     }
     try {
-      await this.suppliers.query(`
-        CREATE TABLE IF NOT EXISTS suppliers (
+      await this.services.query(`
+        CREATE TABLE IF NOT EXISTS services (
           id CHAR(36) NOT NULL PRIMARY KEY,
           shopId CHAR(36) NOT NULL,
           name VARCHAR(200) NOT NULL,
+          legalName VARCHAR(200) NULL,
+          taxId VARCHAR(20) NULL,
           bankAlias VARCHAR(100) NULL,
           notes VARCHAR(500) NULL,
           accountId CHAR(36) NOT NULL,
@@ -45,33 +50,27 @@ export class SuppliersService implements OnModuleInit {
           updatedAt DATETIME(6) NULL,
           deletedAt DATETIME(6) NULL,
           active TINYINT(1) NOT NULL DEFAULT 1,
-          INDEX idx_suppliers_shop (shopId),
-          INDEX idx_suppliers_account (accountId)
+          INDEX idx_services_shop (shopId),
+          INDEX idx_services_account (accountId)
         )
       `);
     } catch {
       // ya existe
     }
-    try {
-      await this.suppliers.query(`
-        ALTER TABLE suppliers ADD COLUMN bankAlias VARCHAR(100) NULL
-      `);
-    } catch {
-      // columna ya existe
-    }
     for (const sql of [
-      `ALTER TABLE suppliers ADD COLUMN legalName VARCHAR(200) NULL`,
-      `ALTER TABLE suppliers ADD COLUMN taxId VARCHAR(20) NULL`,
+      `ALTER TABLE services ADD COLUMN legalName VARCHAR(200) NULL`,
+      `ALTER TABLE services ADD COLUMN taxId VARCHAR(20) NULL`,
+      `ALTER TABLE services ADD COLUMN bankAlias VARCHAR(100) NULL`,
     ]) {
       try {
-        await this.suppliers.query(sql);
+        await this.services.query(sql);
       } catch {
         // ya aplicado
       }
     }
   }
 
-  private toDto(s: Supplier) {
+  private toDto(s: ShopService) {
     return {
       id: s.id,
       shopId: s.shopId,
@@ -93,11 +92,11 @@ export class SuppliersService implements OnModuleInit {
       .toUpperCase()
       .replace(/[^A-Z0-9]+/g, '')
       .slice(0, 12);
-    return raw || 'PROV';
+    return raw || 'SERV';
   }
 
-  private async uniqueSupplierCode(shopId: string, name: string): Promise<string> {
-    const base = `PROV-${this.slugCode(name)}`.slice(0, 24);
+  private async uniqueServiceCode(shopId: string, name: string): Promise<string> {
+    const base = `SERV-${this.slugCode(name)}`.slice(0, 24);
     let code = base;
     let n = 1;
     while (await this.accounts.findOne({ where: { shopId, code } })) {
@@ -108,24 +107,22 @@ export class SuppliersService implements OnModuleInit {
 
   async list(user: AuthUser, shopId: string, includeInactive = false) {
     this.shops.assertShopAccess(user, shopId);
-    const rows = await this.suppliers.find({
+    const rows = await this.services.find({
       where: { shopId },
       relations: ['account'],
       order: { name: 'ASC' },
     });
-    const filtered = includeInactive
-      ? rows
-      : rows.filter((r) => isEntityActive(r.active));
+    const filtered = includeInactive ? rows : rows.filter((r) => isEntityActive(r.active));
     return filtered.map((r) => this.toDto(r));
   }
 
   async one(user: AuthUser, shopId: string, id: string) {
     this.shops.assertShopAccess(user, shopId);
-    const row = await this.suppliers.findOne({
+    const row = await this.services.findOne({
       where: { id, shopId },
       relations: ['account'],
     });
-    if (!row) throw new NotFoundException('Proveedor no encontrado');
+    if (!row) throw new NotFoundException('Servicio no encontrado');
     return this.toDto(row);
   }
 
@@ -143,22 +140,22 @@ export class SuppliersService implements OnModuleInit {
   ) {
     this.shops.assertShopAccess(user, shopId);
     const name = (dto.name ?? '').trim();
-    if (!name) throw new BadRequestException('Ingresá el nombre del proveedor');
+    if (!name) throw new BadRequestException('Ingresá el nombre del servicio');
 
-    const code = await this.uniqueSupplierCode(shopId, name);
+    const code = await this.uniqueServiceCode(shopId, name);
     const account = await this.accounts.save(
       this.accounts.create({
         shopId,
-        name: `Proveedor: ${name}`,
+        name: `Servicio: ${name}`,
         code,
-        type: LedgerAccountType.SUPPLIER,
+        type: LedgerAccountType.SERVICE,
         hideFromCashWithdraw: true,
         active: true,
       }),
     );
 
-    const row = await this.suppliers.save(
-      this.suppliers.create({
+    const row = await this.services.save(
+      this.services.create({
         shopId,
         name,
         legalName: dto.legalName?.trim() || null,
@@ -187,16 +184,16 @@ export class SuppliersService implements OnModuleInit {
     },
   ) {
     this.shops.assertShopAccess(user, shopId);
-    const row = await this.suppliers.findOne({ where: { id, shopId } });
-    if (!row) throw new NotFoundException('Proveedor no encontrado');
+    const row = await this.services.findOne({ where: { id, shopId } });
+    if (!row) throw new NotFoundException('Servicio no encontrado');
 
     if (dto.name !== undefined) {
       const name = dto.name.trim();
-      if (!name) throw new BadRequestException('Ingresá el nombre del proveedor');
+      if (!name) throw new BadRequestException('Ingresá el nombre del servicio');
       row.name = name;
       const account = await this.accounts.findOne({ where: { id: row.accountId, shopId } });
       if (account) {
-        account.name = `Proveedor: ${name}`;
+        account.name = `Servicio: ${name}`;
         await this.accounts.save(account);
       }
     }
@@ -212,16 +209,16 @@ export class SuppliersService implements OnModuleInit {
         await this.accounts.save(account);
       }
     }
-    await this.suppliers.save(row);
+    await this.services.save(row);
     return this.one(user, shopId, id);
   }
 
   async remove(user: AuthUser, shopId: string, id: string) {
     this.shops.assertShopAccess(user, shopId);
-    const row = await this.suppliers.findOne({ where: { id, shopId } });
-    if (!row) throw new NotFoundException('Proveedor no encontrado');
+    const row = await this.services.findOne({ where: { id, shopId } });
+    if (!row) throw new NotFoundException('Servicio no encontrado');
     row.active = false;
-    await this.suppliers.save(row);
+    await this.services.save(row);
     const account = await this.accounts.findOne({ where: { id: row.accountId, shopId } });
     if (account) {
       account.active = false;
