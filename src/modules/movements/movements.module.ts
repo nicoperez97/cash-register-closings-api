@@ -10,6 +10,7 @@ import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { AccountsModule } from '../accounts/accounts.module';
 import { ShopsModule } from '../shops/shops.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { MovementsController } from './movements.controller';
 import { MovementsService } from './movements.service';
 import { ClosingMovementsSyncService } from './closing-movements-sync.service';
@@ -29,6 +30,7 @@ import { MovementsExcelImportService } from './movements-excel-import.service';
     ]),
     ShopsModule,
     AccountsModule,
+    NotificationsModule,
   ],
   controllers: [MovementsController],
   providers: [

@@ -108,7 +108,13 @@ export class MailService {
     const types = Array.isArray(shop.emailNotificationTypes)
       ? shop.emailNotificationTypes
       : null;
-    if (types !== null && !types.includes(type)) return false;
+    if (
+      types !== null &&
+      !types.includes(type) &&
+      type !== NotificationType.MOVEMENT_CREATED
+    ) {
+      return false;
+    }
 
     const userIds = Array.isArray(shop.emailNotificationUserIds)
       ? shop.emailNotificationUserIds
@@ -200,6 +206,9 @@ export class MailService {
     }
     if (type === NotificationType.RESERVATION_REQUEST) {
       return { path: '/reservations', label: 'Ver solicitudes' };
+    }
+    if (type === NotificationType.MOVEMENT_CREATED) {
+      return { path: '/movements', label: 'Ver movimientos' };
     }
     return { path: '/', label: 'Abrir la app' };
   }

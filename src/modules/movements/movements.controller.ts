@@ -69,6 +69,7 @@ class CreateMovementDto {
   @ApiPropertyOptional() @IsOptional() @IsBoolean() invoiced?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsString() invoiceNumber?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsUUID() employeeId?: string | null;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() notifyAdmins?: boolean;
 }
 
 class UpdateMovementDto {

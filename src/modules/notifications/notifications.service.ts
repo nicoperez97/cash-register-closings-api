@@ -32,6 +32,7 @@ function deepLinkFor(type: NotificationType, opts: {
   }
   if (String(type).startsWith('PAYMENT_')) return '/payments/suppliers';
   if (type === NotificationType.RESERVATION_REQUEST) return '/reservations';
+  if (type === NotificationType.MOVEMENT_CREATED) return '/movements';
   return '/';
 }
 
@@ -109,7 +110,8 @@ export class NotificationsService implements OnModuleInit {
             'SHORTAGE_CREATED',
             'SHORTAGE_LEVEL_LOW',
             'SHORTAGE_RESOLVED',
-            'RESERVATION_REQUEST'
+            'RESERVATION_REQUEST',
+            'MOVEMENT_CREATED'
           ) NOT NULL
       `);
     } catch {

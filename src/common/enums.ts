@@ -76,6 +76,8 @@ export enum NotificationType {
   SHORTAGE_RESOLVED = 'SHORTAGE_RESOLVED',
   /** Solicitud de reserva pública pendiente. */
   RESERVATION_REQUEST = 'RESERVATION_REQUEST',
+  /** Movimiento o gasto rápido creado a mano. */
+  MOVEMENT_CREATED = 'MOVEMENT_CREATED',
 }
 
 /** Etiquetas para UI de configuración de mails del local. */
@@ -95,6 +97,7 @@ export const NOTIFICATION_TYPE_LABELS: Record<NotificationType, string> = {
   [NotificationType.SHORTAGE_LEVEL_LOW]: 'Faltantes · bajó a crítico',
   [NotificationType.SHORTAGE_RESOLVED]: 'Faltantes · resuelto',
   [NotificationType.RESERVATION_REQUEST]: 'Reservas · solicitud nueva',
+  [NotificationType.MOVEMENT_CREATED]: 'Movimientos y gastos rápidos',
 };
 
 export const ALL_NOTIFICATION_TYPES: NotificationType[] = Object.values(NotificationType);

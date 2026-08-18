@@ -5,18 +5,19 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Movement } from '../../entities/movement.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { Concept } from '../../entities/concept.entity';
 import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { AuthUser } from '../../common/decorators';
-import { GlobalRole, LedgerAccountType } from '../../common/enums';
+import { GlobalRole, LedgerAccountType, NotificationType } from '../../common/enums';
 import { isGlobalAdmin } from '../../common/guards';
 import { isEntityActive } from '../../common/active.util';
 import { ShopsService } from '../shops/shops.service';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import * as ExcelJS from 'exceljs';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
@@ -55,6 +56,7 @@ export interface UpsertMovementDto {
   invoiced?: boolean;
   invoiceNumber?: string | null;
   employeeId?: string | null;
+  notifyAdmins?: boolean;
 }
 
 @Injectable()
@@ -68,6 +70,7 @@ export class MovementsService implements OnModuleInit {
     @InjectRepository(UserShop) private readonly userShops: Repository<UserShop>,
     private readonly shops: ShopsService,
     private readonly catalogSeed: CatalogSeedService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async onModuleInit() {
@@ -238,7 +241,11 @@ export class MovementsService implements OnModuleInit {
         active: true,
       }),
     );
-    return this.one(user, shopId, row.id);
+    const created = await this.one(user, shopId, row.id);
+    if (dto.notifyAdmins) {
+      void this.notifyAdminsMovementCreated(user, shopId, created).catch(() => undefined);
+    }
+    return created;
   }
 
   async one(user: AuthUser, shopId: string, id: string) {
@@ -499,5 +506,67 @@ export class MovementsService implements OnModuleInit {
       buffer,
       filename: `saldos-${slug || 'local'}-${stamp}.xlsx`,
     };
+  }
+
+  private async notifyAdminsMovementCreated(
+    actor: AuthUser,
+    shopId: string,
+    movement: {
+      id: string;
+      businessDate: string;
+      amountUyu: number;
+      fromAccountName?: string | null;
+      toAccountName?: string | null;
+      conceptName?: string | null;
+      description?: string | null;
+    },
+  ) {
+    const shop = await this.shops.findOne(actor, shopId);
+    const shopName = shop?.name?.trim() || 'Local';
+    const links = await this.userShops.find({
+      where: {
+        shopId,
+        shopRole: In([GlobalRole.OWNER, GlobalRole.ADMIN]),
+      },
+    });
+    const recipientIds = new Set(links.map((l) => l.userId));
+    const globalOwners = await this.users.find({
+      where: { globalRole: GlobalRole.OWNER },
+      select: ['id', 'active'],
+    });
+    for (const u of globalOwners) {
+      if (isEntityActive(u.active)) recipientIds.add(u.id);
+    }
+    recipientIds.delete(actor.id);
+    if (!recipientIds.size) return;
+
+    const date = String(movement.businessDate || '').slice(0, 10);
+    const amount = formatArMoney(Number(movement.amountUyu || 0));
+    const fromName = (movement.fromAccountName ?? '').trim();
+    const toName = (movement.toAccountName ?? '').trim();
+    const route =
+      fromName && toName ? `${fromName} → ${toName}` : fromName || toName || null;
+    const title = 'Nuevo movimiento';
+    const body = [
+      shopName,
+      date,
+      amount,
+      route,
+      movement.conceptName?.trim() || null,
+      movement.description?.trim() || null,
+      `por ${actor.fullName || actor.email}`,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+
+    await this.notifications.createMany(
+      [...recipientIds].map((userId) => ({
+        userId,
+        shopId,
+        type: NotificationType.MOVEMENT_CREATED,
+        title,
+        body,
+      })),
+    );
   }
 }
