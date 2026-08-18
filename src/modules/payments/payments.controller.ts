@@ -60,6 +60,24 @@ class CreatePaymentDto {
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
   @IsIn(['low', 'medium', 'high'])
   priority?: 'low' | 'medium' | 'high' | null;
+  @ApiPropertyOptional({
+    enum: ['PENDING_VALIDATION', 'VALIDATED', 'REJECTED', 'PAID', 'CANCELLED'],
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsIn(['PENDING_VALIDATION', 'VALIDATED', 'REJECTED', 'PAID', 'CANCELLED'])
+  status?:
+    | 'PENDING_VALIDATION'
+    | 'VALIDATED'
+    | 'REJECTED'
+    | 'PAID'
+    | 'CANCELLED'
+    | null;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsDateString()
+  paidAt?: string | null;
   @ApiPropertyOptional()
   @IsOptional()
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')

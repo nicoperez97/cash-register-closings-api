@@ -40,6 +40,7 @@ export interface UpsertPaymentDto {
   amount?: number | null;
   dueDate?: string | null;
   priority?: PaymentPriority | string | null;
+  status?: PaymentStatus | string | null;
   paidAt?: string | null;
   payerUserId?: string | null;
   validatorUserId?: string | null;
@@ -256,6 +257,17 @@ export class PaymentsService implements OnModuleInit {
       throw new BadRequestException('Prioridad inválida');
     }
     return value as PaymentPriority;
+  }
+
+  private parseCreatedStatus(value: string | null | undefined): PaymentStatus {
+    if (value === undefined || value === null || value === '') {
+      return PaymentStatus.PENDING_VALIDATION;
+    }
+    const allowed = new Set<string>(Object.values(PaymentStatus));
+    if (!allowed.has(value)) {
+      throw new BadRequestException('Estado de pago inválido');
+    }
+    return value as PaymentStatus;
   }
 
   private async syncSupplierBilling(
@@ -763,6 +775,19 @@ export class PaymentsService implements OnModuleInit {
     if (supplierId) await this.assertSupplier(shopId, supplierId);
     if (employeeId) await this.assertEmployee(shopId, employeeId);
 
+    const requestedStatus = this.parseCreatedStatus(dto.status);
+    if (requestedStatus === PaymentStatus.PAID) {
+      if (!(amount != null && amount > 0)) {
+        throw new BadRequestException('Un pago abonado necesita un monto mayor a 0');
+      }
+      if (!accountId) {
+        throw new BadRequestException('Indicá la cuenta con la que se paga');
+      }
+      if (!paymentMethod) {
+        throw new BadRequestException('Indicá la forma de pago');
+      }
+    }
+
     const row = await this.payments.save(
       this.payments.create({
         shopId,
@@ -801,21 +826,74 @@ export class PaymentsService implements OnModuleInit {
       row.invoiceTaxId,
     );
 
-    const loaded = await this.load(shopId, row.id);
-    if (validatorUserId) {
-      await this.notifications.create({
-        userId: validatorUserId,
-        shopId,
-        type: NotificationType.PAYMENT_VALIDATE,
-        title: 'Pago para validar',
-        body: `"${this.displayTitle(loaded)}" · $${n(loaded.amount).toLocaleString('es-AR')}${
-          loaded.dueDate ? ` · vence ${loaded.dueDate}` : ''
-        }`,
-        paymentId: loaded.id,
-      });
+    if (requestedStatus === PaymentStatus.PENDING_VALIDATION) {
+      const loaded = await this.load(shopId, row.id);
+      if (validatorUserId) {
+        await this.notifications.create({
+          userId: validatorUserId,
+          shopId,
+          type: NotificationType.PAYMENT_VALIDATE,
+          title: 'Pago para validar',
+          body: `"${this.displayTitle(loaded)}" · $${n(loaded.amount).toLocaleString('es-AR')}${
+            loaded.dueDate ? ` · vence ${loaded.dueDate}` : ''
+          }`,
+          paymentId: loaded.id,
+        });
+      }
+      return this.toDto(loaded);
     }
 
-    return this.toDto(loaded);
+    if (requestedStatus === PaymentStatus.VALIDATED || requestedStatus === PaymentStatus.PAID) {
+      await this.payments.update(
+        { id: row.id, shopId },
+        {
+          status: PaymentStatus.VALIDATED,
+          validatedAt: new Date(),
+          validatedByUserId: user.id,
+        },
+      );
+      if (requestedStatus === PaymentStatus.PAID) {
+        try {
+          return await this.pay(user, shopId, row.id, {
+            paidAt: this.emptyToNull(dto.paidAt) ?? undefined,
+            accountId: accountId ?? undefined,
+            paymentMethod: paymentMethod ?? undefined,
+          });
+        } catch (err) {
+          await this.payments.delete({ id: row.id, shopId });
+          throw err;
+        }
+      }
+      const loaded = await this.load(shopId, row.id);
+      if (loaded.payerUserId) {
+        await this.notifications.create({
+          userId: loaded.payerUserId,
+          shopId,
+          type: NotificationType.PAYMENT_PAY,
+          title: 'Pago para abonar',
+          body: `"${this.displayTitle(loaded)}" · $${n(loaded.amount).toLocaleString('es-AR')}${
+            loaded.dueDate ? ` · vence ${loaded.dueDate}` : ''
+          }`,
+          paymentId: loaded.id,
+        });
+      }
+      return this.toDto(loaded);
+    }
+
+    if (requestedStatus === PaymentStatus.REJECTED) {
+      await this.payments.update(
+        { id: row.id, shopId },
+        {
+          status: PaymentStatus.REJECTED,
+          validatedAt: new Date(),
+          validatedByUserId: user.id,
+        },
+      );
+    } else if (requestedStatus === PaymentStatus.CANCELLED) {
+      await this.payments.update({ id: row.id, shopId }, { status: PaymentStatus.CANCELLED });
+    }
+
+    return this.toDto(await this.load(shopId, row.id));
   }
 
   async update(user: AuthUser, shopId: string, id: string, dto: Partial<UpsertPaymentDto>) {
