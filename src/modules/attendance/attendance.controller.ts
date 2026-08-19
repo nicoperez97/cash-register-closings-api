@@ -127,13 +127,20 @@ export class AttendanceController {
   async export(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
+    @Query('from') from: string,
+    @Query('to') to: string,
     @Query('year') year: string,
     @Query('month') month: string,
     @Res() res: Response,
   ) {
-    const y = Number(year) || new Date().getFullYear();
-    const m = Number(month) || new Date().getMonth() + 1;
-    const { buffer, filename } = await this.excelImport.exportMonth(user, shopId, y, m);
+    const { buffer, filename } = await this.excelImport.exportRange(
+      user,
+      shopId,
+      from,
+      to,
+      year,
+      month,
+    );
     res.setHeader(
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

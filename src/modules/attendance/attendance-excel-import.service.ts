@@ -8,6 +8,7 @@ import { AuthUser } from '../../common/decorators';
 import { isEntityActive } from '../../common/active.util';
 import { ShopsService } from '../shops/shops.service';
 import { AttendanceService } from './attendance.service';
+import { isIsoDateOnly, toIsoDateOnly } from '../../common/iso-date';
 import {
   computeOvertimeHours,
   DEFAULT_SERVICE_CHECK_IN,
@@ -92,16 +93,18 @@ export class AttendanceExcelImportService {
     };
   }
 
-  /** Exporta el presentismo del mes en el mismo formato que la plantilla de importación. */
-  async exportMonth(user: AuthUser, shopId: string, year: number, month: number) {
+  /** Exporta el presentismo de un rango (from/to). year/month queda como respaldo. */
+  async exportRange(
+    user: AuthUser,
+    shopId: string,
+    fromRaw?: string,
+    toRaw?: string,
+    yearRaw?: string,
+    monthRaw?: string,
+  ) {
     this.shops.assertShopAccess(user, shopId);
-    if (month < 1 || month > 12) {
-      throw new BadRequestException('Mes inválido');
-    }
+    const { from, to, dates } = this.resolveExportRange(fromRaw, toRaw, yearRaw, monthRaw);
     const shop = await this.shops.findOne(user, shopId);
-    const from = `${year}-${String(month).padStart(2, '0')}-01`;
-    const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
-    const to = `${year}-${String(month).padStart(2, '0')}-${String(last).padStart(2, '0')}`;
 
     const employees = await this.employees.find({
       where: { shopId },
@@ -127,7 +130,7 @@ export class AttendanceExcelImportService {
     info.addRow(['Presentismo exportado']);
     info.getRow(1).font = { bold: true, size: 13 };
     info.addRow([`Local: ${shop.name}`]);
-    info.addRow([`Período: ${String(month).padStart(2, '0')}/${year}`]);
+    info.addRow([`Período: ${from} a ${to}`]);
     info.addRow([]);
     info.addRow([
       'Formato compatible con la importación: hoja "Base de datos" y "Validación de datos".',
@@ -148,8 +151,7 @@ export class AttendanceExcelImportService {
     const activeEmployees = employees.filter((e) => isEntityActive(e.active));
 
     for (const emp of activeEmployees) {
-      for (let day = 1; day <= last; day++) {
-        const date = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      for (const date of dates) {
         const cell = byKey.get(`${emp.id}|${date}`);
         ws.addRow({
           name: emp.fullName,
@@ -174,12 +176,49 @@ export class AttendanceExcelImportService {
     }
 
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());
-    const monthPad = String(month).padStart(2, '0');
     const slug = this.fileSlug(shop.name || shop.slug || 'local');
     return {
       buffer,
-      filename: `presentismo-${slug}-${year}-${monthPad}.xlsx`,
+      filename: `presentismo-${slug}-${from}_${to}.xlsx`,
     };
+  }
+
+  private resolveExportRange(
+    fromRaw?: string,
+    toRaw?: string,
+    yearRaw?: string,
+    monthRaw?: string,
+  ): { from: string; to: string; dates: string[] } {
+    const from = toIsoDateOnly(fromRaw);
+    const to = toIsoDateOnly(toRaw);
+    if (isIsoDateOnly(from) && isIsoDateOnly(to)) {
+      if (from > to) throw new BadRequestException('El rango de fechas es inválido');
+      const dates = this.eachIsoDate(from, to);
+      if (dates.length > 366) {
+        throw new BadRequestException('El rango no puede superar un año');
+      }
+      return { from, to, dates };
+    }
+    const year = Number(yearRaw) || new Date().getFullYear();
+    const month = Number(monthRaw) || new Date().getMonth() + 1;
+    if (month < 1 || month > 12) throw new BadRequestException('Mes inválido');
+    const monthFrom = `${year}-${String(month).padStart(2, '0')}-01`;
+    const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const monthTo = `${year}-${String(month).padStart(2, '0')}-${String(last).padStart(2, '0')}`;
+    return { from: monthFrom, to: monthTo, dates: this.eachIsoDate(monthFrom, monthTo) };
+  }
+
+  private eachIsoDate(from: string, to: string): string[] {
+    const out: string[] = [];
+    const start = Date.parse(`${from}T00:00:00Z`);
+    const end = Date.parse(`${to}T00:00:00Z`);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start > end) {
+      throw new BadRequestException('El rango de fechas es inválido');
+    }
+    for (let t = start; t <= end; t += 86400000) {
+      out.push(new Date(t).toISOString().slice(0, 10));
+    }
+    return out;
   }
 
   async exportOvertimeSummary(user: AuthUser, shopId: string, from: string, to: string) {
