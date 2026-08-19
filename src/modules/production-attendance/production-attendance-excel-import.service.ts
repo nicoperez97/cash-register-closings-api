@@ -6,6 +6,7 @@ import { Employee } from '../../entities/employee.entity';
 import { ProductionAttendanceDay } from '../../entities/production-attendance-day.entity';
 import { AuthUser } from '../../common/decorators';
 import { isEntityActive } from '../../common/active.util';
+import { ShopLiveService } from '../shop-live/shop-live.service';
 import { ShopsService } from '../shops/shops.service';
 
 export interface ProductionAttendanceImportItem {
@@ -30,6 +31,7 @@ export class ProductionAttendanceExcelImportService {
     @InjectRepository(ProductionAttendanceDay)
     private readonly days: Repository<ProductionAttendanceDay>,
     private readonly shops: ShopsService,
+    private readonly live: ShopLiveService,
   ) {}
 
   async buildTemplate(user: AuthUser, shopId: string) {
@@ -209,6 +211,7 @@ export class ProductionAttendanceExcelImportService {
       upsertedDays += 1;
     }
 
+    this.live.tick(shopId, 'attendance');
     return {
       upsertedDays,
       createdEmployees: [...new Set(createdEmployees)],

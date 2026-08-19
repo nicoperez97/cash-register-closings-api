@@ -20,6 +20,7 @@ import {
 } from '../../entities/reservation-request.entity';
 import { MailService } from '../notifications/mail.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { ShopLiveService } from '../shop-live/shop-live.service';
 import { ShopsService } from '../shops/shops.service';
 import { ReservationDayNotice } from '../../entities/reservation-day-notice.entity';
 import {
@@ -69,6 +70,7 @@ export class ReservationRequestsService implements OnModuleInit {
     private readonly shops: ShopsService,
     private readonly notifications: NotificationsService,
     private readonly mail: MailService,
+    private readonly live: ShopLiveService,
   ) {}
 
   async onModuleInit() {
@@ -153,6 +155,7 @@ export class ReservationRequestsService implements OnModuleInit {
     this.shops.assertShopAccess(user, shopId);
     await this.shops.assertReservationsEnabled(shopId);
     await this.shopsRepo.update(shopId, { reservationSignupEnabled: !!enabled });
+    this.live.tick(shopId, 'reservations');
     return { reservationSignupEnabled: !!enabled };
   }
 
@@ -176,6 +179,7 @@ export class ReservationRequestsService implements OnModuleInit {
       reservationInsideEnabled: inside,
       reservationOutsideEnabled: outside,
     });
+    this.live.tick(shopId, 'reservations');
     return {
       reservationInsideEnabled: inside,
       reservationOutsideEnabled: outside,
@@ -208,6 +212,7 @@ export class ReservationRequestsService implements OnModuleInit {
       shop.reservationOutsideMinPartySize = normalizePartyRule(outside);
     }
     await this.shopsRepo.save(shop);
+    this.live.tick(shopId, 'reservations');
     return {
       reservationInsideMaxPartySize: shop.reservationInsideMaxPartySize ?? null,
       reservationOutsideMaxPartySize: shop.reservationOutsideMinPartySize ?? null,
@@ -339,6 +344,7 @@ export class ReservationRequestsService implements OnModuleInit {
         title: 'Reserva auto-confirmada',
         body: `${guestName} · ${people} · ${when} · ${areaLabel}${left}`,
       });
+      this.live.tick(shop.id, 'reservations');
 
       return {
         ok: true,
@@ -372,6 +378,7 @@ export class ReservationRequestsService implements OnModuleInit {
       title: 'Nueva solicitud de reserva',
       body: `${guestName} · ${partySize} ${partySize === 1 ? 'persona' : 'personas'} · ${when}${areaBit}${igBit}`,
     });
+    this.live.tick(shop.id, 'reservations');
 
     return {
       ok: true,
@@ -484,6 +491,7 @@ export class ReservationRequestsService implements OnModuleInit {
       })
       .catch(() => undefined);
 
+    this.live.tick(shopId, 'reservations');
     return this.toDto(row);
   }
 
@@ -513,6 +521,7 @@ export class ReservationRequestsService implements OnModuleInit {
       })
       .catch(() => undefined);
 
+    this.live.tick(shopId, 'reservations');
     return this.toDto(row);
   }
 
@@ -523,6 +532,7 @@ export class ReservationRequestsService implements OnModuleInit {
     row.active = false;
     await this.requests.save(row);
     await this.requests.softRemove(row);
+    this.live.tick(shopId, 'reservations');
     return { ok: true };
   }
 
