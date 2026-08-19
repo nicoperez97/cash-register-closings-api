@@ -7,10 +7,12 @@ import {
   Patch,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
+import type { Response } from 'express';
 import {
   IsBoolean,
   IsEnum,
@@ -142,6 +144,15 @@ export class ServiceRulesController {
 @Controller('public/shops')
 export class PublicServiceRulesController {
   constructor(private readonly serviceRules: ServiceRulesService) {}
+
+  @Public()
+  @Get(':slug/service-rules.pdf')
+  async publicPdf(@Param('slug') slug: string, @Res() res: Response) {
+    const { buffer, filename } = await this.serviceRules.publicPdf(slug);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
+  }
 
   @Public()
   @Get(':slug/service-rules')

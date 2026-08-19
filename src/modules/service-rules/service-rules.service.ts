@@ -13,6 +13,7 @@ import { AuthUser } from '../../common/decorators';
 import { isEntityActive } from '../../common/active.util';
 import { ServiceRulePhase } from '../../common/enums';
 import { ShopsService } from '../shops/shops.service';
+import { buildServiceRulesPdf } from './service-rules-pdf';
 
 @Injectable()
 export class ServiceRulesService implements OnModuleInit {
@@ -275,6 +276,21 @@ export class ServiceRulesService implements OnModuleInit {
       },
       categories: categories.map((c) => this.categoryDto(c)),
       rules: activeRules.map((r) => this.ruleDto(r)),
+    };
+  }
+
+  async publicPdf(slug: string) {
+    const data = await this.publicBySlug(slug);
+    const bytes = await buildServiceRulesPdf({
+      shopName: data.shop.name,
+      accentColor: data.shop.accentColor,
+      categories: data.categories,
+      rules: data.rules,
+    });
+    const safe = String(data.shop.slug || 'local').replace(/[^a-z0-9-]+/gi, '-');
+    return {
+      buffer: Buffer.from(bytes),
+      filename: `normas-${safe}.pdf`,
     };
   }
 
