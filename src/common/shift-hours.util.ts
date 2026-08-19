@@ -1,4 +1,4 @@
-/** Horarios de servicio (HH:mm) y horas extra respecto de la retirada default. */
+/** Horarios de servicio (HH:mm) y horas extra respecto del rango default. */
 
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
@@ -31,26 +31,42 @@ export function minutesOnShift(startHhmm: string, timeHhmm: string): number {
   return t <= start ? t + 24 * 60 : t;
 }
 
+function roundQuarterHours(hours: number): number {
+  return Math.round(hours * 4) / 4;
+}
+
 /**
- * Extra = max(0, salida real − retirada default), en horas (paso 0.25).
- * Si falta algún horario o no está presente, 0.
+ * Extra respecto del horario configurado (empleado o local), en horas (paso 0.25).
+ * Por defecto solo cuenta si se fue después de la retirada.
+ * Con `countAll`, también suma llegada tarde y retiro temprano.
  */
 export function computeOvertimeHours(opts: {
   isPresent: boolean;
   checkInAt?: string | null;
   checkOutAt?: string | null;
+  defaultCheckIn?: string | null;
   defaultCheckOut?: string | null;
+  countAll?: boolean;
 }): number {
   if (!opts.isPresent) return 0;
   const checkIn = parseHhMm(opts.checkInAt);
   const checkOut = parseHhMm(opts.checkOutAt);
   const defaultOut = parseHhMm(opts.defaultCheckOut);
   if (!checkIn || !checkOut || !defaultOut) return 0;
-  const actualEnd = minutesOnShift(checkIn, checkOut);
-  const defaultEnd = minutesOnShift(checkIn, defaultOut);
-  const extraMin = Math.max(0, actualEnd - defaultEnd);
-  const hours = extraMin / 60;
-  return Math.round(hours * 4) / 4;
+  const anchor = parseHhMm(opts.defaultCheckIn) ?? checkIn;
+
+  const schedStart = minutesOf(anchor);
+  const schedEnd = minutesOnShift(anchor, defaultOut);
+  let actualStart = minutesOf(checkIn);
+  if (actualStart < schedStart - 12 * 60) actualStart += 24 * 60;
+  const actualEnd = minutesOnShift(anchor, checkOut);
+
+  const extraStayMin = Math.max(0, actualEnd - schedEnd);
+  if (!opts.countAll) return roundQuarterHours(extraStayMin / 60);
+
+  const lateArrivalMin = Math.max(0, actualStart - schedStart);
+  const earlyLeaveMin = Math.max(0, schedEnd - actualEnd);
+  return roundQuarterHours((lateArrivalMin + earlyLeaveMin + extraStayMin) / 60);
 }
 
 export const DEFAULT_SERVICE_CHECK_IN = '18:00';

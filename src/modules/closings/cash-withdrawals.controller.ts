@@ -14,19 +14,19 @@ export class CashWithdrawalsController {
   constructor(private readonly withdrawals: CashWithdrawalsService) {}
 
   @Get('pending')
-  @RequirePermissions('closings.read')
+  @RequirePermissions('cashWithdrawals.read')
   listPending(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
     return this.withdrawals.listPending(user, shopId);
   }
 
   @Get('history')
-  @RequirePermissions('closings.read')
+  @RequirePermissions('cashWithdrawals.read')
   listHistory(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
     return this.withdrawals.listHistory(user, shopId);
   }
 
   @Post('pick')
-  @RequirePermissions('closings.update')
+  @RequirePermissions('cashWithdrawals.manage')
   pick(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,

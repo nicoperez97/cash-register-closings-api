@@ -3,6 +3,8 @@ import { GlobalRole, Permission, PERMISSIONS, ROLE_PERMISSIONS } from './enums';
 /** Claves de módulo en `user_shops.modulePermissions`. */
 export type ModuleKey =
   | 'closings'
+  | 'cashWithdrawals'
+  | 'settlements'
   | 'reports'
   | 'movements'
   | 'attendance'
@@ -51,6 +53,24 @@ export const MODULE_DEFS: ModuleDef[] = [
       { value: 'read', label: 'Ver' },
       { value: 'update', label: 'Editar' },
       { value: 'lock', label: 'Bloquear' },
+    ],
+  },
+  {
+    key: 'cashWithdrawals',
+    label: 'A Retirar',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
+    key: 'settlements',
+    label: 'Rendiciones',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
     ],
   },
   {
@@ -300,6 +320,8 @@ export function expandModulePermissions(
   };
 
   pair('movements', 'movements.read', 'movements.manage');
+  pair('cashWithdrawals', 'cashWithdrawals.read', 'cashWithdrawals.manage');
+  pair('settlements', 'settlements.read', 'settlements.manage');
   switch (modules.attendance) {
     case 'self':
       add(set, 'attendance.self');
@@ -375,8 +397,6 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
   const closings = (): ModuleLevel => {
     if (has('closings.lock')) return 'lock';
     if (has('closings.update')) return 'update';
-    if (has('closings.read') && !has('closings.create')) return 'read';
-    if (has('closings.create') && has('closings.read')) return 'read';
     if (has('closings.create')) return 'create';
     if (has('closings.read')) return 'read';
     return 'none';
@@ -403,6 +423,8 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
 
   return {
     closings: closings(),
+    cashWithdrawals: level('cashWithdrawals.read', 'cashWithdrawals.manage'),
+    settlements: level('settlements.read', 'settlements.manage'),
     reports: reports(),
     movements: level('movements.read', 'movements.manage'),
     attendance: attendance(),

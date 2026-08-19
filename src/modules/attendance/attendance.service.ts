@@ -196,6 +196,7 @@ export class AttendanceService implements OnModuleInit {
         isPresent: true,
         checkInAt: row.checkInAt,
         checkOutAt: row.checkOutAt,
+        defaultCheckIn: defaults.checkIn,
         defaultCheckOut: defaults.checkOut,
       }),
     );
@@ -284,9 +285,17 @@ export class AttendanceService implements OnModuleInit {
     return out;
   }
 
-  async overtimeSummary(user: AuthUser, shopId: string, from: string, to: string) {
+  async overtimeSummary(
+    user: AuthUser,
+    shopId: string,
+    from: string,
+    to: string,
+    countAll = false,
+  ) {
     this.shops.assertShopAccess(user, shopId);
     if (!from || !to) throw new BadRequestException('Indicá from y to (YYYY-MM-DD)');
+    const shop = await this.shops.getShopEntity(shopId);
+    const withHours = this.withHours(shop);
     const employees = await this.activeEmployees(shopId);
     const ids = employees.map((e) => e.id);
     const rows = ids.length
@@ -302,7 +311,26 @@ export class AttendanceService implements OnModuleInit {
     }
     const items = employees.map((e) => {
       const days = byEmp.get(e.id) ?? [];
-      const overtimeHours = days.reduce((s, d) => s + n(d.overtimeHours), 0);
+      const defaults = this.employeeShiftDefaults(shop ?? {}, e);
+      const overtimeHours = Math.round(
+        days.reduce((s, d) => {
+          if (!d.isPresent) return s;
+          if (withHours && d.checkInAt && d.checkOutAt) {
+            return (
+              s +
+              computeOvertimeHours({
+                isPresent: true,
+                checkInAt: d.checkInAt,
+                checkOutAt: d.checkOutAt,
+                defaultCheckIn: defaults.checkIn,
+                defaultCheckOut: defaults.checkOut,
+                countAll,
+              })
+            );
+          }
+          return s + n(d.overtimeHours);
+        }, 0) * 100,
+      ) / 100;
       const presentDays = days.filter((d) => d.isPresent).length;
       const rate = n(e.overtimeHourRate);
       return {
@@ -327,6 +355,7 @@ export class AttendanceService implements OnModuleInit {
       shopId,
       from,
       to,
+      countAll,
       items,
       totals: {
         overtimeHours: Math.round(totals.overtimeHours * 100) / 100,

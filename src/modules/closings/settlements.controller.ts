@@ -14,19 +14,19 @@ export class SettlementsController {
   constructor(private readonly settlements: SettlementsService) {}
 
   @Get('pending')
-  @RequirePermissions('closings.read')
+  @RequirePermissions('settlements.read')
   listPending(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
     return this.settlements.listPending(user, shopId);
   }
 
   @Get('history')
-  @RequirePermissions('closings.read')
+  @RequirePermissions('settlements.read')
   listHistory(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
     return this.settlements.listHistory(user, shopId);
   }
 
   @Post('settle')
-  @RequirePermissions('closings.update')
+  @RequirePermissions('settlements.manage')
   settle(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,

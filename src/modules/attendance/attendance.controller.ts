@@ -63,6 +63,11 @@ class BulkAttendanceDto {
   items: UpsertAttendanceDto[];
 }
 
+function queryFlag(raw?: string): boolean {
+  const s = String(raw ?? '').trim().toLowerCase();
+  return s === '1' || s === 'true' || s === 'yes';
+}
+
 @ApiTags('attendance')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'), PermissionsGuard)
@@ -95,8 +100,9 @@ export class AttendanceController {
     @Param('shopId') shopId: string,
     @Query('from') from: string,
     @Query('to') to: string,
+    @Query('countAll') countAll?: string,
   ) {
-    return this.attendance.overtimeSummary(user, shopId, from, to);
+    return this.attendance.overtimeSummary(user, shopId, from, to, queryFlag(countAll));
   }
 
   @Get('overtime-summary.xlsx')
@@ -106,6 +112,7 @@ export class AttendanceController {
     @Param('shopId') shopId: string,
     @Query('from') from: string,
     @Query('to') to: string,
+    @Query('countAll') countAll = '',
     @Res() res: Response,
   ) {
     const { buffer, filename } = await this.excelImport.exportOvertimeSummary(
@@ -113,6 +120,7 @@ export class AttendanceController {
       shopId,
       from,
       to,
+      queryFlag(countAll),
     );
     res.setHeader(
       'Content-Type',

@@ -223,8 +223,14 @@ export class AttendanceExcelImportService {
     return out;
   }
 
-  async exportOvertimeSummary(user: AuthUser, shopId: string, from: string, to: string) {
-    const data = await this.attendance.overtimeSummary(user, shopId, from, to);
+  async exportOvertimeSummary(
+    user: AuthUser,
+    shopId: string,
+    from: string,
+    to: string,
+    countAll = false,
+  ) {
+    const data = await this.attendance.overtimeSummary(user, shopId, from, to, countAll);
     const shop = await this.shops.findOne(user, shopId);
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet('Horas extra');
@@ -253,6 +259,12 @@ export class AttendanceExcelImportService {
       cost: data.totals.overtimeCost,
     });
     ws.getRow(ws.rowCount).font = { bold: true };
+    ws.addRow({});
+    ws.addRow({
+      name: countAll
+        ? 'Incluye llegadas tarde, retiros temprano y retiros después del horario'
+        : 'Solo retiros después del horario configurado por empleado (o del local)',
+    });
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());
     const slug = this.fileSlug(shop.name || shop.slug || 'local');
     return {
@@ -430,6 +442,7 @@ export class AttendanceExcelImportService {
             isPresent: r.isPresent,
             checkInAt,
             checkOutAt,
+            defaultCheckIn: defaultIn,
             defaultCheckOut: defaultOut,
           })
         : 0;
