@@ -18,7 +18,7 @@
       }
     }
     var path = location.pathname || '';
-    var m = path.match(/\/ipad\/w\/([^\/]+)\/?$/);
+    var m = path.match(/\/(?:legacy|ipad)\/w\/([^\/]+)\/?$/);
     if (m) {
       try {
         return decodeURIComponent(m[1]);
@@ -62,14 +62,9 @@
 
   function renderItem(w) {
     return (
-      '<li>' +
-      '<span class="board-name">' +
-      (w.position != null ? '<span class="board-num">#' + escapeHtml(w.position) + '</span> ' : '') +
+      '<li><span class="board-name">' +
       escapeHtml(w.guestName || 'Invitado') +
-      '</span>' +
-      '<span class="board-meta"><span class="board-pax"><strong>' +
-      escapeHtml(w.partySize) +
-      '</strong><span>p</span></span></span></li>'
+      '</span></li>'
     );
   }
 
@@ -95,12 +90,7 @@
 
     var b = board;
     var accent = (b.shop && b.shop.accentColor) || '#c45c26';
-    var inside = (b.waiting || []).filter(function (w) {
-      return w.area !== 'OUTSIDE';
-    });
-    var outside = (b.waiting || []).filter(function (w) {
-      return w.area === 'OUTSIDE';
-    });
+    var waiting = b.waiting || [];
     var logo =
       b.shop && b.shop.logoUrl
         ? '<img class="board-logo" src="' + escapeHtml(b.shop.logoUrl) + '" alt="" />'
@@ -122,32 +112,11 @@
       '<span class="board-live"><span class="board-pulse"></span>Auto · 1 min</span>' +
       '<button type="button" class="board-refresh" id="btn-refresh">Actualizar</button>' +
       '</div></header>' +
-      '<section class="board-totals">' +
-      '<div class="board-total"><div class="board-total-inner"><strong>' +
-      escapeHtml(b.totals.guests) +
-      '</strong><span>pers.</span></div></div>' +
-      '<div class="board-total"><div class="board-total-inner"><strong>' +
-      escapeHtml(b.totals.parties) +
-      '</strong><span>grupos</span></div></div>' +
-      '<div class="board-total"><div class="board-total-inner"><strong>' +
-      escapeHtml(b.totals.inside) +
-      '</strong><span>adentro</span></div></div>' +
-      '<div class="board-total"><div class="board-total-inner"><strong>' +
-      escapeHtml(b.totals.outside) +
-      '</strong><span>afuera</span></div></div>' +
-      '<div style="clear:both"></div></section>' +
-      '<section class="board-lists">' +
-      '<div class="board-col"><div class="board-col-inner"><h2>Adentro <span>' +
-      inside.length +
+      '<section class="board-col"><div class="board-col-inner"><h2>En espera <span>' +
+      waiting.length +
       '</span></h2><ul>' +
-      renderList(inside) +
-      '</ul></div></div>' +
-      '<div class="board-col board-col-out"><div class="board-col-inner"><h2>Afuera <span>' +
-      outside.length +
-      '</span></h2><ul>' +
-      renderList(outside) +
-      '</ul></div></div>' +
-      '<div style="clear:both"></div></section>' +
+      renderList(waiting) +
+      '</ul></div></section>' +
       '</div></div>';
 
     var btn = $('btn-refresh');
