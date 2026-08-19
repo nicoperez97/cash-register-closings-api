@@ -42,17 +42,6 @@ async function bootstrap() {
   const legacyDir = join(__dirname, '..', 'legacy-ipad');
   if (existsSync(legacyDir)) {
     const express = app.getHttpAdapter().getInstance();
-    // Importante: en Express (strict routing off) GET '/ipad' también matchea '/ipad/'.
-    // Si redirigimos siempre a '/ipad/' → bucle infinito (Safari: "demasiados redireccionamientos").
-    express.get('/ipad', (req: { url?: string }, res: { redirect: (code: number, url: string) => void }, next: () => void) => {
-      const url = String(req.url || '');
-      if (url === '/ipad' || url.startsWith('/ipad?')) {
-        res.redirect(302, '/ipad/');
-        return;
-      }
-      next();
-    });
-    // Tableros públicos legacy: /ipad/r/:slug y /ipad/w/:slug
     const sendLegacyBoard = (file: string) =>
       (
         _req: unknown,
@@ -60,11 +49,40 @@ async function bootstrap() {
       ) => {
         res.sendFile(join(legacyDir, file));
       };
+    const redirectLegacyIndex = (
+      req: { url?: string },
+      res: { redirect: (code: number, url: string) => void },
+      next: () => void,
+    ) => {
+      const url = String(req.url || '');
+      if (
+        url === '/legacy' ||
+        url.startsWith('/legacy?') ||
+        url === '/ipad' ||
+        url.startsWith('/ipad?')
+      ) {
+        res.redirect(302, '/legacy/index.html');
+        return;
+      }
+      next();
+    };
+    express.get('/legacy', redirectLegacyIndex);
+    express.get('/legacy/', (_req: unknown, res: { redirect: (code: number, url: string) => void }) => {
+      res.redirect(302, '/legacy/index.html');
+    });
+    express.get('/ipad', redirectLegacyIndex);
+    express.get('/ipad/', (_req: unknown, res: { redirect: (code: number, url: string) => void }) => {
+      res.redirect(302, '/legacy/index.html');
+    });
+    express.get('/legacy/r/:slug', sendLegacyBoard('board-r.html'));
+    express.get('/legacy/r/:slug/', sendLegacyBoard('board-r.html'));
+    express.get('/legacy/w/:slug', sendLegacyBoard('board-w.html'));
+    express.get('/legacy/w/:slug/', sendLegacyBoard('board-w.html'));
     express.get('/ipad/r/:slug', sendLegacyBoard('board-r.html'));
     express.get('/ipad/r/:slug/', sendLegacyBoard('board-r.html'));
     express.get('/ipad/w/:slug', sendLegacyBoard('board-w.html'));
     express.get('/ipad/w/:slug/', sendLegacyBoard('board-w.html'));
-    app.useStaticAssets(legacyDir, { prefix: '/ipad/', index: 'index.html' });
+    app.useStaticAssets(legacyDir, { prefix: '/legacy/', index: 'index.html' });
   }
 
   const swaggerConfig = new DocumentBuilder()
@@ -84,7 +102,7 @@ async function bootstrap() {
   console.log(`Swagger http://localhost:${port}/api/docs`);
   if (existsSync(legacyDir)) {
     // eslint-disable-next-line no-console
-    console.log(`iPad legacy http://localhost:${port}/ipad/`);
+    console.log(`Legacy ES5 http://localhost:${port}/legacy/index.html`);
   }
 }
 

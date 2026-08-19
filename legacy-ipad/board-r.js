@@ -20,7 +20,7 @@
       }
     }
     var path = location.pathname || '';
-    var m = path.match(/\/ipad\/r\/([^\/]+)\/?$/);
+    var m = path.match(/\/(?:legacy|ipad)\/r\/([^\/]+)\/?$/);
     if (m) {
       try {
         return decodeURIComponent(m[1]);
@@ -92,6 +92,74 @@
       var nb = b.number != null ? b.number : 999999;
       return na - nb;
     });
+  }
+
+  function partyMix(rows) {
+    var counts = {};
+    var i;
+    var n;
+    var keys = [];
+    for (i = 0; i < (rows || []).length; i++) {
+      if (rows[i].removedAfterSeated) continue;
+      n = Math.round(Number(rows[i].partySize) || 0);
+      if (n < 1) continue;
+      if (!counts[n]) {
+        counts[n] = 0;
+        keys.push(n);
+      }
+      counts[n] += 1;
+    }
+    keys.sort(function (a, b) {
+      return a - b;
+    });
+    return keys.map(function (size) {
+      return { partySize: size, tables: counts[size] };
+    });
+  }
+
+  function formatMixItem(item) {
+    var mesa = item.tables === 1 ? 'mesa' : 'mesas';
+    var pers = item.partySize === 1 ? 'persona' : 'personas';
+    return item.tables + ' ' + mesa + ' de ' + item.partySize + ' ' + pers;
+  }
+
+  function renderMixCol(label, items) {
+    if (!items.length) return '';
+    var chips = '';
+    var i;
+    for (i = 0; i < items.length; i++) {
+      chips += '<span class="board-mix-chip">' + escapeHtml(formatMixItem(items[i])) + '</span>';
+    }
+    return (
+      '<div class="board-mix-col"><p class="board-mix-label">' +
+      escapeHtml(label) +
+      '</p><p class="board-mix-chips">' +
+      chips +
+      '</p></div>'
+    );
+  }
+
+  function renderMix(rows) {
+    var inside = partyMix(
+      (rows || []).filter(function (r) {
+        return !r.removedAfterSeated && r.area !== 'OUTSIDE';
+      }),
+    );
+    var outside = partyMix(
+      (rows || []).filter(function (r) {
+        return !r.removedAfterSeated && r.area === 'OUTSIDE';
+      }),
+    );
+    if (!inside.length && !outside.length) return '';
+    var both = inside.length && outside.length;
+    return (
+      '<section class="board-mix' +
+      (both ? '' : ' board-mix-one') +
+      '">' +
+      renderMixCol('Adentro', inside) +
+      renderMixCol('Afuera', outside) +
+      '<div style="clear:both"></div></section>'
+    );
   }
 
   function canToggle(r) {
@@ -264,6 +332,7 @@
       escapeHtml(b.totals.outside) +
       '</strong><span>afuera</span></div></div>' +
       '<div style="clear:both"></div></section>' +
+      renderMix(b.reservations) +
       '<section class="board-lists">' +
       '<div class="board-col"><div class="board-col-inner"><h2>Adentro <span>' +
       inside.length +

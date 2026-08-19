@@ -192,6 +192,52 @@ body {
   text-transform: uppercase;
 }
 
+.board-mix {
+  margin: 0 0 12px;
+  overflow: hidden;
+}
+
+.board-mix-col {
+  float: left;
+  width: 50%;
+  box-sizing: border-box;
+  padding: 10px 8px;
+  text-align: center;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.board-mix-one .board-mix-col {
+  float: none;
+  width: 100%;
+}
+
+.board-mix-label {
+  margin: 0 0 6px;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: #e8c4a8;
+}
+
+.board-mix-chips {
+  margin: 0;
+}
+
+.board-mix-chip {
+  display: inline-block;
+  margin: 3px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 650;
+  color: #fff8f1;
+  background: rgba(196, 92, 38, 0.35);
+  border: 1px solid rgba(196, 92, 38, 0.45);
+}
+
 .board-lists {
   overflow: hidden;
   margin: 0 -5px;

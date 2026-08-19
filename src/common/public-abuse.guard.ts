@@ -55,7 +55,7 @@ export class PublicAbuseGuard implements CanActivate {
     if (method === 'OPTIONS' || method === 'HEAD') return true;
 
     const path = String(req.originalUrl ?? req.url ?? '').split('?')[0];
-    if (path.startsWith('/api/docs') || path.startsWith('/ipad')) return true;
+    if (path.startsWith('/api/docs') || path.startsWith('/ipad') || path.startsWith('/legacy')) return true;
     if (path.endsWith('/live')) return true;
 
     const ip = this.clientIp(req);
