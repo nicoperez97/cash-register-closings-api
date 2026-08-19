@@ -51,6 +51,11 @@ class CreateEmployeeDto {
   @IsOptional()
   @IsString()
   bankAlias?: string | null;
+  @ApiPropertyOptional({ description: 'Precio por hora extra de servicio' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  overtimeHourRate?: number;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
 }
 
@@ -77,6 +82,11 @@ class UpdateEmployeeDto {
   @IsOptional()
   @IsString()
   bankAlias?: string | null;
+  @ApiPropertyOptional({ description: 'Precio por hora extra de servicio' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  overtimeHourRate?: number;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
 }
 

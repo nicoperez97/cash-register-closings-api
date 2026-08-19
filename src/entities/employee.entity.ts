@@ -47,6 +47,10 @@ export class Employee extends BaseEntity {
   @Column({ type: 'varchar', length: 120, nullable: true })
   bankAlias?: string | null;
 
+  /** Precio por hora extra de servicio (reporte de costo; no cambia liquidación). */
+  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
+  overtimeHourRate: string;
+
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })
   shop: Shop;

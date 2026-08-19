@@ -1,0 +1,14 @@
+ALTER TABLE shops
+  ADD COLUMN serviceDefaultCheckIn VARCHAR(5) NOT NULL DEFAULT '18:00';
+
+ALTER TABLE shops
+  ADD COLUMN serviceDefaultCheckOut VARCHAR(5) NOT NULL DEFAULT '00:00';
+
+ALTER TABLE employees
+  ADD COLUMN overtimeHourRate DECIMAL(12,2) NOT NULL DEFAULT 0.00;
+
+ALTER TABLE attendance_days
+  ADD COLUMN checkInAt VARCHAR(5) NULL;
+
+ALTER TABLE attendance_days
+  ADD COLUMN checkOutAt VARCHAR(5) NULL;

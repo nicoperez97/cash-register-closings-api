@@ -7,6 +7,14 @@ import { AttendanceDay } from '../../entities/attendance-day.entity';
 import { AuthUser } from '../../common/decorators';
 import { isEntityActive } from '../../common/active.util';
 import { ShopsService } from '../shops/shops.service';
+import { AttendanceService } from './attendance.service';
+import {
+  computeOvertimeHours,
+  DEFAULT_SERVICE_CHECK_IN,
+  DEFAULT_SERVICE_CHECK_OUT,
+  parseHhMm,
+  requireHhMm,
+} from '../../common/shift-hours.util';
 
 export interface AttendanceImportItem {
   rowNumber: number;
@@ -14,6 +22,8 @@ export interface AttendanceImportItem {
   date: string;
   isPresent: boolean;
   isHoliday: boolean;
+  checkInAt: string | null;
+  checkOutAt: string | null;
   overtimeHours: number;
   employeeId: string | null;
   willCreateEmployee: boolean;
@@ -32,6 +42,7 @@ export class AttendanceExcelImportService {
     @InjectRepository(AttendanceDay)
     private readonly days: Repository<AttendanceDay>,
     private readonly shops: ShopsService,
+    private readonly attendance: AttendanceService,
   ) {}
 
   async buildTemplate(user: AuthUser, shopId: string) {
@@ -46,7 +57,7 @@ export class AttendanceExcelImportService {
     info.addRow([`Local: ${shop.name}`]);
     info.addRow([]);
     info.addRow([
-      'Compatible con el Excel "Presentismo": hoja "Base de datos" (Colaborador, Fecha, Presente, Feriado, Horas extras)',
+      'Compatible con el Excel "Presentismo": hoja "Base de datos" (Colaborador, Fecha, Presente, Feriado, Entrada, Salida)',
     ]);
     info.addRow([
       'y opcionalmente "Validación de datos" (Colaborador, Sueldo actual) para crear/actualizar empleados.',
@@ -58,11 +69,13 @@ export class AttendanceExcelImportService {
       { header: 'Fecha', key: 'date', width: 12 },
       { header: 'Feriado', key: 'holiday', width: 10 },
       { header: 'Presente', key: 'present', width: 10 },
+      { header: 'Entrada', key: 'checkIn', width: 10 },
+      { header: 'Salida', key: 'checkOut', width: 10 },
       { header: 'Horas extras', key: 'ot', width: 12 },
     ];
     ws.getRow(1).font = { bold: true };
     const d = new Date();
-    ws.addRow(['Kevin', this.toIsoDate(d), false, true, 0]);
+    ws.addRow(['Kevin', this.toIsoDate(d), false, true, '18:00', '00:00', 0]);
 
     const val = wb.addWorksheet('Validación de datos');
     val.columns = [
@@ -126,6 +139,8 @@ export class AttendanceExcelImportService {
       { header: 'Fecha', key: 'date', width: 12 },
       { header: 'Feriado', key: 'holiday', width: 10 },
       { header: 'Presente', key: 'present', width: 10 },
+      { header: 'Entrada', key: 'checkIn', width: 10 },
+      { header: 'Salida', key: 'checkOut', width: 10 },
       { header: 'Horas extras', key: 'ot', width: 12 },
     ];
     ws.getRow(1).font = { bold: true };
@@ -141,6 +156,8 @@ export class AttendanceExcelImportService {
           date,
           holiday: !!cell?.isHoliday,
           present: !!cell?.isPresent,
+          checkIn: cell?.checkInAt ?? '',
+          checkOut: cell?.checkOutAt ?? '',
           ot: n(cell?.overtimeHours),
         });
       }
@@ -165,6 +182,44 @@ export class AttendanceExcelImportService {
     };
   }
 
+  async exportOvertimeSummary(user: AuthUser, shopId: string, from: string, to: string) {
+    const data = await this.attendance.overtimeSummary(user, shopId, from, to);
+    const shop = await this.shops.findOne(user, shopId);
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Horas extra');
+    ws.columns = [
+      { header: 'Empleado', key: 'name', width: 28 },
+      { header: 'Días presente', key: 'present', width: 14 },
+      { header: 'Horas extra', key: 'hours', width: 14 },
+      { header: 'Precio x hora', key: 'rate', width: 16 },
+      { header: 'Costo extra', key: 'cost', width: 16 },
+    ];
+    ws.getRow(1).font = { bold: true };
+    for (const row of data.items) {
+      ws.addRow({
+        name: row.fullName,
+        present: row.presentDays,
+        hours: row.overtimeHours,
+        rate: row.overtimeHourRate,
+        cost: row.overtimeCost,
+      });
+    }
+    ws.addRow({
+      name: 'Total',
+      present: data.totals.presentDays,
+      hours: data.totals.overtimeHours,
+      rate: '',
+      cost: data.totals.overtimeCost,
+    });
+    ws.getRow(ws.rowCount).font = { bold: true };
+    const buffer = Buffer.from(await wb.xlsx.writeBuffer());
+    const slug = this.fileSlug(shop.name || shop.slug || 'local');
+    return {
+      buffer,
+      filename: `horas-extra-${slug}-${from}_${to}.xlsx`,
+    };
+  }
+
   private fileSlug(name: string): string {
     return name
       .normalize('NFD')
@@ -177,13 +232,13 @@ export class AttendanceExcelImportService {
 
   async preview(user: AuthUser, shopId: string, file: Express.Multer.File) {
     this.shops.assertShopAccess(user, shopId);
-    const { rows, salaries } = await this.parseWorkbook(file);
+    const { rows, salaries } = await this.parseWorkbook(shopId, file);
     return this.enrich(shopId, rows, salaries);
   }
 
   async commit(user: AuthUser, shopId: string, file: Express.Multer.File) {
     this.shops.assertShopAccess(user, shopId);
-    const { rows, salaries } = await this.parseWorkbook(file);
+    const { rows, salaries } = await this.parseWorkbook(shopId, file);
     const items = await this.enrich(shopId, rows, salaries);
     const valid = items.filter((i) => i.valid);
     if (!valid.length && salaries.size === 0) {
@@ -271,6 +326,8 @@ export class AttendanceExcelImportService {
       }
       day.isPresent = item.isPresent;
       day.isHoliday = item.isHoliday;
+      day.checkInAt = item.isPresent ? item.checkInAt : null;
+      day.checkOutAt = item.isPresent ? item.checkOutAt : null;
       day.overtimeHours = String(item.overtimeHours);
       day.active = true;
       await this.days.save(day);
@@ -302,6 +359,8 @@ export class AttendanceExcelImportService {
       date: string;
       isPresent: boolean;
       isHoliday: boolean;
+      checkInAt: string | null;
+      checkOutAt: string | null;
       overtimeHours: number;
     }>,
     salaries: Map<string, number | null>,
@@ -327,7 +386,7 @@ export class AttendanceExcelImportService {
     });
   }
 
-  private async parseWorkbook(file: Express.Multer.File) {
+  private async parseWorkbook(shopId: string, file: Express.Multer.File) {
     if (!file?.buffer?.length) {
       throw new BadRequestException('Adjuntá un archivo Excel (.xlsx)');
     }
@@ -385,8 +444,14 @@ export class AttendanceExcelImportService {
       date: string;
       isPresent: boolean;
       isHoliday: boolean;
+      checkInAt: string | null;
+      checkOutAt: string | null;
       overtimeHours: number;
     }> = [];
+
+    const shop = await this.shops.getShopEntity(shopId);
+    const defaultIn = requireHhMm(shop?.serviceDefaultCheckIn, DEFAULT_SERVICE_CHECK_IN);
+    const defaultOut = requireHhMm(shop?.serviceDefaultCheckOut, DEFAULT_SERVICE_CHECK_OUT);
 
     baseSheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
       if (rowNumber === 1) return;
@@ -395,14 +460,26 @@ export class AttendanceExcelImportService {
       if (!employeeName || !date) return;
       const isPresent = this.parseBool(this.cell(row, colMap.present));
       const isHoliday = this.parseBool(this.cell(row, colMap.holiday));
-      const overtimeHours = this.parseNum(this.cell(row, colMap.overtime));
-      // Skip empty unmarked rows to reduce noise? Keep all dated rows.
+      const checkInAt = isPresent
+        ? parseHhMm(this.parseStr(this.cell(row, colMap.checkIn))) ?? defaultIn
+        : null;
+      const checkOutAt = isPresent
+        ? parseHhMm(this.parseStr(this.cell(row, colMap.checkOut))) ?? defaultOut
+        : null;
+      const overtimeHours = computeOvertimeHours({
+        isPresent,
+        checkInAt,
+        checkOutAt,
+        defaultCheckOut: defaultOut,
+      });
       rows.push({
         rowNumber,
         employeeName,
         date,
         isPresent,
         isHoliday,
+        checkInAt,
+        checkOutAt,
         overtimeHours,
       });
       if (!salaries.has(this.norm(employeeName))) {
@@ -426,7 +503,18 @@ export class AttendanceExcelImportService {
       } else if (key === 'fecha' || key === 'date') map.date = col;
       else if (key.includes('feriado')) map.holiday = col;
       else if (key.includes('presente') || key === 'present') map.present = col;
-      else if (key.includes('hora')) map.overtime = col;
+      else if (key.includes('entrada') || key.includes('checkin') || key.includes('check-in')) {
+        map.checkIn = col;
+      } else if (
+        key.includes('salida') ||
+        key.includes('checkout') ||
+        key.includes('check-out') ||
+        key.includes('retirada')
+      ) {
+        map.checkOut = col;
+      } else if (key.includes('hora extra') || key.includes('horas extra') || key === 'ot') {
+        map.overtime = col;
+      }
     });
     return map;
   }

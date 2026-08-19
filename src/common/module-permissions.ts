@@ -22,6 +22,7 @@ export type ModuleKey =
   | 'shortages'
   | 'tips'
   | 'reimbursements'
+  | 'serviceRules'
   | 'shop'
   | 'users';
 
@@ -225,6 +226,15 @@ export const MODULE_DEFS: ModuleDef[] = [
     ],
   },
   {
+    key: 'serviceRules',
+    label: 'Normas de servicio',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
     key: 'shop',
     label: 'Local / POS',
     levels: [
@@ -335,6 +345,14 @@ export function expandModulePermissions(
       add(set, 'reimbursements.read', 'reimbursements.manage');
       break;
   }
+  switch (modules.serviceRules) {
+    case 'read':
+      add(set, 'serviceRules.read');
+      break;
+    case 'manage':
+      add(set, 'serviceRules.read', 'serviceRules.manage');
+      break;
+  }
   // Quien gestiona pagos puede elegir / crear proveedores en el formulario.
   if (modules.payments === 'manage') {
     add(set, 'suppliers.read', 'suppliers.manage', 'services.read', 'services.manage');
@@ -412,6 +430,7 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
       if (has('reimbursements.self')) return 'self';
       return 'none';
     })(),
+    serviceRules: level('serviceRules.read', 'serviceRules.manage'),
     accounts: has('accounts.manage') ? 'manage' : 'none',
     concepts: has('concepts.manage') ? 'manage' : 'none',
     shop: has('shops.manage') ? 'manage' : 'none',

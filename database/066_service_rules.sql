@@ -1,0 +1,27 @@
+CREATE TABLE IF NOT EXISTS service_rule_categories (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  shopId CHAR(36) NOT NULL,
+  name VARCHAR(120) NOT NULL,
+  sortOrder INT NOT NULL DEFAULT 0,
+  createdAt DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updatedAt DATETIME(6) NULL,
+  deletedAt DATETIME(6) NULL,
+  active TINYINT(1) NOT NULL DEFAULT 1,
+  INDEX idx_src_shop (shopId)
+);
+
+CREATE TABLE IF NOT EXISTS service_rules (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  shopId CHAR(36) NOT NULL,
+  categoryId CHAR(36) NOT NULL,
+  phase ENUM('PRE', 'POST') NOT NULL DEFAULT 'PRE',
+  title VARCHAR(200) NOT NULL,
+  body TEXT NOT NULL,
+  sortOrder INT NOT NULL DEFAULT 0,
+  createdAt DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updatedAt DATETIME(6) NULL,
+  deletedAt DATETIME(6) NULL,
+  active TINYINT(1) NOT NULL DEFAULT 1,
+  INDEX idx_sr_shop (shopId),
+  INDEX idx_sr_cat (categoryId)
+);

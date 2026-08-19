@@ -14,6 +14,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  Matches,
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
@@ -156,6 +157,23 @@ export class CreateShopDto {
   @IsOptional()
   @IsBoolean()
   publicAttendanceEnabled?: boolean;
+
+  @ApiPropertyOptional({ description: 'Página pública de normas pre/post servicio' })
+  @IsOptional()
+  @IsBoolean()
+  publicServiceRulesEnabled?: boolean;
+
+  @ApiPropertyOptional({ example: '18:00', description: 'Hora de entrada default en servicio (HH:mm)' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
+  serviceDefaultCheckIn?: string;
+
+  @ApiPropertyOptional({ example: '00:00', description: 'Hora de retirada default en servicio (HH:mm)' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
+  serviceDefaultCheckOut?: string;
 
   @ApiPropertyOptional({ description: 'Carta pública del local' })
   @IsOptional()

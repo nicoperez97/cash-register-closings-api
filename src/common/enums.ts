@@ -50,6 +50,12 @@ export enum ShortageLevel {
   HIGH = 'HIGH',
 }
 
+/** Fase de una norma de servicio (antes / después del turno). */
+export enum ServiceRulePhase {
+  PRE = 'PRE',
+  POST = 'POST',
+}
+
 export enum NotificationType {
   PAYMENT_VALIDATE = 'PAYMENT_VALIDATE',
   PAYMENT_PAY = 'PAYMENT_PAY',
@@ -248,6 +254,8 @@ export const PERMISSIONS = [
   'reimbursements.self',
   'reimbursements.read',
   'reimbursements.manage',
+  'serviceRules.read',
+  'serviceRules.manage',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -269,6 +277,8 @@ export const ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     'candidates.read',
     'attendance.manage',
     'attendance.read',
+    'serviceRules.read',
+    'serviceRules.manage',
     'payroll.manage',
     'payroll.read',
     'commissions.manage',
@@ -298,6 +308,8 @@ export const ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     'tips.manage',
     'reimbursements.read',
     'reimbursements.manage',
+    'serviceRules.read',
+    'serviceRules.manage',
   ],
   [GlobalRole.CASHIER]: ['closings.create', 'tips.create', 'tips.read'],
   [GlobalRole.VIEWER]: [
@@ -307,6 +319,7 @@ export const ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     'employees.read',
     'candidates.read',
     'attendance.read',
+    'serviceRules.read',
     'payroll.read',
     'commissions.read',
     'movements.read',

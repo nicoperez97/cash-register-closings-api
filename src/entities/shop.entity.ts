@@ -77,6 +77,18 @@ export class Shop extends BaseEntity {
   @Column({ type: 'tinyint', default: 0 })
   publicAttendanceEnabled: boolean;
 
+  /** Página pública de normas pre/post servicio. */
+  @Column({ type: 'tinyint', default: 0 })
+  publicServiceRulesEnabled: boolean;
+
+  /** Hora de entrada default al marcar presente en servicio (HH:mm). */
+  @Column({ type: 'varchar', length: 5, default: '18:00' })
+  serviceDefaultCheckIn: string;
+
+  /** Hora de retirada default al marcar presente en servicio (HH:mm). */
+  @Column({ type: 'varchar', length: 5, default: '00:00' })
+  serviceDefaultCheckOut: string;
+
   /** Carta pública del local. */
   @Column({ type: 'tinyint', default: 0 })
   menuEnabled: boolean;

@@ -62,6 +62,14 @@ export class EmployeesService implements OnModuleInit {
     } catch {
       // ya existe
     }
+    try {
+      await this.employees.query(`
+        ALTER TABLE employees
+          ADD COLUMN overtimeHourRate DECIMAL(12,2) NOT NULL DEFAULT 0.00
+      `);
+    } catch {
+      // ya existe
+    }
   }
 
   private toDto(e: Employee) {
@@ -77,6 +85,7 @@ export class EmployeesService implements OnModuleInit {
       producesFood: !!e.producesFood,
       supervisorEmployeeId: e.supervisorEmployeeId ?? null,
       bankAlias: e.bankAlias?.trim() || null,
+      overtimeHourRate: n(e.overtimeHourRate),
       active: isEntityActive(e.active),
     };
   }
@@ -165,6 +174,7 @@ export class EmployeesService implements OnModuleInit {
       producesFood?: boolean;
       supervisorEmployeeId?: string | null;
       bankAlias?: string | null;
+      overtimeHourRate?: number;
       active?: boolean;
     },
   ) {
@@ -184,6 +194,7 @@ export class EmployeesService implements OnModuleInit {
         producesFood,
         supervisorEmployeeId: producesFood ? (dto.supervisorEmployeeId ?? null) : null,
         bankAlias: dto.bankAlias?.trim() || null,
+        overtimeHourRate: money(n(dto.overtimeHourRate)),
         active: dto.active ?? true,
       }),
     );
@@ -204,6 +215,7 @@ export class EmployeesService implements OnModuleInit {
       producesFood?: boolean;
       supervisorEmployeeId?: string | null;
       bankAlias?: string | null;
+      overtimeHourRate?: number;
       active?: boolean;
     },
   ) {
@@ -221,6 +233,7 @@ export class EmployeesService implements OnModuleInit {
     if (dto.type !== undefined) row.type = normalizeEmployeeType(dto.type);
     if (dto.producesFood !== undefined) row.producesFood = !!dto.producesFood;
     if (dto.bankAlias !== undefined) row.bankAlias = dto.bankAlias?.trim() || null;
+    if (dto.overtimeHourRate !== undefined) row.overtimeHourRate = money(n(dto.overtimeHourRate));
     if (dto.active !== undefined) row.active = dto.active;
 
     const producesFood = !!row.producesFood;
