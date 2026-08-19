@@ -6,6 +6,7 @@ import { Employee, EmployeeType } from '../../entities/employee.entity';
 import { ProductionAttendanceDay } from '../../entities/production-attendance-day.entity';
 import { AuthUser } from '../../common/decorators';
 import { isEntityActive } from '../../common/active.util';
+import { ShopLiveService } from '../shop-live/shop-live.service';
 import { ShopsService } from '../shops/shops.service';
 import {
   computeOvertimeHours,
@@ -30,6 +31,7 @@ export class AttendanceService implements OnModuleInit {
     @InjectRepository(ProductionAttendanceDay)
     private readonly prodDays: Repository<ProductionAttendanceDay>,
     private readonly shops: ShopsService,
+    private readonly live: ShopLiveService,
   ) {}
 
   async onModuleInit() {
@@ -241,6 +243,7 @@ export class AttendanceService implements OnModuleInit {
     if (dto.isHoliday !== undefined) row.isHoliday = dto.isHoliday;
     this.applyShift(row, dto, defaults, withHours);
     await this.days.save(row);
+    this.live.tick(shopId, 'attendance');
     return {
       id: row.id,
       employeeId: row.employeeId,

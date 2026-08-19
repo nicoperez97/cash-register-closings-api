@@ -16,6 +16,7 @@ import { AuthUser } from '../../common/decorators';
 import { GlobalRole, NotificationType } from '../../common/enums';
 import { isEntityActive } from '../../common/active.util';
 import { ShopsService } from '../shops/shops.service';
+import { ShopLiveService } from '../shop-live/shop-live.service';
 import { NotificationsService } from '../notifications/notifications.service';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
@@ -34,6 +35,7 @@ export class ProductionAttendanceService implements OnModuleInit {
     @InjectRepository(UserShop) private readonly userShops: Repository<UserShop>,
     private readonly shops: ShopsService,
     private readonly notifications: NotificationsService,
+    private readonly live: ShopLiveService,
   ) {}
 
   async onModuleInit() {
@@ -455,6 +457,7 @@ export class ProductionAttendanceService implements OnModuleInit {
     }
     row.hours = hoursStr(hours);
     await this.days.save(row);
+    this.live.tick(shopId, 'attendance');
     const savedHours = n(row.hours);
     return {
       id: row.id,

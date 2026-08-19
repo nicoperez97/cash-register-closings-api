@@ -2,11 +2,15 @@ import {
   Body,
   Controller,
   Get,
+  Header,
+  MessageEvent,
+  NotFoundException,
   Param,
   Patch,
   Post,
   Query,
   Res,
+  Sse,
   UploadedFile,
   UseGuards,
   UseInterceptors,
@@ -14,7 +18,10 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
+import type { Observable } from 'rxjs';
+import { from, switchMap, throwError } from 'rxjs';
 import type { Response } from 'express';
+import { ShopLiveService } from '../shop-live/shop-live.service';
 import { ShopsService } from './shops.service';
 import { ShopBackupService } from './shop-backup.service';
 import { CurrentUser, AuthUser, RequirePermissions, Public } from '../../common/decorators';
@@ -140,7 +147,24 @@ export class ShopsController {
 @ApiTags('public-shops')
 @Controller('public/shops')
 export class PublicShopsController {
-  constructor(private readonly shops: ShopsService) {}
+  constructor(
+    private readonly shops: ShopsService,
+    private readonly live: ShopLiveService,
+  ) {}
+
+  @Public()
+  @Sse(':slug/live')
+  @Header('Cache-Control', 'no-cache, no-transform')
+  @Header('Connection', 'keep-alive')
+  @Header('X-Accel-Buffering', 'no')
+  liveStream(@Param('slug') slug: string): Observable<MessageEvent> {
+    return from(this.shops.findActiveBySlug(String(slug ?? '').trim().toLowerCase())).pipe(
+      switchMap((shop) => {
+        if (!shop) return throwError(() => new NotFoundException('Local no encontrado'));
+        return this.live.stream(shop.id);
+      }),
+    );
+  }
 
   @Public()
   @Get(':shopId/logo')
