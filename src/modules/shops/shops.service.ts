@@ -272,6 +272,14 @@ export class ShopsService implements OnModuleInit {
     try {
       await this.shops.query(`
         ALTER TABLE shops
+          ADD COLUMN serviceAttendanceWithHours TINYINT(1) NOT NULL DEFAULT 1
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
           ADD COLUMN menuEnabled TINYINT(1) NOT NULL DEFAULT 0
       `);
     } catch {
@@ -456,6 +464,7 @@ export class ShopsService implements OnModuleInit {
         publicServiceRulesEnabled: dto.publicServiceRulesEnabled ?? false,
         serviceDefaultCheckIn: requireHhMm(dto.serviceDefaultCheckIn, DEFAULT_SERVICE_CHECK_IN),
         serviceDefaultCheckOut: requireHhMm(dto.serviceDefaultCheckOut, DEFAULT_SERVICE_CHECK_OUT),
+        serviceAttendanceWithHours: dto.serviceAttendanceWithHours ?? true,
         menuEnabled: dto.menuEnabled ?? false,
         defaultChangeAmount: String(dto.defaultChangeAmount ?? 0),
         productionDefaultHours: String(
@@ -553,6 +562,9 @@ export class ShopsService implements OnModuleInit {
         dto.serviceDefaultCheckOut,
         DEFAULT_SERVICE_CHECK_OUT,
       );
+    }
+    if (dto.serviceAttendanceWithHours !== undefined) {
+      shop.serviceAttendanceWithHours = dto.serviceAttendanceWithHours;
     }
     if (dto.menuEnabled !== undefined) {
       shop.menuEnabled = dto.menuEnabled;
@@ -887,6 +899,10 @@ export class ShopsService implements OnModuleInit {
       publicServiceRulesEnabled: !!s.publicServiceRulesEnabled,
       serviceDefaultCheckIn: s.serviceDefaultCheckIn || '18:00',
       serviceDefaultCheckOut: s.serviceDefaultCheckOut || '00:00',
+      serviceAttendanceWithHours:
+        s.serviceAttendanceWithHours === undefined || s.serviceAttendanceWithHours === null
+          ? true
+          : !!s.serviceAttendanceWithHours,
       menuEnabled: !!s.menuEnabled,
       defaultChangeAmount: Number(s.defaultChangeAmount),
       productionDefaultHours: Number(s.productionDefaultHours ?? 8) || 8,

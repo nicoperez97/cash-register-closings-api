@@ -175,6 +175,13 @@ export class CreateShopDto {
   @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
   serviceDefaultCheckOut?: string;
 
+  @ApiPropertyOptional({
+    description: 'Si es true, el presentismo de servicio usa entrada/salida y extras',
+  })
+  @IsOptional()
+  @IsBoolean()
+  serviceAttendanceWithHours?: boolean;
+
   @ApiPropertyOptional({ description: 'Carta pública del local' })
   @IsOptional()
   @IsBoolean()

@@ -503,6 +503,10 @@ export class AuthService implements OnModuleInit {
         publicServiceRulesEnabled: !!s.publicServiceRulesEnabled,
         serviceDefaultCheckIn: s.serviceDefaultCheckIn || '18:00',
         serviceDefaultCheckOut: s.serviceDefaultCheckOut || '00:00',
+        serviceAttendanceWithHours:
+          s.serviceAttendanceWithHours === undefined || s.serviceAttendanceWithHours === null
+            ? true
+            : !!s.serviceAttendanceWithHours,
         menuEnabled: !!s.menuEnabled,
         defaultChangeAmount: Number(s.defaultChangeAmount),
         productionDefaultHours: Number(s.productionDefaultHours ?? 8) || 8,

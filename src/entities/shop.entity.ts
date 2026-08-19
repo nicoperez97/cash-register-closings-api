@@ -89,6 +89,10 @@ export class Shop extends BaseEntity {
   @Column({ type: 'varchar', length: 5, default: '00:00' })
   serviceDefaultCheckOut: string;
 
+  /** Si es false, presentismo de servicio es solo presente/ausente/feriado (sin horarios). */
+  @Column({ type: 'tinyint', default: 1 })
+  serviceAttendanceWithHours: boolean;
+
   /** Carta pública del local. */
   @Column({ type: 'tinyint', default: 0 })
   menuEnabled: boolean;

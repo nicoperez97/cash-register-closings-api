@@ -406,6 +406,9 @@ export class AttendanceExcelImportService {
   ): Promise<AttendanceImportItem[]> {
     const employees = await this.employees.find({ where: { shopId } });
     const byName = new Map(employees.map((e) => [this.norm(e.fullName), e]));
+    const shop = await this.shops.getShopEntity(shopId);
+    const shopDefaultIn = requireHhMm(shop?.serviceDefaultCheckIn, DEFAULT_SERVICE_CHECK_IN);
+    const shopDefaultOut = requireHhMm(shop?.serviceDefaultCheckOut, DEFAULT_SERVICE_CHECK_OUT);
 
     return rows.map((r) => {
       const emp = byName.get(this.norm(r.employeeName));
@@ -414,8 +417,24 @@ export class AttendanceExcelImportService {
       if (!r.date) errors.push('Fecha inválida');
       const willCreate = !!r.employeeName && !emp;
       const willReactivate = !!emp && !emp.active;
+      const withHours = shop?.serviceAttendanceWithHours !== false;
+      const defaultIn = requireHhMm(emp?.serviceCheckIn, shopDefaultIn);
+      const defaultOut = requireHhMm(emp?.serviceCheckOut, shopDefaultOut);
+      const checkInAt = withHours && r.isPresent ? r.checkInAt ?? defaultIn : null;
+      const checkOutAt = withHours && r.isPresent ? r.checkOutAt ?? defaultOut : null;
+      const overtimeHours = withHours
+        ? computeOvertimeHours({
+            isPresent: r.isPresent,
+            checkInAt,
+            checkOutAt,
+            defaultCheckOut: defaultOut,
+          })
+        : 0;
       return {
         ...r,
+        checkInAt,
+        checkOutAt,
+        overtimeHours,
         employeeId: emp?.id ?? null,
         willCreateEmployee: willCreate || willReactivate,
         baseSalaryHint: salaries.get(this.norm(r.employeeName)) ?? null,
@@ -488,10 +507,6 @@ export class AttendanceExcelImportService {
       overtimeHours: number;
     }> = [];
 
-    const shop = await this.shops.getShopEntity(shopId);
-    const defaultIn = requireHhMm(shop?.serviceDefaultCheckIn, DEFAULT_SERVICE_CHECK_IN);
-    const defaultOut = requireHhMm(shop?.serviceDefaultCheckOut, DEFAULT_SERVICE_CHECK_OUT);
-
     baseSheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
       if (rowNumber === 1) return;
       const employeeName = this.parseStr(this.cell(row, colMap.employee)) ?? '';
@@ -499,27 +514,15 @@ export class AttendanceExcelImportService {
       if (!employeeName || !date) return;
       const isPresent = this.parseBool(this.cell(row, colMap.present));
       const isHoliday = this.parseBool(this.cell(row, colMap.holiday));
-      const checkInAt = isPresent
-        ? parseHhMm(this.parseStr(this.cell(row, colMap.checkIn))) ?? defaultIn
-        : null;
-      const checkOutAt = isPresent
-        ? parseHhMm(this.parseStr(this.cell(row, colMap.checkOut))) ?? defaultOut
-        : null;
-      const overtimeHours = computeOvertimeHours({
-        isPresent,
-        checkInAt,
-        checkOutAt,
-        defaultCheckOut: defaultOut,
-      });
       rows.push({
         rowNumber,
         employeeName,
         date,
         isPresent,
         isHoliday,
-        checkInAt,
-        checkOutAt,
-        overtimeHours,
+        checkInAt: isPresent ? parseHhMm(this.parseStr(this.cell(row, colMap.checkIn))) : null,
+        checkOutAt: isPresent ? parseHhMm(this.parseStr(this.cell(row, colMap.checkOut))) : null,
+        overtimeHours: 0,
       });
       if (!salaries.has(this.norm(employeeName))) {
         salaries.set(this.norm(employeeName), null);

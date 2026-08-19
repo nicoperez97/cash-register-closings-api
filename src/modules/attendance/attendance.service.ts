@@ -119,11 +119,19 @@ export class AttendanceService implements OnModuleInit {
           fullName: e.fullName,
           baseSalary: n(e.baseSalary),
           overtimeHourRate: n(e.overtimeHourRate),
+          serviceCheckIn: e.serviceCheckIn ?? null,
+          serviceCheckOut: e.serviceCheckOut ?? null,
           type: employeeTypeOf(e),
           days: byDate,
         };
       }),
     };
+  }
+
+  private withHours(shop?: { serviceAttendanceWithHours?: boolean | number | null } | null) {
+    const v = shop?.serviceAttendanceWithHours;
+    if (v === false || v === 0) return false;
+    return true;
   }
 
   private shopShiftDefaults(shop: {
@@ -136,6 +144,20 @@ export class AttendanceService implements OnModuleInit {
     };
   }
 
+  private employeeShiftDefaults(
+    shop: {
+      serviceDefaultCheckIn?: string | null;
+      serviceDefaultCheckOut?: string | null;
+    },
+    emp?: { serviceCheckIn?: string | null; serviceCheckOut?: string | null } | null,
+  ) {
+    const shopDefaults = this.shopShiftDefaults(shop);
+    return {
+      checkIn: requireHhMm(emp?.serviceCheckIn, shopDefaults.checkIn),
+      checkOut: requireHhMm(emp?.serviceCheckOut, shopDefaults.checkOut),
+    };
+  }
+
   private applyShift(
     row: AttendanceDay,
     dto: {
@@ -144,8 +166,15 @@ export class AttendanceService implements OnModuleInit {
       checkOutAt?: string | null;
     },
     defaults: { checkIn: string; checkOut: string },
+    withHours: boolean,
   ) {
     if (dto.isPresent !== undefined) row.isPresent = dto.isPresent;
+    if (!withHours) {
+      row.checkInAt = null;
+      row.checkOutAt = null;
+      row.overtimeHours = '0';
+      return;
+    }
     if (!row.isPresent) {
       row.checkInAt = null;
       row.checkOutAt = null;
@@ -190,7 +219,8 @@ export class AttendanceService implements OnModuleInit {
       throw new NotFoundException('Empleado no encontrado');
     }
     const shop = await this.shops.getShopEntity(shopId);
-    const defaults = this.shopShiftDefaults(shop ?? {});
+    const withHours = this.withHours(shop);
+    const defaults = this.employeeShiftDefaults(shop ?? {}, emp);
 
     let row = await this.days.findOne({
       where: { employeeId: dto.employeeId, date: dto.date },
@@ -209,7 +239,7 @@ export class AttendanceService implements OnModuleInit {
       });
     }
     if (dto.isHoliday !== undefined) row.isHoliday = dto.isHoliday;
-    this.applyShift(row, dto, defaults);
+    this.applyShift(row, dto, defaults, withHours);
     await this.days.save(row);
     return {
       id: row.id,
@@ -375,6 +405,8 @@ export class AttendanceService implements OnModuleInit {
         isHoliday: boolean;
         overtimeHours: number;
         hours: number | null;
+        checkInAt: string | null;
+        checkOutAt: string | null;
       }
     > = {};
     for (const d of rows) {
@@ -383,6 +415,8 @@ export class AttendanceService implements OnModuleInit {
         isHoliday: !!d.isHoliday,
         overtimeHours: n(d.overtimeHours),
         hours: emp.producesFood ? (prodByDate.get(d.date) ?? 0) : null,
+        checkInAt: d.checkInAt ?? null,
+        checkOutAt: d.checkOutAt ?? null,
       };
     }
     if (emp.producesFood) {
@@ -393,6 +427,8 @@ export class AttendanceService implements OnModuleInit {
             isHoliday: false,
             overtimeHours: 0,
             hours,
+            checkInAt: null,
+            checkOutAt: null,
           };
         } else {
           days[date].hours = hours;
