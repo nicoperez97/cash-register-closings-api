@@ -480,6 +480,16 @@ export class ReservationsController {
     return this.requests.reject(user, shopId, id, dto?.staffNote);
   }
 
+  @Delete('reservation-requests/:id')
+  @RequirePermissions('reservations.manage')
+  removeReservationRequest(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+  ) {
+    return this.requests.remove(user, shopId, id);
+  }
+
   @Put('reservation-day-notices')
   @RequirePermissions('reservations.manage')
   upsertDayNotice(

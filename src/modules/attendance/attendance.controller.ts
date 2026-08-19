@@ -26,10 +26,10 @@ import {
   IsArray,
   IsBoolean,
   IsDateString,
-  IsNumber,
   IsOptional,
+  IsString,
   IsUUID,
-  Min,
+  Matches,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -43,7 +43,16 @@ class UpsertAttendanceDto {
   @ApiProperty() @IsDateString() date: string;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() isPresent?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() isHoliday?: boolean;
-  @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) overtimeHours?: number;
+  @ApiPropertyOptional({ example: '18:00' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
+  checkInAt?: string | null;
+  @ApiPropertyOptional({ example: '00:00' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
+  checkOutAt?: string | null;
 }
 
 class BulkAttendanceDto {
@@ -79,18 +88,59 @@ export class AttendanceController {
     return this.attendance.getMonth(user, shopId, y, m);
   }
 
+  @Get('overtime-summary')
+  @RequirePermissions('attendance.read')
+  overtimeSummary(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    return this.attendance.overtimeSummary(user, shopId, from, to);
+  }
+
+  @Get('overtime-summary.xlsx')
+  @RequirePermissions('attendance.read')
+  async overtimeSummaryExcel(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Res() res: Response,
+  ) {
+    const { buffer, filename } = await this.excelImport.exportOvertimeSummary(
+      user,
+      shopId,
+      from,
+      to,
+    );
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
+  }
+
   @Get('export.xlsx')
   @RequirePermissions('attendance.read')
   async export(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
+    @Query('from') from: string,
+    @Query('to') to: string,
     @Query('year') year: string,
     @Query('month') month: string,
     @Res() res: Response,
   ) {
-    const y = Number(year) || new Date().getFullYear();
-    const m = Number(month) || new Date().getMonth() + 1;
-    const { buffer, filename } = await this.excelImport.exportMonth(user, shopId, y, m);
+    const { buffer, filename } = await this.excelImport.exportRange(
+      user,
+      shopId,
+      from,
+      to,
+      year,
+      month,
+    );
     res.setHeader(
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

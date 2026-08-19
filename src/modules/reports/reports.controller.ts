@@ -14,6 +14,26 @@ import { parseClosingFilters } from '../closings/closing-filters';
 export class ReportsController {
   constructor(private readonly reports: ReportsService) {}
 
+  private conceptFilters(query: Record<string, string | undefined>): {
+    from?: string;
+    to?: string;
+    kind?: 'INCOME' | 'EXPENSE' | 'TRANSFER';
+    conceptId?: string;
+  } {
+    const base = parseClosingFilters(query);
+    const kindRaw = (query.kind ?? '').trim().toUpperCase();
+    const kind: 'INCOME' | 'EXPENSE' | 'TRANSFER' | undefined =
+      kindRaw === 'INCOME' || kindRaw === 'EXPENSE' || kindRaw === 'TRANSFER'
+        ? kindRaw
+        : undefined;
+    return {
+      from: base.from,
+      to: base.to,
+      kind,
+      conceptId: (query.conceptId ?? '').trim() || undefined,
+    };
+  }
+
   @Get('dashboard')
   @RequirePermissions('reports.view')
   dashboard(
@@ -52,6 +72,37 @@ export class ReportsController {
     @Query() query: Record<string, string | undefined>,
   ) {
     return this.reports.expensesByConcept(user, shopId, parseClosingFilters(query));
+  }
+
+  @Get('concepts/export.xlsx')
+  @RequirePermissions('reports.export')
+  async conceptsExport(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Query() query: Record<string, string | undefined>,
+    @Res() res: Response,
+  ) {
+    const { buffer, filename } = await this.reports.exportConceptsExcel(
+      user,
+      shopId,
+      this.conceptFilters(query),
+    );
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
+  }
+
+  @Get('concepts')
+  @RequirePermissions('reports.view')
+  concepts(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Query() query: Record<string, string | undefined>,
+  ) {
+    return this.reports.conceptsAnalytics(user, shopId, this.conceptFilters(query));
   }
 
   @Get('export.xlsx')

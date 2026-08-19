@@ -77,6 +77,22 @@ export class Shop extends BaseEntity {
   @Column({ type: 'tinyint', default: 0 })
   publicAttendanceEnabled: boolean;
 
+  /** Página pública de normas pre/post servicio. */
+  @Column({ type: 'tinyint', default: 0 })
+  publicServiceRulesEnabled: boolean;
+
+  /** Hora de entrada default al marcar presente en servicio (HH:mm). */
+  @Column({ type: 'varchar', length: 5, default: '18:00' })
+  serviceDefaultCheckIn: string;
+
+  /** Hora de retirada default al marcar presente en servicio (HH:mm). */
+  @Column({ type: 'varchar', length: 5, default: '00:00' })
+  serviceDefaultCheckOut: string;
+
+  /** Si es false, presentismo de servicio es solo presente/ausente/feriado (sin horarios). */
+  @Column({ type: 'tinyint', default: 1 })
+  serviceAttendanceWithHours: boolean;
+
   /** Carta pública del local. */
   @Column({ type: 'tinyint', default: 0 })
   menuEnabled: boolean;
@@ -196,6 +212,18 @@ export class Shop extends BaseEntity {
    */
   @Column({ type: 'simple-json', nullable: true })
   posnets?: ShopPosnet[] | null;
+
+  /**
+   * Categorías de concepto a listar según el tipo de pago / movimiento.
+   * null = defaults (proveedores, servicios+proveedores, empleados, movimientos).
+   */
+  @Column({ type: 'json', nullable: true })
+  paymentConceptCategories?: {
+    supplier?: string[];
+    service?: string[];
+    employee?: string[];
+    movement?: string[];
+  } | null;
 
   @ManyToOne(() => SalesSystem, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'salesSystemId' })

@@ -11,6 +11,7 @@ import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { AuthUser } from '../../common/decorators';
 import { isEntityActive } from '../../common/active.util';
+import { parseHhMm } from '../../common/shift-hours.util';
 import { ShopsService } from '../shops/shops.service';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
@@ -54,6 +55,38 @@ export class EmployeesService implements OnModuleInit {
     } catch {
       // ya existe
     }
+    try {
+      await this.employees.query(`
+        ALTER TABLE employees
+          ADD COLUMN bankAlias VARCHAR(120) NULL
+      `);
+    } catch {
+      // ya existe
+    }
+    try {
+      await this.employees.query(`
+        ALTER TABLE employees
+          ADD COLUMN overtimeHourRate DECIMAL(12,2) NOT NULL DEFAULT 0.00
+      `);
+    } catch {
+      // ya existe
+    }
+    try {
+      await this.employees.query(`
+        ALTER TABLE employees
+          ADD COLUMN serviceCheckIn VARCHAR(5) NULL
+      `);
+    } catch {
+      // ya existe
+    }
+    try {
+      await this.employees.query(`
+        ALTER TABLE employees
+          ADD COLUMN serviceCheckOut VARCHAR(5) NULL
+      `);
+    } catch {
+      // ya existe
+    }
   }
 
   private toDto(e: Employee) {
@@ -68,6 +101,10 @@ export class EmployeesService implements OnModuleInit {
       type: normalizeEmployeeType(e.type),
       producesFood: !!e.producesFood,
       supervisorEmployeeId: e.supervisorEmployeeId ?? null,
+      bankAlias: e.bankAlias?.trim() || null,
+      overtimeHourRate: n(e.overtimeHourRate),
+      serviceCheckIn: e.serviceCheckIn ?? null,
+      serviceCheckOut: e.serviceCheckOut ?? null,
       active: isEntityActive(e.active),
     };
   }
@@ -155,6 +192,10 @@ export class EmployeesService implements OnModuleInit {
       type?: EmployeeType;
       producesFood?: boolean;
       supervisorEmployeeId?: string | null;
+      bankAlias?: string | null;
+      overtimeHourRate?: number;
+      serviceCheckIn?: string | null;
+      serviceCheckOut?: string | null;
       active?: boolean;
     },
   ) {
@@ -173,6 +214,10 @@ export class EmployeesService implements OnModuleInit {
         type: normalizeEmployeeType(dto.type),
         producesFood,
         supervisorEmployeeId: producesFood ? (dto.supervisorEmployeeId ?? null) : null,
+        bankAlias: dto.bankAlias?.trim() || null,
+        overtimeHourRate: money(n(dto.overtimeHourRate)),
+        serviceCheckIn: parseHhMm(dto.serviceCheckIn),
+        serviceCheckOut: parseHhMm(dto.serviceCheckOut),
         active: dto.active ?? true,
       }),
     );
@@ -192,6 +237,10 @@ export class EmployeesService implements OnModuleInit {
       type?: EmployeeType;
       producesFood?: boolean;
       supervisorEmployeeId?: string | null;
+      bankAlias?: string | null;
+      overtimeHourRate?: number;
+      serviceCheckIn?: string | null;
+      serviceCheckOut?: string | null;
       active?: boolean;
     },
   ) {
@@ -208,6 +257,10 @@ export class EmployeesService implements OnModuleInit {
     if (dto.notes !== undefined) row.notes = dto.notes;
     if (dto.type !== undefined) row.type = normalizeEmployeeType(dto.type);
     if (dto.producesFood !== undefined) row.producesFood = !!dto.producesFood;
+    if (dto.bankAlias !== undefined) row.bankAlias = dto.bankAlias?.trim() || null;
+    if (dto.overtimeHourRate !== undefined) row.overtimeHourRate = money(n(dto.overtimeHourRate));
+    if (dto.serviceCheckIn !== undefined) row.serviceCheckIn = parseHhMm(dto.serviceCheckIn);
+    if (dto.serviceCheckOut !== undefined) row.serviceCheckOut = parseHhMm(dto.serviceCheckOut);
     if (dto.active !== undefined) row.active = dto.active;
 
     const producesFood = !!row.producesFood;

@@ -49,6 +49,17 @@ export function conceptKindLabel(kind?: string | null): string {
   return map[kind ?? ''] ?? kind ?? '';
 }
 
+export function conceptCategoryLabel(category?: string | null): string {
+  const map: Record<string, string> = {
+    EMPLOYEES: 'Empleados',
+    SERVICES: 'Servicios',
+    SUPPLIERS: 'Proveedores',
+    MOVEMENTS: 'Movimientos',
+    OTHERS: 'Otros',
+  };
+  return map[category ?? ''] ?? category ?? '';
+}
+
 export function accountTypeLabel(type?: string | null): string {
   const map: Record<string, string> = {
     PARTNER: 'Socio',

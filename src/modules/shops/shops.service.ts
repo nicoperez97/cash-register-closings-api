@@ -20,12 +20,18 @@ import { normalizeLogoUrl } from '../../common/drive-url';
 import { isEntityActive } from '../../common/active.util';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
 import { normalizeOpeningTime } from '../../common/business-date';
+import {
+  DEFAULT_SERVICE_CHECK_IN,
+  DEFAULT_SERVICE_CHECK_OUT,
+  requireHhMm,
+} from '../../common/shift-hours.util';
 import { CreateShopDto, UpdateShopDto } from './dto/shop.dto';
 import { PosnetType, ShopPosnet } from '../../common/posnet';
 import { randomUUID } from 'crypto';
 import { normalizeUserVisibility, UserVisibility } from '../../common/user-visibility';
 import { normalizePartyRule } from '../reservations/reservation-party-rules.util';
 import { normalizeEmailMessageTemplates } from '../notifications/mail-message-templates.util';
+import { normalizePaymentConceptCategories } from '../../common/concept-categories';
 import {
   deleteUploadIfExists,
   resolveUploadPath,
@@ -242,6 +248,38 @@ export class ShopsService implements OnModuleInit {
     try {
       await this.shops.query(`
         ALTER TABLE shops
+          ADD COLUMN publicServiceRulesEnabled TINYINT(1) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN serviceDefaultCheckIn VARCHAR(5) NOT NULL DEFAULT '18:00'
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN serviceDefaultCheckOut VARCHAR(5) NOT NULL DEFAULT '00:00'
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN serviceAttendanceWithHours TINYINT(1) NOT NULL DEFAULT 1
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
           ADD COLUMN menuEnabled TINYINT(1) NOT NULL DEFAULT 0
       `);
     } catch {
@@ -251,6 +289,14 @@ export class ShopsService implements OnModuleInit {
       await this.shops.query(`
         ALTER TABLE shops
           ADD COLUMN menu TEXT NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN paymentConceptCategories JSON NULL
       `);
     } catch {
       // columna ya existe
@@ -415,6 +461,10 @@ export class ShopsService implements OnModuleInit {
         waitingListEnabled: dto.waitingListEnabled ?? true,
         tipsEnabled: dto.tipsEnabled ?? false,
         publicAttendanceEnabled: dto.publicAttendanceEnabled ?? false,
+        publicServiceRulesEnabled: dto.publicServiceRulesEnabled ?? false,
+        serviceDefaultCheckIn: requireHhMm(dto.serviceDefaultCheckIn, DEFAULT_SERVICE_CHECK_IN),
+        serviceDefaultCheckOut: requireHhMm(dto.serviceDefaultCheckOut, DEFAULT_SERVICE_CHECK_OUT),
+        serviceAttendanceWithHours: dto.serviceAttendanceWithHours ?? true,
         menuEnabled: dto.menuEnabled ?? false,
         defaultChangeAmount: String(dto.defaultChangeAmount ?? 0),
         productionDefaultHours: String(
@@ -440,6 +490,9 @@ export class ShopsService implements OnModuleInit {
         salesSystemId: dto.salesSystemId ?? null,
         posPaymentMap: dto.posPaymentMap ?? null,
         posnets: this.normalizePosnets(dto.posnets),
+        paymentConceptCategories: dto.paymentConceptCategories
+          ? normalizePaymentConceptCategories(dto.paymentConceptCategories)
+          : null,
         active: true,
       }),
     );
@@ -497,6 +550,21 @@ export class ShopsService implements OnModuleInit {
     }
     if (dto.publicAttendanceEnabled !== undefined) {
       shop.publicAttendanceEnabled = dto.publicAttendanceEnabled;
+    }
+    if (dto.publicServiceRulesEnabled !== undefined) {
+      shop.publicServiceRulesEnabled = dto.publicServiceRulesEnabled;
+    }
+    if (dto.serviceDefaultCheckIn !== undefined) {
+      shop.serviceDefaultCheckIn = requireHhMm(dto.serviceDefaultCheckIn, DEFAULT_SERVICE_CHECK_IN);
+    }
+    if (dto.serviceDefaultCheckOut !== undefined) {
+      shop.serviceDefaultCheckOut = requireHhMm(
+        dto.serviceDefaultCheckOut,
+        DEFAULT_SERVICE_CHECK_OUT,
+      );
+    }
+    if (dto.serviceAttendanceWithHours !== undefined) {
+      shop.serviceAttendanceWithHours = dto.serviceAttendanceWithHours;
     }
     if (dto.menuEnabled !== undefined) {
       shop.menuEnabled = dto.menuEnabled;
@@ -567,6 +635,11 @@ export class ShopsService implements OnModuleInit {
     }
     if (dto.posnets !== undefined) {
       shop.posnets = this.normalizePosnets(dto.posnets);
+    }
+    if (dto.paymentConceptCategories !== undefined) {
+      shop.paymentConceptCategories = dto.paymentConceptCategories
+        ? normalizePaymentConceptCategories(dto.paymentConceptCategories)
+        : null;
     }
 
     await this.shops.save(shop);
@@ -823,6 +896,13 @@ export class ShopsService implements OnModuleInit {
       tipsEnabled: !!s.tipsEnabled,
       settlementsEnabled: false,
       publicAttendanceEnabled: !!s.publicAttendanceEnabled,
+      publicServiceRulesEnabled: !!s.publicServiceRulesEnabled,
+      serviceDefaultCheckIn: s.serviceDefaultCheckIn || '18:00',
+      serviceDefaultCheckOut: s.serviceDefaultCheckOut || '00:00',
+      serviceAttendanceWithHours:
+        s.serviceAttendanceWithHours === undefined || s.serviceAttendanceWithHours === null
+          ? true
+          : !!s.serviceAttendanceWithHours,
       menuEnabled: !!s.menuEnabled,
       defaultChangeAmount: Number(s.defaultChangeAmount),
       productionDefaultHours: Number(s.productionDefaultHours ?? 8) || 8,
@@ -850,6 +930,7 @@ export class ShopsService implements OnModuleInit {
       salesSystemId: s.salesSystemId ?? null,
       posPaymentMap: s.posPaymentMap ?? null,
       posnets: s.posnets ?? [],
+      paymentConceptCategories: normalizePaymentConceptCategories(s.paymentConceptCategories),
       active: isEntityActive(s.active),
     };
   }

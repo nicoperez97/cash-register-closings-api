@@ -354,6 +354,366 @@ export class ReportsService {
     });
   }
 
+  async conceptsAnalytics(
+    user: AuthUser,
+    shopId: string,
+    filters: {
+      from?: string;
+      to?: string;
+      kind?: 'INCOME' | 'EXPENSE' | 'TRANSFER';
+      conceptId?: string;
+    },
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    const rows = await this.movementsService.list(user, shopId, {
+      from: filters.from,
+      to: filters.to,
+    });
+    const tagged = rows.map((r) => {
+      const kind = this.inferMovementKind(r);
+      return {
+        ...r,
+        kind,
+        conceptName: r.conceptName?.trim() || 'Sin concepto',
+      };
+    });
+
+    const optionMap = new Map<string, { id: string | null; name: string; kind: string }>();
+    for (const r of tagged) {
+      const id = r.conceptId ?? `__name:${r.conceptName}`;
+      if (optionMap.has(id)) continue;
+      optionMap.set(id, { id: r.conceptId, name: r.conceptName, kind: r.kind });
+    }
+    const conceptOptions = [...optionMap.values()].sort((a, b) =>
+      a.name.localeCompare(b.name, 'es'),
+    );
+
+    let filtered = tagged;
+    if (filters.kind) filtered = filtered.filter((r) => r.kind === filters.kind);
+    if (filters.conceptId === '__none') {
+      filtered = filtered.filter((r) => !r.conceptId);
+    } else if (filters.conceptId) {
+      filtered = filtered.filter((r) => r.conceptId === filters.conceptId);
+    }
+
+    const current = this.aggregateConceptRows(filtered);
+    let comparison: {
+      incomeDeltaPct: number | null;
+      expenseDeltaPct: number | null;
+      countDeltaPct: number | null;
+    } | null = null;
+    if (filters.from && filters.to) {
+      const prevRange = previousPeriod(filters.from, filters.to);
+      const prevRows = await this.movementsService.list(user, shopId, prevRange);
+      let prevTagged = prevRows.map((r) => ({
+        ...r,
+        kind: this.inferMovementKind(r),
+        conceptName: r.conceptName?.trim() || 'Sin concepto',
+      }));
+      if (filters.kind) prevTagged = prevTagged.filter((r) => r.kind === filters.kind);
+      if (filters.conceptId === '__none') {
+        prevTagged = prevTagged.filter((r) => !r.conceptId);
+      } else if (filters.conceptId) {
+        prevTagged = prevTagged.filter((r) => r.conceptId === filters.conceptId);
+      }
+      const prev = this.aggregateConceptRows(prevTagged);
+      comparison = {
+        incomeDeltaPct: pctDelta(current.totals.income, prev.totals.income),
+        expenseDeltaPct: pctDelta(current.totals.expense, prev.totals.expense),
+        countDeltaPct: pctDelta(current.totals.movementCount, prev.totals.movementCount),
+      };
+    }
+
+    return {
+      shopId,
+      from: filters.from ?? null,
+      to: filters.to ?? null,
+      conceptOptions,
+      comparison,
+      ...current,
+    };
+  }
+
+  async exportConceptsExcel(
+    user: AuthUser,
+    shopId: string,
+    filters: {
+      from?: string;
+      to?: string;
+      kind?: 'INCOME' | 'EXPENSE' | 'TRANSFER';
+      conceptId?: string;
+    },
+  ) {
+    const shop = await this.shops.findOne(user, shopId);
+    const data = await this.conceptsAnalytics(user, shopId, filters);
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Cash Register Closings';
+
+    const kindLabel = (kind: string) =>
+      kind === 'INCOME' ? 'Ingreso' : kind === 'EXPENSE' ? 'Egreso' : kind === 'TRANSFER' ? 'Transferencia' : kind;
+
+    const monthNames = [
+      'enero',
+      'febrero',
+      'marzo',
+      'abril',
+      'mayo',
+      'junio',
+      'julio',
+      'agosto',
+      'septiembre',
+      'octubre',
+      'noviembre',
+      'diciembre',
+    ];
+    const kindTitle =
+      filters.kind === 'EXPENSE'
+        ? 'Egresos'
+        : filters.kind === 'INCOME'
+          ? 'Ingresos'
+          : filters.kind === 'TRANSFER'
+            ? 'Transferencias'
+            : 'Conceptos';
+    let banner = kindTitle.toUpperCase();
+    if (data.from && data.to) {
+      const [fy, fm] = data.from.split('-').map(Number);
+      const [ty, tm] = data.to.split('-').map(Number);
+      if (fy === ty && fm === tm) {
+        banner = `${kindTitle.toUpperCase()} ${(monthNames[fm - 1] ?? '').toUpperCase()} ${fy}`;
+      } else {
+        banner = `${kindTitle.toUpperCase()} ${data.from} – ${data.to}`;
+      }
+    }
+
+    const wsPivot = wb.addWorksheet('Conceptos');
+    wsPivot.mergeCells('A1:C1');
+    wsPivot.getCell('A1').value = banner;
+    wsPivot.getCell('A1').font = { bold: true, size: 14, color: { argb: 'FF003366' } };
+    wsPivot.getCell('A1').fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFD6EAF8' },
+    };
+    wsPivot.getCell('A3').value = 'Concepto validado';
+    wsPivot.getCell('B3').value = 'SUM de Importe $';
+    wsPivot.getCell('C3').value = '%';
+    wsPivot.getRow(3).font = { bold: true };
+    wsPivot.getRow(3).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFEEEEEE' },
+    };
+    wsPivot.getCell('B3').alignment = { horizontal: 'right' };
+    wsPivot.getCell('C3').alignment = { horizontal: 'right' };
+    wsPivot.getColumn(1).width = 36;
+    wsPivot.getColumn(2).width = 20;
+    wsPivot.getColumn(3).width = 12;
+    let excelTotal = 0;
+    data.byConcept.forEach((r, i) => {
+      excelTotal += r.amount;
+      const row = wsPivot.addRow([r.name, r.amount, r.share]);
+      row.getCell(2).numFmt = '"$" #,##0.00';
+      row.getCell(3).numFmt = '0.00%';
+      if (i % 2 === 1) {
+        row.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFF7F9FB' },
+        };
+      }
+    });
+    const totalRow = wsPivot.addRow(['Suma total', excelTotal, 1]);
+    totalRow.font = { bold: true };
+    totalRow.getCell(2).numFmt = '"$" #,##0.00';
+    totalRow.getCell(3).numFmt = '0.00%';
+    totalRow.border = { top: { style: 'medium' } };
+
+    const wsSum = wb.addWorksheet('Resumen');
+    wsSum.columns = [
+      { header: 'Indicador', key: 'k', width: 28 },
+      { header: 'Valor', key: 'v', width: 18 },
+    ];
+    wsSum.addRow({ k: 'Local', v: shop.name });
+    wsSum.addRow({ k: 'Desde', v: data.from ?? '' });
+    wsSum.addRow({ k: 'Hasta', v: data.to ?? '' });
+    wsSum.addRow({ k: 'Movimientos', v: data.totals.movementCount });
+    wsSum.addRow({ k: 'Ingresos', v: data.totals.income });
+    wsSum.addRow({ k: 'Egresos', v: data.totals.expense });
+    wsSum.addRow({ k: 'Transferencias', v: data.totals.transfer });
+    wsSum.addRow({ k: 'Resultado (ing. − egr.)', v: data.totals.net });
+    wsSum.addRow({ k: 'Sin concepto (cant.)', v: data.totals.withoutConceptCount });
+    wsSum.addRow({ k: 'Sin concepto ($)', v: data.totals.withoutConceptAmount });
+    wsSum.getRow(1).font = { bold: true };
+
+    const wsCon = wb.addWorksheet('Detalle');
+    wsCon.columns = [
+      { header: 'Concepto', key: 'name', width: 28 },
+      { header: 'Tipo', key: 'kind', width: 16 },
+      { header: 'Movimientos', key: 'count', width: 14 },
+      { header: 'Importe $', key: 'amount', width: 16 },
+      { header: 'Promedio $', key: 'avg', width: 14 },
+      { header: 'Participación %', key: 'share', width: 16 },
+    ];
+    for (const r of data.byConcept) {
+      wsCon.addRow({
+        name: r.name,
+        kind: kindLabel(r.kind),
+        count: r.count,
+        amount: r.amount,
+        avg: r.avgAmount,
+        share: Math.round(r.share * 1000) / 10,
+      });
+    }
+    wsCon.getRow(1).font = { bold: true };
+
+    const wsDay = wb.addWorksheet('Por día');
+    wsDay.columns = [
+      { header: 'Fecha', key: 'date', width: 12 },
+      { header: 'Movimientos', key: 'count', width: 14 },
+      { header: 'Ingresos $', key: 'income', width: 14 },
+      { header: 'Egresos $', key: 'expense', width: 14 },
+      { header: 'Transferencias $', key: 'transfer', width: 18 },
+    ];
+    for (const d of data.byDay) {
+      wsDay.addRow({
+        date: d.businessDate,
+        count: d.count,
+        income: d.income,
+        expense: d.expense,
+        transfer: d.transfer,
+      });
+    }
+    wsDay.getRow(1).font = { bold: true };
+
+    const buffer = Buffer.from(await wb.xlsx.writeBuffer());
+    const from = data.from ?? 'inicio';
+    const to = data.to ?? 'fin';
+    return {
+      buffer,
+      filename: `conceptos-${this.fileSlug(shop.name || shop.slug)}-${from}_${to}.xlsx`,
+    };
+  }
+
+  private aggregateConceptRows(
+    rows: Array<{
+      conceptId?: string | null;
+      conceptName: string;
+      kind: string;
+      amountUyu: number;
+      businessDate: string;
+    }>,
+  ) {
+    const kindMap = new Map<string, { kind: string; count: number; amount: number }>();
+    const conceptMap = new Map<
+      string,
+      {
+        conceptId: string | null;
+        name: string;
+        kind: string;
+        count: number;
+        amount: number;
+      }
+    >();
+    const dayMap = new Map<
+      string,
+      { businessDate: string; count: number; income: number; expense: number; transfer: number }
+    >();
+    let withoutConceptCount = 0;
+    let withoutConceptAmount = 0;
+
+    for (const r of rows) {
+      const amount = n(r.amountUyu);
+      const kindRow = kindMap.get(r.kind) ?? { kind: r.kind, count: 0, amount: 0 };
+      kindRow.count += 1;
+      kindRow.amount += amount;
+      kindMap.set(r.kind, kindRow);
+
+      const key = r.conceptId ?? `name:${r.conceptName}`;
+      const c = conceptMap.get(key) ?? {
+        conceptId: r.conceptId ?? null,
+        name: r.conceptName,
+        kind: r.kind,
+        count: 0,
+        amount: 0,
+      };
+      c.count += 1;
+      c.amount += amount;
+      conceptMap.set(key, c);
+
+      const day =
+        dayMap.get(r.businessDate) ?? {
+          businessDate: r.businessDate,
+          count: 0,
+          income: 0,
+          expense: 0,
+          transfer: 0,
+        };
+      day.count += 1;
+      if (r.kind === 'INCOME') day.income += amount;
+      else if (r.kind === 'EXPENSE') day.expense += amount;
+      else day.transfer += amount;
+      dayMap.set(r.businessDate, day);
+
+      if (!r.conceptId) {
+        withoutConceptCount += 1;
+        withoutConceptAmount += amount;
+      }
+    }
+
+    const kindTotal = [...kindMap.values()].reduce((s, i) => s + i.amount, 0);
+    const byKind = ['INCOME', 'EXPENSE', 'TRANSFER']
+      .map((kind) => kindMap.get(kind))
+      .filter((x): x is { kind: string; count: number; amount: number } => !!x)
+      .map((i) => ({
+        ...i,
+        share: kindTotal > 0 ? i.amount / kindTotal : 0,
+      }));
+
+    const conceptTotal = [...conceptMap.values()].reduce((s, i) => s + i.amount, 0);
+    const byConcept = [...conceptMap.values()]
+      .sort((a, b) => b.amount - a.amount)
+      .map((i) => ({
+        ...i,
+        avgAmount: i.count > 0 ? i.amount / i.count : 0,
+        share: conceptTotal > 0 ? i.amount / conceptTotal : 0,
+      }));
+
+    const income = kindMap.get('INCOME')?.amount ?? 0;
+    const expense = kindMap.get('EXPENSE')?.amount ?? 0;
+    const transfer = kindMap.get('TRANSFER')?.amount ?? 0;
+
+    return {
+      totals: {
+        movementCount: rows.length,
+        income,
+        expense,
+        transfer,
+        net: income - expense,
+        withoutConceptCount,
+        withoutConceptAmount,
+        avgAmount: rows.length ? conceptTotal / rows.length : 0,
+      },
+      byKind,
+      byConcept,
+      byDay: [...dayMap.values()].sort((a, b) => a.businessDate.localeCompare(b.businessDate)),
+    };
+  }
+
+  private inferMovementKind(r: {
+    conceptKind?: string | null;
+    fromAccountName?: string | null;
+    toAccountName?: string | null;
+  }): 'INCOME' | 'EXPENSE' | 'TRANSFER' {
+    if (r.conceptKind === 'INCOME' || r.conceptKind === 'EXPENSE' || r.conceptKind === 'TRANSFER') {
+      return r.conceptKind;
+    }
+    const to = (r.toAccountName ?? '').toLowerCase();
+    const from = (r.fromAccountName ?? '').toLowerCase();
+    if (to.includes('egreso') || from.includes('egreso')) return 'EXPENSE';
+    if (to.includes('ingreso') || from.includes('ingreso')) return 'INCOME';
+    return 'TRANSFER';
+  }
+
   async movementsSummary(user: AuthUser, shopId: string, filters: ClosingListFilters) {
     const [expenses, balances, movements] = await Promise.all([
       this.movementsService.expensesByConcept(user, shopId, {

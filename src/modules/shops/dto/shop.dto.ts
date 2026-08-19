@@ -14,12 +14,41 @@ import {
   MaxLength,
   Min,
   MinLength,
+  Matches,
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { PosnetType } from '../../../common/posnet';
+import { ConceptCategory } from '../../../common/enums';
+import { DEFAULT_PAYMENT_CONCEPT_CATEGORIES } from '../../../common/concept-categories';
+
+export class PaymentConceptCategoriesDto {
+  @ApiPropertyOptional({ enum: ConceptCategory, isArray: true })
+  @IsOptional()
+  @IsArray()
+  @IsEnum(ConceptCategory, { each: true })
+  supplier?: ConceptCategory[];
+
+  @ApiPropertyOptional({ enum: ConceptCategory, isArray: true })
+  @IsOptional()
+  @IsArray()
+  @IsEnum(ConceptCategory, { each: true })
+  service?: ConceptCategory[];
+
+  @ApiPropertyOptional({ enum: ConceptCategory, isArray: true })
+  @IsOptional()
+  @IsArray()
+  @IsEnum(ConceptCategory, { each: true })
+  employee?: ConceptCategory[];
+
+  @ApiPropertyOptional({ enum: ConceptCategory, isArray: true })
+  @IsOptional()
+  @IsArray()
+  @IsEnum(ConceptCategory, { each: true })
+  movement?: ConceptCategory[];
+}
 
 export class ShopPosnetDto {
   @ApiPropertyOptional({ description: 'Si no se envía, el servidor genera uno' })
@@ -128,6 +157,30 @@ export class CreateShopDto {
   @IsOptional()
   @IsBoolean()
   publicAttendanceEnabled?: boolean;
+
+  @ApiPropertyOptional({ description: 'Página pública de normas pre/post servicio' })
+  @IsOptional()
+  @IsBoolean()
+  publicServiceRulesEnabled?: boolean;
+
+  @ApiPropertyOptional({ example: '18:00', description: 'Hora de entrada default en servicio (HH:mm)' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
+  serviceDefaultCheckIn?: string;
+
+  @ApiPropertyOptional({ example: '00:00', description: 'Hora de retirada default en servicio (HH:mm)' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
+  serviceDefaultCheckOut?: string;
+
+  @ApiPropertyOptional({
+    description: 'Si es true, el presentismo de servicio usa entrada/salida y extras',
+  })
+  @IsOptional()
+  @IsBoolean()
+  serviceAttendanceWithHours?: boolean;
 
   @ApiPropertyOptional({ description: 'Carta pública del local' })
   @IsOptional()
@@ -289,6 +342,18 @@ export class CreateShopDto {
   @ValidateNested({ each: true })
   @Type(() => ShopPosnetDto)
   posnets?: ShopPosnetDto[] | null;
+
+  @ApiPropertyOptional({
+    type: PaymentConceptCategoriesDto,
+    description:
+      'Categorías de concepto a listar en cada tipo de pago. Default: proveedores; servicios+proveedores; empleados; movimientos.',
+    example: DEFAULT_PAYMENT_CONCEPT_CATEGORIES,
+  })
+  @IsOptional()
+  @IsObject()
+  @ValidateNested()
+  @Type(() => PaymentConceptCategoriesDto)
+  paymentConceptCategories?: PaymentConceptCategoriesDto | null;
 }
 
 export class UpdateShopDto extends PartialType(CreateShopDto) {

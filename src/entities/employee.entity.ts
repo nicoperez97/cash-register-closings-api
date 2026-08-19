@@ -43,6 +43,22 @@ export class Employee extends BaseEntity {
   @Column({ type: 'varchar', nullable: true })
   supervisorEmployeeId?: string | null;
 
+  /** Alias o CBU para reintegros / transferencias. */
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  bankAlias?: string | null;
+
+  /** Precio por hora extra de servicio (reporte de costo; no cambia liquidación). */
+  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
+  overtimeHourRate: string;
+
+  /** Hora de entrada de servicio de este empleado (HH:mm). Vacío = default del local. */
+  @Column({ type: 'varchar', length: 5, nullable: true })
+  serviceCheckIn?: string | null;
+
+  /** Hora de retirada de servicio de este empleado (HH:mm). Vacío = default del local. */
+  @Column({ type: 'varchar', length: 5, nullable: true })
+  serviceCheckOut?: string | null;
+
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })
   shop: Shop;

@@ -19,8 +19,10 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
   Min,
   MinLength,
+  ValidateIf,
 } from 'class-validator';
 import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
@@ -47,6 +49,27 @@ class CreateEmployeeDto {
   @IsOptional()
   @IsUUID()
   supervisorEmployeeId?: string | null;
+  @ApiPropertyOptional({ description: 'Alias o CBU para transferencias / reintegros' })
+  @IsOptional()
+  @IsString()
+  bankAlias?: string | null;
+  @ApiPropertyOptional({ description: 'Precio por hora extra de servicio' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  overtimeHourRate?: number;
+  @ApiPropertyOptional({ example: '18:00' })
+  @IsOptional()
+  @ValidateIf((_, v) => v != null && v !== '')
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
+  serviceCheckIn?: string | null;
+  @ApiPropertyOptional({ example: '00:00' })
+  @IsOptional()
+  @ValidateIf((_, v) => v != null && v !== '')
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
+  serviceCheckOut?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
 }
 
@@ -69,6 +92,27 @@ class UpdateEmployeeDto {
   })
   @IsOptional()
   supervisorEmployeeId?: string | null;
+  @ApiPropertyOptional({ description: 'Alias o CBU para transferencias / reintegros' })
+  @IsOptional()
+  @IsString()
+  bankAlias?: string | null;
+  @ApiPropertyOptional({ description: 'Precio por hora extra de servicio' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  overtimeHourRate?: number;
+  @ApiPropertyOptional({ example: '18:00' })
+  @IsOptional()
+  @ValidateIf((_, v) => v != null && v !== '')
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
+  serviceCheckIn?: string | null;
+  @ApiPropertyOptional({ example: '00:00' })
+  @IsOptional()
+  @ValidateIf((_, v) => v != null && v !== '')
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
+  serviceCheckOut?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
 }
 

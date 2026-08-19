@@ -4,6 +4,7 @@ import { Shop } from './shop.entity';
 import { User } from './user.entity';
 import { LedgerAccount } from './ledger-account.entity';
 import { Movement } from './movement.entity';
+import { Concept } from './concept.entity';
 import { Supplier } from './supplier.entity';
 import { Employee } from './employee.entity';
 import { ShopService } from './shop-service.entity';
@@ -40,6 +41,10 @@ export class Payment extends BaseEntity {
   /** Cuenta desde la que se paga (egreso). */
   @Column({ type: 'varchar', nullable: true })
   accountId?: string | null;
+
+  /** Concepto del catálogo (opcional; el título se copia del nombre). */
+  @Column({ type: 'varchar', nullable: true })
+  conceptId?: string | null;
 
   /** Efectivo / transferencia / tarjeta / otra. */
   @Column({ type: 'varchar', length: 32, nullable: true })
@@ -140,6 +145,10 @@ export class Payment extends BaseEntity {
   @ManyToOne(() => LedgerAccount, { nullable: true })
   @JoinColumn({ name: 'accountId' })
   account?: LedgerAccount | null;
+
+  @ManyToOne(() => Concept, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'conceptId' })
+  concept?: Concept | null;
 
   @ManyToOne(() => Supplier, { nullable: true })
   @JoinColumn({ name: 'supplierId' })

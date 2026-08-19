@@ -108,6 +108,12 @@ const TYPE_META: Record<string, TypeMeta> = {
     toneSoft: '#e0f2f1',
     hint: 'Se actualizaron horas de producción.',
   },
+  [NotificationType.REIMBURSEMENT_CREATED]: {
+    label: 'Reintegros',
+    tone: '#ef6c00',
+    toneSoft: '#fff8e1',
+    hint: 'Un productor cargó un gasto para reintegrar. Abrí Reintegros para marcarlo como pagado.',
+  },
   [NotificationType.RESERVATION_REQUEST]: {
     label: 'Reservas',
     tone: '#6a1b9a',

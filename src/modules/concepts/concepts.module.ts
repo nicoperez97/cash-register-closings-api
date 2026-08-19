@@ -5,11 +5,12 @@ import { AccountsModule } from '../accounts/accounts.module';
 import { ShopsModule } from '../shops/shops.module';
 import { ConceptsController } from './concepts.controller';
 import { ConceptsService } from './concepts.service';
+import { ConceptsExcelService } from './concepts-excel.service';
 
 @Module({
   imports: [TypeOrmModule.forFeature([Concept]), ShopsModule, AccountsModule],
   controllers: [ConceptsController],
-  providers: [ConceptsService],
+  providers: [ConceptsService, ConceptsExcelService],
   exports: [ConceptsService],
 })
 export class ConceptsModule {}

@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, In, Repository } from 'typeorm';
 import { AttendanceDay } from '../../entities/attendance-day.entity';
@@ -7,6 +7,13 @@ import { ProductionAttendanceDay } from '../../entities/production-attendance-da
 import { AuthUser } from '../../common/decorators';
 import { isEntityActive } from '../../common/active.util';
 import { ShopsService } from '../shops/shops.service';
+import {
+  computeOvertimeHours,
+  DEFAULT_SERVICE_CHECK_IN,
+  DEFAULT_SERVICE_CHECK_OUT,
+  parseHhMm,
+  requireHhMm,
+} from '../../common/shift-hours.util';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 
@@ -15,7 +22,7 @@ function employeeTypeOf(e: Employee): EmployeeType {
 }
 
 @Injectable()
-export class AttendanceService {
+export class AttendanceService implements OnModuleInit {
   constructor(
     @InjectRepository(AttendanceDay)
     private readonly days: Repository<AttendanceDay>,
@@ -24,6 +31,25 @@ export class AttendanceService {
     private readonly prodDays: Repository<ProductionAttendanceDay>,
     private readonly shops: ShopsService,
   ) {}
+
+  async onModuleInit() {
+    try {
+      await this.days.query(`
+        ALTER TABLE attendance_days
+          ADD COLUMN checkInAt VARCHAR(5) NULL
+      `);
+    } catch {
+      // ya existe
+    }
+    try {
+      await this.days.query(`
+        ALTER TABLE attendance_days
+          ADD COLUMN checkOutAt VARCHAR(5) NULL
+      `);
+    } catch {
+      // ya existe
+    }
+  }
 
   private monthRange(year: number, month: number) {
     const from = `${year}-${String(month).padStart(2, '0')}-01`;
@@ -73,6 +99,8 @@ export class AttendanceService {
             id?: string;
             isPresent: boolean;
             isHoliday: boolean;
+            checkInAt: string | null;
+            checkOutAt: string | null;
             overtimeHours: number;
           }
         > = {};
@@ -81,6 +109,8 @@ export class AttendanceService {
             id: d.id,
             isPresent: !!d.isPresent,
             isHoliday: !!d.isHoliday,
+            checkInAt: d.checkInAt ?? null,
+            checkOutAt: d.checkOutAt ?? null,
             overtimeHours: n(d.overtimeHours),
           };
         }
@@ -88,11 +118,85 @@ export class AttendanceService {
           employeeId: e.id,
           fullName: e.fullName,
           baseSalary: n(e.baseSalary),
+          overtimeHourRate: n(e.overtimeHourRate),
+          serviceCheckIn: e.serviceCheckIn ?? null,
+          serviceCheckOut: e.serviceCheckOut ?? null,
           type: employeeTypeOf(e),
           days: byDate,
         };
       }),
     };
+  }
+
+  private withHours(shop?: { serviceAttendanceWithHours?: boolean | number | null } | null) {
+    const v = shop?.serviceAttendanceWithHours;
+    if (v === false || v === 0) return false;
+    return true;
+  }
+
+  private shopShiftDefaults(shop: {
+    serviceDefaultCheckIn?: string | null;
+    serviceDefaultCheckOut?: string | null;
+  }) {
+    return {
+      checkIn: requireHhMm(shop.serviceDefaultCheckIn, DEFAULT_SERVICE_CHECK_IN),
+      checkOut: requireHhMm(shop.serviceDefaultCheckOut, DEFAULT_SERVICE_CHECK_OUT),
+    };
+  }
+
+  private employeeShiftDefaults(
+    shop: {
+      serviceDefaultCheckIn?: string | null;
+      serviceDefaultCheckOut?: string | null;
+    },
+    emp?: { serviceCheckIn?: string | null; serviceCheckOut?: string | null } | null,
+  ) {
+    const shopDefaults = this.shopShiftDefaults(shop);
+    return {
+      checkIn: requireHhMm(emp?.serviceCheckIn, shopDefaults.checkIn),
+      checkOut: requireHhMm(emp?.serviceCheckOut, shopDefaults.checkOut),
+    };
+  }
+
+  private applyShift(
+    row: AttendanceDay,
+    dto: {
+      isPresent?: boolean;
+      checkInAt?: string | null;
+      checkOutAt?: string | null;
+    },
+    defaults: { checkIn: string; checkOut: string },
+    withHours: boolean,
+  ) {
+    if (dto.isPresent !== undefined) row.isPresent = dto.isPresent;
+    if (!withHours) {
+      row.checkInAt = null;
+      row.checkOutAt = null;
+      row.overtimeHours = '0';
+      return;
+    }
+    if (!row.isPresent) {
+      row.checkInAt = null;
+      row.checkOutAt = null;
+      row.overtimeHours = '0';
+      return;
+    }
+    if (dto.checkInAt !== undefined) {
+      row.checkInAt = parseHhMm(dto.checkInAt);
+    }
+    if (dto.checkOutAt !== undefined) {
+      row.checkOutAt = parseHhMm(dto.checkOutAt);
+    }
+    if (!row.checkInAt) row.checkInAt = defaults.checkIn;
+    if (!row.checkOutAt) row.checkOutAt = defaults.checkOut;
+    row.overtimeHours = String(
+      computeOvertimeHours({
+        isPresent: true,
+        checkInAt: row.checkInAt,
+        checkOutAt: row.checkOutAt,
+        defaultCheckOut: defaults.checkOut,
+      }),
+    );
   }
 
   async upsertDay(
@@ -103,7 +207,8 @@ export class AttendanceService {
       date: string;
       isPresent?: boolean;
       isHoliday?: boolean;
-      overtimeHours?: number;
+      checkInAt?: string | null;
+      checkOutAt?: string | null;
     },
   ) {
     this.shops.assertShopAccess(user, shopId);
@@ -113,6 +218,9 @@ export class AttendanceService {
     if (!emp || !isEntityActive(emp.active)) {
       throw new NotFoundException('Empleado no encontrado');
     }
+    const shop = await this.shops.getShopEntity(shopId);
+    const withHours = this.withHours(shop);
+    const defaults = this.employeeShiftDefaults(shop ?? {}, emp);
 
     let row = await this.days.findOne({
       where: { employeeId: dto.employeeId, date: dto.date },
@@ -125,14 +233,13 @@ export class AttendanceService {
         isPresent: false,
         isHoliday: false,
         overtimeHours: '0',
+        checkInAt: null,
+        checkOutAt: null,
         active: true,
       });
     }
-    if (dto.isPresent !== undefined) row.isPresent = dto.isPresent;
     if (dto.isHoliday !== undefined) row.isHoliday = dto.isHoliday;
-    if (dto.overtimeHours !== undefined) {
-      row.overtimeHours = String(dto.overtimeHours);
-    }
+    this.applyShift(row, dto, defaults, withHours);
     await this.days.save(row);
     return {
       id: row.id,
@@ -140,6 +247,8 @@ export class AttendanceService {
       date: row.date,
       isPresent: !!row.isPresent,
       isHoliday: !!row.isHoliday,
+      checkInAt: row.checkInAt ?? null,
+      checkOutAt: row.checkOutAt ?? null,
       overtimeHours: n(row.overtimeHours),
     };
   }
@@ -152,7 +261,8 @@ export class AttendanceService {
       date: string;
       isPresent?: boolean;
       isHoliday?: boolean;
-      overtimeHours?: number;
+      checkInAt?: string | null;
+      checkOutAt?: string | null;
     }>,
   ) {
     const out: Array<{
@@ -161,12 +271,66 @@ export class AttendanceService {
       date: string;
       isPresent: boolean;
       isHoliday: boolean;
+      checkInAt: string | null;
+      checkOutAt: string | null;
       overtimeHours: number;
     }> = [];
     for (const item of items) {
       out.push(await this.upsertDay(user, shopId, item));
     }
     return out;
+  }
+
+  async overtimeSummary(user: AuthUser, shopId: string, from: string, to: string) {
+    this.shops.assertShopAccess(user, shopId);
+    if (!from || !to) throw new BadRequestException('Indicá from y to (YYYY-MM-DD)');
+    const employees = await this.activeEmployees(shopId);
+    const ids = employees.map((e) => e.id);
+    const rows = ids.length
+      ? await this.days.find({
+          where: { shopId, employeeId: In(ids), date: Between(from, to) },
+        })
+      : [];
+    const byEmp = new Map<string, AttendanceDay[]>();
+    for (const r of rows) {
+      const list = byEmp.get(r.employeeId) ?? [];
+      list.push(r);
+      byEmp.set(r.employeeId, list);
+    }
+    const items = employees.map((e) => {
+      const days = byEmp.get(e.id) ?? [];
+      const overtimeHours = days.reduce((s, d) => s + n(d.overtimeHours), 0);
+      const presentDays = days.filter((d) => d.isPresent).length;
+      const rate = n(e.overtimeHourRate);
+      return {
+        employeeId: e.id,
+        fullName: e.fullName,
+        presentDays,
+        overtimeHours,
+        overtimeHourRate: rate,
+        overtimeCost: Math.round(overtimeHours * rate * 100) / 100,
+      };
+    });
+    const totals = items.reduce(
+      (acc, i) => {
+        acc.overtimeHours += i.overtimeHours;
+        acc.overtimeCost += i.overtimeCost;
+        acc.presentDays += i.presentDays;
+        return acc;
+      },
+      { overtimeHours: 0, overtimeCost: 0, presentDays: 0 },
+    );
+    return {
+      shopId,
+      from,
+      to,
+      items,
+      totals: {
+        overtimeHours: Math.round(totals.overtimeHours * 100) / 100,
+        overtimeCost: Math.round(totals.overtimeCost * 100) / 100,
+        presentDays: totals.presentDays,
+      },
+    };
   }
 
   /** Helpers for payroll. */
@@ -241,6 +405,8 @@ export class AttendanceService {
         isHoliday: boolean;
         overtimeHours: number;
         hours: number | null;
+        checkInAt: string | null;
+        checkOutAt: string | null;
       }
     > = {};
     for (const d of rows) {
@@ -249,6 +415,8 @@ export class AttendanceService {
         isHoliday: !!d.isHoliday,
         overtimeHours: n(d.overtimeHours),
         hours: emp.producesFood ? (prodByDate.get(d.date) ?? 0) : null,
+        checkInAt: d.checkInAt ?? null,
+        checkOutAt: d.checkOutAt ?? null,
       };
     }
     if (emp.producesFood) {
@@ -259,6 +427,8 @@ export class AttendanceService {
             isHoliday: false,
             overtimeHours: 0,
             hours,
+            checkInAt: null,
+            checkOutAt: null,
           };
         } else {
           days[date].hours = hours;

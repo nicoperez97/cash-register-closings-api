@@ -7,6 +7,15 @@ import { AttendanceDay } from '../../entities/attendance-day.entity';
 import { AuthUser } from '../../common/decorators';
 import { isEntityActive } from '../../common/active.util';
 import { ShopsService } from '../shops/shops.service';
+import { AttendanceService } from './attendance.service';
+import { isIsoDateOnly, toIsoDateOnly } from '../../common/iso-date';
+import {
+  computeOvertimeHours,
+  DEFAULT_SERVICE_CHECK_IN,
+  DEFAULT_SERVICE_CHECK_OUT,
+  parseHhMm,
+  requireHhMm,
+} from '../../common/shift-hours.util';
 
 export interface AttendanceImportItem {
   rowNumber: number;
@@ -14,6 +23,8 @@ export interface AttendanceImportItem {
   date: string;
   isPresent: boolean;
   isHoliday: boolean;
+  checkInAt: string | null;
+  checkOutAt: string | null;
   overtimeHours: number;
   employeeId: string | null;
   willCreateEmployee: boolean;
@@ -32,6 +43,7 @@ export class AttendanceExcelImportService {
     @InjectRepository(AttendanceDay)
     private readonly days: Repository<AttendanceDay>,
     private readonly shops: ShopsService,
+    private readonly attendance: AttendanceService,
   ) {}
 
   async buildTemplate(user: AuthUser, shopId: string) {
@@ -46,7 +58,7 @@ export class AttendanceExcelImportService {
     info.addRow([`Local: ${shop.name}`]);
     info.addRow([]);
     info.addRow([
-      'Compatible con el Excel "Presentismo": hoja "Base de datos" (Colaborador, Fecha, Presente, Feriado, Horas extras)',
+      'Compatible con el Excel "Presentismo": hoja "Base de datos" (Colaborador, Fecha, Presente, Feriado, Entrada, Salida)',
     ]);
     info.addRow([
       'y opcionalmente "Validación de datos" (Colaborador, Sueldo actual) para crear/actualizar empleados.',
@@ -58,11 +70,13 @@ export class AttendanceExcelImportService {
       { header: 'Fecha', key: 'date', width: 12 },
       { header: 'Feriado', key: 'holiday', width: 10 },
       { header: 'Presente', key: 'present', width: 10 },
+      { header: 'Entrada', key: 'checkIn', width: 10 },
+      { header: 'Salida', key: 'checkOut', width: 10 },
       { header: 'Horas extras', key: 'ot', width: 12 },
     ];
     ws.getRow(1).font = { bold: true };
     const d = new Date();
-    ws.addRow(['Kevin', this.toIsoDate(d), false, true, 0]);
+    ws.addRow(['Kevin', this.toIsoDate(d), false, true, '18:00', '00:00', 0]);
 
     const val = wb.addWorksheet('Validación de datos');
     val.columns = [
@@ -79,16 +93,18 @@ export class AttendanceExcelImportService {
     };
   }
 
-  /** Exporta el presentismo del mes en el mismo formato que la plantilla de importación. */
-  async exportMonth(user: AuthUser, shopId: string, year: number, month: number) {
+  /** Exporta el presentismo de un rango (from/to). year/month queda como respaldo. */
+  async exportRange(
+    user: AuthUser,
+    shopId: string,
+    fromRaw?: string,
+    toRaw?: string,
+    yearRaw?: string,
+    monthRaw?: string,
+  ) {
     this.shops.assertShopAccess(user, shopId);
-    if (month < 1 || month > 12) {
-      throw new BadRequestException('Mes inválido');
-    }
+    const { from, to, dates } = this.resolveExportRange(fromRaw, toRaw, yearRaw, monthRaw);
     const shop = await this.shops.findOne(user, shopId);
-    const from = `${year}-${String(month).padStart(2, '0')}-01`;
-    const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
-    const to = `${year}-${String(month).padStart(2, '0')}-${String(last).padStart(2, '0')}`;
 
     const employees = await this.employees.find({
       where: { shopId },
@@ -114,7 +130,7 @@ export class AttendanceExcelImportService {
     info.addRow(['Presentismo exportado']);
     info.getRow(1).font = { bold: true, size: 13 };
     info.addRow([`Local: ${shop.name}`]);
-    info.addRow([`Período: ${String(month).padStart(2, '0')}/${year}`]);
+    info.addRow([`Período: ${from} a ${to}`]);
     info.addRow([]);
     info.addRow([
       'Formato compatible con la importación: hoja "Base de datos" y "Validación de datos".',
@@ -126,6 +142,8 @@ export class AttendanceExcelImportService {
       { header: 'Fecha', key: 'date', width: 12 },
       { header: 'Feriado', key: 'holiday', width: 10 },
       { header: 'Presente', key: 'present', width: 10 },
+      { header: 'Entrada', key: 'checkIn', width: 10 },
+      { header: 'Salida', key: 'checkOut', width: 10 },
       { header: 'Horas extras', key: 'ot', width: 12 },
     ];
     ws.getRow(1).font = { bold: true };
@@ -133,14 +151,15 @@ export class AttendanceExcelImportService {
     const activeEmployees = employees.filter((e) => isEntityActive(e.active));
 
     for (const emp of activeEmployees) {
-      for (let day = 1; day <= last; day++) {
-        const date = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      for (const date of dates) {
         const cell = byKey.get(`${emp.id}|${date}`);
         ws.addRow({
           name: emp.fullName,
           date,
           holiday: !!cell?.isHoliday,
           present: !!cell?.isPresent,
+          checkIn: cell?.checkInAt ?? '',
+          checkOut: cell?.checkOutAt ?? '',
           ot: n(cell?.overtimeHours),
         });
       }
@@ -157,11 +176,86 @@ export class AttendanceExcelImportService {
     }
 
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());
-    const monthPad = String(month).padStart(2, '0');
     const slug = this.fileSlug(shop.name || shop.slug || 'local');
     return {
       buffer,
-      filename: `presentismo-${slug}-${year}-${monthPad}.xlsx`,
+      filename: `presentismo-${slug}-${from}_${to}.xlsx`,
+    };
+  }
+
+  private resolveExportRange(
+    fromRaw?: string,
+    toRaw?: string,
+    yearRaw?: string,
+    monthRaw?: string,
+  ): { from: string; to: string; dates: string[] } {
+    const from = toIsoDateOnly(fromRaw);
+    const to = toIsoDateOnly(toRaw);
+    if (isIsoDateOnly(from) && isIsoDateOnly(to)) {
+      if (from > to) throw new BadRequestException('El rango de fechas es inválido');
+      const dates = this.eachIsoDate(from, to);
+      if (dates.length > 366) {
+        throw new BadRequestException('El rango no puede superar un año');
+      }
+      return { from, to, dates };
+    }
+    const year = Number(yearRaw) || new Date().getFullYear();
+    const month = Number(monthRaw) || new Date().getMonth() + 1;
+    if (month < 1 || month > 12) throw new BadRequestException('Mes inválido');
+    const monthFrom = `${year}-${String(month).padStart(2, '0')}-01`;
+    const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const monthTo = `${year}-${String(month).padStart(2, '0')}-${String(last).padStart(2, '0')}`;
+    return { from: monthFrom, to: monthTo, dates: this.eachIsoDate(monthFrom, monthTo) };
+  }
+
+  private eachIsoDate(from: string, to: string): string[] {
+    const out: string[] = [];
+    const start = Date.parse(`${from}T00:00:00Z`);
+    const end = Date.parse(`${to}T00:00:00Z`);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start > end) {
+      throw new BadRequestException('El rango de fechas es inválido');
+    }
+    for (let t = start; t <= end; t += 86400000) {
+      out.push(new Date(t).toISOString().slice(0, 10));
+    }
+    return out;
+  }
+
+  async exportOvertimeSummary(user: AuthUser, shopId: string, from: string, to: string) {
+    const data = await this.attendance.overtimeSummary(user, shopId, from, to);
+    const shop = await this.shops.findOne(user, shopId);
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Horas extra');
+    ws.columns = [
+      { header: 'Empleado', key: 'name', width: 28 },
+      { header: 'Días presente', key: 'present', width: 14 },
+      { header: 'Horas extra', key: 'hours', width: 14 },
+      { header: 'Precio x hora', key: 'rate', width: 16 },
+      { header: 'Costo extra', key: 'cost', width: 16 },
+    ];
+    ws.getRow(1).font = { bold: true };
+    for (const row of data.items) {
+      ws.addRow({
+        name: row.fullName,
+        present: row.presentDays,
+        hours: row.overtimeHours,
+        rate: row.overtimeHourRate,
+        cost: row.overtimeCost,
+      });
+    }
+    ws.addRow({
+      name: 'Total',
+      present: data.totals.presentDays,
+      hours: data.totals.overtimeHours,
+      rate: '',
+      cost: data.totals.overtimeCost,
+    });
+    ws.getRow(ws.rowCount).font = { bold: true };
+    const buffer = Buffer.from(await wb.xlsx.writeBuffer());
+    const slug = this.fileSlug(shop.name || shop.slug || 'local');
+    return {
+      buffer,
+      filename: `horas-extra-${slug}-${from}_${to}.xlsx`,
     };
   }
 
@@ -177,13 +271,13 @@ export class AttendanceExcelImportService {
 
   async preview(user: AuthUser, shopId: string, file: Express.Multer.File) {
     this.shops.assertShopAccess(user, shopId);
-    const { rows, salaries } = await this.parseWorkbook(file);
+    const { rows, salaries } = await this.parseWorkbook(shopId, file);
     return this.enrich(shopId, rows, salaries);
   }
 
   async commit(user: AuthUser, shopId: string, file: Express.Multer.File) {
     this.shops.assertShopAccess(user, shopId);
-    const { rows, salaries } = await this.parseWorkbook(file);
+    const { rows, salaries } = await this.parseWorkbook(shopId, file);
     const items = await this.enrich(shopId, rows, salaries);
     const valid = items.filter((i) => i.valid);
     if (!valid.length && salaries.size === 0) {
@@ -271,6 +365,8 @@ export class AttendanceExcelImportService {
       }
       day.isPresent = item.isPresent;
       day.isHoliday = item.isHoliday;
+      day.checkInAt = item.isPresent ? item.checkInAt : null;
+      day.checkOutAt = item.isPresent ? item.checkOutAt : null;
       day.overtimeHours = String(item.overtimeHours);
       day.active = true;
       await this.days.save(day);
@@ -302,12 +398,17 @@ export class AttendanceExcelImportService {
       date: string;
       isPresent: boolean;
       isHoliday: boolean;
+      checkInAt: string | null;
+      checkOutAt: string | null;
       overtimeHours: number;
     }>,
     salaries: Map<string, number | null>,
   ): Promise<AttendanceImportItem[]> {
     const employees = await this.employees.find({ where: { shopId } });
     const byName = new Map(employees.map((e) => [this.norm(e.fullName), e]));
+    const shop = await this.shops.getShopEntity(shopId);
+    const shopDefaultIn = requireHhMm(shop?.serviceDefaultCheckIn, DEFAULT_SERVICE_CHECK_IN);
+    const shopDefaultOut = requireHhMm(shop?.serviceDefaultCheckOut, DEFAULT_SERVICE_CHECK_OUT);
 
     return rows.map((r) => {
       const emp = byName.get(this.norm(r.employeeName));
@@ -316,8 +417,24 @@ export class AttendanceExcelImportService {
       if (!r.date) errors.push('Fecha inválida');
       const willCreate = !!r.employeeName && !emp;
       const willReactivate = !!emp && !emp.active;
+      const withHours = shop?.serviceAttendanceWithHours !== false;
+      const defaultIn = requireHhMm(emp?.serviceCheckIn, shopDefaultIn);
+      const defaultOut = requireHhMm(emp?.serviceCheckOut, shopDefaultOut);
+      const checkInAt = withHours && r.isPresent ? r.checkInAt ?? defaultIn : null;
+      const checkOutAt = withHours && r.isPresent ? r.checkOutAt ?? defaultOut : null;
+      const overtimeHours = withHours
+        ? computeOvertimeHours({
+            isPresent: r.isPresent,
+            checkInAt,
+            checkOutAt,
+            defaultCheckOut: defaultOut,
+          })
+        : 0;
       return {
         ...r,
+        checkInAt,
+        checkOutAt,
+        overtimeHours,
         employeeId: emp?.id ?? null,
         willCreateEmployee: willCreate || willReactivate,
         baseSalaryHint: salaries.get(this.norm(r.employeeName)) ?? null,
@@ -327,7 +444,7 @@ export class AttendanceExcelImportService {
     });
   }
 
-  private async parseWorkbook(file: Express.Multer.File) {
+  private async parseWorkbook(shopId: string, file: Express.Multer.File) {
     if (!file?.buffer?.length) {
       throw new BadRequestException('Adjuntá un archivo Excel (.xlsx)');
     }
@@ -385,6 +502,8 @@ export class AttendanceExcelImportService {
       date: string;
       isPresent: boolean;
       isHoliday: boolean;
+      checkInAt: string | null;
+      checkOutAt: string | null;
       overtimeHours: number;
     }> = [];
 
@@ -395,15 +514,15 @@ export class AttendanceExcelImportService {
       if (!employeeName || !date) return;
       const isPresent = this.parseBool(this.cell(row, colMap.present));
       const isHoliday = this.parseBool(this.cell(row, colMap.holiday));
-      const overtimeHours = this.parseNum(this.cell(row, colMap.overtime));
-      // Skip empty unmarked rows to reduce noise? Keep all dated rows.
       rows.push({
         rowNumber,
         employeeName,
         date,
         isPresent,
         isHoliday,
-        overtimeHours,
+        checkInAt: isPresent ? parseHhMm(this.parseStr(this.cell(row, colMap.checkIn))) : null,
+        checkOutAt: isPresent ? parseHhMm(this.parseStr(this.cell(row, colMap.checkOut))) : null,
+        overtimeHours: 0,
       });
       if (!salaries.has(this.norm(employeeName))) {
         salaries.set(this.norm(employeeName), null);
@@ -426,7 +545,18 @@ export class AttendanceExcelImportService {
       } else if (key === 'fecha' || key === 'date') map.date = col;
       else if (key.includes('feriado')) map.holiday = col;
       else if (key.includes('presente') || key === 'present') map.present = col;
-      else if (key.includes('hora')) map.overtime = col;
+      else if (key.includes('entrada') || key.includes('checkin') || key.includes('check-in')) {
+        map.checkIn = col;
+      } else if (
+        key.includes('salida') ||
+        key.includes('checkout') ||
+        key.includes('check-out') ||
+        key.includes('retirada')
+      ) {
+        map.checkOut = col;
+      } else if (key.includes('hora extra') || key.includes('horas extra') || key === 'ot') {
+        map.overtime = col;
+      }
     });
     return map;
   }

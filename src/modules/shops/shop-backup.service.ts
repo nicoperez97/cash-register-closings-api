@@ -106,7 +106,9 @@ export class ShopBackupService {
       concepts.map((c) => ({
         id: c.id,
         name: c.name,
+        description: c.description ?? '',
         kind: c.kind,
+        validated: c.validated ? 1 : 0,
         active: c.active ? 1 : 0,
       })),
     );
@@ -593,7 +595,9 @@ export class ShopBackupService {
           id,
           shopId,
           name: String(r.name ?? ''),
+          description: this.emptyToNull(r.description),
           kind: r.kind as any,
+          validated: this.toBool(r.validated, true),
           active: this.toBool(r.active, true),
         }),
       );

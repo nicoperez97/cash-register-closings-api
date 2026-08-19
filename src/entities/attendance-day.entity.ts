@@ -21,6 +21,14 @@ export class AttendanceDay extends BaseEntity {
   @Column({ type: 'tinyint', default: 0 })
   isPresent: boolean;
 
+  /** Hora de entrada del turno (HH:mm). */
+  @Column({ type: 'varchar', length: 5, nullable: true })
+  checkInAt?: string | null;
+
+  /** Hora de salida / retirada (HH:mm). */
+  @Column({ type: 'varchar', length: 5, nullable: true })
+  checkOutAt?: string | null;
+
   @Column({ type: 'decimal', precision: 6, scale: 2, default: 0 })
   overtimeHours: string;
 
