@@ -1,4 +1,4 @@
-/* Config para iPad legacy. Misma API (origen relativo) cuando se sirve desde /ipad/ */
+/* Config para cliente ES5 (iOS 9). Misma API cuando se sirve desde /legacy/ */
 window.CRC_LEGACY_CONFIG = {
   apiUrl: '/api/v1',
   tokenKey: 'crc_legacy_token',
