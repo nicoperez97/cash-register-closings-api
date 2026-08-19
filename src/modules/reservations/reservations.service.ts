@@ -20,6 +20,7 @@ import {
 import { Shop } from '../../entities/shop.entity';
 import { AuthUser } from '../../common/decorators';
 import { ShopsService } from '../shops/shops.service';
+import { ShopLiveService } from '../shop-live/shop-live.service';
 import { MailService } from '../notifications/mail.service';
 import { resolveShopCalendarDate } from '../../common/business-date';
 import { isEntityActive } from '../../common/active.util';
@@ -76,6 +77,7 @@ export class ReservationsService implements OnModuleInit {
     private readonly requests: Repository<ReservationRequest>,
     private readonly shops: ShopsService,
     private readonly mail: MailService,
+    private readonly live: ShopLiveService,
   ) {}
 
   async onModuleInit() {
@@ -401,6 +403,7 @@ export class ReservationsService implements OnModuleInit {
       row.active = false;
       row.deletedAt = null as unknown as undefined;
       await this.dayNotices.save(row);
+      this.live.tick(shopId, 'reservations');
       return {
         shopId,
         businessDate,
@@ -412,6 +415,7 @@ export class ReservationsService implements OnModuleInit {
     row.active = true;
     row.deletedAt = null as unknown as undefined;
     await this.dayNotices.save(row);
+    this.live.tick(shopId, 'reservations');
 
     const noticeMsg = String(row.message ?? '').trim();
     return {
@@ -550,6 +554,7 @@ export class ReservationsService implements OnModuleInit {
         active: true,
       }),
     );
+    this.live.tick(shopId, 'reservations');
     return this.toReservationDto(row);
   }
 
@@ -589,6 +594,7 @@ export class ReservationsService implements OnModuleInit {
       effectivePartyRules(shop, dayOverridesFromRow(dayRow)),
     );
     await this.reservations.save(row);
+    this.live.tick(shopId, 'reservations');
     return this.toReservationDto(row);
   }
 
@@ -638,6 +644,7 @@ export class ReservationsService implements OnModuleInit {
       throw new NotFoundException('Reserva no encontrada');
     }
     await this.reservations.softRemove(row);
+    this.live.tick(shopId, 'reservations');
     return { ok: true };
   }
 
@@ -673,6 +680,8 @@ export class ReservationsService implements OnModuleInit {
         active: true,
       }),
     );
+    this.live.tick(shopId, 'waiting');
+    this.live.tick(shopId, 'reservations');
     return this.toWaitingDto(row);
   }
 
@@ -699,6 +708,8 @@ export class ReservationsService implements OnModuleInit {
     if (dto.notes !== undefined) row.notes = dto.notes?.trim() || null;
     if (dto.status !== undefined) row.status = dto.status;
     await this.waiting.save(row);
+    this.live.tick(shopId, 'waiting');
+    this.live.tick(shopId, 'reservations');
     return this.toWaitingDto(row);
   }
 
@@ -710,6 +721,8 @@ export class ReservationsService implements OnModuleInit {
       throw new NotFoundException('Entrada no encontrada');
     }
     await this.waiting.softRemove(row);
+    this.live.tick(shopId, 'waiting');
+    this.live.tick(shopId, 'reservations');
     return { ok: true };
   }
 
@@ -845,6 +858,7 @@ export class ReservationsService implements OnModuleInit {
       if (mesa) row.tableNumber = mesa;
     }
     await this.reservations.save(row);
+    this.live.tick(shop.id, 'reservations');
     return {
       id: row.id,
       status: row.status,
@@ -887,6 +901,7 @@ export class ReservationsService implements OnModuleInit {
       throw new BadRequestException('Solo se pueden quitar reservas liberadas post-mesa');
     }
     await this.reservations.delete({ id: row.id, shopId: shop.id });
+    this.live.tick(shop.id, 'reservations');
     return { ok: true };
   }
 

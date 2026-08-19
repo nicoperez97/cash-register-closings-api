@@ -18,6 +18,7 @@ import { ClosingSourceKind, GlobalRole, LedgerAccountType } from '../../common/e
 import { isGlobalAdmin, isSuperAdmin } from '../../common/guards';
 import { normalizeLogoUrl } from '../../common/drive-url';
 import { isEntityActive } from '../../common/active.util';
+import { ShopLiveService } from '../shop-live/shop-live.service';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
 import { normalizeOpeningTime } from '../../common/business-date';
 import {
@@ -82,6 +83,7 @@ export class ShopsService implements OnModuleInit {
     @InjectRepository(ShopClosingSource)
     private readonly closingSources: Repository<ShopClosingSource>,
     private readonly catalogSeed: CatalogSeedService,
+    private readonly live: ShopLiveService,
   ) {}
 
   async onModuleInit() {
@@ -648,6 +650,28 @@ export class ShopsService implements OnModuleInit {
       if (smtpPasswordPatch === null || smtpPasswordPatch) {
         await this.shops.update(id, { emailSmtpPassword: smtpPasswordPatch });
       }
+    }
+    if (
+      dto.reservationsEnabled !== undefined ||
+      dto.reservationSignupEnabled !== undefined ||
+      dto.reservationInsideEnabled !== undefined ||
+      dto.reservationOutsideEnabled !== undefined ||
+      dto.reservationInsideMaxPartySize !== undefined ||
+      dto.reservationOutsideMaxPartySize !== undefined ||
+      dto.reservationOutsideMinPartySize !== undefined ||
+      dto.closedWeekdays !== undefined ||
+      dto.openingTime !== undefined
+    ) {
+      this.live.tick(id, 'reservations');
+    }
+    if (dto.waitingListEnabled !== undefined) this.live.tick(id, 'waiting');
+    if (
+      dto.publicAttendanceEnabled !== undefined ||
+      dto.serviceAttendanceWithHours !== undefined ||
+      dto.serviceDefaultCheckIn !== undefined ||
+      dto.serviceDefaultCheckOut !== undefined
+    ) {
+      this.live.tick(id, 'attendance');
     }
     return this.toDto(await this.shops.findOneOrFail({ where: { id } }), {
       emailSmtpConfigured: await this.hasSmtpPassword(id),

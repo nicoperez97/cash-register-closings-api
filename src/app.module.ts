@@ -3,6 +3,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from './config/config.module';
 import { DatabaseModule } from './database/database.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { ShopLiveModule } from './modules/shop-live/shop-live.module';
 import { ShopsModule } from './modules/shops/shops.module';
 import { ClosingsModule } from './modules/closings/closings.module';
 import { ReportsModule } from './modules/reports/reports.module';
@@ -38,6 +39,7 @@ import { PublicAbuseGuard } from './common/public-abuse.guard';
   imports: [
     ConfigModule,
     DatabaseModule,
+    ShopLiveModule,
     AiModule,
     AuthModule,
     ShopsModule,

@@ -12,6 +12,7 @@ import { UserShop } from '../../entities/user-shop.entity';
 import { AuthUser } from '../../common/decorators';
 import { isEntityActive } from '../../common/active.util';
 import { parseHhMm } from '../../common/shift-hours.util';
+import { ShopLiveService } from '../shop-live/shop-live.service';
 import { ShopsService } from '../shops/shops.service';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
@@ -28,6 +29,7 @@ export class EmployeesService implements OnModuleInit {
     @InjectRepository(User) private readonly users: Repository<User>,
     @InjectRepository(UserShop) private readonly userShops: Repository<UserShop>,
     private readonly shops: ShopsService,
+    private readonly live: ShopLiveService,
   ) {}
 
   async onModuleInit() {
@@ -221,6 +223,7 @@ export class EmployeesService implements OnModuleInit {
         active: dto.active ?? true,
       }),
     );
+    this.live.tick(shopId, 'attendance');
     return this.toDto(row);
   }
 
@@ -272,6 +275,7 @@ export class EmployeesService implements OnModuleInit {
     }
 
     await this.employees.save(row);
+    this.live.tick(shopId, 'attendance');
     return this.toDto(row);
   }
 
@@ -281,6 +285,7 @@ export class EmployeesService implements OnModuleInit {
     if (!row) throw new NotFoundException('Empleado no encontrado');
     row.active = false;
     await this.employees.save(row);
+    this.live.tick(shopId, 'attendance');
     return { ok: true };
   }
 }

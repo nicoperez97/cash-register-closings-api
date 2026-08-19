@@ -6,6 +6,7 @@ import { Employee } from '../../entities/employee.entity';
 import { AttendanceDay } from '../../entities/attendance-day.entity';
 import { AuthUser } from '../../common/decorators';
 import { isEntityActive } from '../../common/active.util';
+import { ShopLiveService } from '../shop-live/shop-live.service';
 import { ShopsService } from '../shops/shops.service';
 import { AttendanceService } from './attendance.service';
 import { isIsoDateOnly, toIsoDateOnly } from '../../common/iso-date';
@@ -44,6 +45,7 @@ export class AttendanceExcelImportService {
     private readonly days: Repository<AttendanceDay>,
     private readonly shops: ShopsService,
     private readonly attendance: AttendanceService,
+    private readonly live: ShopLiveService,
   ) {}
 
   async buildTemplate(user: AuthUser, shopId: string) {
@@ -377,6 +379,7 @@ export class AttendanceExcelImportService {
       throw new BadRequestException('No hay filas válidas para importar');
     }
 
+    this.live.tick(shopId, 'attendance');
     return {
       upsertedDays,
       createdEmployees: [...new Set(createdEmployees)],

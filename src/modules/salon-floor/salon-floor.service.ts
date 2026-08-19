@@ -5,6 +5,7 @@ import { AuthUser } from '../../common/decorators';
 import { isEntityActive } from '../../common/active.util';
 import { SalonAreaRule } from '../../entities/salon-area-rule.entity';
 import { SalonArea, SalonTable } from '../../entities/salon-table.entity';
+import { ShopLiveService } from '../shop-live/shop-live.service';
 import { ShopsService } from '../shops/shops.service';
 
 const CREATE_TABLES_SQL = `
@@ -46,6 +47,7 @@ export class SalonFloorService implements OnModuleInit {
     @InjectRepository(SalonAreaRule)
     private readonly rules: Repository<SalonAreaRule>,
     private readonly shops: ShopsService,
+    private readonly live: ShopLiveService,
   ) {}
 
   async onModuleInit() {
@@ -130,6 +132,7 @@ export class SalonFloorService implements OnModuleInit {
       active: true,
     });
     await this.tables.save(row);
+    this.live.tick(shopId, 'reservations');
     return this.toTableDto(row);
   }
 
@@ -153,6 +156,7 @@ export class SalonFloorService implements OnModuleInit {
       row.seats = this.normalizeSeats(dto.seats);
     }
     await this.tables.save(row);
+    this.live.tick(shopId, 'reservations');
     return this.toTableDto(row);
   }
 
@@ -162,6 +166,7 @@ export class SalonFloorService implements OnModuleInit {
     if (!row) throw new NotFoundException('Mesa no encontrada');
     row.active = false;
     await this.tables.save(row);
+    this.live.tick(shopId, 'reservations');
     return { ok: true };
   }
 
@@ -209,6 +214,7 @@ export class SalonFloorService implements OnModuleInit {
       });
       created.push(await this.rules.save(row));
     }
+    this.live.tick(shopId, 'reservations');
     return created.map((r) => this.toRuleDto(r));
   }
 }
