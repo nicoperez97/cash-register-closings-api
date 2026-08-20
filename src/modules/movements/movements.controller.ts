@@ -27,6 +27,7 @@ import type { Response } from 'express';
 import {
   IsBoolean,
   IsDateString,
+  IsIn,
   IsNumber,
   IsOptional,
   IsString,
@@ -34,7 +35,12 @@ import {
   Min,
   ValidateIf,
 } from 'class-validator';
-import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
+import {
+  CurrentUser,
+  AuthUser,
+  RequireAnyPermissions,
+  RequirePermissions,
+} from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { MovementsService } from './movements.service';
 import { MovementsExcelImportService } from './movements-excel-import.service';
@@ -70,6 +76,10 @@ class CreateMovementDto {
   @ApiPropertyOptional() @IsOptional() @IsString() invoiceNumber?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsUUID() employeeId?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() notifyAdmins?: boolean;
+  @ApiPropertyOptional({ enum: ['expense', 'transfer'] })
+  @IsOptional()
+  @IsIn(['expense', 'transfer'])
+  kind?: 'expense' | 'transfer';
 }
 
 class UpdateMovementDto {
@@ -102,6 +112,10 @@ class UpdateMovementDto {
   @ApiPropertyOptional() @IsOptional() @IsBoolean() invoiced?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsString() invoiceNumber?: string | null;
   @ApiPropertyOptional() @IsOptional() employeeId?: string | null;
+  @ApiPropertyOptional({ enum: ['expense', 'transfer'] })
+  @IsOptional()
+  @IsIn(['expense', 'transfer'])
+  kind?: 'expense' | 'transfer';
 }
 
 @ApiTags('movements')
@@ -115,7 +129,7 @@ export class MovementsController {
   ) {}
 
   @Get()
-  @RequirePermissions('movements.read')
+  @RequireAnyPermissions('expenses.read', 'accountTransfers.read', 'movements.read')
   list(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -126,6 +140,7 @@ export class MovementsController {
     @Query('conceptId') conceptId?: string,
     @Query('closingId') closingId?: string,
     @Query('q') q?: string,
+    @Query('kind') kind?: 'expense' | 'transfer',
   ) {
     return this.movements.list(user, shopId, {
       from,
@@ -135,22 +150,23 @@ export class MovementsController {
       conceptId,
       closingId,
       q,
+      kind,
     });
   }
 
   @Get('expenses-by-concept')
-  @RequirePermissions('movements.read')
+  @RequirePermissions('expenses.read')
   expensesByConcept(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
   ) {
-    return this.movements.expensesByConcept(user, shopId, { from, to });
+    return this.movements.expensesByConcept(user, shopId, { from, to, kind: 'expense' });
   }
 
   @Get('balances')
-  @RequirePermissions('movements.read')
+  @RequireAnyPermissions('expenses.read', 'accountTransfers.read', 'movements.read')
   balances(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -161,7 +177,7 @@ export class MovementsController {
   }
 
   @Get('balances/export.xlsx')
-  @RequirePermissions('movements.read')
+  @RequireAnyPermissions('expenses.read', 'accountTransfers.read', 'movements.read')
   async exportBalances(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -182,7 +198,7 @@ export class MovementsController {
   }
 
   @Get('import-template.xlsx')
-  @RequirePermissions('movements.manage')
+  @RequireAnyPermissions('expenses.manage', 'accountTransfers.manage', 'movements.manage')
   async importTemplate(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -198,17 +214,19 @@ export class MovementsController {
   }
 
   @Get('export.xlsx')
-  @RequirePermissions('movements.read')
+  @RequireAnyPermissions('expenses.read', 'accountTransfers.read', 'movements.read')
   async export(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
     @Query('from') from: string | undefined,
     @Query('to') to: string | undefined,
+    @Query('kind') kind: 'expense' | 'transfer' | undefined,
     @Res() res: Response,
   ) {
     const { buffer, filename } = await this.excelImport.exportRange(user, shopId, {
       from,
       to,
+      kind,
     });
     res.setHeader(
       'Content-Type',
@@ -219,7 +237,7 @@ export class MovementsController {
   }
 
   @Post('import-excel')
-  @RequirePermissions('movements.manage')
+  @RequireAnyPermissions('expenses.manage', 'accountTransfers.manage', 'movements.manage')
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
@@ -252,7 +270,7 @@ export class MovementsController {
   }
 
   @Get(':id')
-  @RequirePermissions('movements.read')
+  @RequireAnyPermissions('expenses.read', 'accountTransfers.read', 'movements.read')
   one(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -262,7 +280,7 @@ export class MovementsController {
   }
 
   @Post()
-  @RequirePermissions('movements.manage')
+  @RequireAnyPermissions('expenses.manage', 'accountTransfers.manage', 'movements.manage')
   create(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -272,7 +290,7 @@ export class MovementsController {
   }
 
   @Patch(':id')
-  @RequirePermissions('movements.manage')
+  @RequireAnyPermissions('expenses.manage', 'accountTransfers.manage', 'movements.manage')
   update(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -283,7 +301,7 @@ export class MovementsController {
   }
 
   @Delete(':id')
-  @RequirePermissions('movements.manage')
+  @RequireAnyPermissions('expenses.manage', 'accountTransfers.manage', 'movements.manage')
   remove(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,

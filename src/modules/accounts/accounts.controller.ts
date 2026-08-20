@@ -22,7 +22,7 @@ import {
   MinLength,
   ValidateIf,
 } from 'class-validator';
-import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
+import { CurrentUser, AuthUser, RequireAnyPermissions, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { LedgerAccountType, LinkedPaymentMethod } from '../../common/enums';
 import { AccountsService } from './accounts.service';
@@ -138,7 +138,15 @@ export class AccountsController {
   constructor(private readonly accounts: AccountsService) {}
 
   @Get()
-  @RequirePermissions('movements.read')
+  @RequireAnyPermissions(
+    'expenses.read',
+    'accountTransfers.read',
+    'movements.read',
+    'accounts.manage',
+    'closings.read',
+    'closings.create',
+    'payments.read',
+  )
   list(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
     return this.accounts.list(user, shopId);
   }

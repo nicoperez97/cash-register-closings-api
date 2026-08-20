@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
   OnModuleInit,
@@ -12,8 +13,14 @@ import { Concept } from '../../entities/concept.entity';
 import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { AuthUser } from '../../common/decorators';
-import { GlobalRole, LedgerAccountType, NotificationType } from '../../common/enums';
-import { isGlobalAdmin } from '../../common/guards';
+import {
+  ConceptKind,
+  GlobalRole,
+  LedgerAccountType,
+  NotificationType,
+  Permission,
+} from '../../common/enums';
+import { isGlobalAdmin, resolveUserPermissions } from '../../common/guards';
 import { isEntityActive } from '../../common/active.util';
 import { ShopsService } from '../shops/shops.service';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
@@ -32,6 +39,8 @@ function formatArMoney(value: number): string {
   return num < 0 ? `- $${abs}` : `$${abs}`;
 }
 
+export type MovementKindFilter = 'expense' | 'transfer';
+
 export interface MovementFilters {
   from?: string;
   to?: string;
@@ -40,6 +49,7 @@ export interface MovementFilters {
   conceptId?: string;
   closingId?: string;
   q?: string;
+  kind?: MovementKindFilter;
 }
 
 export interface UpsertMovementDto {
@@ -57,6 +67,8 @@ export interface UpsertMovementDto {
   invoiceNumber?: string | null;
   employeeId?: string | null;
   notifyAdmins?: boolean;
+  /** expense = gasto con concepto; transfer = entre cuentas sin concepto */
+  kind?: MovementKindFilter;
 }
 
 @Injectable()
@@ -123,8 +135,40 @@ export class MovementsService implements OnModuleInit {
     };
   }
 
+  private assertPerm(user: AuthUser, shopId: string, ...need: Permission[]) {
+    const perms = resolveUserPermissions(user, shopId);
+    if (!need.every((p) => perms.includes(p))) {
+      throw new ForbiddenException('Sin permiso');
+    }
+  }
+
+  private assertAnyPerm(user: AuthUser, shopId: string, ...need: Permission[]) {
+    const perms = resolveUserPermissions(user, shopId);
+    if (!need.some((p) => perms.includes(p))) {
+      throw new ForbiddenException('Sin permiso');
+    }
+  }
+
+  private isExpenseRow(r: {
+    conceptKind?: string | null;
+    toAccountName?: string | null;
+    toAccountCode?: string | null;
+  }): boolean {
+    if (r.conceptKind === ConceptKind.EXPENSE || r.conceptKind === 'EXPENSE') return true;
+    const name = (r.toAccountName ?? '').toLowerCase();
+    const code = (r.toAccountCode ?? '').toUpperCase();
+    return code === 'EGRESO' || name.includes('egreso');
+  }
+
   async list(user: AuthUser, shopId: string, filters: MovementFilters = {}) {
     this.shops.assertShopAccess(user, shopId);
+    if (filters.kind === 'expense') {
+      this.assertPerm(user, shopId, 'expenses.read');
+    } else if (filters.kind === 'transfer') {
+      this.assertPerm(user, shopId, 'accountTransfers.read');
+    } else {
+      this.assertAnyPerm(user, shopId, 'expenses.read', 'accountTransfers.read', 'movements.read');
+    }
 
     const qb = this.movements
       .createQueryBuilder('m')
@@ -154,6 +198,18 @@ export class MovementsService implements OnModuleInit {
     }
     if (filters.q?.trim()) {
       qb.andWhere('m.description LIKE :q', { q: `%${filters.q.trim()}%` });
+    }
+
+    if (filters.kind === 'expense') {
+      qb.andWhere(
+        `(concept.kind = :expenseKind OR LOWER(toAccount.name) LIKE :egresoName OR UPPER(toAccount.code) = :egresoCode)`,
+        { expenseKind: ConceptKind.EXPENSE, egresoName: '%egreso%', egresoCode: 'EGRESO' },
+      );
+    } else if (filters.kind === 'transfer') {
+      qb.andWhere(
+        `(concept.kind IS NULL OR concept.kind <> :expenseKind) AND (toAccount.id IS NULL OR (LOWER(toAccount.name) NOT LIKE :egresoName AND UPPER(COALESCE(toAccount.code, '')) <> :egresoCode))`,
+        { expenseKind: ConceptKind.EXPENSE, egresoName: '%egreso%', egresoCode: 'EGRESO' },
+      );
     }
 
     qb.orderBy('m.businessDate', 'DESC').addOrderBy('m.createdAt', 'DESC');
@@ -201,18 +257,45 @@ export class MovementsService implements OnModuleInit {
 
   async create(user: AuthUser, shopId: string, dto: UpsertMovementDto) {
     this.shops.assertShopAccess(user, shopId);
+    const kind = dto.kind;
+    if (kind === 'expense') {
+      this.assertPerm(user, shopId, 'expenses.manage');
+    } else if (kind === 'transfer') {
+      this.assertPerm(user, shopId, 'accountTransfers.manage');
+    } else {
+      this.assertAnyPerm(user, shopId, 'expenses.manage', 'accountTransfers.manage', 'movements.manage');
+    }
+
+    let conceptId = dto.conceptId ?? null;
     const fromAccountId = this.normalizeAccountId(dto.fromAccountId);
     const toAccountId = this.normalizeAccountId(dto.toAccountId);
     const fromUserId = this.normalizeUserId(dto.fromUserId);
     const toUserId = this.normalizeUserId(dto.toUserId);
+
+    if (kind === 'transfer') {
+      conceptId = null;
+      if (!fromAccountId || !toAccountId) {
+        throw new BadRequestException('La transferencia requiere cuenta origen y destino');
+      }
+      if (fromAccountId === toAccountId) {
+        throw new BadRequestException('Origen y destino deben ser distintos');
+      }
+    }
+    if (kind === 'expense') {
+      if (!conceptId) throw new BadRequestException('El gasto requiere un concepto');
+    }
+
     await this.assertAccounts(shopId, fromAccountId, toAccountId);
     await this.assertShopUser(shopId, fromUserId);
     await this.assertShopUser(shopId, toUserId);
-    if (dto.conceptId) {
+    if (conceptId) {
       const c = await this.concepts.findOne({
-        where: { id: dto.conceptId, shopId, active: true },
+        where: { id: conceptId, shopId, active: true },
       });
       if (!c) throw new BadRequestException('Concepto inválido');
+      if (kind === 'expense' && c.kind !== ConceptKind.EXPENSE) {
+        throw new BadRequestException('El concepto debe ser de tipo egreso');
+      }
     }
     const amountUsd =
       dto.amountUsd != null
@@ -233,7 +316,7 @@ export class MovementsService implements OnModuleInit {
         amountUyu: money(n(dto.amountUyu)),
         usdRate: dto.usdRate != null ? String(dto.usdRate) : null,
         amountUsd: amountUsd != null ? String(amountUsd) : null,
-        conceptId: dto.conceptId ?? null,
+        conceptId,
         invoiced: dto.invoiced ?? false,
         invoiceNumber: dto.invoiceNumber ?? null,
         employeeId: dto.employeeId ?? null,
@@ -260,13 +343,26 @@ export class MovementsService implements OnModuleInit {
 
   async update(user: AuthUser, shopId: string, id: string, dto: Partial<UpsertMovementDto>) {
     this.shops.assertShopAccess(user, shopId);
-    const row = await this.movements.findOne({ where: { id, shopId } });
+    const row = await this.movements.findOne({
+      where: { id, shopId },
+      relations: ['toAccount', 'concept'],
+    });
     if (!row) throw new NotFoundException('Movimiento no encontrado');
     if (row.closingId && !isGlobalAdmin(user.globalRole as GlobalRole)) {
       throw new BadRequestException(
         'Este movimiento fue generado por un cierre; editá el cierre',
       );
     }
+
+    const asExpense = this.isExpenseRow({
+      conceptKind: row.concept?.kind,
+      toAccountName: row.toAccount?.name,
+      toAccountCode: row.toAccount?.code,
+    });
+    if (asExpense) this.assertPerm(user, shopId, 'expenses.manage');
+    else this.assertPerm(user, shopId, 'accountTransfers.manage');
+
+    const kind = dto.kind ?? (asExpense ? 'expense' : 'transfer');
 
     const fromId =
       dto.fromAccountId !== undefined
@@ -302,7 +398,21 @@ export class MovementsService implements OnModuleInit {
     } else if (dto.usdRate != null && dto.amountUyu != null) {
       row.amountUsd = String(dto.amountUyu / dto.usdRate);
     }
-    if (dto.conceptId !== undefined) row.conceptId = dto.conceptId;
+
+    if (kind === 'transfer') {
+      row.conceptId = null;
+      if (!fromId || !toId) {
+        throw new BadRequestException('La transferencia requiere cuenta origen y destino');
+      }
+    } else if (dto.conceptId !== undefined) {
+      if (!dto.conceptId) throw new BadRequestException('El gasto requiere un concepto');
+      const c = await this.concepts.findOne({
+        where: { id: dto.conceptId, shopId, active: true },
+      });
+      if (!c) throw new BadRequestException('Concepto inválido');
+      row.conceptId = dto.conceptId;
+    }
+
     if (dto.invoiced !== undefined) row.invoiced = dto.invoiced;
     if (dto.invoiceNumber !== undefined) row.invoiceNumber = dto.invoiceNumber;
     if (dto.employeeId !== undefined) row.employeeId = dto.employeeId;
@@ -313,13 +423,23 @@ export class MovementsService implements OnModuleInit {
 
   async remove(user: AuthUser, shopId: string, id: string) {
     this.shops.assertShopAccess(user, shopId);
-    const row = await this.movements.findOne({ where: { id, shopId } });
+    const row = await this.movements.findOne({
+      where: { id, shopId },
+      relations: ['toAccount', 'concept'],
+    });
     if (!row) throw new NotFoundException('Movimiento no encontrado');
     if (row.closingId && !isGlobalAdmin(user.globalRole as GlobalRole)) {
       throw new BadRequestException(
         'Este movimiento fue generado por un cierre; editá el cierre',
       );
     }
+    const asExpense = this.isExpenseRow({
+      conceptKind: row.concept?.kind,
+      toAccountName: row.toAccount?.name,
+      toAccountCode: row.toAccount?.code,
+    });
+    if (asExpense) this.assertPerm(user, shopId, 'expenses.manage');
+    else this.assertPerm(user, shopId, 'accountTransfers.manage');
     await this.movements.softRemove(row);
     return { ok: true };
   }

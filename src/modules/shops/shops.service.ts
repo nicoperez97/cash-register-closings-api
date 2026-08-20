@@ -303,6 +303,14 @@ export class ShopsService implements OnModuleInit {
     } catch {
       // columna ya existe
     }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN navConfig JSON NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
   }
 
   assertShopAccess(user: AuthUser, shopId: string) {
@@ -643,6 +651,9 @@ export class ShopsService implements OnModuleInit {
         ? normalizePaymentConceptCategories(dto.paymentConceptCategories)
         : null;
     }
+    if (dto.navConfig !== undefined) {
+      shop.navConfig = dto.navConfig ? this.normalizeNavConfig(dto.navConfig) : null;
+    }
 
     await this.shops.save(shop);
     if (smtpPasswordPatch !== undefined) {
@@ -955,8 +966,58 @@ export class ShopsService implements OnModuleInit {
       posPaymentMap: s.posPaymentMap ?? null,
       posnets: s.posnets ?? [],
       paymentConceptCategories: normalizePaymentConceptCategories(s.paymentConceptCategories),
+      navConfig: s.navConfig && typeof s.navConfig === 'object' ? s.navConfig : null,
       active: isEntityActive(s.active),
     };
+  }
+
+  private normalizeNavConfig(
+    raw: {
+      groups?: Array<{ id: string; label?: string }>;
+      itemGroup?: Record<string, string>;
+      itemOrder?: Record<string, string[]>;
+      hidden?: string[];
+      itemLabels?: Record<string, string>;
+    },
+  ): Shop['navConfig'] {
+    const groups = Array.isArray(raw.groups)
+      ? raw.groups
+          .filter((g) => g && typeof g.id === 'string' && g.id.trim())
+          .map((g) => ({
+            id: String(g.id).trim(),
+            ...(typeof g.label === 'string' && g.label.trim()
+              ? { label: g.label.trim() }
+              : {}),
+          }))
+      : undefined;
+    const itemGroup =
+      raw.itemGroup && typeof raw.itemGroup === 'object'
+        ? Object.fromEntries(
+            Object.entries(raw.itemGroup)
+              .filter(([k, v]) => k && typeof v === 'string' && v.trim())
+              .map(([k, v]) => [k, String(v).trim()]),
+          )
+        : undefined;
+    const itemOrder =
+      raw.itemOrder && typeof raw.itemOrder === 'object'
+        ? Object.fromEntries(
+            Object.entries(raw.itemOrder)
+              .filter(([, v]) => Array.isArray(v))
+              .map(([k, v]) => [k, (v as string[]).map(String).filter(Boolean)]),
+          )
+        : undefined;
+    const hidden = Array.isArray(raw.hidden)
+      ? raw.hidden.map(String).filter(Boolean)
+      : undefined;
+    const itemLabels =
+      raw.itemLabels && typeof raw.itemLabels === 'object'
+        ? Object.fromEntries(
+            Object.entries(raw.itemLabels)
+              .filter(([k, v]) => k && typeof v === 'string' && v.trim())
+              .map(([k, v]) => [k, String(v).trim()]),
+          )
+        : undefined;
+    return { groups, itemGroup, itemOrder, hidden, itemLabels };
   }
 
   private async withSettlementsEnabled<T extends { id: string; settlementsEnabled?: boolean }>(
