@@ -64,6 +64,8 @@ export class PublicAbuseGuard implements CanActivate {
     const isLogin = path.endsWith('/auth/login') && method === 'POST';
     const isReserve =
       isPublicApi && method === 'POST' && path.includes('/reservation-requests');
+    const isLookup =
+      isPublicApi && method === 'GET' && path.includes('/my-reservations');
 
     if (mutating && isPublicApi) {
       this.assertAllowedOrigin(req);
@@ -87,6 +89,26 @@ export class PublicAbuseGuard implements CanActivate {
           4,
           60 * 60_000,
           'Ya mandamos varias solicitudes con este mail. Revisá tu correo.',
+        );
+      }
+    } else if (isLookup) {
+      this.hit(
+        `lookup:${ip}`,
+        20,
+        60_000,
+        'Demasiadas consultas. Esperá un momento.',
+      );
+      const email = String(
+        (req as { query?: Record<string, unknown> }).query?.email ?? '',
+      )
+        .trim()
+        .toLowerCase();
+      if (email) {
+        this.hit(
+          `lookup-mail:${email}`,
+          10,
+          60 * 60_000,
+          'Demasiadas consultas con este mail. Probá más tarde.',
         );
       }
     } else if (isPublicApi && mutating) {

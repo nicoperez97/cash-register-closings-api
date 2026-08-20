@@ -12,7 +12,7 @@ import {
   ReservationStatus,
 } from '../../entities/reservation.entity';
 import { ReservationDayNotice } from '../../entities/reservation-day-notice.entity';
-import { ReservationRequest } from '../../entities/reservation-request.entity';
+import { ReservationRequest, ReservationRequestStatus } from '../../entities/reservation-request.entity';
 import {
   WaitingListEntry,
   WaitingListStatus,
@@ -721,7 +721,7 @@ export class ReservationsService implements OnModuleInit {
     return { ok: true };
   }
 
-  /** Público: reservas futuras o de hoy de un mail, ligadas al local del slug. */
+  /** Público: reservas y solicitudes futuras/hoy de un mail, ligadas al local del slug. */
   async publicLookupByEmail(slug: string, emailRaw: string) {
     const shop = await this.shops.findActiveBySlug(String(slug ?? '').trim().toLowerCase());
     if (!shop) throw new NotFoundException('Local no encontrado');
@@ -731,22 +731,144 @@ export class ReservationsService implements OnModuleInit {
     const email = this.normalizeEmail(emailRaw);
     if (!email) throw new BadRequestException('Ingresá un mail');
     const fromDate = resolveShopCalendarDate(new Date(), { timezone: shop.timezone });
-    const rows = await this.reservations
-      .createQueryBuilder('r')
-      .where('r.shopId = :shopId', { shopId: shop.id })
-      .andWhere('r.active = true')
-      .andWhere('LOWER(r.guestEmail) = :email', { email })
-      .andWhere('DATE(r.businessDate) >= :fromDate', { fromDate })
-      .andWhere('r.status IN (:...statuses)', {
-        statuses: [...ACTIVE_RESERVATION_STATUSES],
-      })
-      .orderBy('r.businessDate', 'ASC')
-      .addOrderBy('r.reservationTime', 'ASC')
-      .getMany();
+
+    const [rows, requestRows] = await Promise.all([
+      this.reservations
+        .createQueryBuilder('r')
+        .where('r.shopId = :shopId', { shopId: shop.id })
+        .andWhere('r.active = true')
+        .andWhere('LOWER(r.guestEmail) = :email', { email })
+        .andWhere('DATE(r.businessDate) >= :fromDate', { fromDate })
+        .andWhere('r.status IN (:...statuses)', {
+          statuses: [...ACTIVE_RESERVATION_STATUSES],
+        })
+        .orderBy('r.businessDate', 'ASC')
+        .addOrderBy('r.reservationTime', 'ASC')
+        .getMany(),
+      this.requests
+        .createQueryBuilder('q')
+        .where('q.shopId = :shopId', { shopId: shop.id })
+        .andWhere('q.active = true')
+        .andWhere('LOWER(q.guestEmail) = :email', { email })
+        .andWhere('DATE(q.businessDate) >= :fromDate', { fromDate })
+        .andWhere('q.status IN (:...statuses)', {
+          statuses: [
+            ReservationRequestStatus.PENDING,
+            ReservationRequestStatus.REJECTED,
+            ReservationRequestStatus.ACCEPTED,
+          ],
+        })
+        .orderBy('q.businessDate', 'ASC')
+        .addOrderBy('q.reservationTime', 'ASC')
+        .getMany(),
+    ]);
+
+    const linkedReservationIds = new Set(
+      requestRows
+        .map((q) => q.reservationId)
+        .filter((id): id is string => !!id),
+    );
+
+    type LookupItem = {
+      id: string;
+      source: 'reservation' | 'request';
+      publicStatus: 'pending' | 'confirmed' | 'rejected';
+      statusReason: string | null;
+      businessDate: string;
+      guestName: string;
+      partySize: number;
+      area: ReservationArea;
+      reservationTime: string | null;
+      tableNumber: string | null;
+    };
+
+    const items: LookupItem[] = [];
+
+    for (const r of rows) {
+      const dto = this.toReservationDto(r);
+      items.push({
+        id: dto.id,
+        source: 'reservation',
+        publicStatus: 'confirmed',
+        statusReason: null,
+        businessDate: dto.businessDate,
+        guestName: dto.guestName,
+        partySize: dto.partySize,
+        area: dto.area,
+        reservationTime: dto.reservationTime,
+        tableNumber: dto.tableNumber,
+      });
+    }
+
+    for (const q of requestRows) {
+      if (
+        q.status === ReservationRequestStatus.ACCEPTED &&
+        q.reservationId &&
+        linkedReservationIds.has(q.reservationId) &&
+        rows.some((r) => r.id === q.reservationId)
+      ) {
+        continue;
+      }
+      const businessDate = toIsoDateOnly(q.businessDate) || String(q.businessDate);
+      if (q.status === ReservationRequestStatus.PENDING) {
+        items.push({
+          id: q.id,
+          source: 'request',
+          publicStatus: 'pending',
+          statusReason: null,
+          businessDate,
+          guestName: q.guestName ?? '',
+          partySize: Number(q.partySize ?? 0),
+          area: q.area === ReservationArea.OUTSIDE ? ReservationArea.OUTSIDE : ReservationArea.INSIDE,
+          reservationTime: q.reservationTime ?? null,
+          tableNumber: null,
+        });
+      } else if (q.status === ReservationRequestStatus.REJECTED) {
+        items.push({
+          id: q.id,
+          source: 'request',
+          publicStatus: 'rejected',
+          statusReason: q.staffNote?.trim() || null,
+          businessDate,
+          guestName: q.guestName ?? '',
+          partySize: Number(q.partySize ?? 0),
+          area: q.area === ReservationArea.OUTSIDE ? ReservationArea.OUTSIDE : ReservationArea.INSIDE,
+          reservationTime: q.reservationTime ?? null,
+          tableNumber: null,
+        });
+      } else if (q.status === ReservationRequestStatus.ACCEPTED) {
+        // Aceptada pero aún no aparece la reserva vinculada.
+        items.push({
+          id: q.id,
+          source: 'request',
+          publicStatus: 'confirmed',
+          statusReason: null,
+          businessDate,
+          guestName: q.guestName ?? '',
+          partySize: Number(q.partySize ?? 0),
+          area: q.area === ReservationArea.OUTSIDE ? ReservationArea.OUTSIDE : ReservationArea.INSIDE,
+          reservationTime: q.reservationTime ?? null,
+          tableNumber: null,
+        });
+      }
+    }
+
+    items.sort((a, b) => {
+      const d = a.businessDate.localeCompare(b.businessDate);
+      if (d !== 0) return d;
+      return String(a.reservationTime ?? '').localeCompare(String(b.reservationTime ?? ''));
+    });
+
     return {
-      shop: { name: shop.name, slug: shop.slug, accentColor: shop.accentColor ?? null },
+      shop: {
+        name: shop.name,
+        slug: shop.slug,
+        accentColor: shop.accentColor ?? null,
+        logoUrl: normalizeLogoUrl(shop.logoUrl) ?? null,
+      },
       email,
-      reservations: rows.map((r) => this.toReservationDto(r)),
+      reservations: items,
+      items,
     };
   }
 
