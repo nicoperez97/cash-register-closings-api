@@ -7,6 +7,8 @@ export type ModuleKey =
   | 'settlements'
   | 'reports'
   | 'movements'
+  | 'expenses'
+  | 'accountTransfers'
   | 'attendance'
   | 'employees'
   | 'candidates'
@@ -83,8 +85,17 @@ export const MODULE_DEFS: ModuleDef[] = [
     ],
   },
   {
-    key: 'movements',
-    label: 'Movimientos',
+    key: 'expenses',
+    label: 'Gastos',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
+    key: 'accountTransfers',
+    label: 'Movimientos entre cuentas',
     levels: [
       { value: 'none', label: 'Ninguno' },
       { value: 'read', label: 'Ver' },
@@ -319,7 +330,22 @@ export function expandModulePermissions(
     if (level === 'manage') add(set, read, manage);
   };
 
-  pair('movements', 'movements.read', 'movements.manage');
+  // Legacy movements → expenses + accountTransfers
+  const legacyMov = modules.movements;
+  const expensesLevel =
+    modules.expenses ||
+    (legacyMov === 'read' || legacyMov === 'manage' ? legacyMov : undefined);
+  const transfersLevel =
+    modules.accountTransfers ||
+    (legacyMov === 'read' || legacyMov === 'manage' ? legacyMov : undefined);
+  if (expensesLevel === 'read') add(set, 'expenses.read');
+  if (expensesLevel === 'manage') add(set, 'expenses.read', 'expenses.manage');
+  if (transfersLevel === 'read') add(set, 'accountTransfers.read');
+  if (transfersLevel === 'manage') add(set, 'accountTransfers.read', 'accountTransfers.manage');
+  if (expensesLevel === 'read' || expensesLevel === 'manage' || transfersLevel === 'read' || transfersLevel === 'manage') {
+    add(set, 'movements.read');
+    if (expensesLevel === 'manage' || transfersLevel === 'manage') add(set, 'movements.manage');
+  }
   pair('cashWithdrawals', 'cashWithdrawals.read', 'cashWithdrawals.manage');
   pair('settlements', 'settlements.read', 'settlements.manage');
   switch (modules.attendance) {
@@ -381,8 +407,12 @@ export function expandModulePermissions(
   }
   if (modules.payments === 'read') add(set, 'suppliers.read', 'services.read');
 
-  if (modules.accounts === 'manage') add(set, 'accounts.manage', 'movements.read');
-  if (modules.concepts === 'manage') add(set, 'concepts.manage', 'movements.read');
+  if (modules.accounts === 'manage') {
+    add(set, 'accounts.manage', 'expenses.read', 'accountTransfers.read', 'movements.read');
+  }
+  if (modules.concepts === 'manage') {
+    add(set, 'concepts.manage', 'expenses.read', 'accountTransfers.read', 'movements.read');
+  }
   if (modules.shop === 'manage') add(set, 'shops.manage');
   if (modules.users === 'manage') add(set, 'users.manage');
 
@@ -426,7 +456,8 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
     cashWithdrawals: level('cashWithdrawals.read', 'cashWithdrawals.manage'),
     settlements: level('settlements.read', 'settlements.manage'),
     reports: reports(),
-    movements: level('movements.read', 'movements.manage'),
+    expenses: level('expenses.read', 'expenses.manage'),
+    accountTransfers: level('accountTransfers.read', 'accountTransfers.manage'),
     attendance: attendance(),
     employees: level('employees.read', 'employees.manage'),
     candidates: level('candidates.read', 'candidates.manage'),
@@ -467,10 +498,20 @@ export function sanitizeModulePermissions(
 ): ModulePermissionsMap {
   if (!input) return {};
   const allowUsers = opts?.allowUsersModule ?? false;
+  const rawInput = { ...input };
+  // Migración soft: movements → expenses + accountTransfers
+  const legacy = rawInput.movements;
+  if (legacy && legacy !== 'none') {
+    if (!rawInput.expenses || rawInput.expenses === 'none') rawInput.expenses = legacy;
+    if (!rawInput.accountTransfers || rawInput.accountTransfers === 'none') {
+      rawInput.accountTransfers = legacy;
+    }
+    delete rawInput.movements;
+  }
   const out: ModulePermissionsMap = {};
   for (const def of MODULE_DEFS) {
     if (def.key === 'users' && !allowUsers) continue;
-    const raw = input[def.key];
+    const raw = rawInput[def.key];
     if (!raw || raw === 'none') continue;
     if (!def.levels.some((l) => l.value === raw)) continue;
     out[def.key] = raw;

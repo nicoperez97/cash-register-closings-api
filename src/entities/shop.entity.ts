@@ -225,6 +225,19 @@ export class Shop extends BaseEntity {
     movement?: string[];
   } | null;
 
+  /**
+   * Orden / visibilidad / agrupación del menú lateral del local.
+   * null = defaults de la app.
+   */
+  @Column({ type: 'simple-json', nullable: true })
+  navConfig?: {
+    groups?: Array<{ id: string; label?: string }>;
+    itemGroup?: Record<string, string>;
+    itemOrder?: Record<string, string[]>;
+    hidden?: string[];
+    itemLabels?: Record<string, string>;
+  } | null;
+
   @ManyToOne(() => SalesSystem, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'salesSystemId' })
   salesSystem?: SalesSystem | null;

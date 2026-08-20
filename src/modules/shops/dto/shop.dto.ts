@@ -354,6 +354,20 @@ export class CreateShopDto {
   @ValidateNested()
   @Type(() => PaymentConceptCategoriesDto)
   paymentConceptCategories?: PaymentConceptCategoriesDto | null;
+
+  @ApiPropertyOptional({
+    description:
+      'Config del menú lateral: grupos, asignación de ítems, orden y ocultos. null = defaults.',
+  })
+  @IsOptional()
+  @IsObject()
+  navConfig?: {
+    groups?: Array<{ id: string; label?: string }>;
+    itemGroup?: Record<string, string>;
+    itemOrder?: Record<string, string[]>;
+    hidden?: string[];
+    itemLabels?: Record<string, string>;
+  } | null;
 }
 
 export class UpdateShopDto extends PartialType(CreateShopDto) {

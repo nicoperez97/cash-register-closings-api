@@ -117,7 +117,7 @@ export class MovementsExcelImportService {
   async exportRange(
     user: AuthUser,
     shopId: string,
-    filters: { from?: string; to?: string } = {},
+    filters: { from?: string; to?: string; kind?: 'expense' | 'transfer' } = {},
   ) {
     this.shops.assertShopAccess(user, shopId);
     const shop = await this.shops.findOne(user, shopId);
@@ -134,6 +134,17 @@ export class MovementsExcelImportService {
 
     if (filters.from) qb.andWhere('m.businessDate >= :from', { from: filters.from });
     if (filters.to) qb.andWhere('m.businessDate <= :to', { to: filters.to });
+    if (filters.kind === 'expense') {
+      qb.andWhere(
+        `(concept.kind = :expenseKind OR LOWER(toAccount.name) LIKE :egresoName OR UPPER(toAccount.code) = :egresoCode)`,
+        { expenseKind: 'EXPENSE', egresoName: '%egreso%', egresoCode: 'EGRESO' },
+      );
+    } else if (filters.kind === 'transfer') {
+      qb.andWhere(
+        `(concept.kind IS NULL OR concept.kind <> :expenseKind) AND (toAccount.id IS NULL OR (LOWER(toAccount.name) NOT LIKE :egresoName AND UPPER(COALESCE(toAccount.code, '')) <> :egresoCode))`,
+        { expenseKind: 'EXPENSE', egresoName: '%egreso%', egresoCode: 'EGRESO' },
+      );
+    }
     qb.orderBy('m.businessDate', 'ASC').addOrderBy('m.createdAt', 'ASC');
     const rows = await qb.getMany();
 

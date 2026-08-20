@@ -25,7 +25,7 @@ import { AuthGuard } from '@nestjs/passport';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import { IsArray, IsBoolean, IsEnum, IsOptional, IsString, MinLength } from 'class-validator';
-import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
+import { CurrentUser, AuthUser, RequireAnyPermissions, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { ConceptCategory, ConceptKind } from '../../common/enums';
 import { ConceptsService } from './concepts.service';
@@ -75,7 +75,13 @@ export class ConceptsController {
   ) {}
 
   @Get()
-  @RequirePermissions('movements.read')
+  @RequireAnyPermissions(
+    'expenses.read',
+    'accountTransfers.read',
+    'movements.read',
+    'concepts.manage',
+    'payments.read',
+  )
   list(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
