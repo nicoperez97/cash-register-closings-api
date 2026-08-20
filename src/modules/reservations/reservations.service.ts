@@ -861,10 +861,11 @@ export class ReservationsService implements OnModuleInit {
 
     return {
       shop: {
+        id: shop.id,
         name: shop.name,
         slug: shop.slug,
         accentColor: shop.accentColor ?? null,
-        logoUrl: normalizeLogoUrl(shop.logoUrl) ?? null,
+        logoUrl: shop.logoUrl ?? null,
       },
       email,
       reservations: items,
