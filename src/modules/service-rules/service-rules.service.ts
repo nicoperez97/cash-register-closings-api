@@ -56,7 +56,7 @@ export class ServiceRulesService implements OnModuleInit {
           id CHAR(36) NOT NULL PRIMARY KEY,
           shopId CHAR(36) NOT NULL,
           categoryId CHAR(36) NOT NULL,
-          phase ENUM('PRE', 'POST') NOT NULL DEFAULT 'PRE',
+          phase ENUM('PRE', 'DURING', 'POST') NOT NULL DEFAULT 'PRE',
           title VARCHAR(200) NOT NULL,
           body TEXT NOT NULL,
           sortOrder INT NOT NULL DEFAULT 0,
@@ -68,6 +68,16 @@ export class ServiceRulesService implements OnModuleInit {
           INDEX idx_sr_cat (categoryId)
         )
       `);
+      try {
+        await this.rules.query(`
+          ALTER TABLE service_rules
+          MODIFY COLUMN phase ENUM('PRE', 'DURING', 'POST') NOT NULL DEFAULT 'PRE'
+        `);
+      } catch (alterErr) {
+        this.logger.warn(
+          `No se pudo ampliar phase de normas: ${(alterErr as Error)?.message ?? alterErr}`,
+        );
+      }
     } catch (err) {
       this.logger.warn(
         `No se pudieron asegurar tablas de normas: ${(err as Error)?.message ?? err}`,
@@ -391,11 +401,7 @@ export class ServiceRulesService implements OnModuleInit {
               String(r?.body ?? '')
                 .trim()
                 .slice(0, 8000) || title;
-            const phaseRaw = String(r?.phase ?? '')
-              .trim()
-              .toUpperCase();
-            const phase =
-              phaseRaw === ServiceRulePhase.POST ? ServiceRulePhase.POST : ServiceRulePhase.PRE;
+            const phase = this.parsePhase(r?.phase);
             return { phase, title, body };
           })
           .filter((r) => r.title && r.body);
@@ -411,8 +417,36 @@ export class ServiceRulesService implements OnModuleInit {
     return row;
   }
 
+  private parsePhase(raw: unknown): ServiceRulePhase {
+    const t = String(raw ?? '')
+      .trim()
+      .toUpperCase();
+    if (
+      t === ServiceRulePhase.POST ||
+      t.includes('DESPU') ||
+      t.includes('CIERRE') ||
+      t.includes('AFTER')
+    ) {
+      return ServiceRulePhase.POST;
+    }
+    if (
+      t === ServiceRulePhase.DURING ||
+      t.includes('DURANT') ||
+      t.includes('DURING') ||
+      t.includes('EN SERVICIO') ||
+      t.includes('MID')
+    ) {
+      return ServiceRulePhase.DURING;
+    }
+    return ServiceRulePhase.PRE;
+  }
+
   private assertPhase(phase: ServiceRulePhase) {
-    if (phase !== ServiceRulePhase.PRE && phase !== ServiceRulePhase.POST) {
+    if (
+      phase !== ServiceRulePhase.PRE &&
+      phase !== ServiceRulePhase.DURING &&
+      phase !== ServiceRulePhase.POST
+    ) {
       throw new BadRequestException('Fase inválida');
     }
   }
