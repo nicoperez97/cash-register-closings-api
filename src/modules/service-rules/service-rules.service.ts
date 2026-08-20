@@ -12,8 +12,16 @@ import { ServiceRule } from '../../entities/service-rule.entity';
 import { AuthUser } from '../../common/decorators';
 import { isEntityActive } from '../../common/active.util';
 import { ServiceRulePhase } from '../../common/enums';
+import { GeminiDocumentService } from '../ai/gemini-document.service';
 import { ShopsService } from '../shops/shops.service';
 import { buildServiceRulesPdf } from './service-rules-pdf';
+
+export type ServiceRulesImportDraft = {
+  categories: Array<{
+    name: string;
+    rules: Array<{ phase: ServiceRulePhase; title: string; body: string }>;
+  }>;
+};
 
 @Injectable()
 export class ServiceRulesService implements OnModuleInit {
@@ -25,6 +33,7 @@ export class ServiceRulesService implements OnModuleInit {
     @InjectRepository(ServiceRule)
     private readonly rules: Repository<ServiceRule>,
     private readonly shops: ShopsService,
+    private readonly gemini: GeminiDocumentService,
   ) {}
 
   async onModuleInit() {
@@ -292,6 +301,108 @@ export class ServiceRulesService implements OnModuleInit {
       buffer: Buffer.from(bytes),
       filename: `normas-${safe}.pdf`,
     };
+  }
+
+  async parseUpload(user: AuthUser, shopId: string, file?: Express.Multer.File) {
+    this.shops.assertShopAccess(user, shopId);
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('Subí un PDF, una imagen o un .txt con las normas');
+    }
+    if (!this.gemini.isEnabled()) {
+      throw new BadRequestException('Gemini no está configurado (falta GEMINI_API_KEY).');
+    }
+    const ai = await this.gemini.parseServiceRules(file);
+    if (!ai.ok) {
+      throw new BadRequestException(ai.message || 'No se pudieron interpretar las normas');
+    }
+    return {
+      categories: ai.data.categories,
+      fileName: file.originalname || null,
+    };
+  }
+
+  async importDraft(user: AuthUser, shopId: string, draft: ServiceRulesImportDraft) {
+    this.shops.assertShopAccess(user, shopId);
+    const normalized = this.normalizeImportDraft(draft);
+    if (!normalized.categories.length) {
+      throw new BadRequestException('No hay normas para importar');
+    }
+
+    const existing = await this.categories.find({ where: { shopId } });
+    const byName = new Map<string, ServiceRuleCategory>();
+    for (const row of existing) {
+      if (row.deletedAt || !isEntityActive(row.active)) continue;
+      byName.set(row.name.trim().toLowerCase(), row);
+    }
+
+    let catOrder = await this.nextCategoryOrder(shopId);
+    const ruleOrderCache = new Map<string, number>();
+
+    for (const cat of normalized.categories) {
+      const key = cat.name.toLowerCase();
+      let category = byName.get(key);
+      if (!category) {
+        category = await this.categories.save(
+          this.categories.create({
+            shopId,
+            name: cat.name,
+            sortOrder: catOrder++,
+            active: true,
+          }),
+        );
+        byName.set(key, category);
+      }
+
+      for (const rule of cat.rules) {
+        const cacheKey = `${category.id}:${rule.phase}`;
+        let next =
+          ruleOrderCache.get(cacheKey) ??
+          (await this.nextRuleOrder(shopId, category.id, rule.phase));
+        await this.rules.save(
+          this.rules.create({
+            shopId,
+            categoryId: category.id,
+            phase: rule.phase,
+            title: rule.title,
+            body: rule.body,
+            sortOrder: next,
+            active: true,
+          }),
+        );
+        ruleOrderCache.set(cacheKey, next + 1);
+      }
+    }
+
+    return this.list(user, shopId);
+  }
+
+  private normalizeImportDraft(draft: ServiceRulesImportDraft): ServiceRulesImportDraft {
+    const categories = (draft?.categories ?? [])
+      .map((c) => {
+        const name = String(c?.name ?? '')
+          .trim()
+          .slice(0, 120);
+        const rules = (c?.rules ?? [])
+          .map((r) => {
+            const title = String(r?.title ?? '')
+              .trim()
+              .slice(0, 200);
+            const body =
+              String(r?.body ?? '')
+                .trim()
+                .slice(0, 8000) || title;
+            const phaseRaw = String(r?.phase ?? '')
+              .trim()
+              .toUpperCase();
+            const phase =
+              phaseRaw === ServiceRulePhase.POST ? ServiceRulePhase.POST : ServiceRulePhase.PRE;
+            return { phase, title, body };
+          })
+          .filter((r) => r.title && r.body);
+        return { name, rules };
+      })
+      .filter((c) => c.name && c.rules.length);
+    return { categories };
   }
 
   private async requireCategory(shopId: string, categoryId: string) {

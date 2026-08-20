@@ -8,12 +8,24 @@ import {
   Post,
   Query,
   Res,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
-import { AuthGuard } from '@nestjs/passport';
-import type { Response } from 'express';
 import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
+  ApiProperty,
+  ApiPropertyOptional,
+  ApiTags,
+} from '@nestjs/swagger';
+import { AuthGuard } from '@nestjs/passport';
+import { FileInterceptor } from '@nestjs/platform-express';
+import type { Response } from 'express';
+import { Type } from 'class-transformer';
+import {
+  IsArray,
   IsBoolean,
   IsEnum,
   IsInt,
@@ -21,11 +33,18 @@ import {
   IsString,
   IsUUID,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
+import { memoryStorage } from 'multer';
 import { CurrentUser, AuthUser, RequirePermissions, Public } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { ServiceRulePhase } from '../../common/enums';
 import { ServiceRulesService } from './service-rules.service';
+
+const rulesUpload = FileInterceptor('file', {
+  storage: memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024 },
+});
 
 class CreateCategoryDto {
   @ApiProperty() @IsString() @MinLength(1) name: string;
@@ -60,6 +79,31 @@ class UpdateRuleDto {
   @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
 }
 
+class ImportRuleDto {
+  @ApiProperty({ enum: ServiceRulePhase })
+  @IsEnum(ServiceRulePhase)
+  phase: ServiceRulePhase;
+  @ApiProperty() @IsString() @MinLength(1) title: string;
+  @ApiProperty() @IsString() @MinLength(1) body: string;
+}
+
+class ImportCategoryDto {
+  @ApiProperty() @IsString() @MinLength(1) name: string;
+  @ApiProperty({ type: [ImportRuleDto] })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ImportRuleDto)
+  rules: ImportRuleDto[];
+}
+
+class ImportDraftDto {
+  @ApiProperty({ type: [ImportCategoryDto] })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ImportCategoryDto)
+  categories: ImportCategoryDto[];
+}
+
 @ApiTags('service-rules')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'), PermissionsGuard)
@@ -75,6 +119,31 @@ export class ServiceRulesController {
     @Query('includeInactive') includeInactive?: string,
   ) {
     return this.serviceRules.list(user, shopId, includeInactive === 'true');
+  }
+
+  @Post('parse')
+  @RequirePermissions('serviceRules.manage')
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } },
+  })
+  @UseInterceptors(rulesUpload)
+  parse(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @UploadedFile() file?: Express.Multer.File,
+  ) {
+    return this.serviceRules.parseUpload(user, shopId, file);
+  }
+
+  @Post('import')
+  @RequirePermissions('serviceRules.manage')
+  importDraft(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: ImportDraftDto,
+  ) {
+    return this.serviceRules.importDraft(user, shopId, dto);
   }
 
   @Post('categories')

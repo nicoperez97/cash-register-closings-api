@@ -526,6 +526,7 @@ export class AuthService implements OnModuleInit {
             : !!s.emailNotificationsEnabled,
         salesSystemId: s.salesSystemId ?? null,
         posnets: s.posnets ?? [],
+        navConfig: s.navConfig && typeof s.navConfig === 'object' ? s.navConfig : null,
         active: true,
       })),
     };
