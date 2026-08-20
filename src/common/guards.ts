@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AuthGuard } from '@nestjs/passport';
-import { AuthUser, IS_PUBLIC_KEY, PERMISSIONS_KEY } from './decorators';
+import { AuthUser, IS_PUBLIC_KEY, PERMISSIONS_ANY_KEY, PERMISSIONS_KEY } from './decorators';
 import { GlobalRole, Permission, ROLE_PERMISSIONS } from './enums';
 
 @Injectable()
@@ -36,6 +36,21 @@ export class PermissionsGuard implements CanActivate {
       context.getClass(),
     ]);
     if (isPublic) return true;
+
+    const requiredAny = this.reflector.getAllAndOverride<Permission[]>(PERMISSIONS_ANY_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (requiredAny?.length) {
+      const req = context.switchToHttp().getRequest();
+      const user = req.user as AuthUser | undefined;
+      if (!user) throw new UnauthorizedException();
+      const shopId = extractShopId(req);
+      const perms = resolveUserPermissions(user, shopId);
+      const ok = requiredAny.some((p) => perms.includes(p));
+      if (!ok) throw new ForbiddenException('Sin permiso');
+      return true;
+    }
 
     const required = this.reflector.getAllAndOverride<Permission[]>(PERMISSIONS_KEY, [
       context.getHandler(),
