@@ -266,6 +266,99 @@ birthDate ISO YYYY-MM-DD si se puede. rawText: resumen corto del texto leído.`;
     };
   }
 
+  async parseServiceRules(file: Express.Multer.File): Promise<
+    GeminiResult<{
+      categories: Array<{
+        name: string;
+        rules: Array<{ phase: 'PRE' | 'POST'; title: string; body: string }>;
+      }>;
+    }>
+  > {
+    if (!this.isEnabled()) {
+      return this.fail('disabled', 'Gemini no está configurado (falta GEMINI_API_KEY).');
+    }
+    const part = this.filePart(file);
+    if (!part) return this.fail('empty', 'No se pudo leer el archivo para Gemini.');
+    const system = `Sos un extractor de normas de servicio de un local gastronómico.
+Devolvé SOLO JSON con esta forma:
+{"categories":[{"name":"string","rules":[{"phase":"PRE"|"POST","title":"string","body":"string"}]}]}
+Reglas:
+- categories = sectores o áreas (Salón, Cocina, Bar, Caja, Baños, etc.).
+- phase PRE = antes del servicio / apertura / mise en place; POST = después / cierre / limpieza final.
+- Si el documento habla de "antes" / "después" / "pre" / "post" / apertura / cierre, usá PRE o POST.
+- Si no queda claro, preferí PRE.
+- title corto (acción); body el detalle completo. Si solo hay un renglón, repetilo en title y body.
+- No inventes normas que no estén en el documento.
+- Ignorá logos, pies legales y publicidad.
+- Idioma: el del documento.`;
+    const data = await this.generateJson<{
+      categories?: Array<{
+        name?: string;
+        rules?: Array<{ phase?: string; title?: string; body?: string }>;
+      }>;
+    }>(
+      [
+        {
+          text: `Archivo: ${file.originalname || 'normas'}. Extraé todas las normas de servicio en JSON.`,
+        },
+        part,
+      ],
+      system,
+    );
+    if (!data.ok) {
+      if (data.reason === 'disabled') return data;
+      return this.fail(
+        data.reason,
+        data.message.replace(/\s*Se usó el parseo local\.?/gi, '').trim() || data.message,
+      );
+    }
+    if (!Array.isArray(data.data.categories)) {
+      return this.fail('empty', 'Gemini no devolvió categorías de normas.');
+    }
+    const normalizePhase = (raw: string | undefined): 'PRE' | 'POST' => {
+      const t = String(raw ?? '')
+        .trim()
+        .toUpperCase();
+      if (
+        t === 'POST' ||
+        t.includes('DESPU') ||
+        t.includes('CIERRE') ||
+        t.includes('AFTER') ||
+        t.includes('POST')
+      ) {
+        return 'POST';
+      }
+      return 'PRE';
+    };
+    const categories = data.data.categories
+      .map((c) => ({
+        name: String(c?.name ?? '')
+          .trim()
+          .slice(0, 120),
+        rules: (c?.rules ?? [])
+          .map((r) => {
+            const title = String(r?.title ?? '')
+              .trim()
+              .slice(0, 200);
+            const body =
+              String(r?.body ?? '')
+                .trim()
+                .slice(0, 8000) || title;
+            return {
+              phase: normalizePhase(r?.phase),
+              title,
+              body,
+            };
+          })
+          .filter((r) => r.title && r.body),
+      }))
+      .filter((c) => c.name && c.rules.length);
+    if (!categories.length) {
+      return this.fail('empty', 'Gemini no encontró normas en el archivo.');
+    }
+    return { ok: true, data: { categories } };
+  }
+
   async parseInvoice(file: Express.Multer.File): Promise<GeminiResult<ParsedInvoice>> {
     if (!this.isEnabled()) {
       return this.fail('disabled', 'Gemini no está configurado (falta GEMINI_API_KEY).');
