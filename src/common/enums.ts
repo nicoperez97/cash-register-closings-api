@@ -190,6 +190,7 @@ export enum ConceptCategory {
   SERVICES = 'SERVICES',
   SUPPLIERS = 'SUPPLIERS',
   MOVEMENTS = 'MOVEMENTS',
+  CLOSURE = 'CLOSURE',
   OTHERS = 'OTHERS',
 }
 

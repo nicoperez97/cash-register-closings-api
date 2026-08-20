@@ -5,6 +5,7 @@ export const CONCEPT_CATEGORIES: ConceptCategory[] = [
   ConceptCategory.SERVICES,
   ConceptCategory.SUPPLIERS,
   ConceptCategory.MOVEMENTS,
+  ConceptCategory.CLOSURE,
   ConceptCategory.OTHERS,
 ];
 

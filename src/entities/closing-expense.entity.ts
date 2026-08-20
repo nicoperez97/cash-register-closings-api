@@ -19,6 +19,12 @@ export class ClosingExpense {
   @Column()
   label: string;
 
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  conceptId?: string | null;
+
+  @Column({ type: 'varchar', length: 400, nullable: true })
+  notes?: string | null;
+
   @Column({ type: 'decimal', precision: 12, scale: 2 })
   amount: string;
 

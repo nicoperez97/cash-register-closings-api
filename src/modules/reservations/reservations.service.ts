@@ -534,11 +534,6 @@ export class ReservationsService implements OnModuleInit {
         });
     const partySize = this.normalizePartySize(dto.partySize);
     const area = this.normalizeArea(dto.area);
-    const dayRow = await this.findDayNoticeRow(shopId, businessDate);
-    const overrides = dayOverridesFromRow(dayRow);
-    assertPartyFitsShopArea(area, partySize, effectivePartyRules(shop, overrides));
-    assertPartyFitsAreaCapacity(area, partySize, overrides);
-    await consumeDayAreaCapacity(this.dayNotices, shopId, businessDate, area, partySize);
     const row = await this.reservations.save(
       this.reservations.create({
         shopId,
@@ -724,6 +719,35 @@ export class ReservationsService implements OnModuleInit {
     this.live.tick(shopId, 'waiting');
     this.live.tick(shopId, 'reservations');
     return { ok: true };
+  }
+
+  /** Público: reservas futuras o de hoy de un mail, ligadas al local del slug. */
+  async publicLookupByEmail(slug: string, emailRaw: string) {
+    const shop = await this.shops.findActiveBySlug(String(slug ?? '').trim().toLowerCase());
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    if (!shop.reservationsEnabled) {
+      throw new NotFoundException('Reservas no disponibles en este local');
+    }
+    const email = this.normalizeEmail(emailRaw);
+    if (!email) throw new BadRequestException('Ingresá un mail');
+    const fromDate = resolveShopCalendarDate(new Date(), { timezone: shop.timezone });
+    const rows = await this.reservations
+      .createQueryBuilder('r')
+      .where('r.shopId = :shopId', { shopId: shop.id })
+      .andWhere('r.active = true')
+      .andWhere('LOWER(r.guestEmail) = :email', { email })
+      .andWhere('DATE(r.businessDate) >= :fromDate', { fromDate })
+      .andWhere('r.status IN (:...statuses)', {
+        statuses: [...ACTIVE_RESERVATION_STATUSES],
+      })
+      .orderBy('r.businessDate', 'ASC')
+      .addOrderBy('r.reservationTime', 'ASC')
+      .getMany();
+    return {
+      shop: { name: shop.name, slug: shop.slug, accentColor: shop.accentColor ?? null },
+      email,
+      reservations: rows.map((r) => this.toReservationDto(r)),
+    };
   }
 
   /** Público: solo el día calendario actual del local (sin histórico arbitrario). */

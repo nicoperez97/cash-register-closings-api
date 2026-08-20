@@ -8,6 +8,7 @@ import {
   IsString,
   IsUUID,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
@@ -29,6 +30,17 @@ export class ExpenseDto {
   @IsOptional()
   @IsEnum(ExpenseCategory)
   category?: ExpenseCategory;
+
+  @ApiPropertyOptional({ description: 'Concepto de catálogo (categoría Cierre)' })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== '')
+  @IsUUID()
+  conceptId?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  notes?: string | null;
 }
 
 export class ExtraLineDto {
