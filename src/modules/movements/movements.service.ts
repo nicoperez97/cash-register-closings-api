@@ -12,6 +12,7 @@ import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { Concept } from '../../entities/concept.entity';
 import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
+import { Payment } from '../../entities/payment.entity';
 import { AuthUser } from '../../common/decorators';
 import {
   ConceptKind,
@@ -40,6 +41,8 @@ function formatArMoney(value: number): string {
 }
 
 export type MovementKindFilter = 'expense' | 'transfer';
+export type MovementSourceFilter = 'closing' | 'payment' | 'manual';
+export type MovementPartyTypeFilter = 'supplier' | 'service' | 'employee';
 
 export interface MovementFilters {
   from?: string;
@@ -50,6 +53,12 @@ export interface MovementFilters {
   closingId?: string;
   q?: string;
   kind?: MovementKindFilter;
+  /** Solo gastos: cierre / pago / manual. */
+  source?: MovementSourceFilter;
+  /** Solo gastos vinculados a un pago. */
+  partyType?: MovementPartyTypeFilter;
+  /** true | false */
+  invoiced?: string;
 }
 
 export interface UpsertMovementDto {
@@ -71,6 +80,14 @@ export interface UpsertMovementDto {
   kind?: MovementKindFilter;
 }
 
+type PaymentLink = {
+  id: string;
+  movementId: string | null;
+  supplierId?: string | null;
+  serviceId?: string | null;
+  employeeId?: string | null;
+};
+
 @Injectable()
 export class MovementsService implements OnModuleInit {
   constructor(
@@ -80,6 +97,7 @@ export class MovementsService implements OnModuleInit {
     @InjectRepository(Concept) private readonly concepts: Repository<Concept>,
     @InjectRepository(User) private readonly users: Repository<User>,
     @InjectRepository(UserShop) private readonly userShops: Repository<UserShop>,
+    @InjectRepository(Payment) private readonly payments: Repository<Payment>,
     private readonly shops: ShopsService,
     private readonly catalogSeed: CatalogSeedService,
     private readonly notifications: NotificationsService,
@@ -107,7 +125,17 @@ export class MovementsService implements OnModuleInit {
     }
   }
 
-  private toDto(m: Movement) {
+  private toDto(m: Movement, payment?: PaymentLink | null) {
+    const partyType = payment
+      ? payment.supplierId
+        ? 'supplier'
+        : payment.serviceId
+          ? 'service'
+          : payment.employeeId
+            ? 'employee'
+            : null
+      : null;
+    const source = m.closingId ? 'closing' : payment ? 'payment' : 'manual';
     return {
       id: m.id,
       shopId: m.shopId,
@@ -131,9 +159,13 @@ export class MovementsService implements OnModuleInit {
       invoiceNumber: m.invoiceNumber ?? null,
       closingId: m.closingId ?? null,
       employeeId: m.employeeId ?? null,
+      source,
+      paymentId: payment?.id ?? null,
+      paymentPartyType: partyType,
       active: !!m.active,
     };
   }
+
 
   private assertPerm(user: AuthUser, shopId: string, ...need: Permission[]) {
     const perms = resolveUserPermissions(user, shopId);
@@ -177,6 +209,11 @@ export class MovementsService implements OnModuleInit {
       .leftJoinAndSelect('m.fromUser', 'fromUser')
       .leftJoinAndSelect('m.toUser', 'toUser')
       .leftJoinAndSelect('m.concept', 'concept')
+      .leftJoin(
+        Payment,
+        'pay',
+        'pay.movementId = m.id AND pay.shopId = m.shopId AND pay.active = true',
+      )
       .where('m.shopId = :shopId', { shopId })
       .andWhere('m.active = true');
 
@@ -205,6 +242,25 @@ export class MovementsService implements OnModuleInit {
         `(concept.kind = :expenseKind OR LOWER(toAccount.name) LIKE :egresoName OR UPPER(toAccount.code) = :egresoCode)`,
         { expenseKind: ConceptKind.EXPENSE, egresoName: '%egreso%', egresoCode: 'EGRESO' },
       );
+      if (filters.source === 'closing') {
+        qb.andWhere('m.closingId IS NOT NULL');
+      } else if (filters.source === 'payment') {
+        qb.andWhere('pay.id IS NOT NULL');
+      } else if (filters.source === 'manual') {
+        qb.andWhere('m.closingId IS NULL AND pay.id IS NULL');
+      }
+      if (filters.partyType === 'supplier') {
+        qb.andWhere('pay.supplierId IS NOT NULL');
+      } else if (filters.partyType === 'service') {
+        qb.andWhere('pay.serviceId IS NOT NULL');
+      } else if (filters.partyType === 'employee') {
+        qb.andWhere('pay.employeeId IS NOT NULL');
+      }
+      if (filters.invoiced === 'true') {
+        qb.andWhere('m.invoiced = true');
+      } else if (filters.invoiced === 'false') {
+        qb.andWhere('(m.invoiced = false OR m.invoiced IS NULL)');
+      }
     } else if (filters.kind === 'transfer') {
       qb.andWhere(
         `(concept.kind IS NULL OR concept.kind <> :expenseKind) AND (toAccount.id IS NULL OR (LOWER(toAccount.name) NOT LIKE :egresoName AND UPPER(COALESCE(toAccount.code, '')) <> :egresoCode))`,
@@ -212,9 +268,38 @@ export class MovementsService implements OnModuleInit {
       );
     }
 
-    qb.orderBy('m.businessDate', 'DESC').addOrderBy('m.createdAt', 'DESC');
+    qb.distinct(true)
+      .orderBy('m.businessDate', 'DESC')
+      .addOrderBy('m.createdAt', 'DESC');
     const rows = await qb.getMany();
-    return rows.map((r) => this.toDto(r));
+    const paymentLinks = await this.paymentLinksForMovements(
+      shopId,
+      rows.map((r) => r.id),
+    );
+    return rows.map((r) => this.toDto(r, paymentLinks.get(r.id) ?? null));
+  }
+
+  private async paymentLinksForMovements(
+    shopId: string,
+    movementIds: string[],
+  ): Promise<Map<string, PaymentLink>> {
+    const map = new Map<string, PaymentLink>();
+    if (!movementIds.length) return map;
+    const rows = await this.payments.find({
+      where: { shopId, movementId: In(movementIds), active: true },
+      select: ['id', 'movementId', 'supplierId', 'serviceId', 'employeeId'],
+    });
+    for (const p of rows) {
+      if (!p.movementId) continue;
+      map.set(p.movementId, {
+        id: p.id,
+        movementId: p.movementId,
+        supplierId: p.supplierId ?? null,
+        serviceId: p.serviceId ?? null,
+        employeeId: p.employeeId ?? null,
+      });
+    }
+    return map;
   }
 
   private async assertAccounts(
@@ -338,7 +423,8 @@ export class MovementsService implements OnModuleInit {
       relations: ['fromAccount', 'toAccount', 'fromUser', 'toUser', 'concept'],
     });
     if (!row) throw new NotFoundException('Movimiento no encontrado');
-    return this.toDto(row);
+    const paymentLinks = await this.paymentLinksForMovements(shopId, [row.id]);
+    return this.toDto(row, paymentLinks.get(row.id) ?? null);
   }
 
   async update(user: AuthUser, shopId: string, id: string, dto: Partial<UpsertMovementDto>) {

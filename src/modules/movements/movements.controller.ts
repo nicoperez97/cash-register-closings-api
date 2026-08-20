@@ -141,6 +141,9 @@ export class MovementsController {
     @Query('closingId') closingId?: string,
     @Query('q') q?: string,
     @Query('kind') kind?: 'expense' | 'transfer',
+    @Query('source') source?: 'closing' | 'payment' | 'manual',
+    @Query('partyType') partyType?: 'supplier' | 'service' | 'employee',
+    @Query('invoiced') invoiced?: string,
   ) {
     return this.movements.list(user, shopId, {
       from,
@@ -151,6 +154,9 @@ export class MovementsController {
       closingId,
       q,
       kind,
+      source,
+      partyType,
+      invoiced,
     });
   }
 

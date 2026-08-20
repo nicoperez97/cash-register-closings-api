@@ -449,14 +449,30 @@ export class PaymentsService implements OnModuleInit {
     }
     const paidAt =
       this.toDateOnly(payment.paidAt) || (await this.shopTodayIso(shopId));
-    const basePayload = {
+    const invoiced = !!(payment.invoiceNumber || payment.invoiceFilePath);
+    const basePayload: {
+      businessDate: string;
+      fromAccountId: string;
+      toAccountId: string;
+      employeeId: string | null;
+      amountUyu: number;
+      description: string;
+      conceptId?: string;
+      invoiced: boolean;
+      invoiceNumber: string | null;
+    } = {
       businessDate: paidAt,
       fromAccountId: payment.accountId,
       toAccountId: egreso.id,
       employeeId: payment.employeeId ?? null,
       amountUyu: n(payment.amount),
       description: this.paymentMovementDescription(payment),
+      invoiced,
+      invoiceNumber: payment.invoiceNumber ?? null,
     };
+    if (payment.conceptId) {
+      basePayload.conceptId = payment.conceptId;
+    }
 
     const tryWrite = async (fromUserId: string | null) => {
       const payload = { ...basePayload, fromUserId };
@@ -1335,6 +1351,9 @@ export class PaymentsService implements OnModuleInit {
           .filter(Boolean)
           .join(' · '),
         amountUyu: n(row.amount),
+        conceptId: row.conceptId ?? null,
+        invoiced: !!(row.invoiceNumber || row.invoiceFilePath),
+        invoiceNumber: row.invoiceNumber ?? null,
       });
 
       await this.payments
