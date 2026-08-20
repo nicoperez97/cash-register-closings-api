@@ -117,6 +117,7 @@ export async function buildServiceRulesPdf(opts: {
 
   const phases: Array<{ value: ServiceRulePhase; label: string }> = [
     { value: ServiceRulePhase.PRE, label: 'Antes del servicio' },
+    { value: ServiceRulePhase.DURING, label: 'Durante el servicio' },
     { value: ServiceRulePhase.POST, label: 'Después del servicio' },
   ];
   const cats = [...opts.categories].sort(

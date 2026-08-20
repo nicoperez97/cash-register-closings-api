@@ -53,6 +53,7 @@ export enum ShortageLevel {
 /** Fase de una norma de servicio (antes / después del turno). */
 export enum ServiceRulePhase {
   PRE = 'PRE',
+  DURING = 'DURING',
   POST = 'POST',
 }
 

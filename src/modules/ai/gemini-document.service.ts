@@ -270,7 +270,7 @@ birthDate ISO YYYY-MM-DD si se puede. rawText: resumen corto del texto leído.`;
     GeminiResult<{
       categories: Array<{
         name: string;
-        rules: Array<{ phase: 'PRE' | 'POST'; title: string; body: string }>;
+        rules: Array<{ phase: 'PRE' | 'DURING' | 'POST'; title: string; body: string }>;
       }>;
     }>
   > {
@@ -281,11 +281,13 @@ birthDate ISO YYYY-MM-DD si se puede. rawText: resumen corto del texto leído.`;
     if (!part) return this.fail('empty', 'No se pudo leer el archivo para Gemini.');
     const system = `Sos un extractor de normas de servicio de un local gastronómico.
 Devolvé SOLO JSON con esta forma:
-{"categories":[{"name":"string","rules":[{"phase":"PRE"|"POST","title":"string","body":"string"}]}]}
+{"categories":[{"name":"string","rules":[{"phase":"PRE"|"DURING"|"POST","title":"string","body":"string"}]}]}
 Reglas:
 - categories = sectores o áreas (Salón, Cocina, Bar, Caja, Baños, etc.).
-- phase PRE = antes del servicio / apertura / mise en place; POST = después / cierre / limpieza final.
-- Si el documento habla de "antes" / "después" / "pre" / "post" / apertura / cierre, usá PRE o POST.
+- phase PRE = antes del servicio / apertura / mise en place.
+- phase DURING = durante el servicio / en servicio / en el turno.
+- phase POST = después / cierre / limpieza final.
+- Si el documento habla de "antes" / "durante" / "después" / apertura / cierre, mapeá a PRE, DURING o POST.
 - Si no queda claro, preferí PRE.
 - title corto (acción); body el detalle completo. Si solo hay un renglón, repetilo en title y body.
 - No inventes normas que no estén en el documento.
@@ -315,7 +317,7 @@ Reglas:
     if (!Array.isArray(data.data.categories)) {
       return this.fail('empty', 'Gemini no devolvió categorías de normas.');
     }
-    const normalizePhase = (raw: string | undefined): 'PRE' | 'POST' => {
+    const normalizePhase = (raw: string | undefined): 'PRE' | 'DURING' | 'POST' => {
       const t = String(raw ?? '')
         .trim()
         .toUpperCase();
@@ -323,10 +325,18 @@ Reglas:
         t === 'POST' ||
         t.includes('DESPU') ||
         t.includes('CIERRE') ||
-        t.includes('AFTER') ||
-        t.includes('POST')
+        t.includes('AFTER')
       ) {
         return 'POST';
+      }
+      if (
+        t === 'DURING' ||
+        t.includes('DURANT') ||
+        t.includes('DURING') ||
+        t.includes('EN SERVICIO') ||
+        t.includes('MID')
+      ) {
+        return 'DURING';
       }
       return 'PRE';
     };
