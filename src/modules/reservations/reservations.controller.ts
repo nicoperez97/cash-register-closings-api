@@ -607,6 +607,12 @@ export class PublicReservationsController {
   }
 
   @Public()
+  @Get(':slug/my-reservations')
+  lookupByEmail(@Param('slug') slug: string, @Query('email') email?: string) {
+    return this.reservations.publicLookupByEmail(slug, String(email ?? ''));
+  }
+
+  @Public()
   @Post(':slug/reservation-requests')
   createPublicRequest(
     @Param('slug') slug: string,

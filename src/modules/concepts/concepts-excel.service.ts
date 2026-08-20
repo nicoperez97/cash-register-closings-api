@@ -42,7 +42,7 @@ export class ConceptsExcelService {
     info.addRow(['· Descripción — opcional']);
     info.addRow(['· Tipo — Ingreso, Egreso o Transferencia (si falta, se usa Egreso)']);
     info.addRow([
-      '· Categorías — una o más, separadas por coma: Empleados, Servicios, Proveedores, Movimientos, Otros',
+      '· Categorías — una o más, separadas por coma: Empleados, Servicios, Proveedores, Movimientos, Cierre, Otros',
     ]);
     info.addRow(['· Validado — Sí / No. Solo los validados aparecen al cargar movimientos y pagos.']);
     info.addRow([]);
@@ -216,9 +216,10 @@ export class ConceptsExcelService {
     if (/servic/.test(s)) return 'SERVICES';
     if (/proveedor|supplier/.test(s)) return 'SUPPLIERS';
     if (/movimient|movement/.test(s)) return 'MOVEMENTS';
+    if (/cierre|closure|closing/.test(s)) return 'CLOSURE';
     if (/otro|other/.test(s)) return 'OTHERS';
     const upper = raw.trim().toUpperCase();
-    if (['EMPLOYEES', 'SERVICES', 'SUPPLIERS', 'MOVEMENTS', 'OTHERS'].includes(upper)) {
+    if (['EMPLOYEES', 'SERVICES', 'SUPPLIERS', 'MOVEMENTS', 'CLOSURE', 'OTHERS'].includes(upper)) {
       return upper;
     }
     return null;
