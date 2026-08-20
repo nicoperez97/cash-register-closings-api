@@ -335,14 +335,22 @@ export class ReportsService {
       days: rows.map((r) => ({
         id: r.id,
         businessDate: r.businessDate,
+        posSystemAmount: n(r.posSystemAmount),
+        calculatedTotal: n(r.calculatedTotal),
         declaredTotal: n(r.declaredTotal),
         cardAmount: n(r.cardAmount),
         cashAmount: n(r.cashAmount),
+        mercadoPagoAmount: n(r.mercadoPagoAmount),
+        accountDniAmount: n(r.accountDniAmount),
+        transferAmount: n(r.transferAmount),
+        deliveryAppsAmount: n(r.deliveryAppsAmount),
+        otherAmount: n(r.otherAmount),
         cashWithdrawn: n(r.cashWithdrawn),
         cashWithdrawnByName: r.cashWithdrawnByName,
         difference: n(r.difference),
-        status: closingStatusLabel(r.status),
+        status: r.status,
         statusCode: r.status,
+        statusLabel: closingStatusLabel(r.status),
       })),
     };
   }
