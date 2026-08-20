@@ -127,6 +127,22 @@ export class ClosingsService implements OnModuleInit {
     } catch (err) {
       this.logger.warn(`No se pudo migrar signo de diferencia v3: ${(err as Error)?.message}`);
     }
+    try {
+      await this.closings.query(`
+        ALTER TABLE closing_expenses
+          ADD COLUMN conceptId VARCHAR(36) NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.closings.query(`
+        ALTER TABLE closing_expenses
+          ADD COLUMN notes VARCHAR(400) NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
   }
 
   private async resolveWithdrawnBy(
@@ -246,7 +262,15 @@ export class ClosingsService implements OnModuleInit {
       tipsAmount: n(c.tipsAmount), declaredTotal: n(c.declaredTotal), calculatedTotal: n(c.calculatedTotal),
       difference: n(c.difference), differenceReason: c.differenceReason, notes: c.notes,
       evidenceUrl: c.evidenceUrl, status: c.status, createdByUserId: c.createdByUserId, submittedAt: c.submittedAt,
-      expenses: (c.expenses ?? []).map((e) => ({ id: e.id, label: e.label, amount: n(e.amount), category: e.category })),
+      expenses: (c.expenses ?? []).map((e) => ({
+        id: e.id,
+        label: e.label,
+        amount: n(e.amount),
+        category: e.category,
+        conceptId: e.conceptId ?? null,
+        notes: e.notes ?? null,
+      })),
+      expensesTotal: (c.expenses ?? []).reduce((s, e) => s + n(e.amount), 0),
       extraLines: (c.extraLines ?? []).map((e) => ({ id: e.id, type: e.type, label: e.label, amount: n(e.amount), meta: e.meta })),
       sourceAmounts: (c.sourceAmounts ?? []).map((s) => ({
         id: s.id,
@@ -464,7 +488,13 @@ export class ClosingsService implements OnModuleInit {
     await this.closings.save(row);
     if (dto.expenses || dto.extraLines || dto.sourceAmounts) {
       await this.replaceChildren(row.id, {
-        expenses: dto.expenses ?? row.expenses?.map((e) => ({ label: e.label, amount: n(e.amount), category: e.category })),
+        expenses: dto.expenses ?? row.expenses?.map((e) => ({
+          label: e.label,
+          amount: n(e.amount),
+          category: e.category,
+          conceptId: e.conceptId ?? null,
+          notes: e.notes ?? null,
+        })),
         extraLines: dto.extraLines ?? row.extraLines?.map((e) => ({ type: e.type, label: e.label, amount: n(e.amount), meta: e.meta ?? undefined })),
         sourceAmounts: dto.sourceAmounts,
       }, shopId);
@@ -578,7 +608,12 @@ export class ClosingsService implements OnModuleInit {
       await this.expenses.delete({ closingId });
       if (dto.expenses.length) {
         await this.expenses.save(dto.expenses.map((e) => this.expenses.create({
-          closingId, label: e.label, amount: money(n(e.amount)), category: e.category ?? ExpenseCategory.OTHER,
+          closingId,
+          label: e.label,
+          amount: money(n(e.amount)),
+          category: e.category ?? ExpenseCategory.OTHER,
+          conceptId: e.conceptId ?? null,
+          notes: e.notes?.trim() || null,
         })));
       }
     }
