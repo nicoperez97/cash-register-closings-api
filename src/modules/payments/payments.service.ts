@@ -11,6 +11,7 @@ import { In, Repository } from 'typeorm';
 import { createReadStream } from 'fs';
 import * as ExcelJS from 'exceljs';
 import { Payment } from '../../entities/payment.entity';
+import { Movement } from '../../entities/movement.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
@@ -430,6 +431,50 @@ export class PaymentsService implements OnModuleInit {
       .join(' · ');
   }
 
+  /**
+   * Recrea el egreso si un pago Pagado quedó sin movimiento (p. ej. gasto borrado a mano).
+   */
+  private async ensurePaidMovement(user: AuthUser, shopId: string, payment: Payment) {
+    if (payment.status !== PaymentStatus.PAID) return payment;
+    if (payment.movementId) {
+      const live = await this.movements.isLive(shopId, payment.movementId);
+      if (live) return payment;
+      payment.movementId = null;
+      await this.payments
+        .createQueryBuilder()
+        .update(Payment)
+        .set({ movementId: null })
+        .where('id = :id AND shopId = :shopId', { id: payment.id, shopId })
+        .execute();
+    }
+    try {
+      await this.syncPaidMovement(user, shopId, payment);
+    } catch {
+      // No bloquear listados si falta cuenta EGRESO / datos incompletos.
+    }
+    return this.load(shopId, payment.id);
+  }
+
+  private async repairOrphanPaidMovements(user: AuthUser, shopId: string) {
+    const orphans = await this.payments
+      .createQueryBuilder('p')
+      .leftJoin(Movement, 'm', 'm.id = p.movementId AND m.deletedAt IS NULL')
+      .where('p.shopId = :shopId', { shopId })
+      .andWhere('p.active = true')
+      .andWhere('p.status = :st', { st: PaymentStatus.PAID })
+      .andWhere('(p.movementId IS NULL OR m.id IS NULL)')
+      .take(40)
+      .getMany();
+    for (const orphan of orphans) {
+      try {
+        const full = await this.load(shopId, orphan.id);
+        await this.ensurePaidMovement(user, shopId, full);
+      } catch {
+        // seguir con el resto
+      }
+    }
+  }
+
   /** Actualiza o recrea el movimiento del pago abonado. */
   private async syncPaidMovement(user: AuthUser, shopId: string, payment: Payment) {
     if (!payment.accountId) {
@@ -478,14 +523,16 @@ export class PaymentsService implements OnModuleInit {
       const payload = { ...basePayload, fromUserId };
       if (payment.movementId) {
         try {
-          await this.movements.update(user, shopId, payment.movementId, payload);
+          await this.movements.update(user, shopId, payment.movementId, payload, {
+            fromPayment: true,
+          });
           return true;
         } catch (err) {
           if (!(err instanceof NotFoundException)) throw err;
           // movimiento borrado → recrear
         }
       }
-      const movement = await this.movements.create(user, shopId, payload);
+      const movement = await this.movements.create(user, shopId, payload, { fromPayment: true });
       // Solo tocar movementId/paidAt por SQL: un save() de la entidad cargada
       // puede pisar accountId con la relación vieja.
       await this.payments
@@ -544,6 +591,7 @@ export class PaymentsService implements OnModuleInit {
     },
   ) {
     this.shops.assertShopAccess(user, shopId);
+    await this.repairOrphanPaidMovements(user, shopId);
     const qb = this.payments
       .createQueryBuilder('p')
       .leftJoinAndSelect('p.payer', 'payer')
@@ -846,7 +894,11 @@ export class PaymentsService implements OnModuleInit {
 
   async one(user: AuthUser, shopId: string, id: string) {
     this.shops.assertShopAccess(user, shopId);
-    return this.toDto(await this.load(shopId, id));
+    let row = await this.load(shopId, id);
+    if (row.status === PaymentStatus.PAID) {
+      row = await this.ensurePaidMovement(user, shopId, row);
+    }
+    return this.toDto(row);
   }
 
   async create(user: AuthUser, shopId: string, dto: UpsertPaymentDto) {
@@ -1025,7 +1077,11 @@ export class PaymentsService implements OnModuleInit {
       throw new BadRequestException('No se puede editar un pago cancelado');
     }
 
-    const wasPaid = row.status === PaymentStatus.PAID;
+    if (row.status === PaymentStatus.PAID) {
+      throw new BadRequestException(
+        'Un pago abonado no se puede editar. Marcálo como no pagado primero (eso elimina el gasto). Después editá y volvé a abonarlo.',
+      );
+    }
 
     const patch: Partial<Payment> = {};
 
@@ -1042,13 +1098,9 @@ export class PaymentsService implements OnModuleInit {
     }
     if (dto.amount !== undefined) {
       if (dto.amount === null || (dto.amount as any) === '') {
-        if (wasPaid) throw new BadRequestException('Un pago abonado necesita monto');
         patch.amount = null;
       } else {
         if (n(dto.amount) < 0) throw new BadRequestException('El monto no puede ser negativo');
-        if (wasPaid && !(n(dto.amount) > 0)) {
-          throw new BadRequestException('Un pago abonado necesita monto mayor a 0');
-        }
         patch.amount = money(n(dto.amount));
       }
     }
@@ -1057,11 +1109,7 @@ export class PaymentsService implements OnModuleInit {
       patch.priority = this.parsePaymentPriority(dto.priority as string | null);
     }
     if (dto.paidAt !== undefined) {
-      if (!wasPaid) {
-        throw new BadRequestException('La fecha de pago solo aplica a pagos abonados');
-      }
-      const paidAt = this.toDateOnly(dto.paidAt);
-      if (paidAt) patch.paidAt = paidAt;
+      throw new BadRequestException('La fecha de pago solo aplica al abonar el pago');
     }
 
     let nextPayer = row.payerUserId ?? null;
@@ -1081,21 +1129,12 @@ export class PaymentsService implements OnModuleInit {
     let nextAccountId = row.accountId ?? null;
     if (dto.accountId !== undefined) {
       nextAccountId = this.emptyToNull(dto.accountId) ?? null;
-      if (wasPaid && !nextAccountId) {
-        throw new BadRequestException('Un pago abonado necesita la cuenta que paga');
-      }
       if (nextAccountId) await this.assertAccount(shopId, nextAccountId);
       patch.accountId = nextAccountId;
     }
 
     if (dto.paymentMethod !== undefined) {
-      const nextMethod = this.parsePaymentMethod(dto.paymentMethod as string | null, {
-        required: wasPaid,
-      });
-      if (wasPaid && !nextMethod) {
-        throw new BadRequestException('Un pago abonado necesita la forma de pago');
-      }
-      patch.paymentMethod = nextMethod;
+      patch.paymentMethod = this.parsePaymentMethod(dto.paymentMethod as string | null);
     }
 
     let nextSupplierId = row.supplierId ?? null;
@@ -1190,26 +1229,7 @@ export class PaymentsService implements OnModuleInit {
       patch.invoiceTaxId !== undefined ? patch.invoiceTaxId : row.invoiceTaxId,
     );
 
-    let loaded = await this.load(shopId, id);
-
-    // Si está pagado y cambió algo que afecta el movimiento, solo sincronizar ese movimiento.
-    const movementFieldsChanged =
-      wasPaid &&
-      (patch.accountId !== undefined ||
-        patch.amount !== undefined ||
-        patch.paidAt !== undefined ||
-        patch.title !== undefined ||
-        patch.conceptId !== undefined ||
-        patch.supplierId !== undefined ||
-        patch.serviceId !== undefined ||
-        patch.employeeId !== undefined ||
-        patch.payerUserId !== undefined);
-    if (movementFieldsChanged) {
-      await this.syncPaidMovement(user, shopId, loaded);
-      loaded = await this.load(shopId, id);
-    }
-
-    return this.toDto(loaded);
+    return this.toDto(await this.load(shopId, id));
   }
 
   async validate(user: AuthUser, shopId: string, id: string) {
@@ -1336,7 +1356,7 @@ export class PaymentsService implements OnModuleInit {
     }
 
     try {
-      const movement = await this.movements.create(user, shopId, {
+      const createPayload = {
         businessDate: paidAt,
         fromAccountId: accountId,
         toAccountId: egreso.id,
@@ -1354,7 +1374,25 @@ export class PaymentsService implements OnModuleInit {
         conceptId: row.conceptId ?? null,
         invoiced: !!(row.invoiceNumber || row.invoiceFilePath),
         invoiceNumber: row.invoiceNumber ?? null,
-      });
+      };
+      let movement;
+      try {
+        movement = await this.movements.create(user, shopId, createPayload, {
+          fromPayment: true,
+        });
+      } catch (err) {
+        const msg = String((err as Error)?.message ?? err);
+        if (row.payerUserId && /no pertenece al local/i.test(msg)) {
+          movement = await this.movements.create(
+            user,
+            shopId,
+            { ...createPayload, fromUserId: null },
+            { fromPayment: true },
+          );
+        } else {
+          throw err;
+        }
+      }
 
       await this.payments
         .createQueryBuilder()
@@ -1453,17 +1491,17 @@ export class PaymentsService implements OnModuleInit {
 
     if (row.status === PaymentStatus.PAID) {
       const movementId = row.movementId;
+      if (movementId) {
+        try {
+          await this.movements.remove(user, shopId, movementId, { fromPayment: true });
+        } catch {
+          // El movimiento puede haberse borrado antes.
+        }
+      }
       row.status = PaymentStatus.VALIDATED;
       row.paidAt = null;
       row.movementId = null;
       await this.payments.save(row);
-      if (movementId) {
-        try {
-          await this.movements.remove(user, shopId, movementId);
-        } catch {
-          // El pago ya quedó como no abonado; el movimiento puede haberse borrado antes.
-        }
-      }
       return this.toDto(await this.load(shopId, id));
     }
 
