@@ -90,11 +90,11 @@ jobs:
             fi
 
             cd /opt/crc
-            if [ ! -f docker-compose.yml ]; then
-              cp api/docker-compose.yml . || die "No se pudo copiar docker-compose.yml"
-            fi
+            cp api/docker-compose.yml . || die "No se pudo copiar docker-compose.yml"
             if [ ! -d nginx ] && [ -d api/nginx ]; then
               cp -r api/nginx .
+            elif [ -d api/nginx ]; then
+              cp -r api/nginx/. ./nginx/ || true
             fi
 
             echo ""
