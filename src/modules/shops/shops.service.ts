@@ -439,6 +439,8 @@ export class ShopsService implements OnModuleInit {
         id: u.id,
         fullName: u.fullName,
         email: u.email,
+        avatarUrl: u.avatarUrl ?? null,
+        hasAvatar: !!u.avatarUrl,
         visibility,
         hideFromCashWithdraw: !visibility.cashWithdraw,
         ledgerAccounts: accountsByUser.get(u.id) ?? [],

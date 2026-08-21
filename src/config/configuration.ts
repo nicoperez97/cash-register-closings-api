@@ -57,6 +57,13 @@ export default () => {
       apiKey: (env.GEMINI_API_KEY ?? '').trim(),
       model: (env.GEMINI_MODEL ?? 'gemini-3.6-flash').trim() || 'gemini-3.6-flash',
     },
+    /**
+     * Google Sign-In (opcional). Mismo Client ID (tipo Web) en front y API.
+     * Solo permite login si el email ya existe en users.
+     */
+    google: {
+      clientId: (env.GOOGLE_CLIENT_ID ?? '').trim(),
+    },
   };
 };
 

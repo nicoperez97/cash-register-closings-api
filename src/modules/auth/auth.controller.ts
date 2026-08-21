@@ -4,7 +4,9 @@ import { AuthGuard } from '@nestjs/passport';
 import { IsOptional, IsString, Matches, ValidateIf } from 'class-validator';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
+import { GoogleLoginDto } from './dto/google-login.dto';
 import { CurrentUser, Public, AuthUser } from '../../common/decorators';
+import { ConfigService } from '@nestjs/config';
 
 class FavoriteShopDto {
   @ApiPropertyOptional({ nullable: true, description: 'null para quitar el favorito' })
@@ -19,12 +21,28 @@ class FavoriteShopDto {
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly config: ConfigService,
+  ) {}
 
   @Public()
   @Post('login')
   login(@Body() dto: LoginDto) {
     return this.auth.login(dto);
+  }
+
+  @Public()
+  @Get('google')
+  googleConfig() {
+    const clientId = (this.config.get<string>('google.clientId') || '').trim();
+    return { enabled: !!clientId, clientId: clientId || null };
+  }
+
+  @Public()
+  @Post('google')
+  loginWithGoogle(@Body() dto: GoogleLoginDto) {
+    return this.auth.loginWithGoogle(dto);
   }
 
   @ApiBearerAuth()

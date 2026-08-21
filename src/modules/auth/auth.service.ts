@@ -1,8 +1,10 @@
-import { Injectable, UnauthorizedException, OnModuleInit } from '@nestjs/common';
+import { Injectable, UnauthorizedException, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
+import { OAuth2Client } from 'google-auth-library';
 import { User } from '../../entities/user.entity';
 import { Shop } from '../../entities/shop.entity';
 import { UserShop } from '../../entities/user-shop.entity';
@@ -12,6 +14,7 @@ import { ClosingExtraLine } from '../../entities/closing-extra-line.entity';
 import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
 import { ShopClosingSource } from '../../entities/shop-closing-source.entity';
 import { LoginDto } from './dto/login.dto';
+import { GoogleLoginDto } from './dto/google-login.dto';
 import {
   ClosingSourceKind,
   ClosingStatus,
@@ -30,6 +33,7 @@ import {
 import { Permission } from '../../common/enums';
 import { isEntityActive } from '../../common/active.util';
 import { closingDateKey } from '../../common/soft-delete.util';
+import { saveUploadFile } from '../../common/uploads';
 
 const IDS = {
   panino: '11111111-1111-1111-1111-111111111111',
@@ -53,6 +57,7 @@ export class AuthService implements OnModuleInit {
     @InjectRepository(ShopClosingSource)
     private readonly closingSources: Repository<ShopClosingSource>,
     private readonly jwt: JwtService,
+    private readonly config: ConfigService,
   ) {}
 
   async onModuleInit() {
@@ -348,13 +353,141 @@ export class AuthService implements OnModuleInit {
     const ok = await bcrypt.compare(dto.password, user.passwordHash);
     if (!ok) throw new UnauthorizedException('Credenciales inválidas');
 
-    const profile = await this.buildAuthUser(user.id);
+    return this.issueSession(user.id);
+  }
+
+  /**
+   * Login con Google Identity Services.
+   * Solo si el email del token ya existe en el sistema (no crea usuarios).
+   * Completa nombre/foto/etc. solo cuando el usuario aún no los tiene.
+   */
+  async loginWithGoogle(dto: GoogleLoginDto) {
+    const clientId = (this.config.get<string>('google.clientId') || '').trim();
+    if (!clientId) {
+      throw new ServiceUnavailableException(
+        'Login con Google no está configurado. Pedile a un admin que cargue GOOGLE_CLIENT_ID.',
+      );
+    }
+
+    const client = new OAuth2Client(clientId);
+    let payload: {
+      email?: string | null;
+      email_verified?: boolean | string;
+      name?: string | null;
+      given_name?: string | null;
+      family_name?: string | null;
+      picture?: string | null;
+    };
+    try {
+      const ticket = await client.verifyIdToken({
+        idToken: dto.idToken,
+        audience: clientId,
+      });
+      payload = ticket.getPayload() ?? {};
+    } catch {
+      throw new UnauthorizedException('Token de Google inválido o vencido');
+    }
+
+    const email = String(payload.email || '')
+      .toLowerCase()
+      .trim();
+    if (!email) {
+      throw new UnauthorizedException('Google no devolvió un email');
+    }
+    const verified =
+      payload.email_verified === true || payload.email_verified === 'true';
+    if (!verified) {
+      throw new UnauthorizedException('El email de Google no está verificado');
+    }
+
+    const user = await this.users.findOne({ where: { email } });
+    if (!user) {
+      throw new UnauthorizedException(
+        'No hay un usuario con ese correo. Pedile a un administrador que te cree la cuenta primero.',
+      );
+    }
+    if (!isEntityActive(user.active)) {
+      throw new UnauthorizedException(
+        'Usuario desactivado. Contactá a un administrador.',
+      );
+    }
+
+    await this.enrichUserFromGoogle(user, payload);
+    return this.issueSession(user.id);
+  }
+
+  private async issueSession(userId: string) {
+    const profile = await this.buildAuthUser(userId);
     const accessToken = await this.jwt.signAsync({
       sub: profile.id,
       email: profile.email,
       role: profile.globalRole,
     });
     return { accessToken, user: profile };
+  }
+
+  private async enrichUserFromGoogle(
+    user: User,
+    payload: {
+      name?: string | null;
+      given_name?: string | null;
+      family_name?: string | null;
+      picture?: string | null;
+    },
+  ): Promise<void> {
+    const patch: Partial<User> = {};
+
+    const googleName = String(payload.name || '')
+      .trim()
+      .replace(/\s+/g, ' ');
+    const composed = [payload.given_name, payload.family_name]
+      .map((p) => String(p || '').trim())
+      .filter(Boolean)
+      .join(' ');
+    const nextName = googleName || composed;
+    if (nextName && !String(user.fullName || '').trim()) {
+      patch.fullName = nextName;
+    }
+
+    const picture = String(payload.picture || '').trim();
+    if (picture && !String(user.avatarUrl || '').trim()) {
+      const saved = await this.trySaveGoogleAvatar(user.id, picture);
+      patch.avatarUrl = saved || picture;
+    }
+
+    if (Object.keys(patch).length) {
+      await this.users.update({ id: user.id }, patch);
+    }
+  }
+
+  private async trySaveGoogleAvatar(
+    userId: string,
+    pictureUrl: string,
+  ): Promise<string | null> {
+    try {
+      const res = await fetch(pictureUrl, {
+        redirect: 'follow',
+        headers: { Accept: 'image/*,*/*' },
+      });
+      if (!res.ok) return null;
+      const mime = (res.headers.get('content-type') || 'image/jpeg')
+        .split(';')[0]
+        .trim()
+        .toLowerCase();
+      if (mime && !mime.startsWith('image/')) return null;
+      const buffer = Buffer.from(await res.arrayBuffer());
+      if (!buffer.length || buffer.length > 8 * 1024 * 1024) return null;
+      const saved = saveUploadFile({
+        relativeDir: `users/${userId}`,
+        basename: 'avatar',
+        buffer,
+        originalName: 'avatar.jpg',
+        mime: mime || 'image/jpeg',
+      });
+      return saved.relativePath;
+    } catch {
+      return null;
+    }
   }
 
   async buildAuthUser(userId: string): Promise<AuthUser> {
