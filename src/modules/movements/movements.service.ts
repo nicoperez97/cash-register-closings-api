@@ -19,6 +19,7 @@ import {
   GlobalRole,
   LedgerAccountType,
   NotificationType,
+  PaymentStatus,
   Permission,
 } from '../../common/enums';
 import { isGlobalAdmin, resolveUserPermissions } from '../../common/guards';
@@ -59,6 +60,8 @@ export interface MovementFilters {
   partyType?: MovementPartyTypeFilter;
   /** true | false */
   invoiced?: string;
+  /** Filtra el egreso ligado a un pago concreto. */
+  paymentId?: string;
 }
 
 export interface UpsertMovementDto {
@@ -196,6 +199,7 @@ export class MovementsService implements OnModuleInit {
     this.shops.assertShopAccess(user, shopId);
     if (filters.kind === 'expense') {
       this.assertPerm(user, shopId, 'expenses.read');
+      await this.repairOrphanPaymentExpenses(user, shopId);
     } else if (filters.kind === 'transfer') {
       this.assertPerm(user, shopId, 'accountTransfers.read');
     } else {
@@ -232,6 +236,9 @@ export class MovementsService implements OnModuleInit {
     }
     if (filters.closingId) {
       qb.andWhere('m.closingId = :closingId', { closingId: filters.closingId });
+    }
+    if (filters.paymentId) {
+      qb.andWhere('pay.id = :paymentId', { paymentId: filters.paymentId });
     }
     if (filters.q?.trim()) {
       qb.andWhere('m.description LIKE :q', { q: `%${filters.q.trim()}%` });
@@ -277,6 +284,87 @@ export class MovementsService implements OnModuleInit {
       rows.map((r) => r.id),
     );
     return rows.map((r) => this.toDto(r, paymentLinks.get(r.id) ?? null));
+  }
+
+  /**
+   * Pagos abonados sin egreso vivo (gasto borrado a mano): vuelve a crear el movimiento.
+   */
+  private async repairOrphanPaymentExpenses(user: AuthUser, shopId: string) {
+    const orphans = await this.payments
+      .createQueryBuilder('p')
+      .leftJoinAndSelect('p.supplier', 'supplier')
+      .leftJoinAndSelect('p.service', 'service')
+      .leftJoinAndSelect('p.employee', 'employee')
+      .leftJoin(Movement, 'm', 'm.id = p.movementId AND m.deletedAt IS NULL')
+      .where('p.shopId = :shopId', { shopId })
+      .andWhere('p.active = true')
+      .andWhere('p.status = :st', { st: PaymentStatus.PAID })
+      .andWhere('(p.movementId IS NULL OR m.id IS NULL)')
+      .take(40)
+      .getMany();
+    if (!orphans.length) return;
+
+    const egreso = await this.accounts.findOne({
+      where: { shopId, code: 'EGRESO', active: true },
+    });
+    if (!egreso) return;
+
+    for (const p of orphans) {
+      if (!p.accountId || !(n(p.amount) > 0)) continue;
+      const paidAt = String(p.paidAt ?? '').slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(paidAt)) continue;
+      try {
+        if (p.movementId) {
+          await this.payments.update({ id: p.id, shopId }, { movementId: null });
+        }
+        let titleBit = (p.title || '').trim() || 'Sin concepto';
+        if (p.conceptId) {
+          const c = await this.concepts.findOne({
+            where: { id: p.conceptId, shopId },
+            select: ['name'],
+          });
+          if (c?.name) titleBit = c.name;
+        }
+        const payload = {
+          businessDate: paidAt,
+          fromAccountId: p.accountId,
+          toAccountId: egreso.id,
+          fromUserId: p.payerUserId ?? null,
+          employeeId: p.employeeId ?? null,
+          description: [
+            `Pago: ${titleBit}`,
+            p.supplier?.name ? `Proveedor: ${p.supplier.name}` : null,
+            p.service?.name ? `Servicio: ${p.service.name}` : null,
+            p.employee?.fullName ? `Empleado: ${p.employee.fullName}` : null,
+          ]
+            .filter(Boolean)
+            .join(' · '),
+          amountUyu: n(p.amount),
+          conceptId: p.conceptId ?? null,
+          invoiced: !!(p.invoiceNumber || p.invoiceFilePath),
+          invoiceNumber: p.invoiceNumber ?? null,
+        };
+        let movement;
+        try {
+          movement = await this.create(user, shopId, payload, { fromPayment: true });
+        } catch (err) {
+          const msg = String((err as Error)?.message ?? err);
+          if (p.payerUserId && /no pertenece al local/i.test(msg)) {
+            movement = await this.create(
+              user,
+              shopId,
+              { ...payload, fromUserId: null },
+              { fromPayment: true },
+            );
+          } else {
+            throw err;
+          }
+        }
+        await this.payments.update({ id: p.id, shopId }, { movementId: movement.id });
+      } catch {
+        // no bloquear el listado
+      }
+    }
   }
 
   private async paymentLinksForMovements(
@@ -340,15 +428,29 @@ export class MovementsService implements OnModuleInit {
     if (!user) throw new BadRequestException('Usuario inválido');
   }
 
-  async create(user: AuthUser, shopId: string, dto: UpsertMovementDto) {
+  async create(
+    user: AuthUser,
+    shopId: string,
+    dto: UpsertMovementDto,
+    opts?: { fromPayment?: boolean },
+  ) {
     this.shops.assertShopAccess(user, shopId);
     const kind = dto.kind;
-    if (kind === 'expense') {
-      this.assertPerm(user, shopId, 'expenses.manage');
-    } else if (kind === 'transfer') {
-      this.assertPerm(user, shopId, 'accountTransfers.manage');
-    } else {
-      this.assertAnyPerm(user, shopId, 'expenses.manage', 'accountTransfers.manage', 'movements.manage');
+    // El flujo de pagos ya autorizó el abono: no exige expenses.manage al pagador.
+    if (!opts?.fromPayment) {
+      if (kind === 'expense') {
+        this.assertPerm(user, shopId, 'expenses.manage');
+      } else if (kind === 'transfer') {
+        this.assertPerm(user, shopId, 'accountTransfers.manage');
+      } else {
+        this.assertAnyPerm(
+          user,
+          shopId,
+          'expenses.manage',
+          'accountTransfers.manage',
+          'movements.manage',
+        );
+      }
     }
 
     let conceptId = dto.conceptId ?? null;
@@ -427,7 +529,13 @@ export class MovementsService implements OnModuleInit {
     return this.toDto(row, paymentLinks.get(row.id) ?? null);
   }
 
-  async update(user: AuthUser, shopId: string, id: string, dto: Partial<UpsertMovementDto>) {
+  async update(
+    user: AuthUser,
+    shopId: string,
+    id: string,
+    dto: Partial<UpsertMovementDto>,
+    opts?: { fromPayment?: boolean },
+  ) {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.movements.findOne({
       where: { id, shopId },
@@ -445,8 +553,10 @@ export class MovementsService implements OnModuleInit {
       toAccountName: row.toAccount?.name,
       toAccountCode: row.toAccount?.code,
     });
-    if (asExpense) this.assertPerm(user, shopId, 'expenses.manage');
-    else this.assertPerm(user, shopId, 'accountTransfers.manage');
+    if (!opts?.fromPayment) {
+      if (asExpense) this.assertPerm(user, shopId, 'expenses.manage');
+      else this.assertPerm(user, shopId, 'accountTransfers.manage');
+    }
 
     const kind = dto.kind ?? (asExpense ? 'expense' : 'transfer');
 
@@ -507,7 +617,12 @@ export class MovementsService implements OnModuleInit {
     return this.one(user, shopId, id);
   }
 
-  async remove(user: AuthUser, shopId: string, id: string) {
+  async remove(
+    user: AuthUser,
+    shopId: string,
+    id: string,
+    opts?: { fromPayment?: boolean },
+  ) {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.movements.findOne({
       where: { id, shopId },
@@ -519,15 +634,35 @@ export class MovementsService implements OnModuleInit {
         'Este movimiento fue generado por un cierre; editá el cierre',
       );
     }
+    const linkedPayment = await this.payments.findOne({
+      where: { shopId, movementId: id, active: true },
+      select: ['id'],
+    });
+    if (linkedPayment && !opts?.fromPayment) {
+      throw new BadRequestException(
+        'Este gasto viene de un pago abonado. Para sacarlo, revertí el pago en Pagos (de Abonado a Validado).',
+      );
+    }
     const asExpense = this.isExpenseRow({
       conceptKind: row.concept?.kind,
       toAccountName: row.toAccount?.name,
       toAccountCode: row.toAccount?.code,
     });
-    if (asExpense) this.assertPerm(user, shopId, 'expenses.manage');
-    else this.assertPerm(user, shopId, 'accountTransfers.manage');
+    if (!opts?.fromPayment) {
+      if (asExpense) this.assertPerm(user, shopId, 'expenses.manage');
+      else this.assertPerm(user, shopId, 'accountTransfers.manage');
+    }
     await this.movements.softRemove(row);
     return { ok: true };
+  }
+
+  /** true si el movimiento existe y no está borrado. */
+  async isLive(shopId: string, id: string): Promise<boolean> {
+    const row = await this.movements.findOne({
+      where: { id, shopId },
+      select: ['id'],
+    });
+    return !!row;
   }
 
   async expensesByConcept(user: AuthUser, shopId: string, filters: MovementFilters = {}) {
