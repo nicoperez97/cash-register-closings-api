@@ -63,6 +63,26 @@ export class UserShop {
   @Column({ default: false })
   isReservationAdmin: boolean;
 
+  /**
+   * Override del menú lateral para este usuario en este local.
+   * null = usar shop.navConfig.
+   */
+  @Column({ type: 'simple-json', nullable: true })
+  navConfig?: {
+    groups?: Array<{ id: string; label?: string }>;
+    itemGroup?: Record<string, string>;
+    itemOrder?: Record<string, string[]>;
+    hidden?: string[];
+    itemLabels?: Record<string, string>;
+  } | null;
+
+  /**
+   * Tipos de notificación silenciados por el usuario (aunque admin los haya habilitado).
+   * null / [] = no silencia ninguno.
+   */
+  @Column({ type: 'json', nullable: true })
+  mutedNotificationTypes?: string[] | null;
+
   @ManyToOne(() => User, (u) => u.userShops, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'userId' })
   user: User;

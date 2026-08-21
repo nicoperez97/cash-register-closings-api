@@ -451,6 +451,8 @@ export class AuthService implements OnModuleInit {
 
   async me(userId: string) {
     const profile = await this.buildAuthUser(userId);
+    const user = await this.users.findOne({ where: { id: userId } });
+    const links = await this.userShops.find({ where: { userId } });
     const shops =
       profile.shopIds.length > 0
         ? await this.shops.find({ where: { id: In(profile.shopIds), active: true } })
@@ -469,7 +471,14 @@ export class AuthService implements OnModuleInit {
     }
     return {
       ...profile,
-      shops: shops.map((s) => ({
+      phone: user?.phone ?? null,
+      bankAlias: user?.bankAlias ?? null,
+      cbu: user?.cbu ?? null,
+      avatarUrl: user?.avatarUrl ?? null,
+      hasAvatar: !!user?.avatarUrl,
+      shops: shops.map((s) => {
+        const link = links.find((l) => l.shopId === s.id);
+        return {
         id: s.id,
         name: s.name,
         slug: s.slug,
@@ -527,8 +536,17 @@ export class AuthService implements OnModuleInit {
         salesSystemId: s.salesSystemId ?? null,
         posnets: s.posnets ?? [],
         navConfig: s.navConfig && typeof s.navConfig === 'object' ? s.navConfig : null,
+        myNavConfig: link?.navConfig && typeof link.navConfig === 'object' ? link.navConfig : null,
+        mutedNotificationTypes: Array.isArray(link?.mutedNotificationTypes)
+          ? link!.mutedNotificationTypes
+          : [],
+        isStockAdmin: !!link?.isStockAdmin,
+        isBeverageStockAdmin: !!link?.isBeverageStockAdmin,
+        isShortageAdmin: !!link?.isShortageAdmin,
+        isReservationAdmin: !!link?.isReservationAdmin,
         active: true,
-      })),
+      };
+      }),
     };
   }
 }

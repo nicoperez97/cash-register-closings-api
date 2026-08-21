@@ -33,10 +33,26 @@ import { PosSaleTicket } from '../../entities/pos-sale-ticket.entity';
 import { PosSaleTicketLine } from '../../entities/pos-sale-ticket-line.entity';
 import { PosSaleDaily } from '../../entities/pos-sale-daily.entity';
 import { User } from '../../entities/user.entity';
+import {
+  BackupModuleId,
+  BackupPurgeStep,
+  BackupSheetName,
+  modulesLabelList,
+  parseBackupModulesParam,
+  purgeStepsForModules,
+  sheetsForModules,
+} from './shop-backup-modules';
 
 const BACKUP_VERSION = '1';
 
 type Row = Record<string, unknown>;
+
+export type BackupFormat = 'xlsx' | 'sql';
+
+export interface ExportBackupOptions {
+  modules?: string | string[] | null;
+  format?: BackupFormat | string | null;
+}
 
 @Injectable()
 export class ShopBackupService {
@@ -52,9 +68,39 @@ export class ShopBackupService {
     }
   }
 
-  async exportBackup(user: AuthUser, shopId: string) {
+  async exportBackup(user: AuthUser, shopId: string, opts: ExportBackupOptions = {}) {
     this.assertSuperAdmin(user);
     const shop = await this.requireShop(shopId);
+
+    let modules: BackupModuleId[] | 'all';
+    try {
+      modules = parseBackupModulesParam(opts.modules);
+    } catch (e: any) {
+      throw new BadRequestException(e?.message ?? 'Módulos inválidos');
+    }
+    const format: BackupFormat = opts.format === 'sql' ? 'sql' : 'xlsx';
+    const sheetSet = sheetsForModules(modules);
+    const modulesCsv = modulesLabelList(modules);
+
+    const sheets = await this.collectSheetRows(shopId, sheetSet);
+
+    const stamp = new Date().toISOString().slice(0, 10);
+    const baseName = `backup-${shop.slug || 'local'}-${stamp}`;
+
+    if (format === 'sql') {
+      const sql = this.buildSqlDump({
+        shopId: shop.id,
+        slug: shop.slug,
+        name: shop.name,
+        modules: modulesCsv,
+        sheets,
+      });
+      return {
+        buffer: Buffer.from(sql, 'utf8'),
+        filename: `${baseName}.sql`,
+        contentType: 'application/sql; charset=utf-8',
+      };
+    }
 
     const wb = new ExcelJS.Workbook();
     wb.creator = 'Cash Register Closings';
@@ -65,373 +111,47 @@ export class ShopBackupService {
       shopId: shop.id,
       slug: shop.slug,
       name: shop.name,
+      modules: modulesCsv,
       exportedAt: new Date().toISOString(),
     });
 
-    const accounts = await this.dataSource.getRepository(LedgerAccount).find({
-      where: { shopId, deletedAt: IsNull() },
-    });
-    this.addRowsSheet(
-      wb,
-      'ledger_accounts',
-      accounts.map((a) => ({
-        id: a.id,
-        name: a.name,
-        code: a.code,
-        type: a.type,
-        linkedPaymentMethod: a.linkedPaymentMethod ?? '',
-        active: a.active ? 1 : 0,
-      })),
-    );
-
-    const accountLinks = await this.dataSource.getRepository(LedgerAccountUser).find({
-      where: { shopId },
-    });
-    this.addRowsSheet(
-      wb,
-      'ledger_account_users',
-      accountLinks.map((l) => ({
-        id: l.id,
-        accountId: l.accountId,
-        userId: l.userId,
-      })),
-    );
-
-    const concepts = await this.dataSource.getRepository(Concept).find({
-      where: { shopId, deletedAt: IsNull() },
-    });
-    this.addRowsSheet(
-      wb,
-      'concepts',
-      concepts.map((c) => ({
-        id: c.id,
-        name: c.name,
-        description: c.description ?? '',
-        kind: c.kind,
-        validated: c.validated ? 1 : 0,
-        active: c.active ? 1 : 0,
-      })),
-    );
-
-    const categories = await this.dataSource.getRepository(PosCategory).find({
-      where: { shopId, deletedAt: IsNull() },
-    });
-    this.addRowsSheet(
-      wb,
-      'pos_categories',
-      categories.map((c) => ({
-        id: c.id,
-        name: c.name,
-        sortOrder: c.sortOrder,
-        notes: c.notes ?? '',
-        active: c.active ? 1 : 0,
-      })),
-    );
-
-    const subcategories = await this.dataSource.getRepository(PosSubcategory).find({
-      where: { shopId, deletedAt: IsNull() },
-    });
-    this.addRowsSheet(
-      wb,
-      'pos_subcategories',
-      subcategories.map((s) => ({
-        id: s.id,
-        categoryId: s.categoryId,
-        name: s.name,
-        sortOrder: s.sortOrder,
-        notes: s.notes ?? '',
-        active: s.active ? 1 : 0,
-      })),
-    );
-
-    const products = await this.dataSource.getRepository(PosProduct).find({
-      where: { shopId, deletedAt: IsNull() },
-    });
-    this.addRowsSheet(
-      wb,
-      'pos_products',
-      products.map((p) => ({
-        id: p.id,
-        productCode: p.productCode,
-        productName: p.productName ?? '',
-        category: p.category ?? '',
-        subcategory: p.subcategory ?? '',
-        categoryId: p.categoryId ?? '',
-        subcategoryId: p.subcategoryId ?? '',
-        active: p.active ? 1 : 0,
-      })),
-    );
-
-    const employees = await this.dataSource.getRepository(Employee).find({
-      where: { shopId, deletedAt: IsNull() },
-    });
-    this.addRowsSheet(
-      wb,
-      'employees',
-      employees.map((e) => ({
-        id: e.id,
-        fullName: e.fullName,
-        baseSalary: e.baseSalary,
-        userId: e.userId ?? '',
-        hireDate: e.hireDate ?? '',
-        notes: e.notes ?? '',
-        active: e.active ? 1 : 0,
-      })),
-    );
-
-    const commissionRules = await this.dataSource
-      .getRepository(EmployeeCommissionRule)
-      .find({ where: { shopId, deletedAt: IsNull() } });
-    this.addRowsSheet(
-      wb,
-      'employee_commission_rules',
-      commissionRules.map((r) => ({
-        id: r.id,
-        employeeId: r.employeeId,
-        category: r.category,
-        ratePercent: r.ratePercent,
-        notes: r.notes ?? '',
-        active: r.active ? 1 : 0,
-      })),
-    );
-
-    const attendance = await this.dataSource.getRepository(AttendanceDay).find({
-      where: { shopId, deletedAt: IsNull() },
-    });
-    this.addRowsSheet(
-      wb,
-      'attendance_days',
-      attendance.map((a) => ({
-        id: a.id,
-        employeeId: a.employeeId,
-        date: a.date,
-        isHoliday: a.isHoliday ? 1 : 0,
-        isPresent: a.isPresent ? 1 : 0,
-        overtimeHours: a.overtimeHours,
-        active: a.active ? 1 : 0,
-      })),
-    );
-
-    const periods = await this.dataSource.getRepository(PayrollPeriod).find({
-      where: { shopId, deletedAt: IsNull() },
-    });
-    this.addRowsSheet(
-      wb,
-      'payroll_periods',
-      periods.map((p) => ({
-        id: p.id,
-        year: p.year,
-        month: p.month,
-        status: p.status,
-        active: p.active ? 1 : 0,
-      })),
-    );
-
-    const periodIds = periods.map((p) => p.id);
-    const payrollLinesFixed = periodIds.length
-      ? await this.dataSource
-          .getRepository(PayrollLine)
-          .createQueryBuilder('l')
-          .where('l.periodId IN (:...ids)', { ids: periodIds })
-          .getMany()
-      : [];
-    this.addRowsSheet(
-      wb,
-      'payroll_lines',
-      payrollLinesFixed.map((l) => ({
-        id: l.id,
-        periodId: l.periodId,
-        employeeId: l.employeeId,
-        daysWorked: l.daysWorked,
-        holidayDays: l.holidayDays,
-        baseSalarySnapshot: l.baseSalarySnapshot,
-        overtimeAmount: l.overtimeAmount,
-        attendanceBonus: l.attendanceBonus,
-        total: l.total,
-        notes: l.notes ?? '',
-        active: l.active ? 1 : 0,
-      })),
-    );
-
-    const closings = await this.dataSource.getRepository(CashClosing).find({
-      where: { shopId, deletedAt: IsNull() },
-    });
-    this.addRowsSheet(
-      wb,
-      'cash_closings',
-      closings.map((c) => this.closingToRow(c)),
-    );
-
-    const closingIds = closings.map((c) => c.id);
-    const expenses = closingIds.length
-      ? await this.dataSource
-          .getRepository(ClosingExpense)
-          .createQueryBuilder('e')
-          .where('e.closingId IN (:...ids)', { ids: closingIds })
-          .getMany()
-      : [];
-    this.addRowsSheet(
-      wb,
-      'closing_expenses',
-      expenses.map((e) => ({
-        id: e.id,
-        closingId: e.closingId,
-        label: e.label,
-        amount: e.amount,
-        category: e.category,
-      })),
-    );
-
-    const extras = closingIds.length
-      ? await this.dataSource
-          .getRepository(ClosingExtraLine)
-          .createQueryBuilder('e')
-          .where('e.closingId IN (:...ids)', { ids: closingIds })
-          .getMany()
-      : [];
-    this.addRowsSheet(
-      wb,
-      'closing_extra_lines',
-      extras.map((e) => ({
-        id: e.id,
-        closingId: e.closingId,
-        type: e.type,
-        label: e.label,
-        amount: e.amount,
-        meta: e.meta ?? '',
-      })),
-    );
-
-    const movements = await this.dataSource.getRepository(Movement).find({
-      where: { shopId, deletedAt: IsNull() },
-    });
-    this.addRowsSheet(
-      wb,
-      'movements',
-      movements.map((m) => ({
-        id: m.id,
-        businessDate: m.businessDate,
-        fromAccountId: m.fromAccountId,
-        toAccountId: m.toAccountId,
-        description: m.description ?? '',
-        amountUyu: m.amountUyu,
-        usdRate: m.usdRate ?? '',
-        amountUsd: m.amountUsd ?? '',
-        conceptId: m.conceptId ?? '',
-        invoiced: m.invoiced ? 1 : 0,
-        invoiceNumber: m.invoiceNumber ?? '',
-        closingId: m.closingId ?? '',
-        employeeId: m.employeeId ?? '',
-        active: m.active ? 1 : 0,
-      })),
-    );
-
-    const imports = await this.dataSource.getRepository(PosSaleImport).find({
-      where: { shopId, deletedAt: IsNull() },
-    });
-    this.addRowsSheet(
-      wb,
-      'pos_sale_imports',
-      imports.map((i) => ({
-        id: i.id,
-        salesSystemId: i.salesSystemId,
-        fileName: i.fileName ?? '',
-        periodFrom: i.periodFrom ?? '',
-        periodTo: i.periodTo ?? '',
-        ticketCount: i.ticketCount,
-        importedByUserId: i.importedByUserId,
-        active: i.active ? 1 : 0,
-      })),
-    );
-
-    const tickets = await this.dataSource.getRepository(PosSaleTicket).find({
-      where: { shopId, deletedAt: IsNull() },
-    });
-    this.addRowsSheet(
-      wb,
-      'pos_sale_tickets',
-      tickets.map((t) => ({
-        id: t.id,
-        importId: t.importId,
-        salesSystemId: t.salesSystemId,
-        businessDate: t.businessDate,
-        externalId: t.externalId,
-        ticketType: t.ticketType ?? '',
-        total: t.total,
-        subtotal: t.subtotal,
-        discount: t.discount,
-        paymentCode: t.paymentCode ?? '',
-        covers: t.covers,
-        externalClosingId: t.externalClosingId ?? '',
-        occurredAt: t.occurredAt ?? '',
-        active: t.active ? 1 : 0,
-      })),
-    );
-
-    const ticketIds = tickets.map((t) => t.id);
-    const ticketLines = ticketIds.length
-      ? await this.dataSource
-          .getRepository(PosSaleTicketLine)
-          .createQueryBuilder('l')
-          .where('l.ticketId IN (:...ids)', { ids: ticketIds })
-          .getMany()
-      : [];
-    this.addRowsSheet(
-      wb,
-      'pos_sale_ticket_lines',
-      ticketLines.map((l) => ({
-        id: l.id,
-        ticketId: l.ticketId,
-        productCode: l.productCode ?? '',
-        productName: l.productName ?? '',
-        category: l.category ?? '',
-        subcategory: l.subcategory ?? '',
-        qty: l.qty,
-        amount: l.amount,
-        active: l.active ? 1 : 0,
-      })),
-    );
-
-    const dailies = await this.dataSource.getRepository(PosSaleDaily).find({
-      where: { shopId, deletedAt: IsNull() },
-    });
-    this.addRowsSheet(
-      wb,
-      'pos_sale_dailies',
-      dailies.map((d) => ({
-        id: d.id,
-        businessDate: d.businessDate,
-        salesSystemId: d.salesSystemId,
-        importId: d.importId,
-        totalAmount: d.totalAmount,
-        ticketCount: d.ticketCount,
-        coversCount: d.coversCount,
-        cashAmount: d.cashAmount,
-        cardAmount: d.cardAmount,
-        mercadoPagoAmount: d.mercadoPagoAmount,
-        deliveryAppsAmount: d.deliveryAppsAmount,
-        transferAmount: d.transferAmount,
-        accountDniAmount: d.accountDniAmount,
-        otherAmount: d.otherAmount,
-        active: d.active ? 1 : 0,
-      })),
-    );
+    for (const [name, rows] of sheets) {
+      this.addRowsSheet(wb, name, rows);
+    }
 
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());
     return {
       buffer,
-      filename: `backup-${shop.slug || 'local'}-${new Date().toISOString().slice(0, 10)}.xlsx`,
+      filename: `${baseName}.xlsx`,
+      contentType:
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     };
   }
 
-  async resetShop(user: AuthUser, shopId: string, confirm?: string) {
+  async resetShop(
+    user: AuthUser,
+    shopId: string,
+    confirm?: string,
+    modulesRaw?: string[] | string | null,
+  ) {
     this.assertSuperAdmin(user);
     if (confirm !== 'RESET') {
       throw new BadRequestException('Confirmá el reset enviando { "confirm": "RESET" }');
     }
     await this.requireShop(shopId);
-    await this.purgeShopData(shopId);
-    return { ok: true };
+    let modules: BackupModuleId[] | 'all';
+    try {
+      modules =
+        modulesRaw == null || (Array.isArray(modulesRaw) && !modulesRaw.length)
+          ? 'all'
+          : parseBackupModulesParam(
+              Array.isArray(modulesRaw) ? modulesRaw.join(',') : modulesRaw,
+            );
+    } catch (e: any) {
+      throw new BadRequestException(e?.message ?? 'Módulos inválidos');
+    }
+    await this.purgeShopData(shopId, modules);
+    return { ok: true, modules: modulesLabelList(modules) };
   }
 
   async importBackup(
@@ -471,11 +191,20 @@ export class ShopBackupService {
       }
     }
 
+    let modules: BackupModuleId[] | 'all' = 'all';
+    if (meta.modules && String(meta.modules).trim() && String(meta.modules) !== 'all') {
+      try {
+        modules = parseBackupModulesParam(String(meta.modules));
+      } catch (e: any) {
+        throw new BadRequestException(e?.message ?? 'Módulos del backup inválidos');
+      }
+    }
+
     const qr = this.dataSource.createQueryRunner();
     await qr.connect();
     await qr.startTransaction();
     try {
-      await this.purgeShopDataWithManager(qr.manager, shopId);
+      await this.purgeShopDataWithManager(qr.manager, shopId, modules);
       await this.importFromWorkbook(qr.manager, shopId, user.id, wb);
       await qr.commitTransaction();
     } catch (err) {
@@ -485,15 +214,15 @@ export class ShopBackupService {
       await qr.release();
     }
 
-    return { ok: true };
+    return { ok: true, modules: modulesLabelList(modules) };
   }
 
-  private async purgeShopData(shopId: string) {
+  private async purgeShopData(shopId: string, modules: BackupModuleId[] | 'all' = 'all') {
     const qr = this.dataSource.createQueryRunner();
     await qr.connect();
     await qr.startTransaction();
     try {
-      await this.purgeShopDataWithManager(qr.manager, shopId);
+      await this.purgeShopDataWithManager(qr.manager, shopId, modules);
       await qr.commitTransaction();
     } catch (err) {
       await qr.rollbackTransaction();
@@ -503,37 +232,526 @@ export class ShopBackupService {
     }
   }
 
-  /** Hard-delete all shop-scoped operational + catalog data (incl. soft-deleted). */
-  private async purgeShopDataWithManager(manager: any, shopId: string) {
+  /** Hard-delete shop-scoped data for the selected modules (incl. soft-deleted). */
+  private async purgeShopDataWithManager(
+    manager: any,
+    shopId: string,
+    modules: BackupModuleId[] | 'all' = 'all',
+  ) {
+    const steps = purgeStepsForModules(modules);
     const run = async (sql: string) => manager.query(sql, [shopId]);
 
-    await run(
-      `DELETE FROM pos_sale_ticket_lines WHERE ticketId IN (SELECT id FROM pos_sale_tickets WHERE shopId = ?)`,
-    );
-    await run(`DELETE FROM pos_sale_tickets WHERE shopId = ?`);
-    await run(`DELETE FROM pos_sale_dailies WHERE shopId = ?`);
-    await run(`DELETE FROM pos_sale_imports WHERE shopId = ?`);
-    await run(
-      `DELETE FROM payroll_lines WHERE periodId IN (SELECT id FROM payroll_periods WHERE shopId = ?)`,
-    );
-    await run(`DELETE FROM payroll_periods WHERE shopId = ?`);
-    await run(`DELETE FROM attendance_days WHERE shopId = ?`);
-    await run(`DELETE FROM employee_commission_rules WHERE shopId = ?`);
-    await run(`DELETE FROM movements WHERE shopId = ?`);
-    await run(
-      `DELETE FROM closing_expenses WHERE closingId IN (SELECT id FROM cash_closings WHERE shopId = ?)`,
-    );
-    await run(
-      `DELETE FROM closing_extra_lines WHERE closingId IN (SELECT id FROM cash_closings WHERE shopId = ?)`,
-    );
-    await run(`DELETE FROM cash_closings WHERE shopId = ?`);
-    await run(`DELETE FROM ledger_account_users WHERE shopId = ?`);
-    await run(`DELETE FROM pos_products WHERE shopId = ?`);
-    await run(`DELETE FROM pos_subcategories WHERE shopId = ?`);
-    await run(`DELETE FROM pos_categories WHERE shopId = ?`);
-    await run(`DELETE FROM concepts WHERE shopId = ?`);
-    await run(`DELETE FROM ledger_accounts WHERE shopId = ?`);
-    await run(`DELETE FROM employees WHERE shopId = ?`);
+    for (const step of steps) {
+      await this.runPurgeStep(run, step);
+    }
+  }
+
+  private async runPurgeStep(
+    run: (sql: string) => Promise<unknown>,
+    step: BackupPurgeStep,
+  ): Promise<void> {
+    switch (step) {
+      case 'pos_sale_ticket_lines':
+        await run(
+          `DELETE FROM pos_sale_ticket_lines WHERE ticketId IN (SELECT id FROM pos_sale_tickets WHERE shopId = ?)`,
+        );
+        return;
+      case 'pos_sale_tickets':
+        await run(`DELETE FROM pos_sale_tickets WHERE shopId = ?`);
+        return;
+      case 'pos_sale_dailies':
+        await run(`DELETE FROM pos_sale_dailies WHERE shopId = ?`);
+        return;
+      case 'pos_sale_imports':
+        await run(`DELETE FROM pos_sale_imports WHERE shopId = ?`);
+        return;
+      case 'payroll_lines':
+        await run(
+          `DELETE FROM payroll_lines WHERE periodId IN (SELECT id FROM payroll_periods WHERE shopId = ?)`,
+        );
+        return;
+      case 'payroll_periods':
+        await run(`DELETE FROM payroll_periods WHERE shopId = ?`);
+        return;
+      case 'attendance_days':
+        await run(`DELETE FROM attendance_days WHERE shopId = ?`);
+        return;
+      case 'employee_commission_rules':
+        await run(`DELETE FROM employee_commission_rules WHERE shopId = ?`);
+        return;
+      case 'movements':
+        await run(`DELETE FROM movements WHERE shopId = ?`);
+        return;
+      case 'closing_expenses':
+        await run(
+          `DELETE FROM closing_expenses WHERE closingId IN (SELECT id FROM cash_closings WHERE shopId = ?)`,
+        );
+        return;
+      case 'closing_extra_lines':
+        await run(
+          `DELETE FROM closing_extra_lines WHERE closingId IN (SELECT id FROM cash_closings WHERE shopId = ?)`,
+        );
+        return;
+      case 'cash_closings':
+        await run(`DELETE FROM cash_closings WHERE shopId = ?`);
+        return;
+      case 'ledger_account_users':
+        await run(`DELETE FROM ledger_account_users WHERE shopId = ?`);
+        return;
+      case 'pos_products':
+        await run(`DELETE FROM pos_products WHERE shopId = ?`);
+        return;
+      case 'pos_subcategories':
+        await run(`DELETE FROM pos_subcategories WHERE shopId = ?`);
+        return;
+      case 'pos_categories':
+        await run(`DELETE FROM pos_categories WHERE shopId = ?`);
+        return;
+      case 'concepts':
+        await run(`DELETE FROM concepts WHERE shopId = ?`);
+        return;
+      case 'ledger_accounts':
+        await run(`DELETE FROM ledger_accounts WHERE shopId = ?`);
+        return;
+      case 'employees':
+        await run(`DELETE FROM employees WHERE shopId = ?`);
+        return;
+      default:
+        return;
+    }
+  }
+
+  private async collectSheetRows(
+    shopId: string,
+    sheetSet: Set<BackupSheetName>,
+  ): Promise<Map<BackupSheetName, Row[]>> {
+    const out = new Map<BackupSheetName, Row[]>();
+    const put = (name: BackupSheetName, rows: Row[]) => {
+      if (sheetSet.has(name)) out.set(name, rows);
+    };
+
+    if (sheetSet.has('ledger_accounts')) {
+      const accounts = await this.dataSource.getRepository(LedgerAccount).find({
+        where: { shopId, deletedAt: IsNull() },
+      });
+      put(
+        'ledger_accounts',
+        accounts.map((a) => ({
+          id: a.id,
+          name: a.name,
+          code: a.code,
+          type: a.type,
+          linkedPaymentMethod: a.linkedPaymentMethod ?? '',
+          active: a.active ? 1 : 0,
+        })),
+      );
+    }
+
+    if (sheetSet.has('ledger_account_users')) {
+      const accountLinks = await this.dataSource.getRepository(LedgerAccountUser).find({
+        where: { shopId },
+      });
+      put(
+        'ledger_account_users',
+        accountLinks.map((l) => ({
+          id: l.id,
+          accountId: l.accountId,
+          userId: l.userId,
+        })),
+      );
+    }
+
+    if (sheetSet.has('concepts')) {
+      const concepts = await this.dataSource.getRepository(Concept).find({
+        where: { shopId, deletedAt: IsNull() },
+      });
+      put(
+        'concepts',
+        concepts.map((c) => ({
+          id: c.id,
+          name: c.name,
+          description: c.description ?? '',
+          kind: c.kind,
+          validated: c.validated ? 1 : 0,
+          active: c.active ? 1 : 0,
+        })),
+      );
+    }
+
+    if (sheetSet.has('pos_categories')) {
+      const categories = await this.dataSource.getRepository(PosCategory).find({
+        where: { shopId, deletedAt: IsNull() },
+      });
+      put(
+        'pos_categories',
+        categories.map((c) => ({
+          id: c.id,
+          name: c.name,
+          sortOrder: c.sortOrder,
+          notes: c.notes ?? '',
+          active: c.active ? 1 : 0,
+        })),
+      );
+    }
+
+    if (sheetSet.has('pos_subcategories')) {
+      const subcategories = await this.dataSource.getRepository(PosSubcategory).find({
+        where: { shopId, deletedAt: IsNull() },
+      });
+      put(
+        'pos_subcategories',
+        subcategories.map((s) => ({
+          id: s.id,
+          categoryId: s.categoryId,
+          name: s.name,
+          sortOrder: s.sortOrder,
+          notes: s.notes ?? '',
+          active: s.active ? 1 : 0,
+        })),
+      );
+    }
+
+    if (sheetSet.has('pos_products')) {
+      const products = await this.dataSource.getRepository(PosProduct).find({
+        where: { shopId, deletedAt: IsNull() },
+      });
+      put(
+        'pos_products',
+        products.map((p) => ({
+          id: p.id,
+          productCode: p.productCode,
+          productName: p.productName ?? '',
+          category: p.category ?? '',
+          subcategory: p.subcategory ?? '',
+          categoryId: p.categoryId ?? '',
+          subcategoryId: p.subcategoryId ?? '',
+          active: p.active ? 1 : 0,
+        })),
+      );
+    }
+
+    if (sheetSet.has('employees')) {
+      const employees = await this.dataSource.getRepository(Employee).find({
+        where: { shopId, deletedAt: IsNull() },
+      });
+      put(
+        'employees',
+        employees.map((e) => ({
+          id: e.id,
+          fullName: e.fullName,
+          baseSalary: e.baseSalary,
+          userId: e.userId ?? '',
+          hireDate: e.hireDate ?? '',
+          notes: e.notes ?? '',
+          active: e.active ? 1 : 0,
+        })),
+      );
+    }
+
+    if (sheetSet.has('employee_commission_rules')) {
+      const commissionRules = await this.dataSource
+        .getRepository(EmployeeCommissionRule)
+        .find({ where: { shopId, deletedAt: IsNull() } });
+      put(
+        'employee_commission_rules',
+        commissionRules.map((r) => ({
+          id: r.id,
+          employeeId: r.employeeId,
+          category: r.category,
+          ratePercent: r.ratePercent,
+          notes: r.notes ?? '',
+          active: r.active ? 1 : 0,
+        })),
+      );
+    }
+
+    if (sheetSet.has('attendance_days')) {
+      const attendance = await this.dataSource.getRepository(AttendanceDay).find({
+        where: { shopId, deletedAt: IsNull() },
+      });
+      put(
+        'attendance_days',
+        attendance.map((a) => ({
+          id: a.id,
+          employeeId: a.employeeId,
+          date: a.date,
+          isHoliday: a.isHoliday ? 1 : 0,
+          isPresent: a.isPresent ? 1 : 0,
+          overtimeHours: a.overtimeHours,
+          active: a.active ? 1 : 0,
+        })),
+      );
+    }
+
+    let periods: PayrollPeriod[] = [];
+    if (sheetSet.has('payroll_periods') || sheetSet.has('payroll_lines')) {
+      periods = await this.dataSource.getRepository(PayrollPeriod).find({
+        where: { shopId, deletedAt: IsNull() },
+      });
+    }
+    if (sheetSet.has('payroll_periods')) {
+      put(
+        'payroll_periods',
+        periods.map((p) => ({
+          id: p.id,
+          year: p.year,
+          month: p.month,
+          status: p.status,
+          active: p.active ? 1 : 0,
+        })),
+      );
+    }
+    if (sheetSet.has('payroll_lines')) {
+      const periodIds = periods.map((p) => p.id);
+      const payrollLinesFixed = periodIds.length
+        ? await this.dataSource
+            .getRepository(PayrollLine)
+            .createQueryBuilder('l')
+            .where('l.periodId IN (:...ids)', { ids: periodIds })
+            .getMany()
+        : [];
+      put(
+        'payroll_lines',
+        payrollLinesFixed.map((l) => ({
+          id: l.id,
+          periodId: l.periodId,
+          employeeId: l.employeeId,
+          daysWorked: l.daysWorked,
+          holidayDays: l.holidayDays,
+          baseSalarySnapshot: l.baseSalarySnapshot,
+          overtimeAmount: l.overtimeAmount,
+          attendanceBonus: l.attendanceBonus,
+          total: l.total,
+          notes: l.notes ?? '',
+          active: l.active ? 1 : 0,
+        })),
+      );
+    }
+
+    let closings: CashClosing[] = [];
+    if (
+      sheetSet.has('cash_closings') ||
+      sheetSet.has('closing_expenses') ||
+      sheetSet.has('closing_extra_lines')
+    ) {
+      closings = await this.dataSource.getRepository(CashClosing).find({
+        where: { shopId, deletedAt: IsNull() },
+      });
+    }
+    if (sheetSet.has('cash_closings')) {
+      put(
+        'cash_closings',
+        closings.map((c) => this.closingToRow(c)),
+      );
+    }
+    const closingIds = closings.map((c) => c.id);
+    if (sheetSet.has('closing_expenses')) {
+      const expenses = closingIds.length
+        ? await this.dataSource
+            .getRepository(ClosingExpense)
+            .createQueryBuilder('e')
+            .where('e.closingId IN (:...ids)', { ids: closingIds })
+            .getMany()
+        : [];
+      put(
+        'closing_expenses',
+        expenses.map((e) => ({
+          id: e.id,
+          closingId: e.closingId,
+          label: e.label,
+          amount: e.amount,
+          category: e.category,
+        })),
+      );
+    }
+    if (sheetSet.has('closing_extra_lines')) {
+      const extras = closingIds.length
+        ? await this.dataSource
+            .getRepository(ClosingExtraLine)
+            .createQueryBuilder('e')
+            .where('e.closingId IN (:...ids)', { ids: closingIds })
+            .getMany()
+        : [];
+      put(
+        'closing_extra_lines',
+        extras.map((e) => ({
+          id: e.id,
+          closingId: e.closingId,
+          type: e.type,
+          label: e.label,
+          amount: e.amount,
+          meta: e.meta ?? '',
+        })),
+      );
+    }
+
+    if (sheetSet.has('movements')) {
+      const movements = await this.dataSource.getRepository(Movement).find({
+        where: { shopId, deletedAt: IsNull() },
+      });
+      put(
+        'movements',
+        movements.map((m) => ({
+          id: m.id,
+          businessDate: m.businessDate,
+          fromAccountId: m.fromAccountId,
+          toAccountId: m.toAccountId,
+          description: m.description ?? '',
+          amountUyu: m.amountUyu,
+          usdRate: m.usdRate ?? '',
+          amountUsd: m.amountUsd ?? '',
+          conceptId: m.conceptId ?? '',
+          invoiced: m.invoiced ? 1 : 0,
+          invoiceNumber: m.invoiceNumber ?? '',
+          closingId: m.closingId ?? '',
+          employeeId: m.employeeId ?? '',
+          active: m.active ? 1 : 0,
+        })),
+      );
+    }
+
+    if (sheetSet.has('pos_sale_imports')) {
+      const imports = await this.dataSource.getRepository(PosSaleImport).find({
+        where: { shopId, deletedAt: IsNull() },
+      });
+      put(
+        'pos_sale_imports',
+        imports.map((i) => ({
+          id: i.id,
+          salesSystemId: i.salesSystemId,
+          fileName: i.fileName ?? '',
+          periodFrom: i.periodFrom ?? '',
+          periodTo: i.periodTo ?? '',
+          ticketCount: i.ticketCount,
+          importedByUserId: i.importedByUserId,
+          active: i.active ? 1 : 0,
+        })),
+      );
+    }
+
+    let tickets: PosSaleTicket[] = [];
+    if (sheetSet.has('pos_sale_tickets') || sheetSet.has('pos_sale_ticket_lines')) {
+      tickets = await this.dataSource.getRepository(PosSaleTicket).find({
+        where: { shopId, deletedAt: IsNull() },
+      });
+    }
+    if (sheetSet.has('pos_sale_tickets')) {
+      put(
+        'pos_sale_tickets',
+        tickets.map((t) => ({
+          id: t.id,
+          importId: t.importId,
+          salesSystemId: t.salesSystemId,
+          businessDate: t.businessDate,
+          externalId: t.externalId,
+          ticketType: t.ticketType ?? '',
+          total: t.total,
+          subtotal: t.subtotal,
+          discount: t.discount,
+          paymentCode: t.paymentCode ?? '',
+          covers: t.covers,
+          externalClosingId: t.externalClosingId ?? '',
+          occurredAt: t.occurredAt ?? '',
+          active: t.active ? 1 : 0,
+        })),
+      );
+    }
+    if (sheetSet.has('pos_sale_ticket_lines')) {
+      const ticketIds = tickets.map((t) => t.id);
+      const ticketLines = ticketIds.length
+        ? await this.dataSource
+            .getRepository(PosSaleTicketLine)
+            .createQueryBuilder('l')
+            .where('l.ticketId IN (:...ids)', { ids: ticketIds })
+            .getMany()
+        : [];
+      put(
+        'pos_sale_ticket_lines',
+        ticketLines.map((l) => ({
+          id: l.id,
+          ticketId: l.ticketId,
+          productCode: l.productCode ?? '',
+          productName: l.productName ?? '',
+          category: l.category ?? '',
+          subcategory: l.subcategory ?? '',
+          qty: l.qty,
+          amount: l.amount,
+          active: l.active ? 1 : 0,
+        })),
+      );
+    }
+
+    if (sheetSet.has('pos_sale_dailies')) {
+      const dailies = await this.dataSource.getRepository(PosSaleDaily).find({
+        where: { shopId, deletedAt: IsNull() },
+      });
+      put(
+        'pos_sale_dailies',
+        dailies.map((d) => ({
+          id: d.id,
+          businessDate: d.businessDate,
+          salesSystemId: d.salesSystemId,
+          importId: d.importId,
+          totalAmount: d.totalAmount,
+          ticketCount: d.ticketCount,
+          coversCount: d.coversCount,
+          cashAmount: d.cashAmount,
+          cardAmount: d.cardAmount,
+          mercadoPagoAmount: d.mercadoPagoAmount,
+          deliveryAppsAmount: d.deliveryAppsAmount,
+          transferAmount: d.transferAmount,
+          accountDniAmount: d.accountDniAmount,
+          otherAmount: d.otherAmount,
+          active: d.active ? 1 : 0,
+        })),
+      );
+    }
+
+    return out;
+  }
+
+  private buildSqlDump(opts: {
+    shopId: string;
+    slug: string;
+    name: string;
+    modules: string;
+    sheets: Map<BackupSheetName, Row[]>;
+  }): string {
+    const lines: string[] = [
+      `-- Cash Register Closings shop backup`,
+      `-- version: ${BACKUP_VERSION}`,
+      `-- shopId: ${opts.shopId}`,
+      `-- slug: ${opts.slug}`,
+      `-- name: ${opts.name.replace(/\n/g, ' ')}`,
+      `-- modules: ${opts.modules}`,
+      `-- exportedAt: ${new Date().toISOString()}`,
+      `-- Solo exportación (no ejecutar restore automático desde la UI).`,
+      ``,
+    ];
+    for (const [table, rows] of opts.sheets) {
+      lines.push(`-- table: ${table} (${rows.length} rows)`);
+      if (!rows.length) {
+        lines.push(`-- (empty)`);
+        lines.push('');
+        continue;
+      }
+      const keys = Object.keys(rows[0]!);
+      for (const row of rows) {
+        const cols = keys.map((k) => `\`${k}\``).join(', ');
+        const vals = keys.map((k) => this.sqlLiteral(row[k])).join(', ');
+        lines.push(`INSERT INTO \`${table}\` (${cols}) VALUES (${vals});`);
+      }
+      lines.push('');
+    }
+    return lines.join('\n');
+  }
+
+  private sqlLiteral(v: unknown): string {
+    if (v === null || v === undefined || v === '') return 'NULL';
+    if (typeof v === 'number' && Number.isFinite(v)) return String(v);
+    if (typeof v === 'boolean') return v ? '1' : '0';
+    const s = String(v).replace(/\\/g, '\\\\').replace(/'/g, "''");
+    return `'${s}'`;
   }
 
   private async importFromWorkbook(
