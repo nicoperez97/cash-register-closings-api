@@ -62,6 +62,9 @@ export class CreateUserBody {
   isShortageAdmin?: boolean;
   /** Administrador de reservas: recibe notificaciones y mails de solicitudes. */
   isReservationAdmin?: boolean;
+  phone?: string | null;
+  bankAlias?: string | null;
+  cbu?: string | null;
 }
 
 export class UpdateUserBody {
@@ -87,6 +90,9 @@ export class UpdateUserBody {
   isShortageAdmin?: boolean;
   /** Administrador de reservas: recibe notificaciones y mails de solicitudes. */
   isReservationAdmin?: boolean;
+  phone?: string | null;
+  bankAlias?: string | null;
+  cbu?: string | null;
 }
 
 @Injectable()
@@ -164,6 +170,35 @@ export class UsersService implements OnModuleInit {
       `);
     } catch {
       // columna ya existe
+    }
+    try {
+      await this.userShops.query(`
+        ALTER TABLE user_shops
+          ADD COLUMN navConfig JSON NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.userShops.query(`
+        ALTER TABLE user_shops
+          ADD COLUMN mutedNotificationTypes JSON NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    const userCols: Array<[string, string]> = [
+      ['avatarUrl', 'VARCHAR(500) NULL'],
+      ['phone', 'VARCHAR(40) NULL'],
+      ['bankAlias', 'VARCHAR(120) NULL'],
+      ['cbu', 'VARCHAR(40) NULL'],
+    ];
+    for (const [col, def] of userCols) {
+      try {
+        await this.users.query(`ALTER TABLE users ADD COLUMN ${col} ${def}`);
+      } catch {
+        // ya existe
+      }
     }
   }
 
@@ -307,6 +342,9 @@ export class UsersService implements OnModuleInit {
         email,
         passwordHash,
         globalRole: dto.globalRole,
+        phone: dto.phone?.trim() ? dto.phone.trim() : null,
+        bankAlias: dto.bankAlias?.trim() ? dto.bankAlias.trim() : null,
+        cbu: dto.cbu?.trim() ? dto.cbu.trim() : null,
         active: true,
       }),
     );
@@ -383,6 +421,15 @@ export class UsersService implements OnModuleInit {
     }
 
     if (dto.fullName !== undefined) user.fullName = dto.fullName.trim();
+    if (dto.phone !== undefined) {
+      user.phone = dto.phone?.trim() ? dto.phone.trim() : null;
+    }
+    if (dto.bankAlias !== undefined) {
+      user.bankAlias = dto.bankAlias?.trim() ? dto.bankAlias.trim() : null;
+    }
+    if (dto.cbu !== undefined) {
+      user.cbu = dto.cbu?.trim() ? dto.cbu.trim() : null;
+    }
     if (dto.email !== undefined) {
       const email = dto.email.toLowerCase().trim();
       const clash = await this.users.findOne({ where: { email } });
@@ -786,6 +833,11 @@ export class UsersService implements OnModuleInit {
       email: u.email,
       globalRole: u.globalRole,
       active: isEntityActive(u.active),
+      phone: u.phone ?? null,
+      bankAlias: u.bankAlias ?? null,
+      cbu: u.cbu ?? null,
+      avatarUrl: u.avatarUrl ?? null,
+      hasAvatar: !!u.avatarUrl,
       shopIds: links.filter((l) => l.userId === u.id).map((l) => l.shopId),
     };
   }

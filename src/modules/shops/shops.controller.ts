@@ -61,13 +61,15 @@ export class ShopsController {
   async downloadBackup(
     @CurrentUser() user: AuthUser,
     @Param('id') id: string,
+    @Query('modules') modules: string | undefined,
+    @Query('format') format: string | undefined,
     @Res() res: Response,
   ) {
-    const { buffer, filename } = await this.backup.exportBackup(user, id);
-    res.setHeader(
-      'Content-Type',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    );
+    const { buffer, filename, contentType } = await this.backup.exportBackup(user, id, {
+      modules,
+      format,
+    });
+    res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(buffer);
   }
@@ -96,9 +98,9 @@ export class ShopsController {
   reset(
     @CurrentUser() user: AuthUser,
     @Param('id') id: string,
-    @Body() body: { confirm?: string },
+    @Body() body: { confirm?: string; modules?: string[] | string },
   ) {
-    return this.backup.resetShop(user, id, body?.confirm);
+    return this.backup.resetShop(user, id, body?.confirm, body?.modules);
   }
 
   @Get(':id')

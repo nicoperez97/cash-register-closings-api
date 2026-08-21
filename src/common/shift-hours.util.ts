@@ -38,7 +38,8 @@ function roundQuarterHours(hours: number): number {
 /**
  * Extra respecto del horario configurado (empleado o local), en horas (paso 0.25).
  * Por defecto solo cuenta si se fue después de la retirada.
- * Con `countAll`, también suma llegada tarde y retiro temprano.
+ * `countLateArrival` / `countEarlyLeave` suman esos desvíos.
+ * `countAll` equivale a ambos en true (compat).
  */
 export function computeOvertimeHours(opts: {
   isPresent: boolean;
@@ -47,6 +48,8 @@ export function computeOvertimeHours(opts: {
   defaultCheckIn?: string | null;
   defaultCheckOut?: string | null;
   countAll?: boolean;
+  countLateArrival?: boolean;
+  countEarlyLeave?: boolean;
 }): number {
   if (!opts.isPresent) return 0;
   const checkIn = parseHhMm(opts.checkInAt);
@@ -62,10 +65,10 @@ export function computeOvertimeHours(opts: {
   const actualEnd = minutesOnShift(anchor, checkOut);
 
   const extraStayMin = Math.max(0, actualEnd - schedEnd);
-  if (!opts.countAll) return roundQuarterHours(extraStayMin / 60);
-
-  const lateArrivalMin = Math.max(0, actualStart - schedStart);
-  const earlyLeaveMin = Math.max(0, schedEnd - actualEnd);
+  const countLate = opts.countLateArrival ?? !!opts.countAll;
+  const countEarly = opts.countEarlyLeave ?? !!opts.countAll;
+  const lateArrivalMin = countLate ? Math.max(0, actualStart - schedStart) : 0;
+  const earlyLeaveMin = countEarly ? Math.max(0, schedEnd - actualEnd) : 0;
   return roundQuarterHours((lateArrivalMin + earlyLeaveMin + extraStayMin) / 60);
 }
 

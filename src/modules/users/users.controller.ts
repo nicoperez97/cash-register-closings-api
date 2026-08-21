@@ -1,16 +1,21 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Param,
   Patch,
   Post,
   Query,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiBody, ApiConsumes, ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   IsBoolean,
   IsEmail,
@@ -27,6 +32,7 @@ import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorato
 import { PermissionsGuard } from '../../common/guards';
 import { GlobalRole } from '../../common/enums';
 import { UsersService } from './users.service';
+import { ProfileService } from '../profile/profile.service';
 
 class CreateUserDto {
   @ApiProperty() @IsString() @MinLength(2) fullName: string;
@@ -87,6 +93,9 @@ class CreateUserDto {
   @IsOptional()
   @IsBoolean()
   isReservationAdmin?: boolean;
+  @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() phone?: string | null;
+  @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() bankAlias?: string | null;
+  @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() cbu?: string | null;
 }
 
 class UpdateUserDto {
@@ -149,6 +158,9 @@ class UpdateUserDto {
   @IsOptional()
   @IsBoolean()
   isReservationAdmin?: boolean;
+  @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() phone?: string | null;
+  @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() bankAlias?: string | null;
+  @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() cbu?: string | null;
 }
 
 @ApiTags('users')
@@ -156,7 +168,10 @@ class UpdateUserDto {
 @UseGuards(AuthGuard('jwt'), PermissionsGuard)
 @Controller('users')
 export class UsersController {
-  constructor(private readonly users: UsersService) {}
+  constructor(
+    private readonly users: UsersService,
+    private readonly profile: ProfileService,
+  ) {}
 
   @Get()
   @RequirePermissions('closings.read')
@@ -178,6 +193,31 @@ export class UsersController {
   @RequirePermissions('closings.read')
   me(@CurrentUser() user: AuthUser) {
     return user;
+  }
+
+  @Post(':id/avatar')
+  @RequirePermissions('closings.read')
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { file: { type: 'string', format: 'binary' } },
+      required: ['file'],
+    },
+  })
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }))
+  async uploadAvatar(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Query('shopId') shopId?: string,
+  ) {
+    if (!this.users.canManageUsersSomewhere(user)) {
+      throw new ForbiddenException('Sin permiso para editar usuarios');
+    }
+    if (shopId) this.users.assertShopUserAdmin(user, shopId);
+    if (!file) throw new BadRequestException('Adjuntá una imagen');
+    return this.profile.uploadAvatarAsAdmin(id, file);
   }
 
   @Get(':id')

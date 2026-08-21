@@ -101,8 +101,15 @@ export class AttendanceController {
     @Query('from') from: string,
     @Query('to') to: string,
     @Query('countAll') countAll?: string,
+    @Query('countLate') countLate?: string,
+    @Query('countEarly') countEarly?: string,
   ) {
-    return this.attendance.overtimeSummary(user, shopId, from, to, queryFlag(countAll));
+    const all = queryFlag(countAll);
+    return this.attendance.overtimeSummary(user, shopId, from, to, {
+      countAll: all,
+      countLateArrival: all || queryFlag(countLate),
+      countEarlyLeave: all || queryFlag(countEarly),
+    });
   }
 
   @Get('overtime-summary.xlsx')
@@ -113,14 +120,21 @@ export class AttendanceController {
     @Query('from') from: string,
     @Query('to') to: string,
     @Query('countAll') countAll = '',
+    @Query('countLate') countLate = '',
+    @Query('countEarly') countEarly = '',
     @Res() res: Response,
   ) {
+    const all = queryFlag(countAll);
     const { buffer, filename } = await this.excelImport.exportOvertimeSummary(
       user,
       shopId,
       from,
       to,
-      queryFlag(countAll),
+      {
+        countAll: all,
+        countLateArrival: all || queryFlag(countLate),
+        countEarlyLeave: all || queryFlag(countEarly),
+      },
     );
     res.setHeader(
       'Content-Type',

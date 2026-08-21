@@ -4,11 +4,13 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { AppNotification } from '../../entities/notification.entity';
 import { Shop } from '../../entities/shop.entity';
+import { UserShop } from '../../entities/user-shop.entity';
 import { NotificationType } from '../../common/enums';
 import { AuthUser } from '../../common/decorators';
 import { normalizeLogoUrl } from '../../common/drive-url';
 import { PushService } from './push.service';
 import { MailService } from './mail.service';
+import { isNotificationMuted } from '../profile/notification-eligibility';
 
 function deepLinkFor(type: NotificationType, opts: {
   shopId?: string | null;
@@ -50,6 +52,8 @@ export class NotificationsService implements OnModuleInit {
     private readonly notifications: Repository<AppNotification>,
     @InjectRepository(Shop)
     private readonly shops: Repository<Shop>,
+    @InjectRepository(UserShop)
+    private readonly userShops: Repository<UserShop>,
     private readonly config: ConfigService,
     private readonly push: PushService,
     private readonly mail: MailService,
@@ -137,6 +141,9 @@ export class NotificationsService implements OnModuleInit {
     paymentId?: string | null;
     closingId?: string | null;
   }) {
+    if (await this.isMuted(input.userId, input.shopId, input.type)) {
+      return null;
+    }
     const row = await this.notifications.save(
       this.notifications.create({
         userId: input.userId,
@@ -191,8 +198,15 @@ export class NotificationsService implements OnModuleInit {
     }>,
   ) {
     if (!inputs.length) return [];
+    const filtered: typeof inputs = [];
+    for (const input of inputs) {
+      if (!(await this.isMuted(input.userId, input.shopId, input.type))) {
+        filtered.push(input);
+      }
+    }
+    if (!filtered.length) return [];
     const rows = await this.notifications.save(
-      inputs.map((input) =>
+      filtered.map((input) =>
         this.notifications.create({
           userId: input.userId,
           shopId: input.shopId ?? null,
@@ -428,6 +442,19 @@ export class NotificationsService implements OnModuleInit {
       });
     }
     return out;
+  }
+
+  private async isMuted(
+    userId: string,
+    shopId: string | null | undefined,
+    type: string,
+  ): Promise<boolean> {
+    if (!shopId) return false;
+    const link = await this.userShops.findOne({
+      where: { userId, shopId },
+      select: ['id', 'mutedNotificationTypes'],
+    });
+    return isNotificationMuted(link, type);
   }
 
   private toDto(n: AppNotification) {
