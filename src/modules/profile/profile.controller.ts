@@ -18,9 +18,15 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
 import { IsArray, IsObject, IsOptional, IsString, MinLength } from 'class-validator';
 import { Response } from 'express';
+import { memoryStorage } from 'multer';
 import { AuthUser, CurrentUser, Public } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { ProfileService } from './profile.service';
+
+const avatarUpload = FileInterceptor('file', {
+  storage: memoryStorage(),
+  limits: { fileSize: 12 * 1024 * 1024, fieldSize: 2 * 1024 * 1024 },
+});
 
 class UpdateProfileDto {
   @ApiPropertyOptional()
@@ -92,12 +98,12 @@ export class ProfileController {
       required: ['file'],
     },
   })
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }))
+  @UseInterceptors(avatarUpload)
   uploadAvatar(
     @CurrentUser() user: AuthUser,
     @UploadedFile() file: Express.Multer.File,
   ) {
-    if (!file) throw new BadRequestException('Adjuntá una imagen');
+    if (!file?.buffer?.length) throw new BadRequestException('Adjuntá una imagen');
     return this.profile.uploadAvatar(user, file);
   }
 
