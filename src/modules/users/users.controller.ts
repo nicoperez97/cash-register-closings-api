@@ -16,6 +16,7 @@ import {
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import {
   IsBoolean,
   IsEmail,
@@ -205,7 +206,12 @@ export class UsersController {
       required: ['file'],
     },
   })
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }))
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 12 * 1024 * 1024, fieldSize: 2 * 1024 * 1024 },
+    }),
+  )
   async uploadAvatar(
     @CurrentUser() user: AuthUser,
     @Param('id') id: string,
@@ -216,7 +222,7 @@ export class UsersController {
       throw new ForbiddenException('Sin permiso para editar usuarios');
     }
     if (shopId) this.users.assertShopUserAdmin(user, shopId);
-    if (!file) throw new BadRequestException('Adjuntá una imagen');
+    if (!file?.buffer?.length) throw new BadRequestException('Adjuntá una imagen');
     return this.profile.uploadAvatarAsAdmin(id, file);
   }
 
