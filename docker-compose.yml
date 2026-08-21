@@ -48,6 +48,7 @@ services:
       UPLOADS_DIR: /app/uploads
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
     volumes:
       - uploads-data:/app/uploads
     networks:
