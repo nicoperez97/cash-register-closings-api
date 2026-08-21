@@ -228,9 +228,13 @@ export class AttendanceExcelImportService {
     shopId: string,
     from: string,
     to: string,
-    countAll = false,
+    opts: {
+      countAll?: boolean;
+      countLateArrival?: boolean;
+      countEarlyLeave?: boolean;
+    } = {},
   ) {
-    const data = await this.attendance.overtimeSummary(user, shopId, from, to, countAll);
+    const data = await this.attendance.overtimeSummary(user, shopId, from, to, opts);
     const shop = await this.shops.findOne(user, shopId);
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet('Horas extra');
@@ -260,10 +264,15 @@ export class AttendanceExcelImportService {
     });
     ws.getRow(ws.rowCount).font = { bold: true };
     ws.addRow({});
+    const parts: string[] = [];
+    if (data.countLateArrival) parts.push('llegadas tarde');
+    if (data.countEarlyLeave) parts.push('retiros temprano');
+    parts.push('retiros después del horario');
     ws.addRow({
-      name: countAll
-        ? 'Incluye llegadas tarde, retiros temprano y retiros después del horario'
-        : 'Solo retiros después del horario configurado por empleado (o del local)',
+      name:
+        parts.length === 1
+          ? 'Solo retiros después del horario configurado por empleado (o del local)'
+          : `Incluye: ${parts.join(', ')}`,
     });
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());
     const slug = this.fileSlug(shop.name || shop.slug || 'local');

@@ -290,12 +290,18 @@ export class AttendanceService implements OnModuleInit {
     shopId: string,
     from: string,
     to: string,
-    countAll = false,
+    opts: {
+      countAll?: boolean;
+      countLateArrival?: boolean;
+      countEarlyLeave?: boolean;
+    } = {},
   ) {
     this.shops.assertShopAccess(user, shopId);
     if (!from || !to) throw new BadRequestException('Indicá from y to (YYYY-MM-DD)');
     const shop = await this.shops.getShopEntity(shopId);
     const withHours = this.withHours(shop);
+    const countLateArrival = opts.countLateArrival ?? !!opts.countAll;
+    const countEarlyLeave = opts.countEarlyLeave ?? !!opts.countAll;
     const employees = await this.activeEmployees(shopId);
     const ids = employees.map((e) => e.id);
     const rows = ids.length
@@ -324,7 +330,8 @@ export class AttendanceService implements OnModuleInit {
                 checkOutAt: d.checkOutAt,
                 defaultCheckIn: defaults.checkIn,
                 defaultCheckOut: defaults.checkOut,
-                countAll,
+                countLateArrival,
+                countEarlyLeave,
               })
             );
           }
@@ -355,7 +362,9 @@ export class AttendanceService implements OnModuleInit {
       shopId,
       from,
       to,
-      countAll,
+      countLateArrival,
+      countEarlyLeave,
+      countAll: countLateArrival && countEarlyLeave,
       items,
       totals: {
         overtimeHours: Math.round(totals.overtimeHours * 100) / 100,

@@ -60,24 +60,46 @@ export class MovementsExcelImportService {
     private readonly catalogSeed: CatalogSeedService,
   ) {}
 
-  async buildTemplate(user: AuthUser, shopId: string) {
+  async buildTemplate(
+    user: AuthUser,
+    shopId: string,
+    kind: 'expense' | 'transfer' = 'expense',
+  ) {
     this.shops.assertShopAccess(user, shopId);
     const shop = await this.shops.findOne(user, shopId);
     const wb = new ExcelJS.Workbook();
     wb.creator = 'Cash Register Closings';
 
+    const isTransfer = kind === 'transfer';
     const info = wb.addWorksheet('Instrucciones');
     info.getColumn(1).width = 96;
-    info.addRow(['Plantilla / importación de movimientos (libro de egresos e ingresos)']);
+    info.addRow([
+      isTransfer
+        ? 'Plantilla / importación de movimientos entre cuentas'
+        : 'Plantilla / importación de gastos',
+    ]);
     info.getRow(1).font = { bold: true, size: 13 };
     info.addRow([`Local: ${shop.name}`]);
     info.addRow([]);
     info.addRow([
       'Compatible con el Excel del contador: hojas "Movimientos", "Movimientos (saldos)" u "ORIGINAL COMPLETA Movimientos".',
     ]);
-    info.addRow(['Columnas clave: Fecha, Cuenta Emisora, Cuenta Receptora, Descripción, Importe $, Concepto validado.']);
+    info.addRow([
+      'Columnas clave: Fecha, Cuenta Emisora, Cuenta Receptora, Descripción, Importe $, Concepto validado.',
+    ]);
+    if (isTransfer) {
+      info.addRow([
+        'Para transferencias: dejá vacío el Concepto y usá dos cuentas (no Egreso). Ejemplo: MP → Efectivo Caja.',
+      ]);
+    } else {
+      info.addRow([
+        'Para gastos: usá cuenta receptora Egreso (o similar) y un Concepto. Ejemplo: MP → 2. Egreso.',
+      ]);
+    }
     info.addRow(['Si la cuenta o el concepto no existen en el local, se crean al confirmar la importación.']);
-    info.addRow(['Filas ya existentes (misma fecha, cuentas, monto y descripción) se omiten.']);
+    info.addRow([
+      'Filas ya existentes (misma fecha, cuentas, monto y descripción) se omiten: podés subir el mismo Excel dos veces sin duplicar.',
+    ]);
     info.addRow(['No cambies los nombres de las columnas de la fila 1 en la hoja Movimientos.']);
 
     const ws = wb.addWorksheet('Movimientos');
@@ -93,23 +115,41 @@ export class MovementsExcelImportService {
     };
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
-    ws.addRow([
-      this.toIsoDate(yesterday),
-      'MP Toma',
-      '2. Egreso',
-      'Ejemplo materia prima',
-      10000,
-      '',
-      '',
-      'Materia prima',
-      false,
-      '',
-    ]);
+    if (isTransfer) {
+      ws.addRow([
+        this.toIsoDate(yesterday),
+        'MP Toma',
+        'Efectivo Caja',
+        'Ejemplo pase a efectivo',
+        5000,
+        '',
+        '',
+        '',
+        false,
+        '',
+      ]);
+    } else {
+      ws.addRow([
+        this.toIsoDate(yesterday),
+        'MP Toma',
+        '2. Egreso',
+        'Ejemplo materia prima',
+        10000,
+        '',
+        '',
+        'Materia prima',
+        false,
+        '',
+      ]);
+    }
 
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());
+    const slug = shop.slug || 'local';
     return {
       buffer,
-      filename: `plantilla-movimientos-${shop.slug || 'local'}.xlsx`,
+      filename: isTransfer
+        ? `plantilla-transferencias-${slug}.xlsx`
+        : `plantilla-gastos-${slug}.xlsx`,
     };
   }
 
@@ -213,15 +253,25 @@ export class MovementsExcelImportService {
     );
   }
 
-  async preview(user: AuthUser, shopId: string, file: Express.Multer.File) {
+  async preview(
+    user: AuthUser,
+    shopId: string,
+    file: Express.Multer.File,
+    kind?: 'expense' | 'transfer',
+  ) {
     this.shops.assertShopAccess(user, shopId);
     const drafts = await this.parseWorkbook(file);
-    return this.enrich(shopId, drafts);
+    return this.enrich(shopId, drafts, kind);
   }
 
-  async commit(user: AuthUser, shopId: string, file: Express.Multer.File) {
+  async commit(
+    user: AuthUser,
+    shopId: string,
+    file: Express.Multer.File,
+    kind?: 'expense' | 'transfer',
+  ) {
     this.shops.assertShopAccess(user, shopId);
-    const items = await this.enrich(shopId, await this.parseWorkbook(file));
+    const items = await this.enrich(shopId, await this.parseWorkbook(file), kind);
     const valid = items.filter((i) => i.valid && !i.alreadyExists);
     const skipped = items.filter((i) => i.alreadyExists);
     if (!valid.length) {
@@ -291,7 +341,7 @@ export class MovementsExcelImportService {
       }
 
       let conceptId: string | null = null;
-      if (item.conceptName) {
+      if (kind !== 'transfer' && item.conceptName) {
         let concept = conceptCache.get(this.norm(item.conceptName));
         if (!concept) {
           concept = await this.concepts.save(
@@ -377,6 +427,7 @@ export class MovementsExcelImportService {
       | 'valid'
       | 'error'
     >>,
+    kind?: 'expense' | 'transfer',
   ): Promise<MovementImportItem[]> {
     const accounts = await this.accounts.find({ where: { shopId, active: true } });
     const concepts = await this.concepts.find({ where: { shopId, active: true } });
@@ -419,7 +470,27 @@ export class MovementsExcelImportService {
       if (!(d.amountUyu > 0 || (d.amountUsd != null && d.amountUsd > 0))) {
         errors.push('Sin importe');
       }
-      const fp = this.movementFingerprint(d);
+      if (d.fromAccountName && d.toAccountName && this.norm(d.fromAccountName) === this.norm(d.toAccountName)) {
+        errors.push('Emisora y receptora deben ser distintas');
+      }
+
+      const looksExpense = this.rowLooksLikeExpense(d.toAccountName, d.conceptName, concept?.kind);
+      if (kind === 'expense' && !looksExpense) {
+        errors.push('No parece un gasto (falta Egreso o concepto); usá Movimientos entre cuentas');
+      }
+      if (kind === 'transfer') {
+        if (d.conceptName) {
+          errors.push('Las transferencias no llevan concepto');
+        } else if (looksExpense) {
+          errors.push('Parece un gasto; importalo desde Gastos');
+        }
+      }
+
+      const fingerprintInput =
+        kind === 'transfer'
+          ? { ...d, conceptName: null }
+          : d;
+      const fp = this.movementFingerprint(fingerprintInput);
       const alreadyExists = existingFingerprints.has(fp) || seenInFile.has(fp);
       if (d.businessDate && d.fromAccountName && d.toAccountName) {
         seenInFile.add(fp);
@@ -428,15 +499,32 @@ export class MovementsExcelImportService {
         ...d,
         fromAccountId: from?.id ?? null,
         toAccountId: to?.id ?? null,
-        conceptId: concept?.id ?? null,
+        conceptId: kind === 'transfer' ? null : concept?.id ?? null,
         willCreateFromAccount: !!d.fromAccountName && !from,
         willCreateToAccount: !!d.toAccountName && !to,
-        willCreateConcept: !!d.conceptName && !concept,
+        willCreateConcept: kind !== 'transfer' && !!d.conceptName && !concept,
         alreadyExists,
         valid: errors.length === 0,
         error: errors.length ? errors.join('; ') : undefined,
       };
     });
+  }
+
+  /** Misma heurística que el listado: egreso o concepto de egreso. */
+  private rowLooksLikeExpense(
+    toAccountName: string,
+    conceptName: string | null,
+    conceptKind?: ConceptKind | null,
+  ): boolean {
+    const to = this.norm(toAccountName);
+    if (to.includes('egreso') || to === 'egreso') return true;
+    if (conceptKind === ConceptKind.EXPENSE) return true;
+    if (conceptName && this.guessConceptKind('', toAccountName) === ConceptKind.EXPENSE) {
+      return true;
+    }
+    // Concepto informado sin cuenta egreso: igual se trata como gasto de libro.
+    if (conceptName) return true;
+    return false;
   }
 
   private async parseWorkbook(file: Express.Multer.File) {

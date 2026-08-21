@@ -22,6 +22,20 @@ export class User extends BaseEntity {
   @Column({ type: 'varchar', length: 36, nullable: true })
   favoriteShopId?: string | null;
 
+  /** Path relativo bajo uploads/ (p. ej. users/{id}/avatar.jpg). */
+  @Column({ type: 'varchar', length: 500, nullable: true })
+  avatarUrl?: string | null;
+
+  @Column({ type: 'varchar', length: 40, nullable: true })
+  phone?: string | null;
+
+  /** Alias bancario / CBU alias del usuario de sistema. */
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  bankAlias?: string | null;
+
+  @Column({ type: 'varchar', length: 40, nullable: true })
+  cbu?: string | null;
+
   @OneToMany(() => UserShop, (us) => us.user)
   userShops?: UserShop[];
 

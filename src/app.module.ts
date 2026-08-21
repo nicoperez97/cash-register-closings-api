@@ -32,6 +32,7 @@ import { SalonFloorModule } from './modules/salon-floor/salon-floor.module';
 import { MenuModule } from './modules/menu/menu.module';
 import { ServiceRulesModule } from './modules/service-rules/service-rules.module';
 import { AiModule } from './modules/ai/ai.module';
+import { ProfileModule } from './modules/profile/profile.module';
 import { JwtAuthGuard, PermissionsGuard } from './common/guards';
 import { PublicAbuseGuard } from './common/public-abuse.guard';
 
@@ -69,6 +70,7 @@ import { PublicAbuseGuard } from './common/public-abuse.guard';
     SalonFloorModule,
     MenuModule,
     ServiceRulesModule,
+    ProfileModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

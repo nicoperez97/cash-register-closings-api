@@ -208,9 +208,14 @@ export class MovementsController {
   async importTemplate(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
+    @Query('kind') kind: 'expense' | 'transfer' | undefined,
     @Res() res: Response,
   ) {
-    const { buffer, filename } = await this.excelImport.buildTemplate(user, shopId);
+    const { buffer, filename } = await this.excelImport.buildTemplate(
+      user,
+      shopId,
+      kind === 'transfer' ? 'transfer' : 'expense',
+    );
     res.setHeader(
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -261,6 +266,7 @@ export class MovementsController {
     @Param('shopId') shopId: string,
     @UploadedFile() file: Express.Multer.File,
     @Query('commit') commit?: string,
+    @Query('kind') kind?: 'expense' | 'transfer',
     @Body('commit') commitBody?: string | boolean,
   ) {
     if (!file) throw new BadRequestException('Adjuntá el Excel (.xlsx)');
@@ -270,9 +276,10 @@ export class MovementsController {
       commitBody === true ||
       commitBody === 'true' ||
       commitBody === '1';
+    const importKind = kind === 'expense' || kind === 'transfer' ? kind : undefined;
     return doCommit
-      ? this.excelImport.commit(user, shopId, file)
-      : this.excelImport.preview(user, shopId, file);
+      ? this.excelImport.commit(user, shopId, file, importKind)
+      : this.excelImport.preview(user, shopId, file, importKind);
   }
 
   @Get(':id')
