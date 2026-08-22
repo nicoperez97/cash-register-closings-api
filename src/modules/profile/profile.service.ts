@@ -47,6 +47,8 @@ export type UpdateProfileDto = {
 export type UpdateShopPreferencesDto = {
   navConfig?: Shop['navConfig'] | null;
   mutedNotificationTypes?: string[] | null;
+  mutedAppNotificationTypes?: string[] | null;
+  mutedEmailNotificationTypes?: string[] | null;
 };
 
 @Injectable()
@@ -83,6 +85,22 @@ export class ProfileService implements OnModuleInit {
       await this.userShops.query(`
         ALTER TABLE user_shops
           ADD COLUMN mutedNotificationTypes JSON NULL
+      `);
+    } catch {
+      // ya existe
+    }
+    try {
+      await this.userShops.query(`
+        ALTER TABLE user_shops
+          ADD COLUMN mutedAppNotificationTypes JSON NULL
+      `);
+    } catch {
+      // ya existe
+    }
+    try {
+      await this.userShops.query(`
+        ALTER TABLE user_shops
+          ADD COLUMN mutedEmailNotificationTypes JSON NULL
       `);
     } catch {
       // ya existe
@@ -214,6 +232,12 @@ export class ProfileService implements OnModuleInit {
       mutedNotificationTypes: Array.isArray(link?.mutedNotificationTypes)
         ? link!.mutedNotificationTypes
         : [],
+      mutedAppNotificationTypes: Array.isArray(link?.mutedAppNotificationTypes)
+        ? link!.mutedAppNotificationTypes
+        : [],
+      mutedEmailNotificationTypes: Array.isArray(link?.mutedEmailNotificationTypes)
+        ? link!.mutedEmailNotificationTypes
+        : [],
       eligibleNotifications: eligibleNotificationsPayload({
         link,
         globalRole: user.globalRole,
@@ -240,17 +264,25 @@ export class ProfileService implements OnModuleInit {
         link.navConfig = this.isMeaningfulNavConfig(normalized) ? normalized : null;
       }
     }
-    if (dto.mutedNotificationTypes !== undefined) {
-      link.mutedNotificationTypes =
-        dto.mutedNotificationTypes == null
-          ? null
-          : [
-              ...new Set(
-                dto.mutedNotificationTypes
-                  .map((t) => String(t ?? '').trim())
-                  .filter(Boolean),
-              ),
-            ];
+    const cleanTypes = (raw: string[] | null | undefined) =>
+      raw == null
+        ? null
+        : [...new Set(raw.map((t) => String(t ?? '').trim()).filter(Boolean))];
+    if (dto.mutedAppNotificationTypes !== undefined) {
+      link.mutedAppNotificationTypes = cleanTypes(dto.mutedAppNotificationTypes);
+    }
+    if (dto.mutedEmailNotificationTypes !== undefined) {
+      link.mutedEmailNotificationTypes = cleanTypes(dto.mutedEmailNotificationTypes);
+    }
+    if (
+      dto.mutedAppNotificationTypes !== undefined ||
+      dto.mutedEmailNotificationTypes !== undefined
+    ) {
+      const app = new Set(link.mutedAppNotificationTypes ?? []);
+      const email = new Set(link.mutedEmailNotificationTypes ?? []);
+      link.mutedNotificationTypes = [...app].filter((t) => email.has(t));
+    } else if (dto.mutedNotificationTypes !== undefined) {
+      link.mutedNotificationTypes = cleanTypes(dto.mutedNotificationTypes);
     }
     await this.userShops.save(link);
     return this.getShopPreferences(actor, shopId);

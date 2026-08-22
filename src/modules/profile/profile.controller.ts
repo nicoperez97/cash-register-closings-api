@@ -66,6 +66,18 @@ class UpdateShopPreferencesDto {
   @IsArray()
   @IsString({ each: true })
   mutedNotificationTypes?: string[] | null;
+
+  @ApiPropertyOptional({ nullable: true, type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  mutedAppNotificationTypes?: string[] | null;
+
+  @ApiPropertyOptional({ nullable: true, type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  mutedEmailNotificationTypes?: string[] | null;
 }
 
 @ApiTags('profile')
