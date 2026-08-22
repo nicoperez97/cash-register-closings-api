@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, IsNull, Repository } from 'typeorm';
+import { DataSource, In, IsNull, Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
 import * as ExcelJS from 'exceljs';
 import { AuthUser } from '../../common/decorators';
@@ -37,7 +37,9 @@ import {
   BackupModuleId,
   BackupPurgeStep,
   BackupSheetName,
+  classifyBackupMovement,
   modulesLabelList,
+  movementSlicesForModules,
   parseBackupModulesParam,
   purgeStepsForModules,
   sheetsForModules,
@@ -82,7 +84,7 @@ export class ShopBackupService {
     const sheetSet = sheetsForModules(modules);
     const modulesCsv = modulesLabelList(modules);
 
-    const sheets = await this.collectSheetRows(shopId, sheetSet);
+    const sheets = await this.collectSheetRows(shopId, sheetSet, modules);
 
     const stamp = new Date().toISOString().slice(0, 10);
     const baseName = `backup-${shop.slug || 'local'}-${stamp}`;
@@ -280,7 +282,17 @@ export class ShopBackupService {
         await run(`DELETE FROM employee_commission_rules WHERE shopId = ?`);
         return;
       case 'movements':
-        await run(`DELETE FROM movements WHERE shopId = ?`);
+        await run(
+          `DELETE FROM movements m WHERE m.shopId = ? AND NOT (${this.sqlIsExpense()}) AND NOT (${this.sqlIsIncomeCore()})`,
+        );
+        return;
+      case 'expenses':
+        await run(`DELETE FROM movements m WHERE m.shopId = ? AND (${this.sqlIsExpense()})`);
+        return;
+      case 'incomes':
+        await run(
+          `DELETE FROM movements m WHERE m.shopId = ? AND NOT (${this.sqlIsExpense()}) AND (${this.sqlIsIncomeCore()})`,
+        );
         return;
       case 'closing_expenses':
         await run(
@@ -321,9 +333,32 @@ export class ShopBackupService {
     }
   }
 
+  private sqlIsExpense(): string {
+    return `(
+      EXISTS (SELECT 1 FROM concepts c WHERE c.id = m.conceptId AND c.kind = 'EXPENSE')
+      OR EXISTS (
+        SELECT 1 FROM ledger_accounts a
+        WHERE a.id = m.toAccountId
+          AND (UPPER(IFNULL(a.code, '')) = 'EGRESO' OR LOWER(IFNULL(a.name, '')) LIKE '%egreso%')
+      )
+    )`;
+  }
+
+  private sqlIsIncomeCore(): string {
+    return `(
+      EXISTS (SELECT 1 FROM concepts c WHERE c.id = m.conceptId AND c.kind = 'INCOME')
+      OR EXISTS (
+        SELECT 1 FROM ledger_accounts a
+        WHERE a.id = m.fromAccountId
+          AND (UPPER(IFNULL(a.code, '')) = 'INGRESO' OR LOWER(IFNULL(a.name, '')) LIKE '%ingreso%')
+      )
+    )`;
+  }
+
   private async collectSheetRows(
     shopId: string,
     sheetSet: Set<BackupSheetName>,
+    modules: BackupModuleId[] | 'all' = 'all',
   ): Promise<Map<BackupSheetName, Row[]>> {
     const out = new Map<BackupSheetName, Row[]>();
     const put = (name: BackupSheetName, rows: Row[]) => {
@@ -586,12 +621,43 @@ export class ShopBackupService {
     }
 
     if (sheetSet.has('movements')) {
+      const slices = movementSlicesForModules(modules);
       const movements = await this.dataSource.getRepository(Movement).find({
         where: { shopId, deletedAt: IsNull() },
       });
+      const conceptIds = [
+        ...new Set(movements.map((m) => m.conceptId).filter((id): id is string => !!id)),
+      ];
+      const accountIds = [
+        ...new Set(
+          movements.flatMap((m) => [m.fromAccountId, m.toAccountId]).filter((id): id is string => !!id),
+        ),
+      ];
+      const concepts = conceptIds.length
+        ? await this.dataSource.getRepository(Concept).find({ where: { id: In(conceptIds) } })
+        : [];
+      const accounts = accountIds.length
+        ? await this.dataSource.getRepository(LedgerAccount).find({ where: { id: In(accountIds) } })
+        : [];
+      const conceptById = new Map(concepts.map((c) => [c.id, c]));
+      const accountById = new Map(accounts.map((a) => [a.id, a]));
+      const filtered = movements.filter((m) => {
+        const concept = m.conceptId ? conceptById.get(m.conceptId) : undefined;
+        const from = m.fromAccountId ? accountById.get(m.fromAccountId) : undefined;
+        const to = m.toAccountId ? accountById.get(m.toAccountId) : undefined;
+        return slices.has(
+          classifyBackupMovement({
+            conceptKind: concept?.kind,
+            fromAccountName: from?.name,
+            fromAccountCode: from?.code,
+            toAccountName: to?.name,
+            toAccountCode: to?.code,
+          }),
+        );
+      });
       put(
         'movements',
-        movements.map((m) => ({
+        filtered.map((m) => ({
           id: m.id,
           businessDate: m.businessDate,
           fromAccountId: m.fromAccountId,

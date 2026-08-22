@@ -31,6 +31,7 @@ import { PosnetType, ShopPosnet } from '../../common/posnet';
 import { randomUUID } from 'crypto';
 import { normalizeUserVisibility, UserVisibility } from '../../common/user-visibility';
 import { normalizePartyRule } from '../reservations/reservation-party-rules.util';
+import { shopTimeRequired } from '../reservations/reservation-public-form.util';
 import { normalizeEmailMessageTemplates } from '../notifications/mail-message-templates.util';
 import { normalizePaymentConceptCategories } from '../../common/concept-categories';
 import {
@@ -982,6 +983,7 @@ export class ShopsService implements OnModuleInit {
         s.reservationSignupEnabled === undefined || s.reservationSignupEnabled === null
           ? true
           : !!s.reservationSignupEnabled,
+      reservationTimeRequired: shopTimeRequired(s),
       reservationInsideEnabled:
         s.reservationInsideEnabled === undefined || s.reservationInsideEnabled === null
           ? true

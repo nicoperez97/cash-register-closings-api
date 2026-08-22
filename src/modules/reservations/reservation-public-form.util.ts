@@ -7,6 +7,8 @@ export type ReservationPublicFormConfig = {
   hoursByWeekday?: Record<string, string[]>;
   generalMessage?: string | null;
   weekdayMessages?: Record<string, string>;
+  /** Si es true, el cliente tiene que elegir un turno (cuando hay horarios). */
+  timeRequired?: boolean;
 };
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -45,7 +47,12 @@ export function normalizePublicFormConfig(raw: unknown): ReservationPublicFormCo
     if (msg) weekdayMessages[key] = msg;
   }
   const generalMessage = String(src.generalMessage ?? '').trim().slice(0, 600);
-  return { hoursByWeekday, generalMessage, weekdayMessages };
+  return {
+    hoursByWeekday,
+    generalMessage,
+    weekdayMessages,
+    timeRequired: !!src.timeRequired,
+  };
 }
 
 export function defaultPublicFormConfig(): ReservationPublicFormConfig {
@@ -57,6 +64,7 @@ export function defaultPublicFormConfig(): ReservationPublicFormConfig {
     hoursByWeekday,
     generalMessage: DEFAULT_PUBLIC_GENERAL_MESSAGE,
     weekdayMessages: {},
+    timeRequired: false,
   };
 }
 
@@ -87,4 +95,23 @@ export function resolvePublicFormForWeekday(
   const generalMessage = String(stored.generalMessage ?? '').trim() || null;
   const weekdayMessage = String(stored.weekdayMessages?.[key] ?? '').trim() || null;
   return { timeSlots, generalMessage, weekdayMessage };
+}
+
+export function shopTimeRequired(shop: {
+  reservationPublicForm?: unknown;
+} | null | undefined): boolean {
+  if (!shop) return false;
+  return !!normalizePublicFormConfig(shop.reservationPublicForm).timeRequired;
+}
+
+/** Si no hay turnos, no se puede exigir horario. NULL en el día hereda del local. */
+export function effectiveTimeRequired(
+  shop: { reservationPublicForm?: unknown } | null | undefined,
+  dayOverride: boolean | null | undefined,
+  timeSlotsCount: number,
+): boolean {
+  if (!timeSlotsCount) return false;
+  if (dayOverride === true) return true;
+  if (dayOverride === false) return false;
+  return shopTimeRequired(shop);
 }

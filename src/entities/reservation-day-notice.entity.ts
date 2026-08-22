@@ -44,6 +44,10 @@ export class ReservationDayNotice extends BaseEntity {
   @Column({ type: 'int', nullable: true })
   outsideMinPartySize: number | null;
 
+  /** NULL = hereda timeRequired del formulario del local. */
+  @Column({ type: 'boolean', nullable: true })
+  timeRequired: boolean | null;
+
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })
   shop: Shop;

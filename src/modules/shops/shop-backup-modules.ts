@@ -4,6 +4,8 @@ export type BackupModuleId =
   | 'catalog'
   | 'closings'
   | 'movements'
+  | 'expenses'
+  | 'incomes'
   | 'posMenu'
   | 'posSales'
   | 'staff'
@@ -41,6 +43,8 @@ export type BackupPurgeStep =
   | 'attendance_days'
   | 'employee_commission_rules'
   | 'movements'
+  | 'expenses'
+  | 'incomes'
   | 'closing_expenses'
   | 'closing_extra_lines'
   | 'cash_closings'
@@ -67,7 +71,7 @@ export const BACKUP_MODULES: BackupModuleDef[] = [
     label: 'Cuentas y conceptos',
     sheets: ['ledger_accounts', 'ledger_account_users', 'concepts'],
     purgeSteps: ['ledger_account_users', 'concepts', 'ledger_accounts'],
-    alsoClears: ['movements', 'closings'],
+    alsoClears: ['movements', 'expenses', 'incomes', 'closings'],
   },
   {
     id: 'closings',
@@ -78,9 +82,23 @@ export const BACKUP_MODULES: BackupModuleDef[] = [
   },
   {
     id: 'movements',
-    label: 'Movimientos / gastos',
+    label: 'Movimientos',
     sheets: ['movements'],
     purgeSteps: ['movements'],
+    alsoClears: [],
+  },
+  {
+    id: 'expenses',
+    label: 'Gastos',
+    sheets: ['movements'],
+    purgeSteps: ['expenses'],
+    alsoClears: [],
+  },
+  {
+    id: 'incomes',
+    label: 'Ingresos',
+    sheets: ['movements'],
+    purgeSteps: ['incomes'],
     alsoClears: [],
   },
   {
@@ -141,6 +159,8 @@ export const PURGE_STEP_ORDER: BackupPurgeStep[] = [
   'attendance_days',
   'employee_commission_rules',
   'movements',
+  'expenses',
+  'incomes',
   'closing_expenses',
   'closing_extra_lines',
   'cash_closings',
@@ -223,4 +243,38 @@ export function purgeStepsForModules(modules: BackupModuleId[] | 'all'): BackupP
 export function modulesLabelList(modules: BackupModuleId[] | 'all'): string {
   if (modules === 'all') return 'all';
   return expandBackupModules(modules).join(',');
+}
+
+export type BackupMovementSlice = 'transfer' | 'expense' | 'income';
+
+export function movementSlicesForModules(
+  modules: BackupModuleId[] | 'all',
+): Set<BackupMovementSlice> {
+  const ids = expandBackupModules(modules);
+  const out = new Set<BackupMovementSlice>();
+  if (ids.includes('movements')) out.add('transfer');
+  if (ids.includes('expenses')) out.add('expense');
+  if (ids.includes('incomes')) out.add('income');
+  return out;
+}
+
+export function classifyBackupMovement(row: {
+  conceptKind?: string | null;
+  fromAccountName?: string | null;
+  fromAccountCode?: string | null;
+  toAccountName?: string | null;
+  toAccountCode?: string | null;
+}): BackupMovementSlice {
+  const kind = String(row.conceptKind ?? '');
+  const toName = String(row.toAccountName ?? '').toLowerCase();
+  const toCode = String(row.toAccountCode ?? '').toUpperCase();
+  const fromName = String(row.fromAccountName ?? '').toLowerCase();
+  const fromCode = String(row.fromAccountCode ?? '').toUpperCase();
+  if (kind === 'EXPENSE' || toCode === 'EGRESO' || toName.includes('egreso')) {
+    return 'expense';
+  }
+  if (kind === 'INCOME' || fromCode === 'INGRESO' || fromName.includes('ingreso')) {
+    return 'income';
+  }
+  return 'transfer';
 }
