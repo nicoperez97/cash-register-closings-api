@@ -9,6 +9,7 @@ export type ModuleKey =
   | 'movements'
   | 'expenses'
   | 'accountTransfers'
+  | 'incomes'
   | 'attendance'
   | 'employees'
   | 'candidates'
@@ -24,6 +25,7 @@ export type ModuleKey =
   | 'stock'
   | 'beverageStock'
   | 'shortages'
+  | 'orders'
   | 'tips'
   | 'reimbursements'
   | 'serviceRules'
@@ -96,6 +98,15 @@ export const MODULE_DEFS: ModuleDef[] = [
   {
     key: 'accountTransfers',
     label: 'Movimientos entre cuentas',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
+    key: 'incomes',
+    label: 'Ingresos',
     levels: [
       { value: 'none', label: 'Ninguno' },
       { value: 'read', label: 'Ver' },
@@ -237,6 +248,15 @@ export const MODULE_DEFS: ModuleDef[] = [
     ],
   },
   {
+    key: 'orders',
+    label: 'Pedidos',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
     key: 'tips',
     label: 'Propinas',
     levels: [
@@ -342,9 +362,12 @@ export function expandModulePermissions(
   if (expensesLevel === 'manage') add(set, 'expenses.read', 'expenses.manage');
   if (transfersLevel === 'read') add(set, 'accountTransfers.read');
   if (transfersLevel === 'manage') add(set, 'accountTransfers.read', 'accountTransfers.manage');
-  if (expensesLevel === 'read' || expensesLevel === 'manage' || transfersLevel === 'read' || transfersLevel === 'manage') {
+  const incomesLevel = modules.incomes || expensesLevel;
+  if (incomesLevel === 'read') add(set, 'incomes.read');
+  if (incomesLevel === 'manage') add(set, 'incomes.read', 'incomes.manage');
+  if (expensesLevel === 'read' || expensesLevel === 'manage' || transfersLevel === 'read' || transfersLevel === 'manage' || incomesLevel === 'read' || incomesLevel === 'manage') {
     add(set, 'movements.read');
-    if (expensesLevel === 'manage' || transfersLevel === 'manage') add(set, 'movements.manage');
+    if (expensesLevel === 'manage' || transfersLevel === 'manage' || incomesLevel === 'manage') add(set, 'movements.manage');
   }
   pair('cashWithdrawals', 'cashWithdrawals.read', 'cashWithdrawals.manage');
   pair('settlements', 'settlements.read', 'settlements.manage');
@@ -371,6 +394,7 @@ export function expandModulePermissions(
   pair('stock', 'stock.read', 'stock.manage');
   pair('beverageStock', 'beverageStock.read', 'beverageStock.manage');
   pair('shortages', 'shortages.read', 'shortages.manage');
+  pair('orders', 'orders.read', 'orders.manage');
   switch (modules.tips) {
     case 'read':
       add(set, 'tips.read');
@@ -408,10 +432,10 @@ export function expandModulePermissions(
   if (modules.payments === 'read') add(set, 'suppliers.read', 'services.read');
 
   if (modules.accounts === 'manage') {
-    add(set, 'accounts.manage', 'expenses.read', 'accountTransfers.read', 'movements.read');
+    add(set, 'accounts.manage', 'expenses.read', 'accountTransfers.read', 'incomes.read', 'movements.read');
   }
   if (modules.concepts === 'manage') {
-    add(set, 'concepts.manage', 'expenses.read', 'accountTransfers.read', 'movements.read');
+    add(set, 'concepts.manage', 'expenses.read', 'accountTransfers.read', 'incomes.read', 'movements.read');
   }
   if (modules.shop === 'manage') add(set, 'shops.manage');
   if (modules.users === 'manage') add(set, 'users.manage');
@@ -458,6 +482,7 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
     reports: reports(),
     expenses: level('expenses.read', 'expenses.manage'),
     accountTransfers: level('accountTransfers.read', 'accountTransfers.manage'),
+    incomes: level('incomes.read', 'incomes.manage'),
     attendance: attendance(),
     employees: level('employees.read', 'employees.manage'),
     candidates: level('candidates.read', 'candidates.manage'),
@@ -471,6 +496,7 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
     stock: level('stock.read', 'stock.manage'),
     beverageStock: level('beverageStock.read', 'beverageStock.manage'),
     shortages: level('shortages.read', 'shortages.manage'),
+    orders: level('orders.read', 'orders.manage'),
     tips: (() => {
       if (has('tips.manage')) return 'manage';
       if (has('tips.create')) return 'create';
@@ -507,6 +533,14 @@ export function sanitizeModulePermissions(
       rawInput.accountTransfers = legacy;
     }
     delete rawInput.movements;
+  }
+  if (rawInput.expenses && rawInput.expenses !== 'none' && (!rawInput.incomes || rawInput.incomes === 'none')) {
+    rawInput.incomes = rawInput.expenses;
+  }
+  if (!rawInput.orders || rawInput.orders === 'none') {
+    const fromStock = [rawInput.stock, rawInput.beverageStock, rawInput.shortages];
+    if (fromStock.includes('manage')) rawInput.orders = 'manage';
+    else if (fromStock.includes('read')) rawInput.orders = 'read';
   }
   const out: ModulePermissionsMap = {};
   for (const def of MODULE_DEFS) {

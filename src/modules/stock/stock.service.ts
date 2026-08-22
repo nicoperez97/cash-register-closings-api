@@ -578,6 +578,31 @@ export class StockService implements OnModuleInit {
     return this.productDto(row, category);
   }
 
+  /** Suma o resta una cantidad (no limitado a ±1). */
+  async addQuantity(
+    user: AuthUser,
+    shopId: string,
+    kind: StockKind,
+    id: string,
+    delta: number,
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    if (!Number.isFinite(delta) || delta === 0) {
+      throw new BadRequestException('La cantidad tiene que ser distinta de 0');
+    }
+    const row = await this.products.findOne({
+      where: { id, shopId, kind },
+      relations: ['category'],
+    });
+    if (!row || !isEntityActive(row.active)) {
+      throw new NotFoundException('Producto no encontrado');
+    }
+    const after = Math.max(0, n(row.quantity) + delta);
+    row.quantity = qty(after);
+    await this.products.save(row);
+    return this.productDto(row, row.category);
+  }
+
   private buildStockSharePayload(
     shopName: string,
     actorName: string,
