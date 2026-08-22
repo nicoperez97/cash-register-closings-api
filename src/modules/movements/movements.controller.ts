@@ -26,6 +26,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import type { Response } from 'express';
 import {
+  IsArray,
   IsBoolean,
   IsDateString,
   IsIn,
@@ -36,6 +37,7 @@ import {
   Min,
   ValidateIf,
 } from 'class-validator';
+import { NotifyTargetsDto } from '../../common/dto/notify-targets.dto';
 import {
   CurrentUser,
   AuthUser,
@@ -117,6 +119,12 @@ class UpdateMovementDto {
   @IsOptional()
   @IsIn(['expense', 'transfer'])
   kind?: 'expense' | 'transfer';
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() notifyAdmins?: boolean;
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('4', { each: true })
+  notifyUserIds?: string[];
 }
 
 @ApiTags('movements')
@@ -379,7 +387,8 @@ export class MovementsController {
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
     @Param('id') id: string,
+    @Body() dto: NotifyTargetsDto,
   ) {
-    return this.movements.remove(user, shopId, id);
+    return this.movements.remove(user, shopId, id, dto);
   }
 }

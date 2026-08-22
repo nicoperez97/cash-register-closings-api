@@ -85,6 +85,14 @@ export enum NotificationType {
   RESERVATION_REQUEST = 'RESERVATION_REQUEST',
   /** Movimiento o gasto rápido creado a mano. */
   MOVEMENT_CREATED = 'MOVEMENT_CREATED',
+  /** Gasto editado a mano. */
+  MOVEMENT_UPDATED = 'MOVEMENT_UPDATED',
+  /** Gasto borrado a mano. */
+  MOVEMENT_DELETED = 'MOVEMENT_DELETED',
+  /** Pago editado a mano. */
+  PAYMENT_UPDATED = 'PAYMENT_UPDATED',
+  /** Pago borrado a mano. */
+  PAYMENT_DELETED = 'PAYMENT_DELETED',
   /** Productor cargó un gasto a reintegrar. */
   REIMBURSEMENT_CREATED = 'REIMBURSEMENT_CREATED',
 }
@@ -107,6 +115,10 @@ export const NOTIFICATION_TYPE_LABELS: Record<NotificationType, string> = {
   [NotificationType.SHORTAGE_RESOLVED]: 'Faltantes · resuelto',
   [NotificationType.RESERVATION_REQUEST]: 'Reservas · solicitud nueva',
   [NotificationType.MOVEMENT_CREATED]: 'Movimientos y gastos rápidos',
+  [NotificationType.MOVEMENT_UPDATED]: 'Gastos · editados',
+  [NotificationType.MOVEMENT_DELETED]: 'Gastos · eliminados',
+  [NotificationType.PAYMENT_UPDATED]: 'Pagos · editados',
+  [NotificationType.PAYMENT_DELETED]: 'Pagos · eliminados',
   [NotificationType.REIMBURSEMENT_CREATED]: 'Reintegros · gasto de productor',
 };
 

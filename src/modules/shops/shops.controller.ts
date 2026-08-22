@@ -56,6 +56,11 @@ export class ShopsController {
     return this.shops.listUsers(user, id);
   }
 
+  @Get(':id/notification-recipients')
+  listNotificationRecipients(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.shops.listNotificationRecipients(user, id);
+  }
+
   @Get(':id/backup.xlsx')
   @RequirePermissions('shops.manage')
   async downloadBackup(

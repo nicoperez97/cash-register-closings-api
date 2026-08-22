@@ -61,6 +61,8 @@ export interface UpsertPaymentDto {
   invoiceIvaAmount?: number | null;
   invoicePerceptionsAmount?: number | null;
   invoiceOtherTaxesAmount?: number | null;
+  notifyAdmins?: boolean;
+  notifyUserIds?: string[];
 }
 
 @Injectable()
@@ -1202,6 +1204,14 @@ export class PaymentsService implements OnModuleInit {
 
     // Editar NUNCA cambia el estado (ni vuelve a validación ni abona).
     if (!Object.keys(patch).length) {
+      await this.notifyPaymentChange(
+        user,
+        shopId,
+        row,
+        NotificationType.PAYMENT_UPDATED,
+        'Pago editado',
+        dto,
+      );
       return this.toDto(row);
     }
 
@@ -1229,7 +1239,16 @@ export class PaymentsService implements OnModuleInit {
       patch.invoiceTaxId !== undefined ? patch.invoiceTaxId : row.invoiceTaxId,
     );
 
-    return this.toDto(await this.load(shopId, id));
+    const saved = await this.load(shopId, id);
+    await this.notifyPaymentChange(
+      user,
+      shopId,
+      saved,
+      NotificationType.PAYMENT_UPDATED,
+      'Pago editado',
+      dto,
+    );
+    return this.toDto(saved);
   }
 
   async validate(user: AuthUser, shopId: string, id: string) {
@@ -1420,6 +1439,37 @@ export class PaymentsService implements OnModuleInit {
   }
 
   /** Notifica a admins del local (OWNER/ADMIN) + owners globales cuando un pago queda abonado. */
+  private async notifyPaymentChange(
+    actor: AuthUser,
+    shopId: string,
+    payment: Payment,
+    type: NotificationType,
+    title: string,
+    opts?: { notifyAdmins?: boolean; notifyUserIds?: string[] | null },
+  ) {
+    if (!opts?.notifyAdmins && !opts?.notifyUserIds?.length) return;
+    const recipientIds = await this.shops.resolveNotifyUserIds(shopId, actor.id, opts);
+    if (!recipientIds.length) return;
+    const shop = await this.shops.findOne(actor, shopId);
+    const shopName = shop?.name?.trim() || 'Local';
+    const body = [
+      shopName,
+      `"${this.displayTitle(payment)}"`,
+      `$${n(payment.amount).toLocaleString('es-AR')}`,
+      `por ${actor.fullName || actor.email}`,
+    ].join(' · ');
+    await this.notifications.createMany(
+      recipientIds.map((userId) => ({
+        userId,
+        shopId,
+        type,
+        title,
+        body,
+        paymentId: payment.id,
+      })),
+    );
+  }
+
   private async notifyAdminsPaymentPaid(
     actor: AuthUser,
     shopId: string,
@@ -1583,7 +1633,12 @@ export class PaymentsService implements OnModuleInit {
     return this.toDto(await this.load(shopId, id));
   }
 
-  async remove(user: AuthUser, shopId: string, id: string) {
+  async remove(
+    user: AuthUser,
+    shopId: string,
+    id: string,
+    opts?: { notifyAdmins?: boolean; notifyUserIds?: string[] },
+  ) {
     this.shops.assertShopAccess(user, shopId);
     if (!canEditPayments(user, shopId)) {
       throw new ForbiddenException('Sin permiso para eliminar pagos');
@@ -1592,6 +1647,14 @@ export class PaymentsService implements OnModuleInit {
     if (row.status === PaymentStatus.PAID) {
       throw new BadRequestException('No se puede eliminar un pago abonado');
     }
+    await this.notifyPaymentChange(
+      user,
+      shopId,
+      row,
+      NotificationType.PAYMENT_DELETED,
+      'Pago eliminado',
+      opts,
+    );
     // Borra factura/comprobante del disco para no dejar basura
     deleteUploadIfExists(row.invoiceFilePath);
     deleteUploadIfExists(row.receiptFilePath);

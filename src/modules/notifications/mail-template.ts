@@ -90,6 +90,36 @@ const TYPE_META: Record<string, TypeMeta> = {
     toneSoft: '#e8f5e9',
     hint: 'Un pago quedó registrado como abonado.',
   },
+  [NotificationType.PAYMENT_UPDATED]: {
+    label: 'Pagos',
+    tone: '#1565c0',
+    toneSoft: '#e3f2fd',
+    hint: 'Se editó un pago. Abrí Pagos para ver el cambio.',
+  },
+  [NotificationType.PAYMENT_DELETED]: {
+    label: 'Pagos',
+    tone: '#c62828',
+    toneSoft: '#fdecea',
+    hint: 'Se eliminó un pago.',
+  },
+  [NotificationType.MOVEMENT_CREATED]: {
+    label: 'Gastos',
+    tone: '#1565c0',
+    toneSoft: '#e3f2fd',
+    hint: 'Se cargó un gasto. Abrí Gastos para verlo.',
+  },
+  [NotificationType.MOVEMENT_UPDATED]: {
+    label: 'Gastos',
+    tone: '#1565c0',
+    toneSoft: '#e3f2fd',
+    hint: 'Se editó un gasto. Abrí Gastos para ver el cambio.',
+  },
+  [NotificationType.MOVEMENT_DELETED]: {
+    label: 'Gastos',
+    tone: '#c62828',
+    toneSoft: '#fdecea',
+    hint: 'Se eliminó un gasto.',
+  },
   [NotificationType.CLOSING_CREATED]: {
     label: 'Cierres',
     tone: '#1565c0',
