@@ -39,6 +39,13 @@ import * as ExcelJS from 'exceljs';
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
 
+const EXPENSE_PAYMENT_METHODS = new Set(['cash', 'transfer', 'card']);
+
+function parseExpensePaymentMethod(raw?: string | null): string | null {
+  const v = String(raw ?? '').trim().toLowerCase();
+  return EXPENSE_PAYMENT_METHODS.has(v) ? v : null;
+}
+
 function formatArMoney(value: number): string {
   const num = Number(value ?? 0);
   const abs = Math.abs(num).toLocaleString('es-AR', {
@@ -87,6 +94,8 @@ export interface UpsertMovementDto {
   employeeId?: string | null;
   notifyAdmins?: boolean;
   notifyUserIds?: string[];
+  /** cash | transfer | card · gastos */
+  paymentMethod?: string | null;
   /** expense = gasto con concepto; transfer = entre cuentas sin concepto */
   kind?: MovementKindFilter;
 }
@@ -130,6 +139,7 @@ export class MovementsService implements OnModuleInit {
       `ALTER TABLE movements ADD COLUMN receiptFilePath VARCHAR(500) NULL`,
       `ALTER TABLE movements ADD COLUMN receiptFileName VARCHAR(255) NULL`,
       `ALTER TABLE movements ADD COLUMN receiptFileMime VARCHAR(120) NULL`,
+      `ALTER TABLE movements ADD COLUMN paymentMethod VARCHAR(20) NULL`,
     ]) {
       try {
         await this.movements.query(sql);
@@ -178,6 +188,7 @@ export class MovementsService implements OnModuleInit {
       paymentPartyType: partyType,
       hasReceiptFile: !!m.receiptFilePath,
       receiptFileName: m.receiptFileName ?? null,
+      paymentMethod: m.paymentMethod ?? null,
       active: !!m.active,
     };
   }
@@ -356,6 +367,7 @@ export class MovementsService implements OnModuleInit {
           conceptId: p.conceptId ?? null,
           invoiced: !!(p.invoiceNumber || p.invoiceFilePath),
           invoiceNumber: p.invoiceNumber ?? null,
+          paymentMethod: p.paymentMethod ?? null,
         };
         let movement;
         try {
@@ -485,6 +497,19 @@ export class MovementsService implements OnModuleInit {
       if (!conceptId) throw new BadRequestException('El gasto requiere un concepto');
     }
 
+    let paymentMethod: string | null = null;
+    if (dto.paymentMethod !== undefined) {
+      paymentMethod = parseExpensePaymentMethod(dto.paymentMethod);
+      if (dto.paymentMethod && !paymentMethod) {
+        throw new BadRequestException('Forma de pago inválida');
+      }
+    }
+    if (kind === 'expense' && !opts?.fromPayment) {
+      if (!paymentMethod) {
+        throw new BadRequestException('El gasto requiere forma de pago');
+      }
+    }
+
     await this.assertAccounts(shopId, fromAccountId, toAccountId);
     await this.assertShopUser(shopId, fromUserId);
     await this.assertShopUser(shopId, toUserId);
@@ -520,6 +545,7 @@ export class MovementsService implements OnModuleInit {
         invoiced: dto.invoiced ?? false,
         invoiceNumber: dto.invoiceNumber ?? null,
         employeeId: dto.employeeId ?? null,
+        paymentMethod,
         closingId: null,
         active: true,
       }),
@@ -671,6 +697,16 @@ export class MovementsService implements OnModuleInit {
     if (dto.invoiced !== undefined) row.invoiced = dto.invoiced;
     if (dto.invoiceNumber !== undefined) row.invoiceNumber = dto.invoiceNumber;
     if (dto.employeeId !== undefined) row.employeeId = dto.employeeId;
+    if (dto.paymentMethod !== undefined) {
+      const paymentMethod = parseExpensePaymentMethod(dto.paymentMethod);
+      if (dto.paymentMethod && !paymentMethod) {
+        throw new BadRequestException('Forma de pago inválida');
+      }
+      if (kind === 'expense' && !opts?.fromPayment && !paymentMethod) {
+        throw new BadRequestException('El gasto requiere forma de pago');
+      }
+      row.paymentMethod = paymentMethod;
+    }
 
     await this.movements.save(row);
     const saved = await this.one(user, shopId, id);

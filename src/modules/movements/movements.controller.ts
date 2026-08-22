@@ -79,6 +79,10 @@ class CreateMovementDto {
   @ApiPropertyOptional() @IsOptional() @IsString() invoiceNumber?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsUUID() employeeId?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() notifyAdmins?: boolean;
+  @ApiPropertyOptional({ enum: ['cash', 'transfer', 'card'] })
+  @IsOptional()
+  @IsIn(['cash', 'transfer', 'card'])
+  paymentMethod?: 'cash' | 'transfer' | 'card' | null;
   @ApiPropertyOptional({ enum: ['expense', 'transfer'] })
   @IsOptional()
   @IsIn(['expense', 'transfer'])
@@ -119,6 +123,10 @@ class UpdateMovementDto {
   @IsOptional()
   @IsIn(['expense', 'transfer'])
   kind?: 'expense' | 'transfer';
+  @ApiPropertyOptional({ enum: ['cash', 'transfer', 'card'] })
+  @IsOptional()
+  @IsIn(['cash', 'transfer', 'card'])
+  paymentMethod?: 'cash' | 'transfer' | 'card' | null;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() notifyAdmins?: boolean;
   @ApiPropertyOptional({ type: [String] })
   @IsOptional()

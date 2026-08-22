@@ -507,6 +507,7 @@ export class PaymentsService implements OnModuleInit {
       conceptId?: string;
       invoiced: boolean;
       invoiceNumber: string | null;
+      paymentMethod?: string | null;
     } = {
       businessDate: paidAt,
       fromAccountId: payment.accountId,
@@ -516,6 +517,7 @@ export class PaymentsService implements OnModuleInit {
       description: this.paymentMovementDescription(payment),
       invoiced,
       invoiceNumber: payment.invoiceNumber ?? null,
+      paymentMethod: payment.paymentMethod ?? null,
     };
     if (payment.conceptId) {
       basePayload.conceptId = payment.conceptId;
@@ -1393,6 +1395,7 @@ export class PaymentsService implements OnModuleInit {
         conceptId: row.conceptId ?? null,
         invoiced: !!(row.invoiceNumber || row.invoiceFilePath),
         invoiceNumber: row.invoiceNumber ?? null,
+        paymentMethod: row.paymentMethod ?? null,
       };
       let movement;
       try {
