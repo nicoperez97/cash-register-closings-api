@@ -456,6 +456,71 @@ export class ShopsService implements OnModuleInit {
     });
   }
 
+  /** Usuarios avisables del local (staff) + dueños globales. */
+  async listNotificationRecipients(user: AuthUser, shopId: string) {
+    this.assertShopAccess(user, shopId);
+    return this.collectNotificationRecipients(shopId);
+  }
+
+  async resolveNotifyUserIds(
+    shopId: string,
+    actorId: string,
+    opts?: { notifyAdmins?: boolean; notifyUserIds?: string[] | null },
+  ): Promise<string[]> {
+    const rows = await this.collectNotificationRecipients(shopId);
+    const allowed = new Set(rows.map((r) => r.id));
+    const ids = new Set<string>();
+    if (opts?.notifyAdmins) {
+      for (const r of rows) if (r.isAdmin) ids.add(r.id);
+    }
+    for (const id of opts?.notifyUserIds ?? []) {
+      if (allowed.has(id)) ids.add(id);
+    }
+    ids.delete(actorId);
+    return [...ids];
+  }
+
+  private async collectNotificationRecipients(shopId: string) {
+    const links = await this.userShops.find({ where: { shopId } });
+    const shopUserIds = links.map((l) => l.userId);
+    const adminLinkIds = new Set(
+      links
+        .filter((l) => l.shopRole === GlobalRole.OWNER || l.shopRole === GlobalRole.ADMIN)
+        .map((l) => l.userId),
+    );
+    const shopUsers = shopUserIds.length
+      ? await this.users.find({
+          where: { id: In(shopUserIds), active: true },
+          order: { fullName: 'ASC' },
+        })
+      : [];
+    const globalOwners = await this.users.find({
+      where: { globalRole: GlobalRole.OWNER, active: true },
+      order: { fullName: 'ASC' },
+    });
+    const byId = new Map<
+      string,
+      { id: string; fullName: string; email: string; isAdmin: boolean }
+    >();
+    const add = (
+      u: { id: string; fullName: string; email: string; globalRole: GlobalRole },
+      isAdmin: boolean,
+    ) => {
+      const prev = byId.get(u.id);
+      byId.set(u.id, {
+        id: u.id,
+        fullName: u.fullName,
+        email: u.email,
+        isAdmin: (prev?.isAdmin ?? false) || isAdmin,
+      });
+    };
+    for (const u of shopUsers) {
+      add(u, adminLinkIds.has(u.id) || u.globalRole === GlobalRole.OWNER);
+    }
+    for (const u of globalOwners) add(u, true);
+    return [...byId.values()].sort((a, b) => a.fullName.localeCompare(b.fullName, 'es'));
+  }
+
   async create(user: AuthUser, dto: CreateShopDto) {
     if (!isSuperAdmin(user.globalRole as GlobalRole)) {
       throw new ForbiddenException('Solo un super admin puede crear locales');

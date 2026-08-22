@@ -28,6 +28,8 @@ import { AuthGuard } from '@nestjs/passport';
 import { Response } from 'express';
 import { MulterExceptionFilter } from '../../common/filters/multer-exception.filter';
 import {
+  IsArray,
+  IsBoolean,
   IsDateString,
   IsIn,
   IsNumber,
@@ -37,6 +39,7 @@ import {
   Min,
   ValidateIf,
 } from 'class-validator';
+import { NotifyTargetsDto } from '../../common/dto/notify-targets.dto';
 import { CurrentUser, AuthUser, RequireAnyPermissions, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { PaymentsService } from './payments.service';
@@ -240,6 +243,12 @@ class UpdatePaymentDto {
   @IsNumber()
   @Min(0)
   invoiceOtherTaxesAmount?: number | null;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() notifyAdmins?: boolean;
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('4', { each: true })
+  notifyUserIds?: string[];
 }
 
 class PayPaymentDto {
@@ -582,7 +591,8 @@ export class PaymentsController {
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
     @Param('id') id: string,
+    @Body() dto: NotifyTargetsDto,
   ) {
-    return this.payments.remove(user, shopId, id);
+    return this.payments.remove(user, shopId, id, dto);
   }
 }

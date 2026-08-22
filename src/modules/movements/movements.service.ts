@@ -86,6 +86,7 @@ export interface UpsertMovementDto {
   invoiceNumber?: string | null;
   employeeId?: string | null;
   notifyAdmins?: boolean;
+  notifyUserIds?: string[];
   /** expense = gasto con concepto; transfer = entre cuentas sin concepto */
   kind?: MovementKindFilter;
 }
@@ -672,19 +673,30 @@ export class MovementsService implements OnModuleInit {
     if (dto.employeeId !== undefined) row.employeeId = dto.employeeId;
 
     await this.movements.save(row);
-    return this.one(user, shopId, id);
+    const saved = await this.one(user, shopId, id);
+    if (asExpense) {
+      await this.notifyMovementChange(
+        user,
+        shopId,
+        NotificationType.MOVEMENT_UPDATED,
+        'Gasto editado',
+        saved,
+        dto,
+      );
+    }
+    return saved;
   }
 
   async remove(
     user: AuthUser,
     shopId: string,
     id: string,
-    opts?: { fromPayment?: boolean },
+    opts?: { fromPayment?: boolean; notifyAdmins?: boolean; notifyUserIds?: string[] },
   ) {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.movements.findOne({
       where: { id, shopId },
-      relations: ['toAccount', 'concept'],
+      relations: ['fromAccount', 'toAccount', 'concept'],
     });
     if (!row) throw new NotFoundException('Movimiento no encontrado');
     if (row.closingId && !isGlobalAdmin(user.globalRole as GlobalRole)) {
@@ -712,6 +724,23 @@ export class MovementsService implements OnModuleInit {
           throw new ForbiddenException('No tenés permiso para borrar gastos');
         }
       } else this.assertPerm(user, shopId, 'accountTransfers.manage');
+    }
+    if (asExpense && !opts?.fromPayment) {
+      await this.notifyMovementChange(
+        user,
+        shopId,
+        NotificationType.MOVEMENT_DELETED,
+        'Gasto eliminado',
+        {
+          businessDate: String(row.businessDate ?? ''),
+          amountUyu: n(row.amountUyu),
+          fromAccountName: row.fromAccount?.name ?? null,
+          toAccountName: row.toAccount?.name ?? null,
+          conceptName: row.concept?.name ?? null,
+          description: row.description,
+        },
+        opts,
+      );
     }
     await this.movements.softRemove(row);
     return { ok: true };
@@ -908,6 +937,54 @@ export class MovementsService implements OnModuleInit {
       buffer,
       filename: `saldos-${slug || 'local'}-${stamp}.xlsx`,
     };
+  }
+
+  private async notifyMovementChange(
+    actor: AuthUser,
+    shopId: string,
+    type: NotificationType,
+    title: string,
+    movement: {
+      businessDate?: string;
+      amountUyu?: number;
+      fromAccountName?: string | null;
+      toAccountName?: string | null;
+      conceptName?: string | null;
+      description?: string | null;
+    },
+    opts?: { notifyAdmins?: boolean; notifyUserIds?: string[] | null },
+  ) {
+    if (!opts?.notifyAdmins && !opts?.notifyUserIds?.length) return;
+    const recipientIds = await this.shops.resolveNotifyUserIds(shopId, actor.id, opts);
+    if (!recipientIds.length) return;
+    const shop = await this.shops.findOne(actor, shopId);
+    const shopName = shop?.name?.trim() || 'Local';
+    const date = String(movement.businessDate || '').slice(0, 10);
+    const amount = formatArMoney(Number(movement.amountUyu || 0));
+    const fromName = (movement.fromAccountName ?? '').trim();
+    const toName = (movement.toAccountName ?? '').trim();
+    const route =
+      fromName && toName ? `${fromName} → ${toName}` : fromName || toName || null;
+    const body = [
+      shopName,
+      date,
+      amount,
+      route,
+      movement.conceptName?.trim() || null,
+      movement.description?.trim() || null,
+      `por ${actor.fullName || actor.email}`,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    await this.notifications.createMany(
+      recipientIds.map((userId) => ({
+        userId,
+        shopId,
+        type,
+        title,
+        body,
+      })),
+    );
   }
 
   private async notifyAdminsMovementCreated(

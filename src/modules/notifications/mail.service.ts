@@ -111,7 +111,11 @@ export class MailService {
     if (
       types !== null &&
       !types.includes(type) &&
-      type !== NotificationType.MOVEMENT_CREATED
+      type !== NotificationType.MOVEMENT_CREATED &&
+      type !== NotificationType.MOVEMENT_UPDATED &&
+      type !== NotificationType.MOVEMENT_DELETED &&
+      type !== NotificationType.PAYMENT_UPDATED &&
+      type !== NotificationType.PAYMENT_DELETED
     ) {
       return false;
     }
@@ -207,8 +211,8 @@ export class MailService {
     if (type === NotificationType.RESERVATION_REQUEST) {
       return { path: '/reservations', label: 'Ver solicitudes' };
     }
-    if (type === NotificationType.MOVEMENT_CREATED) {
-      return { path: '/movements', label: 'Ver movimientos' };
+    if (String(type).startsWith('MOVEMENT_')) {
+      return { path: '/movements', label: 'Ver gastos' };
     }
     return { path: '/', label: 'Abrir la app' };
   }

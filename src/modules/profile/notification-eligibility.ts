@@ -13,6 +13,10 @@ export const ADMIN_RECIPIENT_TYPES: NotificationType[] = [
   NotificationType.CASH_WITHDRAWAL_PICKED,
   NotificationType.PRODUCTION_HOURS_LOGGED,
   NotificationType.MOVEMENT_CREATED,
+  NotificationType.MOVEMENT_UPDATED,
+  NotificationType.MOVEMENT_DELETED,
+  NotificationType.PAYMENT_UPDATED,
+  NotificationType.PAYMENT_DELETED,
   NotificationType.REIMBURSEMENT_CREATED,
 ];
 
