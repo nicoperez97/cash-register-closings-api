@@ -1,0 +1,6 @@
+ALTER TABLE shops
+  ADD COLUMN reservationPublicForm JSON NULL;
+
+ALTER TABLE user_shops
+  ADD COLUMN canEditExpenses TINYINT(1) NOT NULL DEFAULT 0,
+  ADD COLUMN canEditPayments TINYINT(1) NOT NULL DEFAULT 0;

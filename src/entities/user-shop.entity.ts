@@ -63,6 +63,14 @@ export class UserShop {
   @Column({ default: false })
   isReservationAdmin: boolean;
 
+  /** Super admin le habilitó editar y borrar gastos de este local. */
+  @Column({ default: false })
+  canEditExpenses: boolean;
+
+  /** Super admin le habilitó editar y borrar pagos de este local. */
+  @Column({ default: false })
+  canEditPayments: boolean;
+
   /**
    * Override del menú lateral para este usuario en este local.
    * null = usar shop.navConfig.

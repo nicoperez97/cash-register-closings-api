@@ -305,7 +305,12 @@ export class MovementsController {
   }
 
   @Patch(':id')
-  @RequireAnyPermissions('expenses.manage', 'accountTransfers.manage', 'movements.manage')
+  @RequireAnyPermissions(
+    'expenses.read',
+    'expenses.manage',
+    'accountTransfers.manage',
+    'movements.manage',
+  )
   update(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -316,7 +321,12 @@ export class MovementsController {
   }
 
   @Delete(':id')
-  @RequireAnyPermissions('expenses.manage', 'accountTransfers.manage', 'movements.manage')
+  @RequireAnyPermissions(
+    'expenses.read',
+    'expenses.manage',
+    'accountTransfers.manage',
+    'movements.manage',
+  )
   remove(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,

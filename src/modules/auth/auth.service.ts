@@ -508,11 +508,15 @@ export class AuthService implements OnModuleInit {
     const shopRoles: Record<string, string> = {};
     const shopPermissions: Record<string, Permission[]> = {};
     const shopModulePermissions: Record<string, Record<string, string>> = {};
+    const shopCanEditExpenses: Record<string, boolean> = {};
+    const shopCanEditPayments: Record<string, boolean> = {};
 
     for (const id of shopIds) {
       const link = links.find((l) => l.shopId === id);
       const effectiveRole = (link?.shopRole ?? role) as GlobalRole;
       shopRoles[id] = effectiveRole;
+      shopCanEditExpenses[id] = !!link?.canEditExpenses;
+      shopCanEditPayments[id] = !!link?.canEditPayments;
 
       if (isGlobalAdmin(role)) {
         shopPermissions[id] = [...ALL_PERMISSIONS_LIST];
@@ -566,6 +570,8 @@ export class AuthService implements OnModuleInit {
       shopAccountIds,
       shopPermissions,
       shopModulePermissions,
+      shopCanEditExpenses,
+      shopCanEditPayments,
       permissions,
       favoriteShopId:
         user.favoriteShopId && shopIds.includes(user.favoriteShopId)
@@ -677,6 +683,8 @@ export class AuthService implements OnModuleInit {
         isBeverageStockAdmin: !!link?.isBeverageStockAdmin,
         isShortageAdmin: !!link?.isShortageAdmin,
         isReservationAdmin: !!link?.isReservationAdmin,
+        canEditExpenses: !!link?.canEditExpenses,
+        canEditPayments: !!link?.canEditPayments,
         active: true,
       };
       }),

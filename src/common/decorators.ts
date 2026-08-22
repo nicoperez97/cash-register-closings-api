@@ -28,6 +28,10 @@ export type AuthUser = {
   shopModulePermissions: Record<string, Record<string, string>>;
   /** Unión de permisos (compat / admin global). */
   permissions: Permission[];
+  /** Super admin habilitó editar/borrar gastos en ese local. */
+  shopCanEditExpenses?: Record<string, boolean>;
+  /** Super admin habilitó editar/borrar pagos en ese local. */
+  shopCanEditPayments?: Record<string, boolean>;
   /** Local favorito al iniciar sesión. */
   favoriteShopId?: string | null;
 };

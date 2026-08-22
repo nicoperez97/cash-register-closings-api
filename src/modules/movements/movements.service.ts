@@ -22,7 +22,7 @@ import {
   PaymentStatus,
   Permission,
 } from '../../common/enums';
-import { isGlobalAdmin, resolveUserPermissions } from '../../common/guards';
+import { canEditExpenses, isGlobalAdmin, resolveUserPermissions } from '../../common/guards';
 import { isEntityActive } from '../../common/active.util';
 import { ShopsService } from '../shops/shops.service';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
@@ -554,8 +554,11 @@ export class MovementsService implements OnModuleInit {
       toAccountCode: row.toAccount?.code,
     });
     if (!opts?.fromPayment) {
-      if (asExpense) this.assertPerm(user, shopId, 'expenses.manage');
-      else this.assertPerm(user, shopId, 'accountTransfers.manage');
+      if (asExpense) {
+        if (!canEditExpenses(user, shopId)) {
+          throw new ForbiddenException('No tenés permiso para editar gastos');
+        }
+      } else this.assertPerm(user, shopId, 'accountTransfers.manage');
     }
 
     const kind = dto.kind ?? (asExpense ? 'expense' : 'transfer');
@@ -649,8 +652,11 @@ export class MovementsService implements OnModuleInit {
       toAccountCode: row.toAccount?.code,
     });
     if (!opts?.fromPayment) {
-      if (asExpense) this.assertPerm(user, shopId, 'expenses.manage');
-      else this.assertPerm(user, shopId, 'accountTransfers.manage');
+      if (asExpense) {
+        if (!canEditExpenses(user, shopId)) {
+          throw new ForbiddenException('No tenés permiso para borrar gastos');
+        }
+      } else this.assertPerm(user, shopId, 'accountTransfers.manage');
     }
     await this.movements.softRemove(row);
     return { ok: true };

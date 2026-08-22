@@ -62,6 +62,8 @@ export class CreateUserBody {
   isShortageAdmin?: boolean;
   /** Administrador de reservas: recibe notificaciones y mails de solicitudes. */
   isReservationAdmin?: boolean;
+  canEditExpenses?: boolean;
+  canEditPayments?: boolean;
   phone?: string | null;
   bankAlias?: string | null;
   cbu?: string | null;
@@ -90,6 +92,8 @@ export class UpdateUserBody {
   isShortageAdmin?: boolean;
   /** Administrador de reservas: recibe notificaciones y mails de solicitudes. */
   isReservationAdmin?: boolean;
+  canEditExpenses?: boolean;
+  canEditPayments?: boolean;
   phone?: string | null;
   bankAlias?: string | null;
   cbu?: string | null;
@@ -167,6 +171,22 @@ export class UsersService implements OnModuleInit {
       await this.userShops.query(`
         ALTER TABLE user_shops
           ADD COLUMN isReservationAdmin TINYINT(1) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.userShops.query(`
+        ALTER TABLE user_shops
+          ADD COLUMN canEditExpenses TINYINT(1) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.userShops.query(`
+        ALTER TABLE user_shops
+          ADD COLUMN canEditPayments TINYINT(1) NOT NULL DEFAULT 0
       `);
     } catch {
       // columna ya existe
@@ -305,6 +325,8 @@ export class UsersService implements OnModuleInit {
         isBeverageStockAdmin: !!link?.isBeverageStockAdmin,
         isShortageAdmin: !!link?.isShortageAdmin,
         isReservationAdmin: !!link?.isReservationAdmin,
+        canEditExpenses: !!link?.canEditExpenses,
+        canEditPayments: !!link?.canEditPayments,
         ledgerAccountIds,
         ledgerAccountNames,
         ledgerAccountId: ledgerAccountIds[0] ?? null,
@@ -369,6 +391,14 @@ export class UsersService implements OnModuleInit {
             defaultShopId === shopId ? !!dto.isBeverageStockAdmin : false,
           isShortageAdmin: defaultShopId === shopId ? !!dto.isShortageAdmin : false,
           isReservationAdmin: defaultShopId === shopId ? !!dto.isReservationAdmin : false,
+          canEditExpenses:
+            defaultShopId === shopId && isSuperAdmin(actor.globalRole as GlobalRole)
+              ? !!dto.canEditExpenses
+              : false,
+          canEditPayments:
+            defaultShopId === shopId && isSuperAdmin(actor.globalRole as GlobalRole)
+              ? !!dto.canEditPayments
+              : false,
         }),
       );
     }
@@ -495,6 +525,7 @@ export class UsersService implements OnModuleInit {
                   shopId === sid ? !!dto.isBeverageStockAdmin : false,
                 isShortageAdmin: shopId === sid ? !!dto.isShortageAdmin : false,
                 isReservationAdmin: shopId === sid ? !!dto.isReservationAdmin : false,
+                ...this.editFlagsFromDto(actor, dto, undefined, shopId === sid),
               }),
             );
           } else {
@@ -521,6 +552,10 @@ export class UsersService implements OnModuleInit {
             if (shopId === sid && dto.isReservationAdmin !== undefined) {
               exists.isReservationAdmin = !!dto.isReservationAdmin;
             }
+            if (shopId === sid && isSuperAdmin(actor.globalRole as GlobalRole)) {
+              if (dto.canEditExpenses !== undefined) exists.canEditExpenses = !!dto.canEditExpenses;
+              if (dto.canEditPayments !== undefined) exists.canEditPayments = !!dto.canEditPayments;
+            }
             await this.userShops.save(exists);
           }
         }
@@ -538,6 +573,8 @@ export class UsersService implements OnModuleInit {
         const prevReservationAdmin = new Map(
           links.map((l) => [l.shopId, !!l.isReservationAdmin]),
         );
+        const prevEditExpenses = new Map(links.map((l) => [l.shopId, !!l.canEditExpenses]));
+        const prevEditPayments = new Map(links.map((l) => [l.shopId, !!l.canEditPayments]));
         await this.userShops.delete({ userId: id });
         for (const sid of nextIds) {
           const visibility =
@@ -563,6 +600,12 @@ export class UsersService implements OnModuleInit {
             shopId === sid && dto.isReservationAdmin !== undefined
               ? !!dto.isReservationAdmin
               : (prevReservationAdmin.get(sid) ?? false);
+          const editFlags = this.editFlagsFromDto(
+            actor,
+            dto,
+            { canEditExpenses: prevEditExpenses.get(sid), canEditPayments: prevEditPayments.get(sid) },
+            shopId === sid,
+          );
           await this.userShops.save(
             this.userShops.create({
               userId: id,
@@ -580,6 +623,8 @@ export class UsersService implements OnModuleInit {
               isBeverageStockAdmin: beverageStockAdmin,
               isShortageAdmin: shortageAdmin,
               isReservationAdmin: reservationAdmin,
+              canEditExpenses: editFlags.canEditExpenses,
+              canEditPayments: editFlags.canEditPayments,
             }),
           );
         }
@@ -592,7 +637,9 @@ export class UsersService implements OnModuleInit {
         dto.isStockAdmin !== undefined ||
         dto.isBeverageStockAdmin !== undefined ||
         dto.isShortageAdmin !== undefined ||
-        dto.isReservationAdmin !== undefined)
+        dto.isReservationAdmin !== undefined ||
+        dto.canEditExpenses !== undefined ||
+        dto.canEditPayments !== undefined)
     ) {
       const link = await this.userShops.findOne({ where: { userId: id, shopId } });
       if (link) {
@@ -619,6 +666,10 @@ export class UsersService implements OnModuleInit {
         if (dto.isReservationAdmin !== undefined) {
           link.isReservationAdmin = !!dto.isReservationAdmin;
         }
+        if (isSuperAdmin(actor.globalRole as GlobalRole)) {
+          if (dto.canEditExpenses !== undefined) link.canEditExpenses = !!dto.canEditExpenses;
+          if (dto.canEditPayments !== undefined) link.canEditPayments = !!dto.canEditPayments;
+        }
         await this.userShops.save(link);
       } else {
         const visibility = this.resolveVisibilityFromDto(dto);
@@ -639,6 +690,7 @@ export class UsersService implements OnModuleInit {
             isBeverageStockAdmin: !!dto.isBeverageStockAdmin,
             isShortageAdmin: !!dto.isShortageAdmin,
             isReservationAdmin: !!dto.isReservationAdmin,
+            ...this.editFlagsFromDto(actor, dto, undefined, true),
           }),
         );
       }
@@ -705,6 +757,8 @@ export class UsersService implements OnModuleInit {
       isBeverageStockAdmin: !!link?.isBeverageStockAdmin,
       isShortageAdmin: !!link?.isShortageAdmin,
       isReservationAdmin: !!link?.isReservationAdmin,
+      canEditExpenses: !!link?.canEditExpenses,
+      canEditPayments: !!link?.canEditPayments,
       ledgerAccountIds: accountIds,
       ledgerAccountNames: names,
       ledgerAccountId: accountIds[0] ?? null,
@@ -824,6 +878,26 @@ export class UsersService implements OnModuleInit {
         'Como admin del local solo podés asignar Gerente, Cajero, Visor o Socio',
       );
     }
+  }
+
+  private editFlagsFromDto(
+    actor: AuthUser,
+    dto: { canEditExpenses?: boolean; canEditPayments?: boolean },
+    existing?: { canEditExpenses?: boolean; canEditPayments?: boolean },
+    apply = true,
+  ): { canEditExpenses: boolean; canEditPayments: boolean } {
+    if (!apply || !isSuperAdmin(actor.globalRole as GlobalRole)) {
+      return {
+        canEditExpenses: !!existing?.canEditExpenses,
+        canEditPayments: !!existing?.canEditPayments,
+      };
+    }
+    return {
+      canEditExpenses:
+        dto.canEditExpenses !== undefined ? !!dto.canEditExpenses : !!existing?.canEditExpenses,
+      canEditPayments:
+        dto.canEditPayments !== undefined ? !!dto.canEditPayments : !!existing?.canEditPayments,
+    };
   }
 
   private toDto(u: User, links: UserShop[]) {

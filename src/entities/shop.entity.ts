@@ -65,6 +65,17 @@ export class Shop extends BaseEntity {
   @Column({ type: 'int', nullable: true })
   reservationOutsideMinPartySize?: number | null;
 
+  /**
+   * Horarios y mensajes del formulario público de reservas.
+   * hoursByWeekday: "0"…"6" → ["19:30","20:00"]; generalMessage; weekdayMessages.
+   */
+  @Column({ type: 'simple-json', nullable: true })
+  reservationPublicForm?: {
+    hoursByWeekday?: Record<string, string[]>;
+    generalMessage?: string | null;
+    weekdayMessages?: Record<string, string>;
+  } | null;
+
   /** Si es false, el módulo de lista de espera no está disponible en este local. */
   @Column({ type: 'tinyint', default: 1 })
   waitingListEnabled: boolean;
