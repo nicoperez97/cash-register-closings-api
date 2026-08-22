@@ -65,6 +65,10 @@ export class Movement extends BaseEntity {
   @Column({ type: 'varchar', length: 120, nullable: true })
   receiptFileMime?: string | null;
 
+  /** cash | transfer | card · solo gastos manuales. */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  paymentMethod?: string | null;
+
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })
   shop: Shop;
