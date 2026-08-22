@@ -23,6 +23,7 @@ import {
 } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import type { Response } from 'express';
 import {
   IsBoolean,
@@ -302,6 +303,53 @@ export class MovementsController {
     @Body() dto: CreateMovementDto,
   ) {
     return this.movements.create(user, shopId, dto);
+  }
+
+  @Post(':id/receipt-file')
+  @RequireAnyPermissions('expenses.manage', 'movements.manage')
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { file: { type: 'string', format: 'binary' } },
+      required: ['file'],
+    },
+  })
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 15 * 1024 * 1024, fieldSize: 2 * 1024 * 1024 },
+    }),
+  )
+  uploadReceipt(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) throw new BadRequestException('Archivo requerido');
+    return this.movements.uploadReceiptFile(user, shopId, id, file);
+  }
+
+  @Get(':id/receipt-file')
+  @RequireAnyPermissions('expenses.read', 'movements.read')
+  async downloadReceipt(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { stream, fileName, mime } = await this.movements.downloadReceiptFile(
+      user,
+      shopId,
+      id,
+    );
+    res.setHeader('Content-Type', mime);
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${encodeURIComponent(fileName)}"`,
+    );
+    return stream;
   }
 
   @Patch(':id')

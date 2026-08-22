@@ -85,11 +85,19 @@ export class UserShop {
   } | null;
 
   /**
-   * Tipos de notificación silenciados por el usuario (aunque admin los haya habilitado).
+   * Tipos silenciados en ambos canales (legado).
    * null / [] = no silencia ninguno.
    */
   @Column({ type: 'json', nullable: true })
   mutedNotificationTypes?: string[] | null;
+
+  /** Tipos silenciados en la app (campana + push). */
+  @Column({ type: 'json', nullable: true })
+  mutedAppNotificationTypes?: string[] | null;
+
+  /** Tipos silenciados en el mail. */
+  @Column({ type: 'json', nullable: true })
+  mutedEmailNotificationTypes?: string[] | null;
 
   @ManyToOne(() => User, (u) => u.userShops, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'userId' })

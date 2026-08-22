@@ -65,27 +65,59 @@ export function eligibleNotificationTypes(opts: {
   return [...set];
 }
 
-export function mutedSet(link: UserShop | null | undefined): Set<string> {
-  const raw = link?.mutedNotificationTypes;
+function typeSet(raw: unknown): Set<string> {
   if (!Array.isArray(raw) || !raw.length) return new Set();
   return new Set(raw.map((t) => String(t).trim()).filter(Boolean));
+}
+
+export function mutedSet(link: UserShop | null | undefined): Set<string> {
+  return typeSet(link?.mutedNotificationTypes);
+}
+
+export function muteChannels(
+  link: UserShop | null | undefined,
+  type: string,
+): { app: boolean; email: boolean } {
+  const key = String(type);
+  const hasNew =
+    Array.isArray(link?.mutedAppNotificationTypes) ||
+    Array.isArray(link?.mutedEmailNotificationTypes);
+  if (!hasNew) {
+    const both = mutedSet(link).has(key);
+    return { app: both, email: both };
+  }
+  return {
+    app: typeSet(link?.mutedAppNotificationTypes).has(key),
+    email: typeSet(link?.mutedEmailNotificationTypes).has(key),
+  };
 }
 
 export function isNotificationMuted(
   link: UserShop | null | undefined,
   type: string,
 ): boolean {
-  return mutedSet(link).has(String(type));
+  const ch = muteChannels(link, type);
+  return ch.app && ch.email;
 }
 
 export function eligibleNotificationsPayload(opts: {
   link: UserShop | null | undefined;
   globalRole: string | GlobalRole;
-}): Array<{ type: NotificationType; label: string; muted: boolean }> {
-  const muted = mutedSet(opts.link);
-  return eligibleNotificationTypes(opts).map((type) => ({
-    type,
-    label: NOTIFICATION_TYPE_LABELS[type] ?? type,
-    muted: muted.has(type),
-  }));
+}): Array<{
+  type: NotificationType;
+  label: string;
+  muted: boolean;
+  mutedApp: boolean;
+  mutedEmail: boolean;
+}> {
+  return eligibleNotificationTypes(opts).map((type) => {
+    const ch = muteChannels(opts.link, type);
+    return {
+      type,
+      label: NOTIFICATION_TYPE_LABELS[type] ?? type,
+      muted: ch.app && ch.email,
+      mutedApp: ch.app,
+      mutedEmail: ch.email,
+    };
+  });
 }

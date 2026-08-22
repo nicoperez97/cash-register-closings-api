@@ -10,7 +10,7 @@ import { AuthUser } from '../../common/decorators';
 import { normalizeLogoUrl } from '../../common/drive-url';
 import { PushService } from './push.service';
 import { MailService } from './mail.service';
-import { isNotificationMuted } from '../profile/notification-eligibility';
+import { muteChannels } from '../profile/notification-eligibility';
 
 function deepLinkFor(type: NotificationType, opts: {
   shopId?: string | null;
@@ -141,49 +141,55 @@ export class NotificationsService implements OnModuleInit {
     paymentId?: string | null;
     closingId?: string | null;
   }) {
-    if (await this.isMuted(input.userId, input.shopId, input.type)) {
+    const mute = await this.muteChannelsFor(input.userId, input.shopId, input.type);
+    if (mute.app && mute.email) {
       return null;
     }
-    const row = await this.notifications.save(
-      this.notifications.create({
-        userId: input.userId,
-        shopId: input.shopId ?? null,
-        type: input.type,
-        title: input.title,
-        body: input.body,
-        paymentId: input.paymentId ?? null,
-        closingId: input.closingId ?? null,
-        isRead: false,
-        active: true,
-      }),
-    );
-    const dto = this.toDto(row);
     const branding = await this.resolveShopBranding(input.shopId);
-    const unreadCount = await this.countUnreadForUser(input.userId);
-    void this.push
-      .sendToUsers([input.userId], {
-        title: this.pushTitle(input.title, branding.name),
-        body: input.body,
-        url: deepLinkFor(input.type, input),
-        tag: `crc-${input.type}-${row.id}`,
-        shopId: input.shopId ?? null,
-        shopName: branding.name,
-        notificationId: row.id,
-        unreadCount,
-        icon: branding.pushIconUrl,
-        image: branding.pushIconUrl,
-      })
-      .catch(() => undefined);
-    void this.mail
-      .sendNotificationEmail({
-        userId: input.userId,
-        shopId: input.shopId,
-        type: input.type,
-        title: input.title,
-        body: input.body,
-      })
-      .catch(() => undefined);
-    return { ...dto, shopName: branding.name, shopLogoUrl: branding.logoUrl };
+    let dto: ReturnType<NotificationsService['toDto']> | null = null;
+    if (!mute.app) {
+      const row = await this.notifications.save(
+        this.notifications.create({
+          userId: input.userId,
+          shopId: input.shopId ?? null,
+          type: input.type,
+          title: input.title,
+          body: input.body,
+          paymentId: input.paymentId ?? null,
+          closingId: input.closingId ?? null,
+          isRead: false,
+          active: true,
+        }),
+      );
+      dto = this.toDto(row);
+      const unreadCount = await this.countUnreadForUser(input.userId);
+      void this.push
+        .sendToUsers([input.userId], {
+          title: this.pushTitle(input.title, branding.name),
+          body: input.body,
+          url: deepLinkFor(input.type, input),
+          tag: `crc-${input.type}-${row.id}`,
+          shopId: input.shopId ?? null,
+          shopName: branding.name,
+          notificationId: row.id,
+          unreadCount,
+          icon: branding.pushIconUrl,
+          image: branding.pushIconUrl,
+        })
+        .catch(() => undefined);
+    }
+    if (!mute.email) {
+      void this.mail
+        .sendNotificationEmail({
+          userId: input.userId,
+          shopId: input.shopId,
+          type: input.type,
+          title: input.title,
+          body: input.body,
+        })
+        .catch(() => undefined);
+    }
+    return dto ? { ...dto, shopName: branding.name, shopLogoUrl: branding.logoUrl } : null;
   }
 
   async createMany(
@@ -198,13 +204,29 @@ export class NotificationsService implements OnModuleInit {
     }>,
   ) {
     if (!inputs.length) return [];
-    const filtered: typeof inputs = [];
+    const toSave: typeof inputs = [];
+    const toEmail: typeof inputs = [];
     for (const input of inputs) {
-      if (!(await this.isMuted(input.userId, input.shopId, input.type))) {
-        filtered.push(input);
-      }
+      const mute = await this.muteChannelsFor(input.userId, input.shopId, input.type);
+      if (!mute.app) toSave.push(input);
+      if (!mute.email) toEmail.push(input);
     }
-    if (!filtered.length) return [];
+    if (!toSave.length && !toEmail.length) return [];
+    const filtered = toSave;
+    if (!filtered.length) {
+      void this.mail
+        .sendNotificationEmails(
+          toEmail.map((input) => ({
+            userId: input.userId,
+            shopId: input.shopId,
+            type: input.type,
+            title: input.title,
+            body: input.body,
+          })),
+        )
+        .catch(() => undefined);
+      return [];
+    }
     const rows = await this.notifications.save(
       filtered.map((input) =>
         this.notifications.create({
@@ -261,12 +283,12 @@ export class NotificationsService implements OnModuleInit {
 
     void this.mail
       .sendNotificationEmails(
-        rows.map((row) => ({
-          userId: row.userId,
-          shopId: row.shopId,
-          type: row.type,
-          title: row.title,
-          body: row.body,
+        toEmail.map((input) => ({
+          userId: input.userId,
+          shopId: input.shopId,
+          type: input.type,
+          title: input.title,
+          body: input.body,
         })),
       )
       .catch(() => undefined);
@@ -444,17 +466,22 @@ export class NotificationsService implements OnModuleInit {
     return out;
   }
 
-  private async isMuted(
+  private async muteChannelsFor(
     userId: string,
     shopId: string | null | undefined,
     type: string,
-  ): Promise<boolean> {
-    if (!shopId) return false;
+  ): Promise<{ app: boolean; email: boolean }> {
+    if (!shopId) return { app: false, email: false };
     const link = await this.userShops.findOne({
       where: { userId, shopId },
-      select: ['id', 'mutedNotificationTypes'],
+      select: [
+        'id',
+        'mutedNotificationTypes',
+        'mutedAppNotificationTypes',
+        'mutedEmailNotificationTypes',
+      ],
     });
-    return isNotificationMuted(link, type);
+    return muteChannels(link, type);
   }
 
   private toDto(n: AppNotification) {

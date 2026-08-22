@@ -56,6 +56,15 @@ export class Movement extends BaseEntity {
   @Column({ type: 'varchar', nullable: true })
   employeeId?: string | null;
 
+  @Column({ type: 'varchar', length: 500, nullable: true })
+  receiptFilePath?: string | null;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  receiptFileName?: string | null;
+
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  receiptFileMime?: string | null;
+
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })
   shop: Shop;

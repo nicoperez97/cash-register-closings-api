@@ -27,6 +27,13 @@ import { isEntityActive } from '../../common/active.util';
 import { ShopsService } from '../shops/shops.service';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import {
+  deleteUploadIfExists,
+  resolveUploadPath,
+  saveUploadFile,
+} from '../../common/uploads';
+import { createReadStream } from 'fs';
+import { StreamableFile } from '@nestjs/common';
 import * as ExcelJS from 'exceljs';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
@@ -119,6 +126,9 @@ export class MovementsService implements OnModuleInit {
     for (const sql of [
       `ALTER TABLE movements ADD COLUMN fromUserId CHAR(36) NULL`,
       `ALTER TABLE movements ADD COLUMN toUserId CHAR(36) NULL`,
+      `ALTER TABLE movements ADD COLUMN receiptFilePath VARCHAR(500) NULL`,
+      `ALTER TABLE movements ADD COLUMN receiptFileName VARCHAR(255) NULL`,
+      `ALTER TABLE movements ADD COLUMN receiptFileMime VARCHAR(120) NULL`,
     ]) {
       try {
         await this.movements.query(sql);
@@ -165,6 +175,8 @@ export class MovementsService implements OnModuleInit {
       source,
       paymentId: payment?.id ?? null,
       paymentPartyType: partyType,
+      hasReceiptFile: !!m.receiptFilePath,
+      receiptFileName: m.receiptFileName ?? null,
       active: !!m.active,
     };
   }
@@ -516,6 +528,49 @@ export class MovementsService implements OnModuleInit {
       void this.notifyAdminsMovementCreated(user, shopId, created).catch(() => undefined);
     }
     return created;
+  }
+
+  async uploadReceiptFile(
+    user: AuthUser,
+    shopId: string,
+    id: string,
+    file: Express.Multer.File,
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    this.assertPerm(user, shopId, 'expenses.manage');
+    const row = await this.movements.findOne({ where: { id, shopId } });
+    if (!row || !isEntityActive(row.active)) {
+      throw new NotFoundException('Movimiento no encontrado');
+    }
+    if (!file?.buffer?.length) throw new BadRequestException('Archivo requerido');
+    deleteUploadIfExists(row.receiptFilePath);
+    const saved = saveUploadFile({
+      relativeDir: `movements/${shopId}/${id}`,
+      basename: 'receipt',
+      buffer: file.buffer,
+      originalName: file.originalname,
+      mime: file.mimetype,
+    });
+    row.receiptFilePath = saved.relativePath;
+    row.receiptFileName = file.originalname || saved.fileName;
+    row.receiptFileMime = file.mimetype || null;
+    await this.movements.save(row);
+    return this.one(user, shopId, id);
+  }
+
+  async downloadReceiptFile(user: AuthUser, shopId: string, id: string) {
+    this.shops.assertShopAccess(user, shopId);
+    const row = await this.movements.findOne({ where: { id, shopId } });
+    if (!row || !isEntityActive(row.active)) {
+      throw new NotFoundException('Movimiento no encontrado');
+    }
+    const abs = resolveUploadPath(row.receiptFilePath);
+    if (!abs) throw new NotFoundException('Comprobante no encontrado');
+    return {
+      stream: new StreamableFile(createReadStream(abs)),
+      fileName: row.receiptFileName || 'comprobante.pdf',
+      mime: row.receiptFileMime || 'application/octet-stream',
+    };
   }
 
   async one(user: AuthUser, shopId: string, id: string) {
