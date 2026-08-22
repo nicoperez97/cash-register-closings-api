@@ -41,6 +41,7 @@ import {
   normalizePartyRule,
   partyFitsArea,
 } from './reservation-party-rules.util';
+import * as PublicForm from './reservation-public-form.util';
 
 export type CreatePublicReservationRequestDto = {
   guestName: string;
@@ -124,6 +125,15 @@ export class ReservationRequestsService implements OnModuleInit {
     const partyRules = effectivePartyRules(shop, overrides);
     const closedWeekdays = normalizeClosedWeekdays(shop.closedWeekdays);
     const closedDay = isShopClosedOnDate(shop, businessDate);
+    const weekday = PublicForm.weekdayFromIsoDate(businessDate);
+    const publicForm = PublicForm.resolvePublicFormForWeekday(
+      shop.reservationPublicForm,
+      weekday,
+    );
+    const noticeRow = await this.dayNotices.findOne({
+      where: { shopId: shop.id, businessDate },
+    });
+    const dayNotice = String(noticeRow?.message ?? '').trim() || null;
     return {
       signupEnabled: flags.signupEnabled && !closedDay,
       insideEnabled: closedDay ? false : flags.insideEnabled,
@@ -136,6 +146,10 @@ export class ReservationRequestsService implements OnModuleInit {
       shopSignupEnabled: shopSignupOpen(shop),
       closedWeekdays,
       closedDay,
+      timeSlots: publicForm.timeSlots,
+      generalMessage: publicForm.generalMessage,
+      weekdayMessage: publicForm.weekdayMessage,
+      dayNotice,
       businessDate,
       shop: {
         id: shop.id,
@@ -157,6 +171,23 @@ export class ReservationRequestsService implements OnModuleInit {
     await this.shopsRepo.update(shopId, { reservationSignupEnabled: !!enabled });
     this.live.tick(shopId, 'reservations');
     return { reservationSignupEnabled: !!enabled };
+  }
+
+  async getPublicForm(user: AuthUser, shopId: string) {
+    this.shops.assertShopAccess(user, shopId);
+    await this.shops.assertReservationsEnabled(shopId);
+    const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    return PublicForm.storedOrDefaultPublicForm(shop.reservationPublicForm);
+  }
+
+  async savePublicForm(user: AuthUser, shopId: string, dto: unknown) {
+    this.shops.assertShopAccess(user, shopId);
+    await this.shops.assertReservationsEnabled(shopId);
+    const config = PublicForm.normalizePublicFormConfig(dto);
+    await this.shopsRepo.update(shopId, { reservationPublicForm: config });
+    this.live.tick(shopId, 'reservations');
+    return config;
   }
 
   async setAreasEnabled(
@@ -245,7 +276,17 @@ export class ReservationRequestsService implements OnModuleInit {
     const guestEmail = this.normalizeEmail(dto.guestEmail);
     const instagramHandle = this.normalizeInstagram(dto.instagramHandle);
     const partySize = this.normalizePartySize(dto.partySize);
-    const reservationTime = this.normalizeTime(dto.reservationTime);
+    let reservationTime = this.normalizeTime(dto.reservationTime);
+    const weekday = PublicForm.weekdayFromIsoDate(businessDate);
+    const formForDay = PublicForm.resolvePublicFormForWeekday(
+      shop.reservationPublicForm,
+      weekday,
+    );
+    if (!formForDay.timeSlots.length) {
+      reservationTime = null;
+    } else if (reservationTime && !formForDay.timeSlots.includes(reservationTime)) {
+      throw new BadRequestException('Ese horario no está disponible ese día');
+    }
     const area = this.normalizeArea(dto.area);
     if (area === ReservationArea.OUTSIDE && !flags.outsideEnabled) {
       throw new BadRequestException('El sector afuera no está disponible');

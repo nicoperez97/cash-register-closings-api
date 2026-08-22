@@ -120,3 +120,15 @@ export function isGlobalAdmin(role: GlobalRole | string): boolean {
 export function isSuperAdmin(role: GlobalRole | string): boolean {
   return role === GlobalRole.OWNER;
 }
+
+/** Editar/borrar gastos: super admin o usuario habilitado en ese local. */
+export function canEditExpenses(user: AuthUser, shopId: string): boolean {
+  if (isSuperAdmin(user.globalRole)) return true;
+  return !!user.shopCanEditExpenses?.[shopId];
+}
+
+/** Editar/borrar pagos: super admin o usuario habilitado en ese local. */
+export function canEditPayments(user: AuthUser, shopId: string): boolean {
+  if (isSuperAdmin(user.globalRole)) return true;
+  return !!user.shopCanEditPayments?.[shopId];
+}

@@ -24,7 +24,7 @@ import { GlobalRole, NotificationType, PaymentMethod, PaymentPriority, PaymentSt
 import { ShopsService } from '../shops/shops.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MovementsService } from '../movements/movements.service';
-import { resolveUserPermissions } from '../../common/guards';
+import { canEditPayments, resolveUserPermissions } from '../../common/guards';
 import { isEntityActive } from '../../common/active.util';
 import { resolveShopCalendarDate } from '../../common/business-date';
 import { deletePaymentUploads, deleteUploadIfExists, resolveUploadPath, saveUploadFile } from '../../common/uploads';
@@ -1069,7 +1069,7 @@ export class PaymentsService implements OnModuleInit {
 
   async update(user: AuthUser, shopId: string, id: string, dto: Partial<UpsertPaymentDto>) {
     this.shops.assertShopAccess(user, shopId);
-    if (!this.canManage(user, shopId)) {
+    if (!canEditPayments(user, shopId)) {
       throw new ForbiddenException('Sin permiso para editar pagos');
     }
     const row = await this.load(shopId, id);
@@ -1585,7 +1585,7 @@ export class PaymentsService implements OnModuleInit {
 
   async remove(user: AuthUser, shopId: string, id: string) {
     this.shops.assertShopAccess(user, shopId);
-    if (!this.canManage(user, shopId)) {
+    if (!canEditPayments(user, shopId)) {
       throw new ForbiddenException('Sin permiso para eliminar pagos');
     }
     const row = await this.load(shopId, id);

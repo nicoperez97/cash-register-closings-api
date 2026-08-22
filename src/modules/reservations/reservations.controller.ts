@@ -18,6 +18,7 @@ import {
   IsEmail,
   IsEnum,
   IsInt,
+  IsObject,
   IsOptional,
   IsString,
   Max,
@@ -233,6 +234,24 @@ class SetReservationSignupDto {
   enabled: boolean;
 }
 
+class ReservationPublicFormDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsObject()
+  hoursByWeekday?: Record<string, string[]>;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @IsString()
+  @MaxLength(600)
+  generalMessage?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsObject()
+  weekdayMessages?: Record<string, string>;
+}
+
 class SetReservationAreasDto {
   @ApiPropertyOptional()
   @IsOptional()
@@ -417,6 +436,25 @@ export class ReservationsController {
     @Body() dto: SetReservationSignupDto,
   ) {
     return this.requests.setSignupEnabled(user, shopId, dto.enabled);
+  }
+
+  @Get('reservation-public-form')
+  @RequirePermissions('reservations.read')
+  getReservationPublicForm(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+  ) {
+    return this.requests.getPublicForm(user, shopId);
+  }
+
+  @Put('reservation-public-form')
+  @RequirePermissions('reservations.manage')
+  saveReservationPublicForm(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: ReservationPublicFormDto,
+  ) {
+    return this.requests.savePublicForm(user, shopId, dto);
   }
 
   @Patch('reservation-areas')

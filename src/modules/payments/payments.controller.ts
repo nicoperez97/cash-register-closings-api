@@ -37,7 +37,7 @@ import {
   Min,
   ValidateIf,
 } from 'class-validator';
-import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
+import { CurrentUser, AuthUser, RequireAnyPermissions, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { PaymentsService } from './payments.service';
 
@@ -402,7 +402,7 @@ export class PaymentsController {
   }
 
   @Patch(':id')
-  @RequirePermissions('payments.manage')
+  @RequireAnyPermissions('payments.read', 'payments.manage')
   update(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -577,7 +577,7 @@ export class PaymentsController {
   }
 
   @Delete(':id')
-  @RequirePermissions('payments.manage')
+  @RequireAnyPermissions('payments.read', 'payments.manage')
   remove(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
