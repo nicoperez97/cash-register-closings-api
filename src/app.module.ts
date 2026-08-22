@@ -26,6 +26,7 @@ import { ServicesModule } from './modules/services/services.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { StockModule } from './modules/stock/stock.module';
 import { ShortagesModule } from './modules/shortages/shortages.module';
+import { OrdersModule } from './modules/orders/orders.module';
 import { TipsModule } from './modules/tips/tips.module';
 import { ReimbursementsModule } from './modules/reimbursements/reimbursements.module';
 import { SalonFloorModule } from './modules/salon-floor/salon-floor.module';
@@ -65,6 +66,7 @@ import { PublicAbuseGuard } from './common/public-abuse.guard';
     ServicesModule,
     StockModule,
     ShortagesModule,
+    OrdersModule,
     TipsModule,
     ReimbursementsModule,
     SalonFloorModule,

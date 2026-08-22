@@ -55,7 +55,7 @@ function formatArMoney(value: number): string {
   return num < 0 ? `- $${abs}` : `$${abs}`;
 }
 
-export type MovementKindFilter = 'expense' | 'transfer';
+export type MovementKindFilter = 'expense' | 'income' | 'transfer';
 export type MovementSourceFilter = 'closing' | 'payment' | 'manual';
 export type MovementPartyTypeFilter = 'supplier' | 'service' | 'employee';
 
@@ -96,7 +96,7 @@ export interface UpsertMovementDto {
   notifyUserIds?: string[];
   /** cash | transfer | card · gastos */
   paymentMethod?: string | null;
-  /** expense = gasto con concepto; transfer = entre cuentas sin concepto */
+  /** expense = gasto; income = ingreso; transfer = entre cuentas */
   kind?: MovementKindFilter;
 }
 
@@ -219,15 +219,58 @@ export class MovementsService implements OnModuleInit {
     return code === 'EGRESO' || name.includes('egreso');
   }
 
+  private isIncomeRow(r: {
+    conceptKind?: string | null;
+    fromAccountName?: string | null;
+    fromAccountCode?: string | null;
+    toAccountName?: string | null;
+    toAccountCode?: string | null;
+  }): boolean {
+    if (this.isExpenseRow(r)) return false;
+    if (r.conceptKind === ConceptKind.INCOME || r.conceptKind === 'INCOME') return true;
+    const name = (r.fromAccountName ?? '').toLowerCase();
+    const code = (r.fromAccountCode ?? '').toUpperCase();
+    return code === 'INGRESO' || name.includes('ingreso');
+  }
+
+  private classifyRow(r: {
+    conceptKind?: string | null;
+    fromAccountName?: string | null;
+    fromAccountCode?: string | null;
+    toAccountName?: string | null;
+    toAccountCode?: string | null;
+  }): MovementKindFilter {
+    if (this.isExpenseRow(r)) return 'expense';
+    if (this.isIncomeRow(r)) return 'income';
+    return 'transfer';
+  }
+
+  private async findSystemAccount(shopId: string, code: 'INGRESO' | 'EGRESO') {
+    const byCode = await this.accounts.findOne({ where: { shopId, code, active: true } });
+    if (byCode) return byCode;
+    const needle = code === 'INGRESO' ? 'ingreso' : 'egreso';
+    const all = await this.accounts.find({ where: { shopId, active: true } });
+    return all.find((a) => (a.name ?? '').toLowerCase().includes(needle)) ?? null;
+  }
+
   async list(user: AuthUser, shopId: string, filters: MovementFilters = {}) {
     this.shops.assertShopAccess(user, shopId);
     if (filters.kind === 'expense') {
       this.assertPerm(user, shopId, 'expenses.read');
       await this.repairOrphanPaymentExpenses(user, shopId);
+    } else if (filters.kind === 'income') {
+      this.assertPerm(user, shopId, 'incomes.read');
     } else if (filters.kind === 'transfer') {
       this.assertPerm(user, shopId, 'accountTransfers.read');
     } else {
-      this.assertAnyPerm(user, shopId, 'expenses.read', 'accountTransfers.read', 'movements.read');
+      this.assertAnyPerm(
+        user,
+        shopId,
+        'expenses.read',
+        'accountTransfers.read',
+        'incomes.read',
+        'movements.read',
+      );
     }
 
     const qb = this.movements
@@ -292,10 +335,28 @@ export class MovementsService implements OnModuleInit {
       } else if (filters.invoiced === 'false') {
         qb.andWhere('(m.invoiced = false OR m.invoiced IS NULL)');
       }
-    } else if (filters.kind === 'transfer') {
+    } else if (filters.kind === 'income') {
+      qb.andWhere(
+        `(concept.kind = :incomeKind OR LOWER(fromAccount.name) LIKE :ingresoName OR UPPER(fromAccount.code) = :ingresoCode)`,
+        { incomeKind: ConceptKind.INCOME, ingresoName: '%ingreso%', ingresoCode: 'INGRESO' },
+      );
       qb.andWhere(
         `(concept.kind IS NULL OR concept.kind <> :expenseKind) AND (toAccount.id IS NULL OR (LOWER(toAccount.name) NOT LIKE :egresoName AND UPPER(COALESCE(toAccount.code, '')) <> :egresoCode))`,
         { expenseKind: ConceptKind.EXPENSE, egresoName: '%egreso%', egresoCode: 'EGRESO' },
+      );
+    } else if (filters.kind === 'transfer') {
+      qb.andWhere(
+        `(concept.kind IS NULL OR (concept.kind <> :expenseKind AND concept.kind <> :incomeKind))
+         AND (toAccount.id IS NULL OR (LOWER(toAccount.name) NOT LIKE :egresoName AND UPPER(COALESCE(toAccount.code, '')) <> :egresoCode))
+         AND (fromAccount.id IS NULL OR (LOWER(fromAccount.name) NOT LIKE :ingresoName AND UPPER(COALESCE(fromAccount.code, '')) <> :ingresoCode))`,
+        {
+          expenseKind: ConceptKind.EXPENSE,
+          incomeKind: ConceptKind.INCOME,
+          egresoName: '%egreso%',
+          egresoCode: 'EGRESO',
+          ingresoName: '%ingreso%',
+          ingresoCode: 'INGRESO',
+        },
       );
     }
 
@@ -465,6 +526,8 @@ export class MovementsService implements OnModuleInit {
     if (!opts?.fromPayment) {
       if (kind === 'expense') {
         this.assertPerm(user, shopId, 'expenses.manage');
+      } else if (kind === 'income') {
+        this.assertPerm(user, shopId, 'incomes.manage');
       } else if (kind === 'transfer') {
         this.assertPerm(user, shopId, 'accountTransfers.manage');
       } else {
@@ -473,19 +536,30 @@ export class MovementsService implements OnModuleInit {
           shopId,
           'expenses.manage',
           'accountTransfers.manage',
+          'incomes.manage',
           'movements.manage',
         );
       }
     }
 
     let conceptId = dto.conceptId ?? null;
-    const fromAccountId = this.normalizeAccountId(dto.fromAccountId);
-    const toAccountId = this.normalizeAccountId(dto.toAccountId);
+    let fromAccountId = this.normalizeAccountId(dto.fromAccountId);
+    let toAccountId = this.normalizeAccountId(dto.toAccountId);
     const fromUserId = this.normalizeUserId(dto.fromUserId);
     const toUserId = this.normalizeUserId(dto.toUserId);
 
+    if (kind === 'income' && !fromAccountId) {
+      const ingreso = await this.findSystemAccount(shopId, 'INGRESO');
+      if (!ingreso) throw new BadRequestException('Falta la cuenta de Ingreso del local');
+      fromAccountId = ingreso.id;
+    }
+    if (kind === 'expense' && !toAccountId) {
+      const egreso = await this.findSystemAccount(shopId, 'EGRESO');
+      if (!egreso) throw new BadRequestException('Falta la cuenta de Egreso del local');
+      toAccountId = egreso.id;
+    }
+
     if (kind === 'transfer') {
-      conceptId = null;
       if (!fromAccountId || !toAccountId) {
         throw new BadRequestException('La transferencia requiere cuenta origen y destino');
       }
@@ -493,8 +567,12 @@ export class MovementsService implements OnModuleInit {
         throw new BadRequestException('Origen y destino deben ser distintos');
       }
     }
-    if (kind === 'expense') {
-      if (!conceptId) throw new BadRequestException('El gasto requiere un concepto');
+    if (kind === 'expense' && !conceptId) {
+      throw new BadRequestException('El gasto requiere un concepto');
+    }
+    if (kind === 'income') {
+      if (!conceptId) throw new BadRequestException('El ingreso requiere un concepto');
+      if (!toAccountId) throw new BadRequestException('El ingreso requiere cuenta destino');
     }
 
     let paymentMethod: string | null = null;
@@ -520,6 +598,9 @@ export class MovementsService implements OnModuleInit {
       if (!c) throw new BadRequestException('Concepto inválido');
       if (kind === 'expense' && c.kind !== ConceptKind.EXPENSE) {
         throw new BadRequestException('El concepto debe ser de tipo egreso');
+      }
+      if (kind === 'income' && c.kind !== ConceptKind.INCOME) {
+        throw new BadRequestException('El concepto debe ser de tipo ingreso');
       }
     }
     const amountUsd =
@@ -621,7 +702,7 @@ export class MovementsService implements OnModuleInit {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.movements.findOne({
       where: { id, shopId },
-      relations: ['toAccount', 'concept'],
+      relations: ['fromAccount', 'toAccount', 'concept'],
     });
     if (!row) throw new NotFoundException('Movimiento no encontrado');
     if (row.closingId && !isGlobalAdmin(user.globalRole as GlobalRole)) {
@@ -635,15 +716,30 @@ export class MovementsService implements OnModuleInit {
       toAccountName: row.toAccount?.name,
       toAccountCode: row.toAccount?.code,
     });
+    const asIncome = this.isIncomeRow({
+      conceptKind: row.concept?.kind,
+      fromAccountName: row.fromAccount?.name,
+      fromAccountCode: row.fromAccount?.code,
+      toAccountName: row.toAccount?.name,
+      toAccountCode: row.toAccount?.code,
+    });
     if (!opts?.fromPayment) {
       if (asExpense) {
         if (!canEditExpenses(user, shopId)) {
           throw new ForbiddenException('No tenés permiso para editar gastos');
         }
+      } else if (asIncome) {
+        this.assertPerm(user, shopId, 'incomes.manage');
       } else this.assertPerm(user, shopId, 'accountTransfers.manage');
     }
 
-    const kind = dto.kind ?? (asExpense ? 'expense' : 'transfer');
+    const kind = dto.kind ?? this.classifyRow({
+      conceptKind: row.concept?.kind,
+      fromAccountName: row.fromAccount?.name,
+      fromAccountCode: row.fromAccount?.code,
+      toAccountName: row.toAccount?.name,
+      toAccountCode: row.toAccount?.code,
+    });
 
     const fromId =
       dto.fromAccountId !== undefined
@@ -681,12 +777,15 @@ export class MovementsService implements OnModuleInit {
     }
 
     if (kind === 'transfer') {
-      row.conceptId = null;
       if (!fromId || !toId) {
         throw new BadRequestException('La transferencia requiere cuenta origen y destino');
       }
     } else if (dto.conceptId !== undefined) {
-      if (!dto.conceptId) throw new BadRequestException('El gasto requiere un concepto');
+      if (!dto.conceptId) {
+        throw new BadRequestException(
+          kind === 'income' ? 'El ingreso requiere un concepto' : 'El gasto requiere un concepto',
+        );
+      }
       const c = await this.concepts.findOne({
         where: { id: dto.conceptId, shopId, active: true },
       });
@@ -710,12 +809,12 @@ export class MovementsService implements OnModuleInit {
 
     await this.movements.save(row);
     const saved = await this.one(user, shopId, id);
-    if (asExpense) {
+    if (asExpense || asIncome) {
       await this.notifyMovementChange(
         user,
         shopId,
         NotificationType.MOVEMENT_UPDATED,
-        'Gasto editado',
+        asIncome ? 'Ingreso editado' : 'Gasto editado',
         saved,
         dto,
       );
@@ -754,19 +853,28 @@ export class MovementsService implements OnModuleInit {
       toAccountName: row.toAccount?.name,
       toAccountCode: row.toAccount?.code,
     });
+    const asIncome = this.isIncomeRow({
+      conceptKind: row.concept?.kind,
+      fromAccountName: row.fromAccount?.name,
+      fromAccountCode: row.fromAccount?.code,
+      toAccountName: row.toAccount?.name,
+      toAccountCode: row.toAccount?.code,
+    });
     if (!opts?.fromPayment) {
       if (asExpense) {
         if (!canEditExpenses(user, shopId)) {
           throw new ForbiddenException('No tenés permiso para borrar gastos');
         }
+      } else if (asIncome) {
+        this.assertPerm(user, shopId, 'incomes.manage');
       } else this.assertPerm(user, shopId, 'accountTransfers.manage');
     }
-    if (asExpense && !opts?.fromPayment) {
+    if ((asExpense || asIncome) && !opts?.fromPayment) {
       await this.notifyMovementChange(
         user,
         shopId,
         NotificationType.MOVEMENT_DELETED,
-        'Gasto eliminado',
+        asIncome ? 'Ingreso eliminado' : 'Gasto eliminado',
         {
           businessDate: String(row.businessDate ?? ''),
           amountUyu: n(row.amountUyu),

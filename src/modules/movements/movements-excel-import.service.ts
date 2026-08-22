@@ -31,7 +31,24 @@ export interface MovementImportItem {
   alreadyExists: boolean;
   valid: boolean;
   error?: string;
+  detectedKind: 'expense' | 'income' | 'transfer';
 }
+
+export type LedgerImportKind = 'expense' | 'income' | 'transfer';
+
+/** Cómo matchear una cuenta del Excel con una del local. */
+export type AccountImportMapping = {
+  excelName: string;
+  /** Cuenta existente del local. Si falta y create es true, se crea. */
+  accountId?: string | null;
+  create?: boolean;
+};
+
+export type ConceptImportMapping = {
+  excelName: string;
+  conceptId?: string | null;
+  create?: boolean;
+};
 
 const TEMPLATE_HEADERS = [
   'Fecha',
@@ -63,21 +80,16 @@ export class MovementsExcelImportService {
   async buildTemplate(
     user: AuthUser,
     shopId: string,
-    kind: 'expense' | 'transfer' = 'expense',
+    _kind: LedgerImportKind = 'expense',
   ) {
     this.shops.assertShopAccess(user, shopId);
     const shop = await this.shops.findOne(user, shopId);
     const wb = new ExcelJS.Workbook();
     wb.creator = 'Cash Register Closings';
 
-    const isTransfer = kind === 'transfer';
     const info = wb.addWorksheet('Instrucciones');
     info.getColumn(1).width = 96;
-    info.addRow([
-      isTransfer
-        ? 'Plantilla / importación de movimientos entre cuentas'
-        : 'Plantilla / importación de gastos',
-    ]);
+    info.addRow(['Plantilla / importación del libro (gastos, ingresos y pases entre cuentas)']);
     info.getRow(1).font = { bold: true, size: 13 };
     info.addRow([`Local: ${shop.name}`]);
     info.addRow([]);
@@ -87,15 +99,16 @@ export class MovementsExcelImportService {
     info.addRow([
       'Columnas clave: Fecha, Cuenta Emisora, Cuenta Receptora, Descripción, Importe $, Concepto validado.',
     ]);
-    if (isTransfer) {
-      info.addRow([
-        'Para transferencias: dejá vacío el Concepto y usá dos cuentas (no Egreso). Ejemplo: MP → Efectivo Caja.',
-      ]);
-    } else {
-      info.addRow([
-        'Para gastos: usá cuenta receptora Egreso (o similar) y un Concepto. Ejemplo: MP → 2. Egreso.',
-      ]);
-    }
+    info.addRow([
+      'Gasto: receptora 2. Egreso (o similar). Ejemplo: MP Toma → 2. Egreso, concepto Materia prima.',
+    ]);
+    info.addRow([
+      'Ingreso: emisora 1. Ingreso (o similar). Ejemplo: 1. Ingreso → MP Toma, concepto EFECTIVO ingreso.',
+    ]);
+    info.addRow([
+      'Pase entre cuentas: dos cuentas operativas (no Ingreso/Egreso). Ejemplo: MP Toma → Efectivo Caja.',
+    ]);
+    info.addRow(['Al importar vas a ver una vista previa y podés elegir qué módulos cargar.']);
     info.addRow(['Si la cuenta o el concepto no existen en el local, se crean al confirmar la importación.']);
     info.addRow([
       'Filas ya existentes (misma fecha, cuentas, monto y descripción) se omiten: podés subir el mismo Excel dos veces sin duplicar.',
@@ -115,41 +128,49 @@ export class MovementsExcelImportService {
     };
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
-    if (isTransfer) {
-      ws.addRow([
-        this.toIsoDate(yesterday),
-        'MP Toma',
-        'Efectivo Caja',
-        'Ejemplo pase a efectivo',
-        5000,
-        '',
-        '',
-        '',
-        false,
-        '',
-      ]);
-    } else {
-      ws.addRow([
-        this.toIsoDate(yesterday),
-        'MP Toma',
-        '2. Egreso',
-        'Ejemplo materia prima',
-        10000,
-        '',
-        '',
-        'Materia prima',
-        false,
-        '',
-      ]);
-    }
+    const iso = this.toIsoDate(yesterday);
+    ws.addRow([
+      iso,
+      'MP Toma',
+      '2. Egreso',
+      'Ejemplo materia prima',
+      10000,
+      '',
+      '',
+      'Materia prima',
+      false,
+      '',
+    ]);
+    ws.addRow([
+      iso,
+      '1. Ingreso',
+      'MP Toma',
+      'Ejemplo efectivo ingreso',
+      8000,
+      '',
+      '',
+      'EFECTIVO ingreso',
+      false,
+      '',
+    ]);
+    ws.addRow([
+      iso,
+      'MP Toma',
+      'Efectivo Caja',
+      'Ejemplo pase a efectivo',
+      5000,
+      '',
+      '',
+      'Transferencia e/ cuentas',
+      false,
+      '',
+    ]);
 
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());
     const slug = shop.slug || 'local';
     return {
       buffer,
-      filename: isTransfer
-        ? `plantilla-transferencias-${slug}.xlsx`
-        : `plantilla-gastos-${slug}.xlsx`,
+      filename: `plantilla-libro-diario-${slug}.xlsx`,
     };
   }
 
@@ -157,7 +178,7 @@ export class MovementsExcelImportService {
   async exportRange(
     user: AuthUser,
     shopId: string,
-    filters: { from?: string; to?: string; kind?: 'expense' | 'transfer' } = {},
+    filters: { from?: string; to?: string; kind?: LedgerImportKind } = {},
   ) {
     this.shops.assertShopAccess(user, shopId);
     const shop = await this.shops.findOne(user, shopId);
@@ -179,10 +200,28 @@ export class MovementsExcelImportService {
         `(concept.kind = :expenseKind OR LOWER(toAccount.name) LIKE :egresoName OR UPPER(toAccount.code) = :egresoCode)`,
         { expenseKind: 'EXPENSE', egresoName: '%egreso%', egresoCode: 'EGRESO' },
       );
-    } else if (filters.kind === 'transfer') {
+    } else if (filters.kind === 'income') {
+      qb.andWhere(
+        `(concept.kind = :incomeKind OR LOWER(fromAccount.name) LIKE :ingresoName OR UPPER(fromAccount.code) = :ingresoCode)`,
+        { incomeKind: 'INCOME', ingresoName: '%ingreso%', ingresoCode: 'INGRESO' },
+      );
       qb.andWhere(
         `(concept.kind IS NULL OR concept.kind <> :expenseKind) AND (toAccount.id IS NULL OR (LOWER(toAccount.name) NOT LIKE :egresoName AND UPPER(COALESCE(toAccount.code, '')) <> :egresoCode))`,
         { expenseKind: 'EXPENSE', egresoName: '%egreso%', egresoCode: 'EGRESO' },
+      );
+    } else if (filters.kind === 'transfer') {
+      qb.andWhere(
+        `(concept.kind IS NULL OR (concept.kind <> :expenseKind AND concept.kind <> :incomeKind))
+         AND (toAccount.id IS NULL OR (LOWER(toAccount.name) NOT LIKE :egresoName AND UPPER(COALESCE(toAccount.code, '')) <> :egresoCode))
+         AND (fromAccount.id IS NULL OR (LOWER(fromAccount.name) NOT LIKE :ingresoName AND UPPER(COALESCE(fromAccount.code, '')) <> :ingresoCode))`,
+        {
+          expenseKind: 'EXPENSE',
+          incomeKind: 'INCOME',
+          egresoName: '%egreso%',
+          egresoCode: 'EGRESO',
+          ingresoName: '%ingreso%',
+          ingresoCode: 'INGRESO',
+        },
       );
     }
     qb.orderBy('m.businessDate', 'ASC').addOrderBy('m.createdAt', 'ASC');
@@ -257,7 +296,7 @@ export class MovementsExcelImportService {
     user: AuthUser,
     shopId: string,
     file: Express.Multer.File,
-    kind?: 'expense' | 'transfer',
+    kind?: LedgerImportKind,
   ) {
     this.shops.assertShopAccess(user, shopId);
     const drafts = await this.parseWorkbook(file);
@@ -268,11 +307,17 @@ export class MovementsExcelImportService {
     user: AuthUser,
     shopId: string,
     file: Express.Multer.File,
-    kind?: 'expense' | 'transfer',
+    kind?: LedgerImportKind,
+    modules?: LedgerImportKind[],
+    accountMap?: AccountImportMapping[],
+    conceptMap?: ConceptImportMapping[],
   ) {
     this.shops.assertShopAccess(user, shopId);
     const items = await this.enrich(shopId, await this.parseWorkbook(file), kind);
-    const valid = items.filter((i) => i.valid && !i.alreadyExists);
+    const selected = this.normalizeModules(kind, modules);
+    const valid = items.filter(
+      (i) => i.valid && !i.alreadyExists && (!selected || selected.includes(i.detectedKind)),
+    );
     const skipped = items.filter((i) => i.alreadyExists);
     if (!valid.length) {
       if (skipped.length) {
@@ -294,11 +339,21 @@ export class MovementsExcelImportService {
     }
 
     const accountCache = new Map<string, LedgerAccount>();
+    const accountById = new Map<string, LedgerAccount>();
     const conceptCache = new Map<string, Concept>();
-    const accounts = await this.accounts.find({ where: { shopId } });
-    for (const a of accounts) accountCache.set(this.norm(a.name), a);
-    const concepts = await this.concepts.find({ where: { shopId } });
-    for (const c of concepts) conceptCache.set(this.norm(c.name), c);
+    const accounts = await this.accounts.find({ where: { shopId }, withDeleted: true });
+    for (const a of accounts) {
+      accountCache.set(this.norm(a.name), a);
+      accountById.set(a.id, a);
+    }
+    const mappingByExcel = this.indexAccountMap(accountMap);
+    const conceptById = new Map<string, Concept>();
+    const concepts = await this.concepts.find({ where: { shopId }, withDeleted: true });
+    for (const c of concepts) {
+      conceptCache.set(this.norm(c.name), c);
+      conceptById.set(c.id, c);
+    }
+    const conceptMapping = this.indexConceptMap(conceptMap);
 
     const created: string[] = [];
     const createdAccounts: string[] = [];
@@ -310,52 +365,35 @@ export class MovementsExcelImportService {
     }));
 
     for (const item of valid) {
-      let from = accountCache.get(this.norm(item.fromAccountName));
-      if (!from) {
-        from = await this.accounts.save(
-          this.accounts.create({
-            shopId,
-            name: item.fromAccountName,
-            code: this.makeCode(item.fromAccountName),
-            type: this.guessAccountType(item.fromAccountName),
-            active: true,
-          }),
-        );
-        accountCache.set(this.norm(from.name), from);
-        createdAccounts.push(from.name);
-      }
-
-      let to = accountCache.get(this.norm(item.toAccountName));
-      if (!to) {
-        to = await this.accounts.save(
-          this.accounts.create({
-            shopId,
-            name: item.toAccountName,
-            code: this.makeCode(item.toAccountName),
-            type: this.guessAccountType(item.toAccountName),
-            active: true,
-          }),
-        );
-        accountCache.set(this.norm(to.name), to);
-        createdAccounts.push(to.name);
-      }
+      const from = await this.resolveMappedAccount(
+        shopId,
+        item.fromAccountName,
+        accountCache,
+        accountById,
+        mappingByExcel,
+        createdAccounts,
+      );
+      const to = await this.resolveMappedAccount(
+        shopId,
+        item.toAccountName,
+        accountCache,
+        accountById,
+        mappingByExcel,
+        createdAccounts,
+      );
 
       let conceptId: string | null = null;
-      if (kind !== 'transfer' && item.conceptName) {
-        let concept = conceptCache.get(this.norm(item.conceptName));
-        if (!concept) {
-          concept = await this.concepts.save(
-            this.concepts.create({
-              shopId,
-              name: item.conceptName,
-              kind: this.guessConceptKind(item.fromAccountName, item.toAccountName),
-              active: true,
-              validated: true,
-            }),
-          );
-          conceptCache.set(this.norm(concept.name), concept);
-          createdConcepts.push(concept.name);
-        }
+      if (item.conceptName) {
+        const concept = await this.resolveMappedConcept(
+          shopId,
+          item.conceptName,
+          item.fromAccountName,
+          item.toAccountName,
+          conceptCache,
+          conceptById,
+          conceptMapping,
+          createdConcepts,
+        );
         conceptId = concept.id;
       }
 
@@ -426,8 +464,9 @@ export class MovementsExcelImportService {
       | 'alreadyExists'
       | 'valid'
       | 'error'
+      | 'detectedKind'
     >>,
-    kind?: 'expense' | 'transfer',
+    kind?: LedgerImportKind,
   ): Promise<MovementImportItem[]> {
     const accounts = await this.accounts.find({ where: { shopId, active: true } });
     const concepts = await this.concepts.find({ where: { shopId, active: true } });
@@ -474,23 +513,9 @@ export class MovementsExcelImportService {
         errors.push('Emisora y receptora deben ser distintas');
       }
 
-      const looksExpense = this.rowLooksLikeExpense(d.toAccountName, d.conceptName, concept?.kind);
-      if (kind === 'expense' && !looksExpense) {
-        errors.push('No parece un gasto (falta Egreso o concepto); usá Movimientos entre cuentas');
-      }
-      if (kind === 'transfer') {
-        if (d.conceptName) {
-          errors.push('Las transferencias no llevan concepto');
-        } else if (looksExpense) {
-          errors.push('Parece un gasto; importalo desde Gastos');
-        }
-      }
+      const detectedKind = this.classifyLedgerRow(d.fromAccountName, d.toAccountName);
 
-      const fingerprintInput =
-        kind === 'transfer'
-          ? { ...d, conceptName: null }
-          : d;
-      const fp = this.movementFingerprint(fingerprintInput);
+      const fp = this.movementFingerprint(d);
       const alreadyExists = existingFingerprints.has(fp) || seenInFile.has(fp);
       if (d.businessDate && d.fromAccountName && d.toAccountName) {
         seenInFile.add(fp);
@@ -499,32 +524,186 @@ export class MovementsExcelImportService {
         ...d,
         fromAccountId: from?.id ?? null,
         toAccountId: to?.id ?? null,
-        conceptId: kind === 'transfer' ? null : concept?.id ?? null,
+        conceptId: concept?.id ?? null,
         willCreateFromAccount: !!d.fromAccountName && !from,
         willCreateToAccount: !!d.toAccountName && !to,
-        willCreateConcept: kind !== 'transfer' && !!d.conceptName && !concept,
+        willCreateConcept: !!d.conceptName && !concept,
         alreadyExists,
         valid: errors.length === 0,
         error: errors.length ? errors.join('; ') : undefined,
+        detectedKind,
       };
     });
   }
 
-  /** Misma heurística que el listado: egreso o concepto de egreso. */
-  private rowLooksLikeExpense(
-    toAccountName: string,
-    conceptName: string | null,
-    conceptKind?: ConceptKind | null,
-  ): boolean {
-    const to = this.norm(toAccountName);
-    if (to.includes('egreso') || to === 'egreso') return true;
-    if (conceptKind === ConceptKind.EXPENSE) return true;
-    if (conceptName && this.guessConceptKind('', toAccountName) === ConceptKind.EXPENSE) {
-      return true;
+  private isEgresoName(name: string): boolean {
+    const v = this.norm(name);
+    return v === 'egreso' || v.includes('egreso');
+  }
+
+  private isIngresoName(name: string): boolean {
+    const v = this.norm(name);
+    return v === 'ingreso' || v.includes('ingreso');
+  }
+
+  private classifyLedgerRow(fromName: string, toName: string): LedgerImportKind {
+    if (this.isEgresoName(toName)) return 'expense';
+    if (this.isIngresoName(fromName)) return 'income';
+    return 'transfer';
+  }
+
+  private normalizeModules(
+    kind?: LedgerImportKind,
+    modules?: LedgerImportKind[],
+  ): LedgerImportKind[] | undefined {
+    const allowed: LedgerImportKind[] = ['expense', 'income', 'transfer'];
+    const fromQuery = (modules ?? []).filter((m): m is LedgerImportKind =>
+      allowed.includes(m),
+    );
+    if (fromQuery.length) return [...new Set(fromQuery)];
+    if (kind && allowed.includes(kind)) return [kind];
+    return undefined;
+  }
+
+  private indexAccountMap(mappings?: AccountImportMapping[]) {
+    const map = new Map<string, AccountImportMapping>();
+    for (const m of mappings ?? []) {
+      const key = this.norm(m.excelName ?? '');
+      if (!key) continue;
+      map.set(key, m);
     }
-    // Concepto informado sin cuenta egreso: igual se trata como gasto de libro.
-    if (conceptName) return true;
-    return false;
+    return map;
+  }
+
+  private async resolveMappedAccount(
+    shopId: string,
+    excelName: string,
+    cacheByName: Map<string, LedgerAccount>,
+    byId: Map<string, LedgerAccount>,
+    mappingByExcel: Map<string, AccountImportMapping>,
+    createdAccounts: string[],
+  ): Promise<LedgerAccount> {
+    const key = this.norm(excelName);
+    const mapped = mappingByExcel.get(key);
+    if (mapped?.accountId) {
+      const existing = byId.get(mapped.accountId);
+      if (existing) {
+        cacheByName.set(key, existing);
+        return existing;
+      }
+    }
+    const cached = cacheByName.get(key);
+    if (cached) return cached;
+
+    try {
+      const created = await this.accounts.save(
+        this.accounts.create({
+          shopId,
+          name: excelName.trim(),
+          code: this.makeCode(excelName),
+          type: this.guessAccountType(excelName),
+          active: true,
+        }),
+      );
+      cacheByName.set(key, created);
+      cacheByName.set(this.norm(created.name), created);
+      byId.set(created.id, created);
+      createdAccounts.push(created.name);
+      return created;
+    } catch (err) {
+      if (!this.isDuplicateError(err)) throw err;
+      const existing = await this.accounts.findOne({
+        where: { shopId, name: excelName.trim() },
+        withDeleted: true,
+      });
+      if (!existing) throw err;
+      cacheByName.set(key, existing);
+      cacheByName.set(this.norm(existing.name), existing);
+      byId.set(existing.id, existing);
+      return existing;
+    }
+  }
+
+  private indexConceptMap(mappings?: ConceptImportMapping[]) {
+    const map = new Map<string, ConceptImportMapping>();
+    for (const m of mappings ?? []) {
+      const key = this.norm(m.excelName ?? '');
+      if (!key) continue;
+      map.set(key, m);
+    }
+    return map;
+  }
+
+  private async resolveMappedConcept(
+    shopId: string,
+    excelName: string,
+    fromAccountName: string,
+    toAccountName: string,
+    cacheByName: Map<string, Concept>,
+    byId: Map<string, Concept>,
+    mappingByExcel: Map<string, ConceptImportMapping>,
+    createdConcepts: string[],
+  ): Promise<Concept> {
+    const key = this.norm(excelName);
+    const mapped = mappingByExcel.get(key);
+    if (mapped?.conceptId) {
+      const existing = byId.get(mapped.conceptId);
+      if (existing) {
+        cacheByName.set(key, existing);
+        return existing;
+      }
+    }
+    const cached = cacheByName.get(key);
+    if (cached) return cached;
+
+    try {
+      const created = await this.concepts.save(
+        this.concepts.create({
+          shopId,
+          name: excelName.trim(),
+          kind: this.guessConceptKind(fromAccountName, toAccountName),
+          active: true,
+          validated: true,
+        }),
+      );
+      cacheByName.set(key, created);
+      cacheByName.set(this.norm(created.name), created);
+      byId.set(created.id, created);
+      createdConcepts.push(created.name);
+      return created;
+    } catch (err) {
+      if (!this.isDuplicateError(err)) throw err;
+      const existing =
+        (await this.concepts.findOne({
+          where: { shopId, name: excelName.trim() },
+          withDeleted: true,
+        })) ??
+        (await this.findConceptByNormalizedName(shopId, key));
+      if (!existing) throw err;
+      cacheByName.set(key, existing);
+      cacheByName.set(this.norm(existing.name), existing);
+      byId.set(existing.id, existing);
+      return existing;
+    }
+  }
+
+  private async findConceptByNormalizedName(shopId: string, key: string) {
+    const rows = await this.concepts.find({ where: { shopId }, withDeleted: true });
+    return rows.find((c) => this.norm(c.name) === key) ?? null;
+  }
+
+  private isDuplicateError(err: unknown): boolean {
+    const any = err as {
+      code?: string | number;
+      errno?: number;
+      driverError?: { code?: string; errno?: number };
+    };
+    return (
+      any?.code === 'ER_DUP_ENTRY' ||
+      any?.errno === 1062 ||
+      any?.driverError?.code === 'ER_DUP_ENTRY' ||
+      any?.driverError?.errno === 1062
+    );
   }
 
   private async parseWorkbook(file: Express.Multer.File) {

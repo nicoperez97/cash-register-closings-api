@@ -83,10 +83,10 @@ class CreateMovementDto {
   @IsOptional()
   @IsIn(['cash', 'transfer', 'card'])
   paymentMethod?: 'cash' | 'transfer' | 'card' | null;
-  @ApiPropertyOptional({ enum: ['expense', 'transfer'] })
+  @ApiPropertyOptional({ enum: ['expense', 'income', 'transfer'] })
   @IsOptional()
-  @IsIn(['expense', 'transfer'])
-  kind?: 'expense' | 'transfer';
+  @IsIn(['expense', 'income', 'transfer'])
+  kind?: 'expense' | 'income' | 'transfer';
 }
 
 class UpdateMovementDto {
@@ -119,10 +119,10 @@ class UpdateMovementDto {
   @ApiPropertyOptional() @IsOptional() @IsBoolean() invoiced?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsString() invoiceNumber?: string | null;
   @ApiPropertyOptional() @IsOptional() employeeId?: string | null;
-  @ApiPropertyOptional({ enum: ['expense', 'transfer'] })
+  @ApiPropertyOptional({ enum: ['expense', 'income', 'transfer'] })
   @IsOptional()
-  @IsIn(['expense', 'transfer'])
-  kind?: 'expense' | 'transfer';
+  @IsIn(['expense', 'income', 'transfer'])
+  kind?: 'expense' | 'income' | 'transfer';
   @ApiPropertyOptional({ enum: ['cash', 'transfer', 'card'] })
   @IsOptional()
   @IsIn(['cash', 'transfer', 'card'])
@@ -146,7 +146,7 @@ export class MovementsController {
   ) {}
 
   @Get()
-  @RequireAnyPermissions('expenses.read', 'accountTransfers.read', 'movements.read')
+  @RequireAnyPermissions('expenses.read', 'accountTransfers.read', 'incomes.read', 'movements.read')
   list(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -157,7 +157,7 @@ export class MovementsController {
     @Query('conceptId') conceptId?: string,
     @Query('closingId') closingId?: string,
     @Query('q') q?: string,
-    @Query('kind') kind?: 'expense' | 'transfer',
+    @Query('kind') kind?: 'expense' | 'income' | 'transfer',
     @Query('source') source?: 'closing' | 'payment' | 'manual',
     @Query('partyType') partyType?: 'supplier' | 'service' | 'employee',
     @Query('invoiced') invoiced?: string,
@@ -191,7 +191,7 @@ export class MovementsController {
   }
 
   @Get('balances')
-  @RequireAnyPermissions('expenses.read', 'accountTransfers.read', 'movements.read')
+  @RequireAnyPermissions('expenses.read', 'accountTransfers.read', 'incomes.read', 'movements.read')
   balances(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -202,7 +202,7 @@ export class MovementsController {
   }
 
   @Get('balances/export.xlsx')
-  @RequireAnyPermissions('expenses.read', 'accountTransfers.read', 'movements.read')
+  @RequireAnyPermissions('expenses.read', 'accountTransfers.read', 'incomes.read', 'movements.read')
   async exportBalances(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -223,17 +223,22 @@ export class MovementsController {
   }
 
   @Get('import-template.xlsx')
-  @RequireAnyPermissions('expenses.manage', 'accountTransfers.manage', 'movements.manage')
+  @RequireAnyPermissions(
+    'expenses.manage',
+    'accountTransfers.manage',
+    'incomes.manage',
+    'movements.manage',
+  )
   async importTemplate(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
-    @Query('kind') kind: 'expense' | 'transfer' | undefined,
+    @Query('kind') kind: 'expense' | 'income' | 'transfer' | undefined,
     @Res() res: Response,
   ) {
     const { buffer, filename } = await this.excelImport.buildTemplate(
       user,
       shopId,
-      kind === 'transfer' ? 'transfer' : 'expense',
+      kind === 'income' || kind === 'transfer' ? kind : 'expense',
     );
     res.setHeader(
       'Content-Type',
@@ -244,13 +249,13 @@ export class MovementsController {
   }
 
   @Get('export.xlsx')
-  @RequireAnyPermissions('expenses.read', 'accountTransfers.read', 'movements.read')
+  @RequireAnyPermissions('expenses.read', 'accountTransfers.read', 'incomes.read', 'movements.read')
   async export(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
     @Query('from') from: string | undefined,
     @Query('to') to: string | undefined,
-    @Query('kind') kind: 'expense' | 'transfer' | undefined,
+    @Query('kind') kind: 'expense' | 'income' | 'transfer' | undefined,
     @Res() res: Response,
   ) {
     const { buffer, filename } = await this.excelImport.exportRange(user, shopId, {
@@ -267,7 +272,12 @@ export class MovementsController {
   }
 
   @Post('import-excel')
-  @RequireAnyPermissions('expenses.manage', 'accountTransfers.manage', 'movements.manage')
+  @RequireAnyPermissions(
+    'expenses.manage',
+    'accountTransfers.manage',
+    'incomes.manage',
+    'movements.manage',
+  )
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
@@ -285,8 +295,11 @@ export class MovementsController {
     @Param('shopId') shopId: string,
     @UploadedFile() file: Express.Multer.File,
     @Query('commit') commit?: string,
-    @Query('kind') kind?: 'expense' | 'transfer',
+    @Query('kind') kind?: 'expense' | 'income' | 'transfer',
+    @Query('modules') modules?: string,
     @Body('commit') commitBody?: string | boolean,
+    @Body('accountMap') accountMapBody?: string,
+    @Body('conceptMap') conceptMapBody?: string,
   ) {
     if (!file) throw new BadRequestException('Adjuntá el Excel (.xlsx)');
     const doCommit =
@@ -295,14 +308,39 @@ export class MovementsController {
       commitBody === true ||
       commitBody === 'true' ||
       commitBody === '1';
-    const importKind = kind === 'expense' || kind === 'transfer' ? kind : undefined;
+    const importKind =
+      kind === 'expense' || kind === 'income' || kind === 'transfer' ? kind : undefined;
+    const parsedModules = (modules ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter((m): m is 'expense' | 'income' | 'transfer' =>
+        m === 'expense' || m === 'income' || m === 'transfer',
+      );
+    let accountMap: Array<{ excelName: string; accountId?: string | null; create?: boolean }> | undefined;
+    if (accountMapBody) {
+      try {
+        const parsed = JSON.parse(accountMapBody);
+        if (Array.isArray(parsed)) accountMap = parsed;
+      } catch {
+        throw new BadRequestException('El mapa de cuentas no es válido');
+      }
+    }
+    let conceptMap: Array<{ excelName: string; conceptId?: string | null; create?: boolean }> | undefined;
+    if (conceptMapBody) {
+      try {
+        const parsed = JSON.parse(conceptMapBody);
+        if (Array.isArray(parsed)) conceptMap = parsed;
+      } catch {
+        throw new BadRequestException('El mapa de conceptos no es válido');
+      }
+    }
     return doCommit
-      ? this.excelImport.commit(user, shopId, file, importKind)
+      ? this.excelImport.commit(user, shopId, file, importKind, parsedModules, accountMap, conceptMap)
       : this.excelImport.preview(user, shopId, file, importKind);
   }
 
   @Get(':id')
-  @RequireAnyPermissions('expenses.read', 'accountTransfers.read', 'movements.read')
+  @RequireAnyPermissions('expenses.read', 'accountTransfers.read', 'incomes.read', 'movements.read')
   one(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -312,7 +350,12 @@ export class MovementsController {
   }
 
   @Post()
-  @RequireAnyPermissions('expenses.manage', 'accountTransfers.manage', 'movements.manage')
+  @RequireAnyPermissions(
+    'expenses.manage',
+    'accountTransfers.manage',
+    'incomes.manage',
+    'movements.manage',
+  )
   create(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -373,6 +416,7 @@ export class MovementsController {
     'expenses.read',
     'expenses.manage',
     'accountTransfers.manage',
+    'incomes.manage',
     'movements.manage',
   )
   update(
@@ -389,6 +433,7 @@ export class MovementsController {
     'expenses.read',
     'expenses.manage',
     'accountTransfers.manage',
+    'incomes.manage',
     'movements.manage',
   )
   remove(
