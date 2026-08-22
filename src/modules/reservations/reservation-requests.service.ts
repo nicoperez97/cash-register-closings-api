@@ -146,6 +146,11 @@ export class ReservationRequestsService implements OnModuleInit {
       shopSignupEnabled: shopSignupOpen(shop),
       closedWeekdays,
       closedDay,
+      timeRequired: PublicForm.effectiveTimeRequired(
+        shop,
+        overrides?.timeRequired,
+        publicForm.timeSlots.length,
+      ),
       timeSlots: publicForm.timeSlots,
       generalMessage: publicForm.generalMessage,
       weekdayMessage: publicForm.weekdayMessage,
@@ -188,6 +193,18 @@ export class ReservationRequestsService implements OnModuleInit {
     await this.shopsRepo.update(shopId, { reservationPublicForm: config });
     this.live.tick(shopId, 'reservations');
     return config;
+  }
+
+  async setTimeRequired(user: AuthUser, shopId: string, required: boolean) {
+    this.shops.assertShopAccess(user, shopId);
+    await this.shops.assertReservationsEnabled(shopId);
+    const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    const config = PublicForm.storedOrDefaultPublicForm(shop.reservationPublicForm);
+    config.timeRequired = !!required;
+    await this.shopsRepo.update(shopId, { reservationPublicForm: config });
+    this.live.tick(shopId, 'reservations');
+    return { reservationTimeRequired: !!required };
   }
 
   async setAreasEnabled(
@@ -286,6 +303,16 @@ export class ReservationRequestsService implements OnModuleInit {
       reservationTime = null;
     } else if (reservationTime && !formForDay.timeSlots.includes(reservationTime)) {
       throw new BadRequestException('Ese horario no está disponible ese día');
+    }
+    if (
+      PublicForm.effectiveTimeRequired(
+        shop,
+        overrides?.timeRequired,
+        formForDay.timeSlots.length,
+      ) &&
+      !reservationTime
+    ) {
+      throw new BadRequestException('Elegí un horario');
     }
     const area = this.normalizeArea(dto.area);
     if (area === ReservationArea.OUTSIDE && !flags.outsideEnabled) {

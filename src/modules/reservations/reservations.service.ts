@@ -115,6 +115,7 @@ export class ReservationsService implements OnModuleInit {
       `ALTER TABLE reservation_day_notices ADD COLUMN outsideCapacityRemaining INT NULL`,
       `ALTER TABLE reservation_day_notices ADD COLUMN insideMaxPartySize INT NULL`,
       `ALTER TABLE reservation_day_notices ADD COLUMN outsideMinPartySize INT NULL`,
+      `ALTER TABLE reservation_day_notices ADD COLUMN timeRequired TINYINT(1) NULL`,
       `ALTER TABLE reservations ADD COLUMN guestEmail VARCHAR(180) NULL`,
       `ALTER TABLE reservations ADD COLUMN tableNumber VARCHAR(20) NULL`,
     ]) {
@@ -325,6 +326,7 @@ export class ReservationsService implements OnModuleInit {
       insideMaxPartySize?: number | null;
       outsideMaxPartySize?: number | null;
       outsideMinPartySize?: number | null;
+      timeRequired?: boolean | null;
     },
   ) {
     this.shops.assertShopAccess(user, shopId);
@@ -346,7 +348,8 @@ export class ReservationsService implements OnModuleInit {
       dto.outsideCapacityRemaining !== undefined ||
       dto.insideMaxPartySize !== undefined ||
       dto.outsideMaxPartySize !== undefined ||
-      dto.outsideMinPartySize !== undefined;
+      dto.outsideMinPartySize !== undefined ||
+      dto.timeRequired !== undefined;
     if (!touchesMessage && !touchesSettings) {
       throw new BadRequestException('Indicá mensaje o configuración del día');
     }
@@ -368,6 +371,7 @@ export class ReservationsService implements OnModuleInit {
         outsideCapacityRemaining: null,
         insideMaxPartySize: null,
         outsideMinPartySize: null,
+        timeRequired: null,
         active: true,
       });
     }
@@ -397,6 +401,9 @@ export class ReservationsService implements OnModuleInit {
       dto.outsideMaxPartySize !== undefined ? dto.outsideMaxPartySize : dto.outsideMinPartySize;
     if (outsideMax !== undefined) {
       row.outsideMinPartySize = normalizePartyRule(outsideMax);
+    }
+    if (dto.timeRequired !== undefined) {
+      row.timeRequired = dto.timeRequired;
     }
 
     if (!rowHasDayContent(row)) {

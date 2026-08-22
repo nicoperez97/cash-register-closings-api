@@ -250,6 +250,19 @@ class ReservationPublicFormDto {
   @IsOptional()
   @IsObject()
   weekdayMessages?: Record<string, string>;
+
+  @ApiPropertyOptional({
+    description: 'Si es true, el cliente tiene que elegir un horario (cuando hay turnos).',
+  })
+  @IsOptional()
+  @IsBoolean()
+  timeRequired?: boolean;
+}
+
+class SetReservationTimeRequiredDto {
+  @ApiProperty()
+  @IsBoolean()
+  required: boolean;
 }
 
 class SetReservationAreasDto {
@@ -395,6 +408,15 @@ class UpsertDayNoticeDto {
   @Min(1)
   @Max(99)
   outsideMinPartySize?: number | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'NULL hereda del local; true obliga horario; false lo deja opcional.',
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsBoolean()
+  timeRequired?: boolean | null;
 }
 
 @ApiTags('reservations')
@@ -436,6 +458,16 @@ export class ReservationsController {
     @Body() dto: SetReservationSignupDto,
   ) {
     return this.requests.setSignupEnabled(user, shopId, dto.enabled);
+  }
+
+  @Patch('reservation-time-required')
+  @RequirePermissions('reservations.manage')
+  setReservationTimeRequired(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: SetReservationTimeRequiredDto,
+  ) {
+    return this.requests.setTimeRequired(user, shopId, dto.required);
   }
 
   @Get('reservation-public-form')

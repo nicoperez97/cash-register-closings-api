@@ -67,13 +67,15 @@ export class Shop extends BaseEntity {
 
   /**
    * Horarios y mensajes del formulario público de reservas.
-   * hoursByWeekday: "0"…"6" → ["19:30","20:00"]; generalMessage; weekdayMessages.
+   * hoursByWeekday: "0"…"6" → ["19:30","20:00"]; generalMessage; weekdayMessages;
+   * timeRequired.
    */
   @Column({ type: 'simple-json', nullable: true })
   reservationPublicForm?: {
     hoursByWeekday?: Record<string, string[]>;
     generalMessage?: string | null;
     weekdayMessages?: Record<string, string>;
+    timeRequired?: boolean;
   } | null;
 
   /** Si es false, el módulo de lista de espera no está disponible en este local. */

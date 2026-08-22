@@ -18,6 +18,8 @@ export type ReservationDayOverrides = {
   outsideMaxPartySize: number | null;
   /** @deprecated alias de outsideMaxPartySize */
   outsideMinPartySize: number | null;
+  /** NULL = hereda del formulario del local. */
+  timeRequired: boolean | null;
 };
 
 export function shopSignupOpen(shop: Shop): boolean {
@@ -76,6 +78,10 @@ export function dayOverridesFromRow(
       : Number(row.outsideCapacityRemaining);
   const insideMaxPartySize = normalizePartyRule(row.insideMaxPartySize);
   const outsideMinPartySize = normalizePartyRule(row.outsideMinPartySize);
+  const timeRequired =
+    row.timeRequired === null || row.timeRequired === undefined
+      ? null
+      : !!row.timeRequired;
   if (
     signupEnabled === null &&
     insideEnabled === null &&
@@ -83,7 +89,8 @@ export function dayOverridesFromRow(
     insideCapacityRemaining === null &&
     outsideCapacityRemaining === null &&
     insideMaxPartySize === null &&
-    outsideMinPartySize === null
+    outsideMinPartySize === null &&
+    timeRequired === null
   ) {
     return null;
   }
@@ -100,6 +107,7 @@ export function dayOverridesFromRow(
     insideMaxPartySize,
     outsideMaxPartySize: outsideMinPartySize,
     outsideMinPartySize,
+    timeRequired,
   };
 }
 
@@ -308,6 +316,7 @@ export function rowHasDayContent(row: ReservationDayNotice): boolean {
     (row.insideCapacityRemaining !== null && row.insideCapacityRemaining !== undefined) ||
     (row.outsideCapacityRemaining !== null && row.outsideCapacityRemaining !== undefined) ||
     (row.insideMaxPartySize !== null && row.insideMaxPartySize !== undefined) ||
-    (row.outsideMinPartySize !== null && row.outsideMinPartySize !== undefined)
+    (row.outsideMinPartySize !== null && row.outsideMinPartySize !== undefined) ||
+    (row.timeRequired !== null && row.timeRequired !== undefined)
   );
 }
