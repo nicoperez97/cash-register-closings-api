@@ -103,6 +103,14 @@ export class ClosingsService implements OnModuleInit {
     } catch {
       // columna ya existe
     }
+    try {
+      await this.closings.query(`
+        ALTER TABLE cash_closings
+          ADD COLUMN cashOpeningAmount DECIMAL(12,2) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // columna ya existe
+    }
     // Una sola vez: volver al signo caja sistema − declarado (v3).
     try {
       await this.closings.query(`
@@ -255,6 +263,7 @@ export class ClosingsService implements OnModuleInit {
       })),
       unitsSold: c.unitsSold, coversCount: c.coversCount,
       averageTicket: c.averageTicket != null ? n(c.averageTicket) : null,
+      cashOpeningAmount: n(c.cashOpeningAmount),
       cashLeftInRegister: n(c.cashLeftInRegister), cashPendingPickup: n(c.cashPendingPickup),
       cashWithdrawn: n(c.cashWithdrawn), cashWithdrawnByUserId: c.cashWithdrawnByUserId,
       cashWithdrawnByEmployeeId: c.cashWithdrawnByEmployeeId ?? null, cashWithdrawnByName: c.cashWithdrawnByName,
@@ -369,6 +378,7 @@ export class ClosingsService implements OnModuleInit {
       posnetAmounts,
       unitsSold: normalized.unitsSold ?? null, coversCount: normalized.coversCount ?? null,
       averageTicket: normalized.averageTicket != null ? money(normalized.averageTicket) : null,
+      cashOpeningAmount: money(n(normalized.cashOpeningAmount)),
       cashLeftInRegister: money(n(normalized.cashLeftInRegister)), cashPendingPickup: money(n(normalized.cashPendingPickup)),
       cashWithdrawn: money(n(normalized.cashWithdrawn)),
       cashWithdrawnByUserId: withdrawn.cashWithdrawnByUserId,
@@ -422,6 +432,7 @@ export class ClosingsService implements OnModuleInit {
       unitsSold: dto.unitsSold !== undefined ? dto.unitsSold : row.unitsSold ?? undefined,
       coversCount: dto.coversCount !== undefined ? dto.coversCount : row.coversCount ?? undefined,
       averageTicket: dto.averageTicket !== undefined ? dto.averageTicket : row.averageTicket != null ? n(row.averageTicket) : undefined,
+      cashOpeningAmount: dto.cashOpeningAmount ?? n(row.cashOpeningAmount),
       cashLeftInRegister: dto.cashLeftInRegister ?? n(row.cashLeftInRegister),
       cashPendingPickup: dto.cashPendingPickup ?? n(row.cashPendingPickup),
       cashWithdrawn: dto.cashWithdrawn ?? n(row.cashWithdrawn),
@@ -474,6 +485,7 @@ export class ClosingsService implements OnModuleInit {
       posnetAmounts,
       unitsSold: merged.unitsSold ?? null, coversCount: merged.coversCount ?? null,
       averageTicket: merged.averageTicket != null ? money(merged.averageTicket) : null,
+      cashOpeningAmount: money(n(merged.cashOpeningAmount)),
       cashLeftInRegister: money(n(merged.cashLeftInRegister)), cashPendingPickup: money(n(merged.cashPendingPickup)),
       cashWithdrawn: money(n(merged.cashWithdrawn)),
       cashWithdrawnByUserId: withdrawn.cashWithdrawnByUserId,

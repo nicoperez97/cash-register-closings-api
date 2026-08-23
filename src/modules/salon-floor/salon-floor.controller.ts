@@ -129,6 +129,12 @@ export class SalonFloorController {
     return this.salon.removeTable(user, shopId, id);
   }
 
+  @Post('from-reservations')
+  @RequirePermissions('reservations.manage')
+  applyFromReservations(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
+    return this.salon.applyFromReservations(user, shopId);
+  }
+
   @Put('rules')
   @RequirePermissions('reservations.manage')
   replaceRules(

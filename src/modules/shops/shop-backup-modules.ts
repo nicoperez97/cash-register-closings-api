@@ -2,10 +2,12 @@
 
 export type BackupModuleId =
   | 'catalog'
+  | 'concepts'
   | 'closings'
   | 'movements'
   | 'expenses'
   | 'incomes'
+  | 'payments'
   | 'posMenu'
   | 'posSales'
   | 'staff'
@@ -54,6 +56,7 @@ export type BackupPurgeStep =
   | 'pos_categories'
   | 'concepts'
   | 'ledger_accounts'
+  | 'payments'
   | 'employees';
 
 export interface BackupModuleDef {
@@ -68,10 +71,17 @@ export interface BackupModuleDef {
 export const BACKUP_MODULES: BackupModuleDef[] = [
   {
     id: 'catalog',
-    label: 'Cuentas y conceptos',
-    sheets: ['ledger_accounts', 'ledger_account_users', 'concepts'],
-    purgeSteps: ['ledger_account_users', 'concepts', 'ledger_accounts'],
-    alsoClears: ['movements', 'expenses', 'incomes', 'closings'],
+    label: 'Cuentas',
+    sheets: ['ledger_accounts', 'ledger_account_users'],
+    purgeSteps: ['ledger_account_users', 'ledger_accounts'],
+    alsoClears: ['movements', 'expenses', 'incomes'],
+  },
+  {
+    id: 'concepts',
+    label: 'Conceptos',
+    sheets: ['concepts'],
+    purgeSteps: ['concepts'],
+    alsoClears: ['movements', 'expenses', 'incomes', 'payments'],
   },
   {
     id: 'closings',
@@ -99,6 +109,13 @@ export const BACKUP_MODULES: BackupModuleDef[] = [
     label: 'Ingresos',
     sheets: ['movements'],
     purgeSteps: ['incomes'],
+    alsoClears: [],
+  },
+  {
+    id: 'payments',
+    label: 'Pagos',
+    sheets: [],
+    purgeSteps: ['payments'],
     alsoClears: [],
   },
   {
@@ -161,6 +178,7 @@ export const PURGE_STEP_ORDER: BackupPurgeStep[] = [
   'movements',
   'expenses',
   'incomes',
+  'payments',
   'closing_expenses',
   'closing_extra_lines',
   'cash_closings',

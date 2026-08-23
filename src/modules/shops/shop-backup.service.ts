@@ -294,6 +294,9 @@ export class ShopBackupService {
           `DELETE FROM movements m WHERE m.shopId = ? AND NOT (${this.sqlIsExpense()}) AND (${this.sqlIsIncomeCore()})`,
         );
         return;
+      case 'payments':
+        await run(`DELETE FROM payments WHERE shopId = ?`);
+        return;
       case 'closing_expenses':
         await run(
           `DELETE FROM closing_expenses WHERE closingId IN (SELECT id FROM cash_closings WHERE shopId = ?)`,

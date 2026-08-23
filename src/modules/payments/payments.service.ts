@@ -1253,7 +1253,12 @@ export class PaymentsService implements OnModuleInit {
     return this.toDto(saved);
   }
 
-  async validate(user: AuthUser, shopId: string, id: string) {
+  async validate(
+    user: AuthUser,
+    shopId: string,
+    id: string,
+    body?: { accountId?: string },
+  ) {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.load(shopId, id);
     if (row.status !== PaymentStatus.PENDING_VALIDATION) {
@@ -1261,6 +1266,12 @@ export class PaymentsService implements OnModuleInit {
     }
     this.assertAssignedOrManage(user, shopId, row.validatorUserId, 'quien valida');
 
+    const accountId = body?.accountId || row.accountId;
+    if (!accountId) {
+      throw new BadRequestException('Indicá la cuenta con la que se paga');
+    }
+    await this.assertAccount(shopId, accountId);
+    row.accountId = accountId;
     row.status = PaymentStatus.VALIDATED;
     row.validatedAt = new Date();
     row.validatedByUserId = user.id;

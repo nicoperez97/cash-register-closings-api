@@ -67,6 +67,10 @@ export class CashClosing extends BaseEntity {
   @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
   averageTicket?: string | null;
 
+  /** Efectivo con el que abrió la caja. */
+  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
+  cashOpeningAmount: string;
+
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
   cashLeftInRegister: string;
 
