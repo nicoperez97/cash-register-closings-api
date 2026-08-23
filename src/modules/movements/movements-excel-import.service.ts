@@ -9,6 +9,7 @@ import { AuthUser } from '../../common/decorators';
 import { ConceptKind, LedgerAccountType } from '../../common/enums';
 import { ShopsService } from '../shops/shops.service';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
+import { GeminiDocumentService } from '../ai/gemini-document.service';
 
 export interface MovementImportItem {
   rowNumber: number;
@@ -35,6 +36,20 @@ export interface MovementImportItem {
 }
 
 export type LedgerImportKind = 'expense' | 'income' | 'transfer';
+
+export type LedgerImportGemini = {
+  ok: boolean;
+  summary: string | null;
+  findings: string[];
+  accounts: Array<{ name: string; note: string }>;
+  warnings: string[];
+  message: string | null;
+};
+
+export type LedgerImportPreview = {
+  items: MovementImportItem[];
+  gemini: LedgerImportGemini;
+};
 
 /** Cómo matchear una cuenta del Excel con una del local. */
 export type AccountImportMapping = {
@@ -75,6 +90,7 @@ export class MovementsExcelImportService {
     @InjectRepository(Concept) private readonly concepts: Repository<Concept>,
     private readonly shops: ShopsService,
     private readonly catalogSeed: CatalogSeedService,
+    private readonly gemini: GeminiDocumentService,
   ) {}
 
   async buildTemplate(
@@ -94,7 +110,7 @@ export class MovementsExcelImportService {
     info.addRow([`Local: ${shop.name}`]);
     info.addRow([]);
     info.addRow([
-      'Compatible con el Excel del contador: hojas "Movimientos", "Movimientos (saldos)" u "ORIGINAL COMPLETA Movimientos".',
+      'Compatible con el Excel del contador: hoja "Movimientos" (Fecha, Cuenta Emisora, Cuenta Receptora, Importe $). No uses la hoja oculta de saldos acumulados.',
     ]);
     info.addRow([
       'Columnas clave: Fecha, Cuenta Emisora, Cuenta Receptora, Descripción, Importe $, Concepto validado.',
@@ -297,10 +313,12 @@ export class MovementsExcelImportService {
     shopId: string,
     file: Express.Multer.File,
     kind?: LedgerImportKind,
-  ) {
+  ): Promise<LedgerImportPreview> {
     this.shops.assertShopAccess(user, shopId);
     const drafts = await this.parseWorkbook(file);
-    return this.enrich(shopId, drafts, kind);
+    const items = await this.enrich(shopId, drafts, kind);
+    const gemini = await this.analyzeWithGemini(items, file.originalname);
+    return { items, gemini };
   }
 
   async commit(
@@ -470,7 +488,6 @@ export class MovementsExcelImportService {
   ): Promise<MovementImportItem[]> {
     const accounts = await this.accounts.find({ where: { shopId, active: true } });
     const concepts = await this.concepts.find({ where: { shopId, active: true } });
-    const byAccount = new Map(accounts.map((a) => [this.norm(a.name), a]));
     const byConcept = new Map(concepts.map((c) => [this.norm(c.name), c]));
 
     const dates = [...new Set(drafts.map((d) => d.businessDate).filter(Boolean))];
@@ -497,8 +514,8 @@ export class MovementsExcelImportService {
     const seenInFile = new Set<string>();
 
     return drafts.map((d) => {
-      const from = byAccount.get(this.norm(d.fromAccountName));
-      const to = byAccount.get(this.norm(d.toAccountName));
+      const from = this.findAccount(d.fromAccountName, accounts);
+      const to = this.findAccount(d.toAccountName, accounts);
       const concept = d.conceptName
         ? byConcept.get(this.norm(d.conceptName))
         : null;
@@ -552,6 +569,125 @@ export class MovementsExcelImportService {
     return 'transfer';
   }
 
+  private isSystemLedgerName(name: string): boolean {
+    return this.isIngresoName(name) || this.isEgresoName(name);
+  }
+
+  private async analyzeWithGemini(
+    items: MovementImportItem[],
+    fileName?: string,
+  ): Promise<LedgerImportGemini> {
+    const empty: LedgerImportGemini = {
+      ok: false,
+      summary: null,
+      findings: [],
+      accounts: [],
+      warnings: [],
+      message: null,
+    };
+    if (!this.gemini.isEnabled()) return empty;
+    try {
+      const res = await this.gemini.analyzeLedgerImport(
+        this.ledgerDigest(items, fileName),
+      );
+      if (!res.ok) {
+        return { ...empty, message: res.message };
+      }
+      return {
+        ok: true,
+        summary: res.data.summary,
+        findings: res.data.findings,
+        accounts: res.data.accounts,
+        warnings: res.data.warnings,
+        message: null,
+      };
+    } catch {
+      return { ...empty, message: 'No se pudo analizar el Excel con Gemini.' };
+    }
+  }
+
+  private ledgerDigest(items: MovementImportItem[], fileName?: string) {
+    const usable = items.filter((i) => i.valid && i.amountUyu > 0);
+    const round = (v: number) => Math.round(v * 100) / 100;
+    const accounts = new Map<
+      string,
+      { name: string; incoming: number; outgoing: number }
+    >();
+    const flows = new Map<
+      string,
+      { from: string; to: string; kind: string; count: number; sum: number }
+    >();
+    const bump = (name: string) => {
+      const key = this.norm(name) || name;
+      let row = accounts.get(key);
+      if (!row) {
+        row = { name, incoming: 0, outgoing: 0 };
+        accounts.set(key, row);
+      }
+      return row;
+    };
+    let expenses = 0;
+    let incomes = 0;
+    let transfers = 0;
+    let minDate = '';
+    let maxDate = '';
+    for (const i of usable) {
+      const amt = n(i.amountUyu);
+      bump(i.fromAccountName).outgoing += amt;
+      bump(i.toAccountName).incoming += amt;
+      const flowKey = `${this.norm(i.fromAccountName)}=>${this.norm(i.toAccountName)}`;
+      const flow = flows.get(flowKey) ?? {
+        from: i.fromAccountName,
+        to: i.toAccountName,
+        kind: i.detectedKind,
+        count: 0,
+        sum: 0,
+      };
+      flow.count += 1;
+      flow.sum += amt;
+      flows.set(flowKey, flow);
+      if (i.detectedKind === 'expense') expenses += 1;
+      else if (i.detectedKind === 'income') incomes += 1;
+      else transfers += 1;
+      if (i.businessDate && (!minDate || i.businessDate < minDate)) minDate = i.businessDate;
+      if (i.businessDate && (!maxDate || i.businessDate > maxDate)) maxDate = i.businessDate;
+    }
+    const accountRows = [...accounts.values()]
+      .filter((a) => !this.isSystemLedgerName(a.name))
+      .map((a) => ({
+        name: a.name,
+        incoming: round(a.incoming),
+        outgoing: round(a.outgoing),
+        net: round(a.incoming - a.outgoing),
+      }))
+      .sort((a, b) => Math.abs(b.net) - Math.abs(a.net))
+      .slice(0, 12);
+    const topFlows = [...flows.values()]
+      .sort((a, b) => b.sum - a.sum)
+      .slice(0, 12)
+      .map((f) => ({
+        from: f.from,
+        to: f.to,
+        kind: f.kind,
+        count: f.count,
+        sum: round(f.sum),
+      }));
+    return {
+      fileName: fileName || null,
+      rows: {
+        total: items.length,
+        valid: usable.length,
+        expenses,
+        incomes,
+        transfers,
+      },
+      period: { from: minDate || null, to: maxDate || null },
+      rule: 'Saldo de cada cuenta operativa = entra - sale. Ingreso y Egreso no son cajas.',
+      accounts: accountRows,
+      topFlows,
+    };
+  }
+
   private normalizeModules(
     kind?: LedgerImportKind,
     modules?: LedgerImportKind[],
@@ -594,6 +730,17 @@ export class MovementsExcelImportService {
     }
     const cached = cacheByName.get(key);
     if (cached) return cached;
+
+    if (!mapped?.create) {
+      const unique = [
+        ...new Map([...cacheByName.values()].map((a) => [a.id, a])).values(),
+      ];
+      const fuzzy = this.findAccount(excelName, unique);
+      if (fuzzy) {
+        cacheByName.set(key, fuzzy);
+        return fuzzy;
+      }
+    }
 
     try {
       const created = await this.accounts.save(
@@ -717,22 +864,13 @@ export class MovementsExcelImportService {
       throw new BadRequestException('No se pudo leer el Excel');
     }
 
-    const preferred = [
-      'movimientos',
-      'movimientos (saldos)',
-      'original completa movimientos',
-    ];
-    const ws =
-      preferred
-        .map((name) =>
-          wb.worksheets.find((s) => this.norm(s.name) === this.norm(name)),
-        )
-        .find(Boolean) ||
-      wb.worksheets.find((s) => this.norm(s.name).includes('movimiento')) ||
-      wb.worksheets.find((s) => !this.norm(s.name).includes('instruccion')) ||
-      wb.worksheets[0];
+    const ws = this.pickLedgerSheet(wb);
 
-    if (!ws) throw new BadRequestException('El Excel no tiene hojas');
+    if (!ws) {
+      throw new BadRequestException(
+        'El Excel no tiene una hoja de movimientos con Fecha, Cuenta Emisora y Cuenta Receptora.',
+      );
+    }
 
     const headerRow = ws.getRow(1);
     const colMap = this.mapHeaders(headerRow);
@@ -834,6 +972,70 @@ export class MovementsExcelImportService {
     return map;
   }
 
+  private pickLedgerSheet(wb: ExcelJS.Workbook): ExcelJS.Worksheet | undefined {
+    const skip = (s: ExcelJS.Worksheet) => {
+      const n = this.norm(s.name);
+      return (
+        n.includes('saldo') ||
+        n.includes('inversion') ||
+        n.includes('cotizacion') ||
+        n.includes('instruccion')
+      );
+    };
+    const hasLedgerHeaders = (s: ExcelJS.Worksheet) => {
+      const map = this.mapHeaders(s.getRow(1));
+      return !!(map.businessDate && map.fromAccount && map.toAccount);
+    };
+    const preferred = ['movimientos', 'original completa movimientos'];
+    for (const name of preferred) {
+      const ws = wb.worksheets.find((s) => this.norm(s.name) === this.norm(name));
+      if (ws && hasLedgerHeaders(ws)) return ws;
+    }
+    const visible = wb.worksheets.find(
+      (s) => (s.state === 'visible' || !s.state) && !skip(s) && hasLedgerHeaders(s),
+    );
+    if (visible) return visible;
+    return wb.worksheets.find((s) => !skip(s) && hasLedgerHeaders(s));
+  }
+
+  private findAccount(
+    name: string,
+    accounts: LedgerAccount[],
+  ): LedgerAccount | undefined {
+    const key = this.norm(name);
+    if (!key) return undefined;
+    const exact = accounts.find((a) => this.norm(a.name) === key);
+    if (exact) return exact;
+
+    const stripped = this.norm(name.replace(/\btoma\b/gi, ' '));
+    if (stripped && stripped !== key) {
+      const bySuffix = accounts.find((a) => this.norm(a.name) === stripped);
+      if (bySuffix) return bySuffix;
+    }
+
+    if (this.isIngresoName(name)) {
+      const sys = accounts.find(
+        (a) => a.type === LedgerAccountType.SYSTEM && this.isIngresoName(a.name),
+      );
+      if (sys) return sys;
+    }
+    if (this.isEgresoName(name)) {
+      const sys = accounts.find(
+        (a) => a.type === LedgerAccountType.SYSTEM && this.isEgresoName(a.name),
+      );
+      if (sys) return sys;
+    }
+
+    const hits = accounts.filter((a) => {
+      const nk = this.norm(a.name);
+      if (nk.length < 2) return false;
+      return key.startsWith(`${nk} `) || nk.startsWith(`${key} `);
+    });
+    if (!hits.length) return undefined;
+    hits.sort((a, b) => this.norm(b.name).length - this.norm(a.name).length);
+    return hits[0];
+  }
+
   private guessAccountType(name: string): LedgerAccountType {
     const nrm = this.norm(name);
     if (nrm.includes('ingreso') || nrm.includes('egreso')) return LedgerAccountType.SYSTEM;
@@ -893,11 +1095,20 @@ export class MovementsExcelImportService {
 
   private parseNum(value: ExcelJS.CellValue | null): number {
     if (value == null || value === '') return 0;
-    if (typeof value === 'number') return value;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
     if (typeof value === 'object' && value && 'result' in (value as any)) {
       return this.parseNum((value as any).result);
     }
-    const s = String(value).replace(/\./g, '').replace(',', '.').replace(/[^\d.\-]/g, '');
+    const raw = String(value).trim();
+    const hasComma = raw.includes(',');
+    const hasDot = raw.includes('.');
+    let normalized = raw;
+    if (hasComma && hasDot) {
+      normalized = raw.replace(/\./g, '').replace(',', '.');
+    } else if (hasComma) {
+      normalized = raw.replace(',', '.');
+    }
+    const s = normalized.replace(/[^\d.\-]/g, '');
     const num = Number(s);
     return Number.isFinite(num) ? num : 0;
   }
