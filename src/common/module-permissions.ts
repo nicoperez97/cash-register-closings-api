@@ -9,6 +9,7 @@ export type ModuleKey =
   | 'movements'
   | 'expenses'
   | 'accountTransfers'
+  | 'partnerSplits'
   | 'incomes'
   | 'attendance'
   | 'employees'
@@ -98,6 +99,15 @@ export const MODULE_DEFS: ModuleDef[] = [
   {
     key: 'accountTransfers',
     label: 'Movimientos entre cuentas',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
+    key: 'partnerSplits',
+    label: 'División de socios',
     levels: [
       { value: 'none', label: 'Ninguno' },
       { value: 'read', label: 'Ver' },
@@ -362,6 +372,9 @@ export function expandModulePermissions(
   if (expensesLevel === 'manage') add(set, 'expenses.read', 'expenses.manage');
   if (transfersLevel === 'read') add(set, 'accountTransfers.read');
   if (transfersLevel === 'manage') add(set, 'accountTransfers.read', 'accountTransfers.manage');
+  const splitLevel = modules.partnerSplits || transfersLevel;
+  if (splitLevel === 'read') add(set, 'partnerSplits.read');
+  if (splitLevel === 'manage') add(set, 'partnerSplits.read', 'partnerSplits.manage');
   const incomesLevel = modules.incomes || expensesLevel;
   if (incomesLevel === 'read') add(set, 'incomes.read');
   if (incomesLevel === 'manage') add(set, 'incomes.read', 'incomes.manage');
@@ -482,6 +495,7 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
     reports: reports(),
     expenses: level('expenses.read', 'expenses.manage'),
     accountTransfers: level('accountTransfers.read', 'accountTransfers.manage'),
+    partnerSplits: level('partnerSplits.read', 'partnerSplits.manage'),
     incomes: level('incomes.read', 'incomes.manage'),
     attendance: attendance(),
     employees: level('employees.read', 'employees.manage'),
