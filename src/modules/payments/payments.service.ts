@@ -942,7 +942,9 @@ export class PaymentsService implements OnModuleInit {
     const title = concept?.name?.trim() || dto.title?.trim() || null;
     const notes = dto.notes?.trim() || concept?.description?.trim() || null;
 
-    const requestedStatus = this.parseCreatedStatus(dto.status);
+    const requestedStatus = canEditPayments(user, shopId)
+      ? this.parseCreatedStatus(dto.status)
+      : PaymentStatus.PENDING_VALIDATION;
     if (requestedStatus === PaymentStatus.PAID) {
       if (!(amount != null && amount > 0)) {
         throw new BadRequestException('Un pago abonado necesita un monto mayor a 0');

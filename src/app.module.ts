@@ -34,6 +34,7 @@ import { MenuModule } from './modules/menu/menu.module';
 import { ServiceRulesModule } from './modules/service-rules/service-rules.module';
 import { AiModule } from './modules/ai/ai.module';
 import { ProfileModule } from './modules/profile/profile.module';
+import { PartnerSplitsModule } from './modules/partner-splits/partner-splits.module';
 import { JwtAuthGuard, PermissionsGuard } from './common/guards';
 import { PublicAbuseGuard } from './common/public-abuse.guard';
 
@@ -73,6 +74,7 @@ import { PublicAbuseGuard } from './common/public-abuse.guard';
     MenuModule,
     ServiceRulesModule,
     ProfileModule,
+    PartnerSplitsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

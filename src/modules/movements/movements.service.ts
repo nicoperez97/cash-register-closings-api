@@ -64,6 +64,8 @@ export interface MovementFilters {
   to?: string;
   fromAccountId?: string;
   toAccountId?: string;
+  /** Cuenta origen o destino. */
+  accountId?: string;
   conceptId?: string;
   closingId?: string;
   q?: string;
@@ -290,13 +292,19 @@ export class MovementsService implements OnModuleInit {
 
     if (filters.from) qb.andWhere('m.businessDate >= :from', { from: filters.from });
     if (filters.to) qb.andWhere('m.businessDate <= :to', { to: filters.to });
-    if (filters.fromAccountId) {
-      qb.andWhere('m.fromAccountId = :fromAccountId', {
-        fromAccountId: filters.fromAccountId,
+    if (filters.accountId) {
+      qb.andWhere('(m.fromAccountId = :accountId OR m.toAccountId = :accountId)', {
+        accountId: filters.accountId,
       });
-    }
-    if (filters.toAccountId) {
-      qb.andWhere('m.toAccountId = :toAccountId', { toAccountId: filters.toAccountId });
+    } else {
+      if (filters.fromAccountId) {
+        qb.andWhere('m.fromAccountId = :fromAccountId', {
+          fromAccountId: filters.fromAccountId,
+        });
+      }
+      if (filters.toAccountId) {
+        qb.andWhere('m.toAccountId = :toAccountId', { toAccountId: filters.toAccountId });
+      }
     }
     if (filters.conceptId) {
       qb.andWhere('m.conceptId = :conceptId', { conceptId: filters.conceptId });

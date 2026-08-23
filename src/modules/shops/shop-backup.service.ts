@@ -38,6 +38,7 @@ import {
   BackupPurgeStep,
   BackupSheetName,
   classifyBackupMovement,
+  expandBackupModules,
   modulesLabelList,
   movementSlicesForModules,
   parseBackupModulesParam,
@@ -330,6 +331,109 @@ export class ShopBackupService {
         return;
       case 'employees':
         await run(`DELETE FROM employees WHERE shopId = ?`);
+        return;
+      case 'tip_allocations':
+        await run(
+          `DELETE FROM tip_allocations WHERE tipDayId IN (SELECT id FROM tip_days WHERE shopId = ?)`,
+        );
+        return;
+      case 'tip_days':
+        await run(`DELETE FROM tip_days WHERE shopId = ?`);
+        return;
+      case 'order_lines':
+        await run(
+          `DELETE FROM order_lines WHERE orderId IN (SELECT id FROM orders WHERE shopId = ?)`,
+        );
+        return;
+      case 'orders':
+        await run(`DELETE FROM orders WHERE shopId = ?`);
+        return;
+      case 'shortages':
+        await run(`DELETE FROM shortages WHERE shopId = ?`);
+        return;
+      case 'stock_products_food':
+        await run(`DELETE FROM stock_products WHERE shopId = ? AND kind = 'food'`);
+        return;
+      case 'stock_products_beverage':
+        await run(`DELETE FROM stock_products WHERE shopId = ? AND kind = 'beverage'`);
+        return;
+      case 'stock_categories_food':
+        await run(`DELETE FROM stock_categories WHERE shopId = ? AND kind = 'food'`);
+        return;
+      case 'stock_categories_beverage':
+        await run(`DELETE FROM stock_categories WHERE shopId = ? AND kind = 'beverage'`);
+        return;
+      case 'waiting_list_entries':
+        await run(`DELETE FROM waiting_list_entries WHERE shopId = ?`);
+        return;
+      case 'reservation_requests':
+        await run(`DELETE FROM reservation_requests WHERE shopId = ?`);
+        return;
+      case 'reservations':
+        await run(`DELETE FROM reservations WHERE shopId = ?`);
+        return;
+      case 'reservation_day_notices':
+        await run(`DELETE FROM reservation_day_notices WHERE shopId = ?`);
+        return;
+      case 'salon_tables':
+        await run(`DELETE FROM salon_tables WHERE shopId = ?`);
+        return;
+      case 'salon_area_rules':
+        await run(`DELETE FROM salon_area_rules WHERE shopId = ?`);
+        return;
+      case 'service_rules':
+        await run(`DELETE FROM service_rules WHERE shopId = ?`);
+        return;
+      case 'service_rule_categories':
+        await run(`DELETE FROM service_rule_categories WHERE shopId = ?`);
+        return;
+      case 'reimbursements':
+        await run(`DELETE FROM reimbursements WHERE shopId = ?`);
+        return;
+      case 'production_attendance_days':
+        await run(`DELETE FROM production_attendance_days WHERE shopId = ?`);
+        return;
+      case 'candidates':
+        await run(`DELETE FROM candidates WHERE shopId = ?`);
+        return;
+      case 'cash_pending_withdrawal_offsets':
+        await run(`DELETE FROM cash_pending_withdrawal_offsets WHERE shopId = ?`);
+        return;
+      case 'cash_pending_withdrawals':
+        await run(`DELETE FROM cash_pending_withdrawals WHERE shopId = ?`);
+        return;
+      case 'closing_source_amounts':
+        await run(
+          `DELETE FROM closing_source_amounts WHERE closingId IN (SELECT id FROM cash_closings WHERE shopId = ?)`,
+        );
+        return;
+      case 'settlement_fields':
+        await run(
+          `UPDATE closing_source_amounts SET settledAt = NULL, settledToAccountId = NULL, settledByUserId = NULL, settledByName = NULL, settlementMovementId = NULL, settleBatchId = NULL WHERE closingId IN (SELECT id FROM cash_closings WHERE shopId = ?)`,
+        );
+        return;
+      case 'shop_closing_sources':
+        await run(`DELETE FROM shop_closing_sources WHERE shopId = ?`);
+        return;
+      case 'partner_split_configs':
+        await run(`DELETE FROM partner_split_configs WHERE shopId = ?`);
+        return;
+      case 'payments_suppliers':
+        await run(`DELETE FROM payments WHERE shopId = ? AND supplierId IS NOT NULL`);
+        return;
+      case 'payments_services':
+        await run(`DELETE FROM payments WHERE shopId = ? AND serviceId IS NOT NULL`);
+        return;
+      case 'payments_employees':
+        await run(
+          `DELETE FROM payments WHERE shopId = ? AND employeeId IS NOT NULL AND supplierId IS NULL AND serviceId IS NULL`,
+        );
+        return;
+      case 'suppliers':
+        await run(`DELETE FROM suppliers WHERE shopId = ?`);
+        return;
+      case 'services':
+        await run(`DELETE FROM services WHERE shopId = ?`);
         return;
       default:
         return;
@@ -776,6 +880,7 @@ export class ShopBackupService {
       );
     }
 
+    await this.collectExtraSheetRows(shopId, sheetSet, modules, put);
     return out;
   }
 
@@ -1204,6 +1309,8 @@ export class ShopBackupService {
         }),
       );
     }
+
+    await this.importExtraSheets(manager, shopId, actorUserId, wb, map);
   }
 
   private closingToRow(c: CashClosing): Row {
@@ -1322,5 +1429,248 @@ export class ShopBackupService {
     if (s === 'true' || s === 'yes' || s === 'si' || s === 'sí') return true;
     if (s === 'false' || s === 'no') return false;
     return fallback;
+  }
+
+  private async collectExtraSheetRows(
+    shopId: string,
+    sheetSet: Set<BackupSheetName>,
+    modules: BackupModuleId[] | 'all',
+    put: (name: BackupSheetName, rows: Row[]) => void,
+  ) {
+    const ids = expandBackupModules(modules);
+    const has = (id: BackupModuleId) => modules === 'all' || ids.includes(id);
+
+    const dump = (table: string, extra = '') => this.dumpShopTable(table, shopId, extra);
+    const dumpVia = (sql: string) => this.dumpSql(sql, [shopId]);
+
+    if (sheetSet.has('shop_closing_sources')) put('shop_closing_sources', await dump('shop_closing_sources'));
+    if (sheetSet.has('closing_source_amounts')) {
+      put(
+        'closing_source_amounts',
+        await dumpVia(
+          `SELECT a.* FROM closing_source_amounts a INNER JOIN cash_closings c ON a.closingId = c.id WHERE c.shopId = ?`,
+        ),
+      );
+    }
+    if (sheetSet.has('cash_pending_withdrawals')) {
+      put('cash_pending_withdrawals', await dump('cash_pending_withdrawals'));
+    }
+    if (sheetSet.has('cash_pending_withdrawal_offsets')) {
+      put('cash_pending_withdrawal_offsets', await dump('cash_pending_withdrawal_offsets'));
+    }
+    if (sheetSet.has('payments')) {
+      const parts: string[] = [];
+      if (has('paymentsSuppliers')) parts.push('supplierId IS NOT NULL');
+      if (has('paymentsServices')) parts.push('serviceId IS NOT NULL');
+      if (has('paymentsEmployees')) {
+        parts.push(`(employeeId IS NOT NULL AND supplierId IS NULL AND serviceId IS NULL)`);
+      }
+      const extra = parts.length && parts.length < 3 ? parts.join(' OR ') : '';
+      put('payments', await dump('payments', extra));
+    }
+    if (sheetSet.has('partner_split_configs')) put('partner_split_configs', await dump('partner_split_configs'));
+    if (sheetSet.has('suppliers')) put('suppliers', await dump('suppliers'));
+    if (sheetSet.has('services')) put('services', await dump('services'));
+    if (sheetSet.has('reservations')) put('reservations', await dump('reservations'));
+    if (sheetSet.has('reservation_requests')) put('reservation_requests', await dump('reservation_requests'));
+    if (sheetSet.has('reservation_day_notices')) {
+      put('reservation_day_notices', await dump('reservation_day_notices'));
+    }
+    if (sheetSet.has('waiting_list_entries')) put('waiting_list_entries', await dump('waiting_list_entries'));
+    if (sheetSet.has('salon_tables')) put('salon_tables', await dump('salon_tables'));
+    if (sheetSet.has('salon_area_rules')) put('salon_area_rules', await dump('salon_area_rules'));
+    if (sheetSet.has('stock_categories') || sheetSet.has('stock_products')) {
+      const kinds: string[] = [];
+      if (has('stock')) kinds.push('food');
+      if (has('beverageStock')) kinds.push('beverage');
+      const kindSql =
+        kinds.length === 1 ? `kind = '${kinds[0]}'` : '';
+      if (sheetSet.has('stock_categories')) {
+        put('stock_categories', await dump('stock_categories', kindSql));
+      }
+      if (sheetSet.has('stock_products')) {
+        put('stock_products', await dump('stock_products', kindSql));
+      }
+    }
+    if (sheetSet.has('shortages')) put('shortages', await dump('shortages'));
+    if (sheetSet.has('orders')) put('orders', await dump('orders'));
+    if (sheetSet.has('order_lines')) put('order_lines', await dump('order_lines'));
+    if (sheetSet.has('candidates')) put('candidates', await dump('candidates'));
+    if (sheetSet.has('production_attendance_days')) {
+      put('production_attendance_days', await dump('production_attendance_days'));
+    }
+    if (sheetSet.has('tip_days')) put('tip_days', await dump('tip_days'));
+    if (sheetSet.has('tip_allocations')) {
+      put(
+        'tip_allocations',
+        await dumpVia(
+          `SELECT a.* FROM tip_allocations a INNER JOIN tip_days d ON a.tipDayId = d.id WHERE d.shopId = ?`,
+        ),
+      );
+    }
+    if (sheetSet.has('reimbursements')) put('reimbursements', await dump('reimbursements'));
+    if (sheetSet.has('service_rule_categories')) {
+      put('service_rule_categories', await dump('service_rule_categories'));
+    }
+    if (sheetSet.has('service_rules')) put('service_rules', await dump('service_rules'));
+  }
+
+  private async dumpShopTable(table: string, shopId: string, extra = ''): Promise<Row[]> {
+    const sql = extra
+      ? `SELECT * FROM \`${table}\` WHERE shopId = ? AND (${extra})`
+      : `SELECT * FROM \`${table}\` WHERE shopId = ?`;
+    return this.dumpSql(sql, [shopId]);
+  }
+
+  private async dumpSql(sql: string, params: unknown[]): Promise<Row[]> {
+    const rows = (await this.dataSource.query(sql, params)) as Record<string, unknown>[];
+    return (rows ?? []).map((r) => this.normalizeDumpRow(r));
+  }
+
+  private normalizeDumpRow(r: Record<string, unknown>): Row {
+    const out: Row = {};
+    for (const [k, v] of Object.entries(r)) {
+      if (v instanceof Date) out[k] = v.toISOString();
+      else if (Buffer.isBuffer(v)) out[k] = v.toString('utf8');
+      else if (v && typeof v === 'object') out[k] = JSON.stringify(v);
+      else out[k] = v ?? '';
+    }
+    return out;
+  }
+
+  private async importExtraSheets(
+    manager: any,
+    shopId: string,
+    actorUserId: string,
+    wb: ExcelJS.Workbook,
+    map: Map<string, string>,
+  ) {
+    const remap = (oldId: string | null | undefined) => {
+      if (!oldId) return null;
+      return map.get(oldId) ?? null;
+    };
+    const ensureId = (oldId: string) => {
+      const existing = map.get(oldId);
+      if (existing) return existing;
+      const id = randomUUID();
+      map.set(oldId, id);
+      return id;
+    };
+    const tables: BackupSheetName[] = [
+      'shop_closing_sources',
+      'closing_source_amounts',
+      'cash_pending_withdrawals',
+      'cash_pending_withdrawal_offsets',
+      'suppliers',
+      'services',
+      'partner_split_configs',
+      'salon_tables',
+      'salon_area_rules',
+      'reservations',
+      'reservation_day_notices',
+      'reservation_requests',
+      'waiting_list_entries',
+      'stock_categories',
+      'stock_products',
+      'shortages',
+      'orders',
+      'order_lines',
+      'candidates',
+      'production_attendance_days',
+      'tip_days',
+      'tip_allocations',
+      'reimbursements',
+      'service_rule_categories',
+      'service_rules',
+      'payments',
+    ];
+    const fkCols = [
+      'accountId',
+      'fromAccountId',
+      'toAccountId',
+      'pickedToAccountId',
+      'settledToAccountId',
+      'conceptId',
+      'employeeId',
+      'closingId',
+      'movementId',
+      'supplierId',
+      'serviceId',
+      'categoryId',
+      'productId',
+      'shortageId',
+      'orderId',
+      'tipDayId',
+      'pendingId',
+      'sourceId',
+      'reservationId',
+      'supervisorEmployeeId',
+    ];
+    for (const table of tables) {
+      const rows = this.readRowsSheet(wb, table);
+      for (const r of rows) {
+        const row: Record<string, unknown> = { ...r };
+        if (row.id) row.id = ensureId(String(r.id));
+        if ('shopId' in row) row.shopId = shopId;
+        for (const col of fkCols) {
+          if (row[col] != null && String(row[col]) !== '') {
+            const mapped = remap(String(row[col]));
+            if (mapped) row[col] = mapped;
+          }
+        }
+        if (table === 'partner_split_configs') {
+          row.partnerAccountIds = this.remapJsonIds(row.partnerAccountIds, map);
+          row.channelLeaves = this.remapChannelLeaves(row.channelLeaves, map);
+        }
+        const cols = Object.keys(row).filter((k) => row[k] !== undefined);
+        if (!cols.length) continue;
+        const placeholders = cols.map(() => '?').join(', ');
+        const sql = `INSERT INTO \`${table}\` (${cols.map((c) => `\`${c}\``).join(',')}) VALUES (${placeholders})`;
+        try {
+          await manager.query(
+            sql,
+            cols.map((c) => this.sqlValue(row[c])),
+          );
+        } catch {
+          // tabla o columna ausente en dumps viejos
+        }
+      }
+    }
+    void actorUserId;
+  }
+
+  private remapJsonIds(raw: unknown, map: Map<string, string>): string {
+    let ids: string[] = [];
+    if (typeof raw === 'string' && raw.trim()) {
+      try {
+        ids = JSON.parse(raw);
+      } catch {
+        ids = [];
+      }
+    } else if (Array.isArray(raw)) ids = raw.map(String);
+    return JSON.stringify(ids.map((id) => map.get(id) ?? id));
+  }
+
+  private remapChannelLeaves(raw: unknown, map: Map<string, string>): string {
+    let items: Array<{ accountId?: string }> = [];
+    if (typeof raw === 'string' && raw.trim()) {
+      try {
+        items = JSON.parse(raw);
+      } catch {
+        items = [];
+      }
+    } else if (Array.isArray(raw)) items = raw as Array<{ accountId?: string }>;
+    return JSON.stringify(
+      items.map((i) => ({
+        ...i,
+        accountId: i.accountId ? map.get(i.accountId) ?? i.accountId : i.accountId,
+      })),
+    );
+  }
+
+  private sqlValue(v: unknown): unknown {
+    if (v === null || v === undefined || v === '') return null;
+    if (typeof v === 'boolean') return v ? 1 : 0;
+    return v;
   }
 }
