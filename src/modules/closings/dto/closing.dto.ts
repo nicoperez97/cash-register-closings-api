@@ -97,6 +97,7 @@ export class CreateClosingDto {
   @ApiPropertyOptional() @IsOptional() @IsNumber() unitsSold?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() coversCount?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() averageTicket?: number;
+  @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) cashOpeningAmount?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) cashLeftInRegister?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) cashPendingPickup?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) cashWithdrawn?: number;

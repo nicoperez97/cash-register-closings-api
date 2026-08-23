@@ -260,6 +260,10 @@ class PayPaymentDto {
   paymentMethod?: 'cash' | 'transfer' | 'card' | 'other';
 }
 
+class ValidatePaymentDto {
+  @ApiPropertyOptional() @IsOptional() @IsUUID() accountId?: string;
+}
+
 class RejectPaymentDto {
   @ApiPropertyOptional() @IsOptional() @IsString() reason?: string;
 }
@@ -528,8 +532,9 @@ export class PaymentsController {
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
     @Param('id') id: string,
+    @Body() dto: ValidatePaymentDto,
   ) {
-    return this.payments.validate(user, shopId, id);
+    return this.payments.validate(user, shopId, id, dto);
   }
 
   @Post(':id/reject')

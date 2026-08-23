@@ -10,6 +10,7 @@ import {
   Query,
   Res,
   UploadedFile,
+  UseFilters,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
@@ -47,6 +48,7 @@ import {
 import { PermissionsGuard } from '../../common/guards';
 import { MovementsService } from './movements.service';
 import { MovementsExcelImportService } from './movements-excel-import.service';
+import { MulterExceptionFilter } from '../../common/filters/multer-exception.filter';
 
 class CreateMovementDto {
   @ApiProperty() @IsDateString() businessDate: string;
@@ -289,7 +291,13 @@ export class MovementsController {
       required: ['file'],
     },
   })
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
+  @UseFilters(MulterExceptionFilter)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 20 * 1024 * 1024, fieldSize: 2 * 1024 * 1024 },
+    }),
+  )
   importExcel(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,

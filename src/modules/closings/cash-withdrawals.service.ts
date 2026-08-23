@@ -86,7 +86,7 @@ export class CashWithdrawalsService implements OnModuleInit {
   computeCashTake(closing: CashClosing): number {
     const expensesTotal = (closing.expenses ?? []).reduce((s, e) => s + n(e.amount), 0);
     if (n(closing.cashWithdrawn) > 0) return n(closing.cashWithdrawn);
-    return Math.max(0, n(closing.cashAmount) - n(closing.cashLeftInRegister) - expensesTotal);
+    return Math.max(0, n(closing.cashAmount) - n(closing.cashLeftInRegister));
   }
 
   /**
@@ -392,9 +392,30 @@ export class CashWithdrawalsService implements OnModuleInit {
     });
 
     const savedOffsets = await this.offsets.find({ where: { shopId } });
+    const cashIds = await this.cashDrawerAccountIds(shopId);
+    const egreso = cashIds.length
+      ? await this.ledger.findOne({ where: { shopId, code: 'EGRESO', active: true } })
+      : null;
+    const offsetMovementIds = [...new Set(savedOffsets.map((o) => o.movementId))];
+    const offsetMovements = offsetMovementIds.length
+      ? await this.movements.find({
+          where: { id: In(offsetMovementIds), shopId },
+          relations: ['concept'],
+        })
+      : [];
+    const validOffsetMovementIds = new Set(
+      offsetMovements
+        .filter((m) => this.isCashDrawerExpense(m, cashIds, egreso?.id ?? null))
+        .map((m) => m.id),
+    );
+    const staleOffsets = savedOffsets.filter((o) => !validOffsetMovementIds.has(o.movementId));
+    if (staleOffsets.length) {
+      await this.offsets.remove(staleOffsets);
+    }
+    const liveOffsets = savedOffsets.filter((o) => validOffsetMovementIds.has(o.movementId));
     const usedByMovement = new Map<string, number>();
     const usedByPending = new Map<string, number>();
-    for (const o of savedOffsets) {
+    for (const o of liveOffsets) {
       usedByMovement.set(o.movementId, (usedByMovement.get(o.movementId) ?? 0) + n(o.amount));
       usedByPending.set(o.pendingId, (usedByPending.get(o.pendingId) ?? 0) + n(o.amount));
     }
@@ -430,18 +451,14 @@ export class CashWithdrawalsService implements OnModuleInit {
       };
     });
 
-    const cashIds = await this.cashDrawerAccountIds(shopId);
     const applied = new Map<string, number>();
     const pendingIds = new Set(items.map((i) => i.id));
-    for (const o of savedOffsets) {
+    for (const o of liveOffsets) {
       if (!pendingIds.has(o.pendingId)) continue;
       applied.set(o.movementId, (applied.get(o.movementId) ?? 0) + n(o.amount));
     }
 
     if (cashIds.length && items.length) {
-      const egreso = await this.ledger.findOne({
-        where: { shopId, code: 'EGRESO', active: true },
-      });
       const oldest = items.reduce(
         (min, i) => (i.createdAt < min ? i.createdAt : min),
         items[0].createdAt,
