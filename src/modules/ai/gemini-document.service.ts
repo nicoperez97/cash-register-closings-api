@@ -80,6 +80,7 @@ export class GeminiDocumentService {
   private async generateJson<T>(
     parts: Array<TextPart | InlinePart>,
     system: string,
+    timeoutMs = 55_000,
   ): Promise<GeminiResult<T>> {
     const key = this.apiKey();
     if (!key) {
@@ -88,7 +89,7 @@ export class GeminiDocumentService {
     const model = this.model();
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 55_000);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch(url, {
         method: 'POST',
@@ -399,6 +400,83 @@ taxId = CUIT (XX-XXXXXXXX-X). invoiceType = A/B/C/etc. Montos numéricos con dec
         otherTaxesAmount: data.data.otherTaxesAmount ?? null,
         totalAmount: data.data.totalAmount ?? null,
         rawText: String(data.data.rawText ?? '').slice(0, 12000),
+      },
+    };
+  }
+
+  async analyzeLedgerImport(digest: unknown): Promise<
+    GeminiResult<{
+      summary: string;
+      findings: string[];
+      accounts: Array<{ name: string; note: string }>;
+      warnings: string[];
+    }>
+  > {
+    if (!this.isEnabled()) {
+      return this.fail('disabled', 'Gemini no está configurado (falta GEMINI_API_KEY).');
+    }
+    const system = `Sos un analista del libro diario de un local gastronómico (Uruguay/Argentina).
+Te pasan un resumen numérico de un Excel de movimientos (cuenta emisora, receptora, importe).
+El saldo de cada cuenta operativa es lo que entra menos lo que sale.
+Las cuentas 1. Ingreso / 2. Egreso son origen y destino del libro, no cajas.
+Devolvé SOLO JSON:
+{"summary":"string","findings":["string"],"accounts":[{"name":"string","note":"string"}],"warnings":["string"]}
+Reglas:
+- Español rioplatense, frases cortas, segunda persona, sin jerga.
+- summary: 2 a 4 oraciones. Decí si los números cierran y por qué una cuenta grande (p. ej. PVS) queda negativa o positiva.
+- findings: hasta 6 viñetas concretas, con montos si ayudan.
+- accounts: solo las cuentas que merecen una nota (máx 6).
+- warnings: rarezas (cuenta nueva, desbalance raro, PVS usado para gastos y divisiones a socios). Vacío si no hay.
+- No inventes filas. Usá solo el resumen.
+- No sugieras cambiar la fórmula del saldo.`;
+    const data = await this.generateJson<{
+      summary?: string;
+      findings?: unknown;
+      accounts?: unknown;
+      warnings?: unknown;
+    }>(
+      [
+        {
+          text: `Resumen del Excel a importar:\n${JSON.stringify(digest).slice(0, 14000)}`,
+        },
+      ],
+      system,
+      22_000,
+    );
+    if (!data.ok) {
+      return this.fail(
+        data.reason,
+        data.message
+          .replace(/\s*Se usó el parseo local\.?/gi, '')
+          .trim() || data.message,
+      );
+    }
+    const strList = (raw: unknown, max: number): string[] =>
+      (Array.isArray(raw) ? raw : [])
+        .map((x) => String(x ?? '').trim())
+        .filter(Boolean)
+        .slice(0, max);
+    const accounts = (Array.isArray(data.data.accounts) ? data.data.accounts : [])
+      .map((a) => {
+        const row = a as { name?: string; note?: string };
+        return {
+          name: String(row?.name ?? '').trim().slice(0, 80),
+          note: String(row?.note ?? '').trim().slice(0, 280),
+        };
+      })
+      .filter((a) => a.name && a.note)
+      .slice(0, 6);
+    const summary = String(data.data.summary ?? '').trim().slice(0, 900);
+    if (!summary) {
+      return this.fail('empty', 'Gemini no devolvió un análisis del Excel.');
+    }
+    return {
+      ok: true,
+      data: {
+        summary,
+        findings: strList(data.data.findings, 6),
+        accounts,
+        warnings: strList(data.data.warnings, 4),
       },
     };
   }
