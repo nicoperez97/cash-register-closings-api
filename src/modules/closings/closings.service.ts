@@ -548,6 +548,16 @@ export class ClosingsService implements OnModuleInit {
     }
   }
 
+  async previewReloadIncomes(user: AuthUser, shopId: string) {
+    this.shops.assertShopAccess(user, shopId);
+    return this.closingMovements.previewMissingIncomes(shopId);
+  }
+
+  async commitReloadIncomes(user: AuthUser, shopId: string) {
+    this.shops.assertShopAccess(user, shopId);
+    return this.closingMovements.commitMissingIncomes(shopId);
+  }
+
   async lock(user: AuthUser, shopId: string, id: string) {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.closings.findOne({

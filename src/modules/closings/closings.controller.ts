@@ -136,6 +136,19 @@ export class ClosingsController {
       : this.excelImport.preview(user, shopId, file);
   }
 
+  @Post('reload-incomes')
+  @RequirePermissions('closings.create')
+  reloadIncomes(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Query('commit') commit?: string,
+  ) {
+    const doCommit = commit === 'true' || commit === '1';
+    return doCommit
+      ? this.closings.commitReloadIncomes(user, shopId)
+      : this.closings.previewReloadIncomes(user, shopId);
+  }
+
   @Get(':id')
   @RequirePermissions('closings.read')
   getOne(
