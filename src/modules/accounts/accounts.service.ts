@@ -167,7 +167,7 @@ export class AccountsService implements OnModuleInit {
 
   async create(user: AuthUser, shopId: string, dto: UpsertAccountDto) {
     this.shops.assertShopAccess(user, shopId);
-    this.assertOpeningBalanceAllowed(user, shopId, dto.openingBalance, 0);
+    this.assertOpeningBalanceAllowed(user, dto.openingBalance, 0);
     const code = dto.code.trim().toUpperCase();
     const clash = await this.accounts.findOne({ where: { shopId, code } });
     if (clash) throw new BadRequestException('Ya existe una cuenta con ese código');
@@ -199,7 +199,7 @@ export class AccountsService implements OnModuleInit {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.accounts.findOne({ where: { id, shopId } });
     if (!row) throw new NotFoundException('Cuenta no encontrada');
-    this.assertOpeningBalanceAllowed(user, shopId, dto.openingBalance, n(row.openingBalance));
+    this.assertOpeningBalanceAllowed(user, dto.openingBalance, n(row.openingBalance));
     if (dto.name !== undefined) row.name = dto.name.trim();
     if (dto.code !== undefined) {
       const code = dto.code.trim().toUpperCase();
@@ -285,15 +285,14 @@ export class AccountsService implements OnModuleInit {
 
   private assertOpeningBalanceAllowed(
     user: AuthUser,
-    shopId: string,
     incoming: number | string | null | undefined,
     current: number,
   ) {
     if (incoming === undefined) return;
     const next = parseOpening(incoming);
     if (Math.abs(next - current) < 0.005) return;
-    if (!canConfigureOpeningBalances(user, shopId)) {
-      throw new ForbiddenException('No tenés permiso para configurar saldos iniciales');
+    if (!canConfigureOpeningBalances(user)) {
+      throw new ForbiddenException('Solo un super admin puede configurar el saldo inicial');
     }
   }
 

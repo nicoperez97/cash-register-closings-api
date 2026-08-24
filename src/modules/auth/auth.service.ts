@@ -510,7 +510,6 @@ export class AuthService implements OnModuleInit {
     const shopModulePermissions: Record<string, Record<string, string>> = {};
     const shopCanEditExpenses: Record<string, boolean> = {};
     const shopCanEditPayments: Record<string, boolean> = {};
-    const shopCanConfigureOpeningBalances: Record<string, boolean> = {};
 
     for (const id of shopIds) {
       const link = links.find((l) => l.shopId === id);
@@ -518,7 +517,6 @@ export class AuthService implements OnModuleInit {
       shopRoles[id] = effectiveRole;
       shopCanEditExpenses[id] = !!link?.canEditExpenses;
       shopCanEditPayments[id] = !!link?.canEditPayments;
-      shopCanConfigureOpeningBalances[id] = !!link?.canConfigureOpeningBalances;
 
       if (isGlobalAdmin(role)) {
         shopPermissions[id] = [...ALL_PERMISSIONS_LIST];
@@ -574,7 +572,6 @@ export class AuthService implements OnModuleInit {
       shopModulePermissions,
       shopCanEditExpenses,
       shopCanEditPayments,
-      shopCanConfigureOpeningBalances,
       permissions,
       favoriteShopId:
         user.favoriteShopId && shopIds.includes(user.favoriteShopId)
@@ -688,7 +685,6 @@ export class AuthService implements OnModuleInit {
         isReservationAdmin: !!link?.isReservationAdmin,
         canEditExpenses: !!link?.canEditExpenses,
         canEditPayments: !!link?.canEditPayments,
-        canConfigureOpeningBalances: !!link?.canConfigureOpeningBalances,
         active: true,
       };
       }),
