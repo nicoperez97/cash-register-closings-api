@@ -951,7 +951,14 @@ export class MovementsService implements OnModuleInit {
     });
     const bal = new Map<
       string,
-      { accountId: string; name: string; type: string; income: number; expense: number }
+      {
+        accountId: string;
+        name: string;
+        type: string;
+        income: number;
+        expense: number;
+        opening: number;
+      }
     >();
     for (const a of accounts) {
       bal.set(a.id, {
@@ -960,6 +967,7 @@ export class MovementsService implements OnModuleInit {
         type: a.type,
         income: 0,
         expense: 0,
+        opening: Number(a.openingBalance ?? 0),
       });
     }
     for (const r of rows) {
@@ -989,7 +997,8 @@ export class MovementsService implements OnModuleInit {
         type: a.type,
         income: a.income,
         expense: a.expense,
-        balance: a.income - a.expense,
+        openingBalance: a.opening,
+        balance: a.income - a.expense + a.opening,
       })),
     };
   }

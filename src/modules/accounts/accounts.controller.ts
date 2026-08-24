@@ -55,6 +55,9 @@ class CreateAccountDto {
   @IsOptional()
   @IsBoolean()
   hideFromCashWithdraw?: boolean;
+  @ApiPropertyOptional({ description: 'Saldo inicial. Se suma al saldo de movimientos.' })
+  @IsOptional()
+  openingBalance?: number;
 }
 
 class UpdateAccountDto {
@@ -83,6 +86,9 @@ class UpdateAccountDto {
   @IsOptional()
   @IsBoolean()
   hideFromCashWithdraw?: boolean;
+  @ApiPropertyOptional({ description: 'Saldo inicial. Se suma al saldo de movimientos.' })
+  @IsOptional()
+  openingBalance?: number;
 }
 
 /** Mapa medio de cobro del cierre → id de cuenta (null = sin vincular). */

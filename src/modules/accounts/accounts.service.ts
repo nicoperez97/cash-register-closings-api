@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
   OnModuleInit,
@@ -18,6 +19,7 @@ import {
   LedgerAccountType,
   LinkedPaymentMethod,
 } from '../../common/enums';
+import { canConfigureOpeningBalances } from '../../common/guards';
 import { ShopsService } from '../shops/shops.service';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
 import { markDeletedUnique } from '../../common/soft-delete.util';
@@ -25,6 +27,11 @@ import { markDeletedUnique } from '../../common/soft-delete.util';
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
 const BALANCE_EPS = 0.01;
+const parseOpening = (v?: string | number | null) => {
+  const x = Number(v ?? 0);
+  if (!Number.isFinite(x)) return 0;
+  return Math.round(x * 100) / 100;
+};
 
 export class UpsertAccountDto {
   name: string;
@@ -38,6 +45,8 @@ export class UpsertAccountDto {
   active?: boolean;
   /** Ocultar en el selector de retiro del cierre. */
   hideFromCashWithdraw?: boolean;
+  /** Se suma al saldo de movimientos. */
+  openingBalance?: number | string | null;
 }
 
 @Injectable()
@@ -68,6 +77,14 @@ export class AccountsService implements OnModuleInit {
       await this.accounts.query(`
         ALTER TABLE ledger_accounts
           ADD COLUMN hideFromCashWithdraw TINYINT(1) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.accounts.query(`
+        ALTER TABLE ledger_accounts
+          ADD COLUMN openingBalance DECIMAL(14,2) NOT NULL DEFAULT 0
       `);
     } catch {
       // columna ya existe
@@ -129,6 +146,7 @@ export class AccountsService implements OnModuleInit {
         type: a.type,
         linkedPaymentMethod: a.linkedPaymentMethod ?? null,
         hideFromCashWithdraw: !!a.hideFromCashWithdraw,
+        openingBalance: n(a.openingBalance),
         userIds: uids,
         userNames: names,
         userFullName: names.join(', ') || null,
@@ -149,6 +167,7 @@ export class AccountsService implements OnModuleInit {
 
   async create(user: AuthUser, shopId: string, dto: UpsertAccountDto) {
     this.shops.assertShopAccess(user, shopId);
+    this.assertOpeningBalanceAllowed(user, shopId, dto.openingBalance, 0);
     const code = dto.code.trim().toUpperCase();
     const clash = await this.accounts.findOne({ where: { shopId, code } });
     if (clash) throw new BadRequestException('Ya existe una cuenta con ese código');
@@ -167,6 +186,7 @@ export class AccountsService implements OnModuleInit {
           dto.type === LedgerAccountType.SUPPLIER || dto.type === LedgerAccountType.SERVICE
             ? true
             : !!dto.hideFromCashWithdraw,
+        openingBalance: money(parseOpening(dto.openingBalance)),
         active: dto.active ?? true,
       }),
     );
@@ -179,6 +199,7 @@ export class AccountsService implements OnModuleInit {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.accounts.findOne({ where: { id, shopId } });
     if (!row) throw new NotFoundException('Cuenta no encontrada');
+    this.assertOpeningBalanceAllowed(user, shopId, dto.openingBalance, n(row.openingBalance));
     if (dto.name !== undefined) row.name = dto.name.trim();
     if (dto.code !== undefined) {
       const code = dto.code.trim().toUpperCase();
@@ -203,6 +224,9 @@ export class AccountsService implements OnModuleInit {
       row.hideFromCashWithdraw = true;
     }
     if (dto.active !== undefined) row.active = dto.active;
+    if (dto.openingBalance !== undefined) {
+      row.openingBalance = money(parseOpening(dto.openingBalance));
+    }
     await this.accounts.save(row);
     if (dto.userIds !== undefined || dto.userId !== undefined) {
       await this.replaceUserLinks(shopId, id, this.normalizeUserIds(dto));
@@ -259,11 +283,25 @@ export class AccountsService implements OnModuleInit {
     await qb.execute();
   }
 
+  private assertOpeningBalanceAllowed(
+    user: AuthUser,
+    shopId: string,
+    incoming: number | string | null | undefined,
+    current: number,
+  ) {
+    if (incoming === undefined) return;
+    const next = parseOpening(incoming);
+    if (Math.abs(next - current) < 0.005) return;
+    if (!canConfigureOpeningBalances(user, shopId)) {
+      throw new ForbiddenException('No tenés permiso para configurar saldos iniciales');
+    }
+  }
+
   async balanceOf(user: AuthUser, shopId: string, id: string) {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.accounts.findOne({ where: { id, shopId } });
     if (!row) throw new NotFoundException('Cuenta no encontrada');
-    const balance = await this.computeBalance(shopId, id);
+    const balance = await this.computeBalance(shopId, id, n(row.openingBalance));
     return {
       accountId: row.id,
       name: row.name,
@@ -284,7 +322,7 @@ export class AccountsService implements OnModuleInit {
       throw new BadRequestException('No se pueden eliminar cuentas de sistema');
     }
 
-    const balance = await this.computeBalance(shopId, id);
+    const balance = await this.computeBalance(shopId, id, n(row.openingBalance));
     if (Math.abs(balance) >= BALANCE_EPS) {
       const destId = transferToAccountId?.trim() || null;
       if (!destId) {
@@ -316,7 +354,11 @@ export class AccountsService implements OnModuleInit {
     return { ok: true, transferredBalance: Math.abs(balance) >= BALANCE_EPS ? balance : 0 };
   }
 
-  private async computeBalance(shopId: string, accountId: string): Promise<number> {
+  private async computeBalance(
+    shopId: string,
+    accountId: string,
+    openingBalance = 0,
+  ): Promise<number> {
     const rows = await this.movements
       .createQueryBuilder('m')
       .where('m.shopId = :shopId', { shopId })
@@ -330,7 +372,7 @@ export class AccountsService implements OnModuleInit {
       if (r.fromAccountId === accountId) expense += amt;
       if (r.toAccountId === accountId) income += amt;
     }
-    return Math.round((income - expense) * 100) / 100;
+    return Math.round((income - expense + Number(openingBalance || 0)) * 100) / 100;
   }
 
   private async createBalanceTransfer(
