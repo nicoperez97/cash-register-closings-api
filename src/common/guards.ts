@@ -133,8 +133,7 @@ export function canEditPayments(user: AuthUser, shopId: string): boolean {
   return !!user.shopCanEditPayments?.[shopId];
 }
 
-/** Saldos iniciales de cuentas: super admin o usuario habilitado en ese local. */
-export function canConfigureOpeningBalances(user: AuthUser, shopId: string): boolean {
-  if (isSuperAdmin(user.globalRole)) return true;
-  return !!user.shopCanConfigureOpeningBalances?.[shopId];
+/** Saldos iniciales de cuentas: solo super admin. */
+export function canConfigureOpeningBalances(user: AuthUser): boolean {
+  return isSuperAdmin(user.globalRole);
 }

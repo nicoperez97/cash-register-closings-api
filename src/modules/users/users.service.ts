@@ -64,7 +64,6 @@ export class CreateUserBody {
   isReservationAdmin?: boolean;
   canEditExpenses?: boolean;
   canEditPayments?: boolean;
-  canConfigureOpeningBalances?: boolean;
   phone?: string | null;
   bankAlias?: string | null;
   cbu?: string | null;
@@ -95,7 +94,6 @@ export class UpdateUserBody {
   isReservationAdmin?: boolean;
   canEditExpenses?: boolean;
   canEditPayments?: boolean;
-  canConfigureOpeningBalances?: boolean;
   phone?: string | null;
   bankAlias?: string | null;
   cbu?: string | null;
@@ -189,14 +187,6 @@ export class UsersService implements OnModuleInit {
       await this.userShops.query(`
         ALTER TABLE user_shops
           ADD COLUMN canEditPayments TINYINT(1) NOT NULL DEFAULT 0
-      `);
-    } catch {
-      // columna ya existe
-    }
-    try {
-      await this.userShops.query(`
-        ALTER TABLE user_shops
-          ADD COLUMN canConfigureOpeningBalances TINYINT(1) NOT NULL DEFAULT 0
       `);
     } catch {
       // columna ya existe
@@ -353,7 +343,6 @@ export class UsersService implements OnModuleInit {
         isReservationAdmin: !!link?.isReservationAdmin,
         canEditExpenses: !!link?.canEditExpenses,
         canEditPayments: !!link?.canEditPayments,
-        canConfigureOpeningBalances: !!link?.canConfigureOpeningBalances,
         ledgerAccountIds,
         ledgerAccountNames,
         ledgerAccountId: ledgerAccountIds[0] ?? null,
@@ -425,10 +414,6 @@ export class UsersService implements OnModuleInit {
           canEditPayments:
             defaultShopId === shopId && isSuperAdmin(actor.globalRole as GlobalRole)
               ? !!dto.canEditPayments
-              : false,
-          canConfigureOpeningBalances:
-            defaultShopId === shopId && isSuperAdmin(actor.globalRole as GlobalRole)
-              ? !!dto.canConfigureOpeningBalances
               : false,
         }),
       );
@@ -586,9 +571,6 @@ export class UsersService implements OnModuleInit {
             if (shopId === sid && isSuperAdmin(actor.globalRole as GlobalRole)) {
               if (dto.canEditExpenses !== undefined) exists.canEditExpenses = !!dto.canEditExpenses;
               if (dto.canEditPayments !== undefined) exists.canEditPayments = !!dto.canEditPayments;
-              if (dto.canConfigureOpeningBalances !== undefined) {
-                exists.canConfigureOpeningBalances = !!dto.canConfigureOpeningBalances;
-              }
             }
             await this.userShops.save(exists);
           }
@@ -609,9 +591,6 @@ export class UsersService implements OnModuleInit {
         );
         const prevEditExpenses = new Map(links.map((l) => [l.shopId, !!l.canEditExpenses]));
         const prevEditPayments = new Map(links.map((l) => [l.shopId, !!l.canEditPayments]));
-        const prevOpeningBalances = new Map(
-          links.map((l) => [l.shopId, !!l.canConfigureOpeningBalances]),
-        );
         await this.userShops.delete({ userId: id });
         for (const sid of nextIds) {
           const visibility =
@@ -643,7 +622,6 @@ export class UsersService implements OnModuleInit {
             {
               canEditExpenses: prevEditExpenses.get(sid),
               canEditPayments: prevEditPayments.get(sid),
-              canConfigureOpeningBalances: prevOpeningBalances.get(sid),
             },
             shopId === sid,
           );
@@ -666,7 +644,6 @@ export class UsersService implements OnModuleInit {
               isReservationAdmin: reservationAdmin,
               canEditExpenses: editFlags.canEditExpenses,
               canEditPayments: editFlags.canEditPayments,
-              canConfigureOpeningBalances: editFlags.canConfigureOpeningBalances,
             }),
           );
         }
@@ -681,8 +658,7 @@ export class UsersService implements OnModuleInit {
         dto.isShortageAdmin !== undefined ||
         dto.isReservationAdmin !== undefined ||
         dto.canEditExpenses !== undefined ||
-        dto.canEditPayments !== undefined ||
-        dto.canConfigureOpeningBalances !== undefined)
+        dto.canEditPayments !== undefined)
     ) {
       const link = await this.userShops.findOne({ where: { userId: id, shopId } });
       if (link) {
@@ -712,9 +688,6 @@ export class UsersService implements OnModuleInit {
         if (isSuperAdmin(actor.globalRole as GlobalRole)) {
           if (dto.canEditExpenses !== undefined) link.canEditExpenses = !!dto.canEditExpenses;
           if (dto.canEditPayments !== undefined) link.canEditPayments = !!dto.canEditPayments;
-          if (dto.canConfigureOpeningBalances !== undefined) {
-            link.canConfigureOpeningBalances = !!dto.canConfigureOpeningBalances;
-          }
         }
         await this.userShops.save(link);
       } else {
@@ -805,7 +778,6 @@ export class UsersService implements OnModuleInit {
       isReservationAdmin: !!link?.isReservationAdmin,
       canEditExpenses: !!link?.canEditExpenses,
       canEditPayments: !!link?.canEditPayments,
-      canConfigureOpeningBalances: !!link?.canConfigureOpeningBalances,
       ledgerAccountIds: accountIds,
       ledgerAccountNames: names,
       ledgerAccountId: accountIds[0] ?? null,
@@ -932,24 +904,20 @@ export class UsersService implements OnModuleInit {
     dto: {
       canEditExpenses?: boolean;
       canEditPayments?: boolean;
-      canConfigureOpeningBalances?: boolean;
     },
     existing?: {
       canEditExpenses?: boolean;
       canEditPayments?: boolean;
-      canConfigureOpeningBalances?: boolean;
     },
     apply = true,
   ): {
     canEditExpenses: boolean;
     canEditPayments: boolean;
-    canConfigureOpeningBalances: boolean;
   } {
     if (!apply || !isSuperAdmin(actor.globalRole as GlobalRole)) {
       return {
         canEditExpenses: !!existing?.canEditExpenses,
         canEditPayments: !!existing?.canEditPayments,
-        canConfigureOpeningBalances: !!existing?.canConfigureOpeningBalances,
       };
     }
     return {
@@ -957,10 +925,6 @@ export class UsersService implements OnModuleInit {
         dto.canEditExpenses !== undefined ? !!dto.canEditExpenses : !!existing?.canEditExpenses,
       canEditPayments:
         dto.canEditPayments !== undefined ? !!dto.canEditPayments : !!existing?.canEditPayments,
-      canConfigureOpeningBalances:
-        dto.canConfigureOpeningBalances !== undefined
-          ? !!dto.canConfigureOpeningBalances
-          : !!existing?.canConfigureOpeningBalances,
     };
   }
 

@@ -71,10 +71,6 @@ export class UserShop {
   @Column({ default: false })
   canEditPayments: boolean;
 
-  /** Super admin le habilitó configurar saldos iniciales de cuentas de este local. */
-  @Column({ default: false })
-  canConfigureOpeningBalances: boolean;
-
   /**
    * Override del menú lateral para este usuario en este local.
    * null = usar shop.navConfig.
