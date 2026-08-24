@@ -484,6 +484,8 @@ export class ShopBackupService {
           code: a.code,
           type: a.type,
           linkedPaymentMethod: a.linkedPaymentMethod ?? '',
+          hideFromCashWithdraw: a.hideFromCashWithdraw ? 1 : 0,
+          openingBalance: a.openingBalance ?? 0,
           active: a.active ? 1 : 0,
         })),
       );
@@ -961,6 +963,8 @@ export class ShopBackupService {
           code: String(r.code ?? ''),
           type: r.type as any,
           linkedPaymentMethod: this.emptyToNull(r.linkedPaymentMethod) as any,
+          hideFromCashWithdraw: this.toBool(r.hideFromCashWithdraw, false),
+          openingBalance: String(r.openingBalance ?? 0),
           active: this.toBool(r.active, true),
         }),
       );

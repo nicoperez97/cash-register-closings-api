@@ -106,6 +106,12 @@ class CreateUserDto {
   @IsOptional()
   @IsBoolean()
   canEditPayments?: boolean;
+  @ApiPropertyOptional({
+    description: 'Si es true, puede configurar saldos iniciales de cuentas (solo lo asigna un super admin)',
+  })
+  @IsOptional()
+  @IsBoolean()
+  canConfigureOpeningBalances?: boolean;
   @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() phone?: string | null;
   @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() bankAlias?: string | null;
   @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() cbu?: string | null;
@@ -183,6 +189,12 @@ class UpdateUserDto {
   @IsOptional()
   @IsBoolean()
   canEditPayments?: boolean;
+  @ApiPropertyOptional({
+    description: 'Si es true, puede configurar saldos iniciales de cuentas (solo lo asigna un super admin)',
+  })
+  @IsOptional()
+  @IsBoolean()
+  canConfigureOpeningBalances?: boolean;
   @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() phone?: string | null;
   @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() bankAlias?: string | null;
   @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() cbu?: string | null;

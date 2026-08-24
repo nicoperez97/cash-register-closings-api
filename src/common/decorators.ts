@@ -32,6 +32,8 @@ export type AuthUser = {
   shopCanEditExpenses?: Record<string, boolean>;
   /** Super admin habilitó editar/borrar pagos en ese local. */
   shopCanEditPayments?: Record<string, boolean>;
+  /** Super admin habilitó configurar saldos iniciales en ese local. */
+  shopCanConfigureOpeningBalances?: Record<string, boolean>;
   /** Local favorito al iniciar sesión. */
   favoriteShopId?: string | null;
 };

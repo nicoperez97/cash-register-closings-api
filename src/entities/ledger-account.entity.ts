@@ -26,6 +26,10 @@ export class LedgerAccount extends BaseEntity {
   @Column({ type: 'tinyint', default: 0 })
   hideFromCashWithdraw: boolean;
 
+  /** Se suma al saldo de movimientos (puede ser negativo). */
+  @Column({ type: 'decimal', precision: 14, scale: 2, default: 0 })
+  openingBalance: string;
+
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })
   shop: Shop;
