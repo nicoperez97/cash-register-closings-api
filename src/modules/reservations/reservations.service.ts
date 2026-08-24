@@ -5,7 +5,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import {
   Reservation,
   ReservationArea,
@@ -658,9 +658,14 @@ export class ReservationsService implements OnModuleInit {
       .where('w.shopId = :shopId', { shopId })
       .andWhere('w.active = true');
     if (!includeDone) {
-      qb.andWhere('w.status = :status', { status: WaitingListStatus.WAITING });
+      qb.andWhere('w.status IN (:...open)', {
+        open: [WaitingListStatus.WAITING, WaitingListStatus.READY],
+      });
     }
-    qb.orderBy('w.createdAt', 'ASC');
+    qb.orderBy(
+      `CASE WHEN w.status = '${WaitingListStatus.READY}' THEN 0 ELSE 1 END`,
+      'ASC',
+    ).addOrderBy('w.createdAt', 'ASC');
     const rows = await qb.getMany();
     return rows.map((w) => this.toWaitingDto(w));
   }
@@ -1072,10 +1077,16 @@ export class ReservationsService implements OnModuleInit {
     const rows = await this.waiting.find({
       where: {
         shopId: shop.id,
-        status: WaitingListStatus.WAITING,
+        status: In([WaitingListStatus.WAITING, WaitingListStatus.READY]),
         active: true,
       },
       order: { createdAt: 'ASC' },
+    });
+    rows.sort((a, b) => {
+      const ar = a.status === WaitingListStatus.READY ? 0 : 1;
+      const br = b.status === WaitingListStatus.READY ? 0 : 1;
+      if (ar !== br) return ar - br;
+      return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
     });
 
     const inside = rows.filter(
