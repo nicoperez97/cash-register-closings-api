@@ -214,11 +214,37 @@ export class ClosingMovementsSyncService {
     return this.reloadMissingIncomes(shopId, false);
   }
 
-  async commitMissingIncomes(shopId: string) {
-    return this.reloadMissingIncomes(shopId, true);
+  async commitMissingIncomes(
+    shopId: string,
+    selected?: Array<{
+      closingId: string;
+      toAccountId: string;
+      amount: number;
+      label: string;
+    }>,
+  ) {
+    return this.reloadMissingIncomes(shopId, true, selected);
   }
 
-  private async reloadMissingIncomes(shopId: string, commit: boolean) {
+  private incomeItemKey(row: {
+    closingId: string;
+    toAccountId: string | null;
+    label: string;
+    amount: number;
+  }) {
+    return `${row.closingId}|${row.toAccountId ?? ''}|${row.label}|${row.amount}`;
+  }
+
+  private async reloadMissingIncomes(
+    shopId: string,
+    commit: boolean,
+    selected?: Array<{
+      closingId: string;
+      toAccountId: string;
+      amount: number;
+      label: string;
+    }>,
+  ) {
     await this.catalogSeed.ensureShopCatalogs(shopId);
     const accounts = await this.accounts.find({ where: { shopId } });
     const byCode = new Map(accounts.map((a) => [a.code, a]));
@@ -245,6 +271,7 @@ export class ClosingMovementsSyncService {
           status: 'skipped' as const,
           existingAmount: 0,
           existingDescription: null,
+          existingMovementId: null as string | null,
         };
       }
       const exact = incomePool.find(
@@ -262,6 +289,7 @@ export class ClosingMovementsSyncService {
           status: 'exists' as const,
           existingAmount: Number(exact.amountUyu),
           existingDescription: exact.description ?? null,
+          existingMovementId: exact.id,
         };
       }
       const sameChannel = incomePool.find(
@@ -272,11 +300,13 @@ export class ClosingMovementsSyncService {
             this.channelKey(m.toAccount?.name ?? '') === this.channelKey(row.toAccountName)),
       );
       if (sameChannel) {
+        used.add(sameChannel.id);
         return {
           ...row,
           status: 'mismatch' as const,
           existingAmount: Number(sameChannel.amountUyu),
           existingDescription: sameChannel.description ?? null,
+          existingMovementId: sameChannel.id,
         };
       }
       return {
@@ -284,10 +314,21 @@ export class ClosingMovementsSyncService {
         status: 'new' as const,
         existingAmount: 0,
         existingDescription: null,
+        existingMovementId: null as string | null,
       };
     });
 
-    const toCreate = items.filter((i) => i.status === 'new' && i.toAccountId);
+    const selectedKeys =
+      selected == null ? null : new Set(selected.map((s) => this.incomeItemKey(s)));
+    const picked = (i: (typeof items)[number]) =>
+      !selectedKeys || selectedKeys.has(this.incomeItemKey(i));
+    const toCreate = items.filter(
+      (i) => i.status === 'new' && i.toAccountId && picked(i),
+    );
+    const toUpdate = items.filter(
+      (i) =>
+        i.status === 'mismatch' && i.existingMovementId && selectedKeys && picked(i),
+    );
     if (commit && toCreate.length) {
       await this.movements.save(
         toCreate.map((r) =>
@@ -306,11 +347,31 @@ export class ClosingMovementsSyncService {
         ),
       );
     }
+    if (commit && toUpdate.length) {
+      for (const r of toUpdate) {
+        await this.movements.update(
+          { id: r.existingMovementId!, shopId },
+          {
+            amountUyu: money(r.amount),
+            description: r.label,
+            closingId: r.closingId,
+          },
+        );
+      }
+    }
 
-    const balances = this.projectBalances(accounts, existing, toCreate);
+    const extras = [
+      ...toCreate,
+      ...toUpdate.map((r) => ({
+        toAccountId: r.toAccountId,
+        amount: r.amount - r.existingAmount,
+      })),
+    ];
+    const balances = this.projectBalances(accounts, existing, extras);
     return {
       closingsCount: closings.length,
       createdCount: commit ? toCreate.length : 0,
+      updatedCount: commit ? toUpdate.length : 0,
       items,
       counts: {
         new: items.filter((i) => i.status === 'new').length,

@@ -142,10 +142,19 @@ export class ClosingsController {
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
     @Query('commit') commit?: string,
+    @Body()
+    body?: {
+      selected?: Array<{
+        closingId: string;
+        toAccountId: string;
+        amount: number;
+        label: string;
+      }>;
+    },
   ) {
     const doCommit = commit === 'true' || commit === '1';
     return doCommit
-      ? this.closings.commitReloadIncomes(user, shopId)
+      ? this.closings.commitReloadIncomes(user, shopId, body?.selected)
       : this.closings.previewReloadIncomes(user, shopId);
   }
 

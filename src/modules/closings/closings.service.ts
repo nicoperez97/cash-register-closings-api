@@ -553,9 +553,18 @@ export class ClosingsService implements OnModuleInit {
     return this.closingMovements.previewMissingIncomes(shopId);
   }
 
-  async commitReloadIncomes(user: AuthUser, shopId: string) {
+  async commitReloadIncomes(
+    user: AuthUser,
+    shopId: string,
+    selected?: Array<{
+      closingId: string;
+      toAccountId: string;
+      amount: number;
+      label: string;
+    }>,
+  ) {
     this.shops.assertShopAccess(user, shopId);
-    return this.closingMovements.commitMissingIncomes(shopId);
+    return this.closingMovements.commitMissingIncomes(shopId, selected);
   }
 
   async lock(user: AuthUser, shopId: string, id: string) {

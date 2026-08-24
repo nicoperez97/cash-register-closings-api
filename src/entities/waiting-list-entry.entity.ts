@@ -5,6 +5,7 @@ import { ReservationArea } from './reservation.entity';
 
 export enum WaitingListStatus {
   WAITING = 'WAITING',
+  READY = 'READY',
   SEATED = 'SEATED',
   CANCELLED = 'CANCELLED',
   LEFT = 'LEFT',
