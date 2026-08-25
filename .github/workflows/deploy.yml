@@ -50,6 +50,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 55
     steps:
+      - name: Esperar puerto 22 de Lightsail
+        env:
+          HOST: ${{ secrets.LIGHTSAIL_HOST }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HOST}" ]; then
+            echo "::error title=Deploy Backend::Falta el secret LIGHTSAIL_HOST"
+            exit 1
+          fi
+          for i in $(seq 1 8); do
+            if timeout 12 bash -c "echo >/dev/tcp/${HOST}/22" 2>/dev/null; then
+              echo "Puerto 22 OK (intento ${i})"
+              exit 0
+            fi
+            echo "Intento ${i}/8: no responde :22. Reintento en 20s."
+            sleep 20
+          done
+          echo "::error title=Deploy Backend::GitHub no llega al puerto 22 de Lightsail. Revisá: instancia encendida, IP pública = LIGHTSAIL_HOST, firewall IPv4 con SSH 22 abierto a 0.0.0.0/0 (los runners cambian de IP), y que un docker build cortado no haya dejado la máquina sin RAM. Si hace falta, reiniciá la instancia y volvé a correr este workflow."
+          exit 1
+
       - name: Actualizar código, build Docker y reiniciar API
         id: ssh_deploy
         uses: appleboy/ssh-action@v1.2.0
@@ -58,6 +78,7 @@ jobs:
           username: ${{ secrets.LIGHTSAIL_USER }}
           key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
           port: 22
+          timeout: 2m
           command_timeout: 45m
           script_stop: true
           script: |
@@ -149,7 +170,12 @@ jobs:
             else
               echo "❌ Falló el deploy por SSH."
               echo ""
-              echo "Buscá en el log la línea que empieza con **>>>** — indica la etapa."
-              echo "También aparece \`::error\` con el motivo concreto."
+              echo "Si el error es \`dial tcp :22: i/o timeout\`, GitHub no llega a Lightsail."
+              echo "1. Instancia **Running** en la consola de Lightsail"
+              echo "2. La IP pública sigue siendo el secret \`LIGHTSAIL_HOST\`"
+              echo "3. Networking → IPv4 → SSH (22) abierto a \`0.0.0.0/0\`"
+              echo "4. Si el deploy anterior se cortó a mitad del Docker build, reiniciá la instancia y re-ejecutá el workflow"
+              echo ""
+              echo "Si el SSH sí conectó, buscá en el log la línea **>>>** (etapa) o \`::error\`."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
