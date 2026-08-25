@@ -45,6 +45,9 @@ export class UpsertAccountDto {
   active?: boolean;
   /** Ocultar en el selector de retiro del cierre. */
   hideFromCashWithdraw?: boolean;
+  listInExpenses?: boolean;
+  listInIncomes?: boolean;
+  listInTransfers?: boolean;
   /** Se suma al saldo de movimientos. */
   openingBalance?: number | string | null;
 }
@@ -80,6 +83,16 @@ export class AccountsService implements OnModuleInit {
       `);
     } catch {
       // columna ya existe
+    }
+    for (const col of ['listInExpenses', 'listInIncomes', 'listInTransfers'] as const) {
+      try {
+        await this.accounts.query(`
+          ALTER TABLE ledger_accounts
+            ADD COLUMN ${col} TINYINT(1) NOT NULL DEFAULT 1
+        `);
+      } catch {
+        // columna ya existe
+      }
     }
     try {
       await this.accounts.query(`
@@ -146,6 +159,9 @@ export class AccountsService implements OnModuleInit {
         type: a.type,
         linkedPaymentMethod: a.linkedPaymentMethod ?? null,
         hideFromCashWithdraw: !!a.hideFromCashWithdraw,
+        listInExpenses: Number(a.listInExpenses ?? 1) !== 0,
+        listInIncomes: Number(a.listInIncomes ?? 1) !== 0,
+        listInTransfers: Number(a.listInTransfers ?? 1) !== 0,
         openingBalance: n(a.openingBalance),
         userIds: uids,
         userNames: names,
@@ -186,6 +202,9 @@ export class AccountsService implements OnModuleInit {
           dto.type === LedgerAccountType.SUPPLIER || dto.type === LedgerAccountType.SERVICE
             ? true
             : !!dto.hideFromCashWithdraw,
+        listInExpenses: dto.listInExpenses !== false,
+        listInIncomes: dto.listInIncomes !== false,
+        listInTransfers: dto.listInTransfers !== false,
         openingBalance: money(parseOpening(dto.openingBalance)),
         active: dto.active ?? true,
       }),
@@ -220,6 +239,9 @@ export class AccountsService implements OnModuleInit {
     if (dto.hideFromCashWithdraw !== undefined) {
       row.hideFromCashWithdraw = !!dto.hideFromCashWithdraw;
     }
+    if (dto.listInExpenses !== undefined) row.listInExpenses = !!dto.listInExpenses;
+    if (dto.listInIncomes !== undefined) row.listInIncomes = !!dto.listInIncomes;
+    if (dto.listInTransfers !== undefined) row.listInTransfers = !!dto.listInTransfers;
     if (row.type === LedgerAccountType.SUPPLIER || row.type === LedgerAccountType.SERVICE) {
       row.hideFromCashWithdraw = true;
     }

@@ -55,6 +55,18 @@ class CreateAccountDto {
   @IsOptional()
   @IsBoolean()
   hideFromCashWithdraw?: boolean;
+  @ApiPropertyOptional({ description: 'Si es false, no aparece al cargar un gasto' })
+  @IsOptional()
+  @IsBoolean()
+  listInExpenses?: boolean;
+  @ApiPropertyOptional({ description: 'Si es false, no aparece al cargar un ingreso' })
+  @IsOptional()
+  @IsBoolean()
+  listInIncomes?: boolean;
+  @ApiPropertyOptional({ description: 'Si es false, no aparece en movimientos entre cuentas' })
+  @IsOptional()
+  @IsBoolean()
+  listInTransfers?: boolean;
   @ApiPropertyOptional({ description: 'Saldo inicial. Se suma al saldo de movimientos.' })
   @IsOptional()
   openingBalance?: number;
@@ -86,6 +98,18 @@ class UpdateAccountDto {
   @IsOptional()
   @IsBoolean()
   hideFromCashWithdraw?: boolean;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  listInExpenses?: boolean;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  listInIncomes?: boolean;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  listInTransfers?: boolean;
   @ApiPropertyOptional({ description: 'Saldo inicial. Se suma al saldo de movimientos.' })
   @IsOptional()
   openingBalance?: number;

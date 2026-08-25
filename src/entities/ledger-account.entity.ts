@@ -26,6 +26,18 @@ export class LedgerAccount extends BaseEntity {
   @Column({ type: 'tinyint', default: 0 })
   hideFromCashWithdraw: boolean;
 
+  /** Si es false, no aparece al cargar un gasto. */
+  @Column({ type: 'tinyint', default: 1 })
+  listInExpenses: boolean;
+
+  /** Si es false, no aparece al cargar un ingreso. */
+  @Column({ type: 'tinyint', default: 1 })
+  listInIncomes: boolean;
+
+  /** Si es false, no aparece en movimientos entre cuentas. */
+  @Column({ type: 'tinyint', default: 1 })
+  listInTransfers: boolean;
+
   /** Se suma al saldo de movimientos (puede ser negativo). */
   @Column({ type: 'decimal', precision: 14, scale: 2, default: 0 })
   openingBalance: string;
