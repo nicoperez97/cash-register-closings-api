@@ -202,9 +202,18 @@ export class AccountsService implements OnModuleInit {
           dto.type === LedgerAccountType.SUPPLIER || dto.type === LedgerAccountType.SERVICE
             ? true
             : !!dto.hideFromCashWithdraw,
-        listInExpenses: dto.listInExpenses !== false,
-        listInIncomes: dto.listInIncomes !== false,
-        listInTransfers: dto.listInTransfers !== false,
+        listInExpenses:
+          dto.type === LedgerAccountType.SUPPLIER || dto.type === LedgerAccountType.SERVICE
+            ? false
+            : dto.listInExpenses !== false,
+        listInIncomes:
+          dto.type === LedgerAccountType.SUPPLIER || dto.type === LedgerAccountType.SERVICE
+            ? false
+            : dto.listInIncomes !== false,
+        listInTransfers:
+          dto.type === LedgerAccountType.SUPPLIER || dto.type === LedgerAccountType.SERVICE
+            ? false
+            : dto.listInTransfers !== false,
         openingBalance: money(parseOpening(dto.openingBalance)),
         active: dto.active ?? true,
       }),
@@ -244,6 +253,9 @@ export class AccountsService implements OnModuleInit {
     if (dto.listInTransfers !== undefined) row.listInTransfers = !!dto.listInTransfers;
     if (row.type === LedgerAccountType.SUPPLIER || row.type === LedgerAccountType.SERVICE) {
       row.hideFromCashWithdraw = true;
+      row.listInExpenses = false;
+      row.listInIncomes = false;
+      row.listInTransfers = false;
     }
     if (dto.active !== undefined) row.active = dto.active;
     if (dto.openingBalance !== undefined) {

@@ -153,6 +153,9 @@ export class SuppliersService implements OnModuleInit {
         code,
         type: LedgerAccountType.SUPPLIER,
         hideFromCashWithdraw: true,
+        listInExpenses: false,
+        listInIncomes: false,
+        listInTransfers: false,
         active: true,
       }),
     );

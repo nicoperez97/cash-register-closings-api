@@ -150,6 +150,9 @@ export class ServicesService implements OnModuleInit {
         code,
         type: LedgerAccountType.SERVICE,
         hideFromCashWithdraw: true,
+        listInExpenses: false,
+        listInIncomes: false,
+        listInTransfers: false,
         active: true,
       }),
     );
