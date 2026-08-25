@@ -48,7 +48,7 @@ jobs:
     name: 2 · Deploy Lightsail
     needs: compile
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 55
     steps:
       - name: Actualizar código, build Docker y reiniciar API
         id: ssh_deploy
@@ -58,10 +58,12 @@ jobs:
           username: ${{ secrets.LIGHTSAIL_USER }}
           key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
           port: 22
-          command_timeout: 20m
+          command_timeout: 45m
           script_stop: true
           script: |
             set -euo pipefail
+            export COMPOSE_BAKE=0
+            export DOCKER_BUILDKIT=1
 
             die() {
               echo "::error title=Deploy Backend::$1"
@@ -99,7 +101,8 @@ jobs:
 
             echo ""
             echo ">>> [3/6] Build imagen Docker (api)"
-            sudo docker compose build api || die "docker compose build api falló — revisá el Dockerfile / logs de build"
+            sudo COMPOSE_BAKE=0 DOCKER_BUILDKIT=1 docker compose build api \
+              || die "docker compose build api falló — revisá el Dockerfile / logs de build"
 
             echo ""
             echo ">>> [4/6] Limpiar contenedores api en conflicto"
