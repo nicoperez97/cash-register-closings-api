@@ -177,8 +177,14 @@ export class AccountsController {
     'closings.create',
     'payments.read',
   )
-  list(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
-    return this.accounts.list(user, shopId);
+  list(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Query('includeInactive') includeInactive?: string,
+  ) {
+    return this.accounts.list(user, shopId, {
+      includeInactive: includeInactive === '1' || includeInactive === 'true',
+    });
   }
 
   @Put('payment-deposits')

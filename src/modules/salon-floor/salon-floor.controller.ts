@@ -3,6 +3,7 @@ import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiTags } from '@nestj
 import { AuthGuard } from '@nestjs/passport';
 import {
   IsArray,
+  IsBoolean,
   IsEnum,
   IsInt,
   IsOptional,
@@ -13,7 +14,7 @@ import {
   MinLength,
   ValidateNested,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { AuthUser, CurrentUser, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { SalonArea } from '../../entities/salon-table.entity';
@@ -85,6 +86,14 @@ class ReplaceSalonRulesDto {
   slots: SalonRuleSlotDto[];
 }
 
+class ApplyFromReservationsDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true')
+  @IsBoolean()
+  onlyIfEmpty?: boolean;
+}
+
 @ApiTags('salon-floor')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'), PermissionsGuard)
@@ -131,8 +140,14 @@ export class SalonFloorController {
 
   @Post('from-reservations')
   @RequirePermissions('reservations.manage')
-  applyFromReservations(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
-    return this.salon.applyFromReservations(user, shopId);
+  applyFromReservations(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() body: ApplyFromReservationsDto,
+  ) {
+    return this.salon.applyFromReservations(user, shopId, {
+      onlyIfEmpty: !!body?.onlyIfEmpty,
+    });
   }
 
   @Put('rules')

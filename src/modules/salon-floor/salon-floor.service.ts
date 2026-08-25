@@ -221,10 +221,36 @@ export class SalonFloorService implements OnModuleInit {
     return created.map((r) => this.toRuleDto(r));
   }
 
-  async applyFromReservations(user: AuthUser, shopId: string) {
+  /** Cuántas mesas físicas de 2 y 3 cubiertos hacen falta para un grupo. */
+  private seatsForParty(size: number): { two: number; three: number } {
+    const n = Math.max(1, Math.min(20, Math.round(Number(size) || 2)));
+    if (n <= 2) return { two: 1, three: 0 };
+    if (n === 3) return { two: 0, three: 1 };
+    const threes = Math.floor(n / 3);
+    const rem = n % 3;
+    if (rem === 0) return { two: 0, three: threes };
+    if (rem === 1) {
+      if (threes >= 1) return { two: 2, three: threes - 1 };
+      return { two: 2, three: 0 };
+    }
+    return { two: 1, three: threes };
+  }
+
+  async applyFromReservations(
+    user: AuthUser,
+    shopId: string,
+    opts?: { onlyIfEmpty?: boolean },
+  ) {
     this.shops.assertShopAccess(user, shopId);
+    const current = await this.getFloor(user, shopId);
+    const hasTables = (current.tables ?? []).length > 0;
+    const hasRules = (current.rules ?? []).some((r) => r.maxCount > 0);
+    if (opts?.onlyIfEmpty && (hasTables || hasRules)) {
+      return { ...current, applied: false as const };
+    }
+
     const from = new Date();
-    from.setDate(from.getDate() - 60);
+    from.setDate(from.getDate() - 90);
     const to = new Date();
     to.setDate(to.getDate() + 30);
     const fromIso = from.toISOString().slice(0, 10);
@@ -244,6 +270,7 @@ export class SalonFloorService implements OnModuleInit {
       return d >= fromIso && d <= toIso;
     });
     if (!inRange.length) {
+      if (opts?.onlyIfEmpty) return { ...current, applied: false as const };
       throw new BadRequestException(
         'No hay reservas confirmadas recientes para armar el salón',
       );
@@ -252,39 +279,70 @@ export class SalonFloorService implements OnModuleInit {
     for (const area of [SalonArea.INSIDE, SalonArea.OUTSIDE]) {
       const ofArea = inRange.filter((r) => this.normalizeArea(r.area) === area);
       if (!ofArea.length) continue;
-      const byDate = new Map<string, number[]>();
+      const byDate = new Map<string, { timed: Map<string, number[]>; untimed: number[] }>();
       for (const r of ofArea) {
         const d = String(r.businessDate).slice(0, 10);
-        const list = byDate.get(d) ?? [];
-        list.push(Math.max(2, Math.min(20, Number(r.partySize) || 2)));
-        byDate.set(d, list);
+        const party = Math.max(1, Math.min(20, Number(r.partySize) || 2));
+        const bucket = byDate.get(d) ?? { timed: new Map<string, number[]>(), untimed: [] };
+        const time = String(r.reservationTime ?? '').trim().slice(0, 5);
+        if (time) {
+          const list = bucket.timed.get(time) ?? [];
+          list.push(party);
+          bucket.timed.set(time, list);
+        } else {
+          bucket.untimed.push(party);
+        }
+        byDate.set(d, bucket);
       }
       const sizePeak = new Map<number, number>();
-      let peakCovers = 0;
-      for (const sizes of byDate.values()) {
+      let peakTwo = 0;
+      let peakThree = 0;
+      const consider = (sizes: number[]) => {
         const counts = new Map<number, number>();
-        let covers = 0;
+        let two = 0;
+        let three = 0;
         for (const s of sizes) {
-          counts.set(s, (counts.get(s) ?? 0) + 1);
-          covers += s;
+          const party = Math.max(2, s);
+          counts.set(party, (counts.get(party) ?? 0) + 1);
+          const mix = this.seatsForParty(s);
+          two += mix.two;
+          three += mix.three;
         }
-        peakCovers = Math.max(peakCovers, covers);
+        peakTwo = Math.max(peakTwo, two);
+        peakThree = Math.max(peakThree, three);
         for (const [size, n] of counts) {
           sizePeak.set(size, Math.max(sizePeak.get(size) ?? 0, n));
         }
+      };
+      for (const day of byDate.values()) {
+        if (!day.timed.size) {
+          consider(day.untimed);
+          continue;
+        }
+        for (const timed of day.timed.values()) {
+          consider([...timed, ...day.untimed]);
+        }
       }
       const slots = [...sizePeak.entries()]
+        .filter(([, maxCount]) => maxCount > 0)
         .sort((a, b) => a[0] - b[0])
         .map(([partySize, maxCount]) => ({ partySize, maxCount }));
-      await this.replaceRules(user, shopId, { area, slots });
-      const needed = Math.max(1, Math.ceil(peakCovers / 2));
+      if (slots.length) {
+        await this.replaceRules(user, shopId, { area, slots });
+      }
       const existing = (await this.tables.find({ where: { shopId } })).filter(
         (r) => isEntityActive(r.active) && this.normalizeArea(r.area) === area,
       );
-      for (let i = existing.length; i < needed; i++) {
+      const haveTwo = existing.filter((t) => t.seats <= 2).length;
+      const haveThree = existing.filter((t) => t.seats >= 3).length;
+      for (let i = haveTwo; i < peakTwo; i++) {
         await this.createTable(user, shopId, { area, seats: 2 });
       }
+      for (let i = haveThree; i < peakThree; i++) {
+        await this.createTable(user, shopId, { area, seats: 3 });
+      }
     }
-    return this.getFloor(user, shopId);
+    const floor = await this.getFloor(user, shopId);
+    return { ...floor, applied: true as const };
   }
 }

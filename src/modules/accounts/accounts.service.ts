@@ -172,10 +172,10 @@ export class AccountsService implements OnModuleInit {
     });
   }
 
-  async list(user: AuthUser, shopId: string) {
+  async list(user: AuthUser, shopId: string, opts?: { includeInactive?: boolean }) {
     this.shops.assertShopAccess(user, shopId);
     const rows = await this.accounts.find({
-      where: { shopId, active: true },
+      where: opts?.includeInactive ? { shopId } : { shopId, active: true },
       order: { type: 'ASC', name: 'ASC' },
     });
     return this.enrich(rows);
