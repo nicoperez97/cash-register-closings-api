@@ -1083,12 +1083,6 @@ export class PaymentsService implements OnModuleInit {
       throw new BadRequestException('No se puede editar un pago cancelado');
     }
 
-    if (row.status === PaymentStatus.PAID) {
-      throw new BadRequestException(
-        'Un pago abonado no se puede editar. Marcálo como no pagado primero (eso elimina el gasto). Después editá y volvé a abonarlo.',
-      );
-    }
-
     const patch: Partial<Payment> = {};
 
     if (dto.title !== undefined) patch.title = dto.title?.trim() || null;
@@ -1244,6 +1238,9 @@ export class PaymentsService implements OnModuleInit {
     );
 
     const saved = await this.load(shopId, id);
+    if (saved.status === PaymentStatus.PAID) {
+      await this.syncPaidMovement(user, shopId, saved);
+    }
     await this.notifyPaymentChange(
       user,
       shopId,
@@ -1252,7 +1249,7 @@ export class PaymentsService implements OnModuleInit {
       'Pago editado',
       dto,
     );
-    return this.toDto(saved);
+    return this.toDto(await this.load(shopId, id));
   }
 
   async validate(
@@ -1273,11 +1270,21 @@ export class PaymentsService implements OnModuleInit {
       throw new BadRequestException('Indicá la cuenta con la que se paga');
     }
     await this.assertAccount(shopId, accountId);
-    row.accountId = accountId;
-    row.status = PaymentStatus.VALIDATED;
-    row.validatedAt = new Date();
-    row.validatedByUserId = user.id;
-    await this.payments.save(row);
+    await this.payments
+      .createQueryBuilder()
+      .update(Payment)
+      .set({
+        accountId,
+        status: PaymentStatus.VALIDATED,
+        validatedAt: new Date(),
+        validatedByUserId: user.id,
+      })
+      .where('id = :id AND shopId = :shopId AND status = :st', {
+        id,
+        shopId,
+        st: PaymentStatus.PENDING_VALIDATION,
+      })
+      .execute();
 
     if (row.payerUserId) {
       await this.notifications.create({
@@ -1548,10 +1555,16 @@ export class PaymentsService implements OnModuleInit {
     const row = await this.load(shopId, id);
 
     if (row.status === PaymentStatus.VALIDATED) {
-      row.status = PaymentStatus.PENDING_VALIDATION;
-      row.validatedAt = null;
-      row.validatedByUserId = null;
-      await this.payments.save(row);
+      await this.payments
+        .createQueryBuilder()
+        .update(Payment)
+        .set({
+          status: PaymentStatus.PENDING_VALIDATION,
+          validatedAt: null,
+          validatedByUserId: null,
+        })
+        .where('id = :id AND shopId = :shopId', { id, shopId })
+        .execute();
       return this.toDto(await this.load(shopId, id));
     }
 
@@ -1564,10 +1577,16 @@ export class PaymentsService implements OnModuleInit {
           // El movimiento puede haberse borrado antes.
         }
       }
-      row.status = PaymentStatus.VALIDATED;
-      row.paidAt = null;
-      row.movementId = null;
-      await this.payments.save(row);
+      await this.payments
+        .createQueryBuilder()
+        .update(Payment)
+        .set({
+          status: PaymentStatus.VALIDATED,
+          paidAt: null,
+          movementId: null,
+        })
+        .where('id = :id AND shopId = :shopId', { id, shopId })
+        .execute();
       return this.toDto(await this.load(shopId, id));
     }
 

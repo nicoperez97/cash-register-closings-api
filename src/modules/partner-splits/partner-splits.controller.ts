@@ -112,4 +112,20 @@ export class PartnerSplitsController {
   ) {
     return this.splits.apply(user, shopId, body);
   }
+
+  @Get('runs')
+  @RequirePermissions('partnerSplits.read')
+  listRuns(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
+    return this.splits.listRuns(user, shopId);
+  }
+
+  @Get('runs/:id')
+  @RequirePermissions('partnerSplits.read')
+  getRun(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+  ) {
+    return this.splits.getRun(user, shopId, id);
+  }
 }

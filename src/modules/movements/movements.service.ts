@@ -816,6 +816,9 @@ export class MovementsService implements OnModuleInit {
     }
 
     await this.movements.save(row);
+    if (!opts?.fromPayment) {
+      await this.syncLinkedPayment(shopId, row);
+    }
     const saved = await this.one(user, shopId, id);
     if (asExpense || asIncome) {
       await this.notifyMovementChange(
@@ -1208,5 +1211,26 @@ export class MovementsService implements OnModuleInit {
         body,
       })),
     );
+  }
+
+  /** Si el gasto nació de un pago, replica monto, cuenta, concepto y fecha. */
+  private async syncLinkedPayment(shopId: string, row: Movement) {
+    const payment = await this.payments.findOne({
+      where: { shopId, movementId: row.id, active: true },
+    });
+    if (!payment || payment.status !== PaymentStatus.PAID) return;
+    await this.payments
+      .createQueryBuilder()
+      .update(Payment)
+      .set({
+        amount: money(n(row.amountUyu)),
+        accountId: row.fromAccountId ?? payment.accountId,
+        conceptId: row.conceptId ?? payment.conceptId,
+        notes: row.description ?? payment.notes,
+        paidAt: String(row.businessDate ?? payment.paidAt ?? '').slice(0, 10) || payment.paidAt,
+        paymentMethod: (row.paymentMethod as Payment['paymentMethod']) ?? payment.paymentMethod,
+      })
+      .where('id = :id AND shopId = :shopId', { id: payment.id, shopId })
+      .execute();
   }
 }
