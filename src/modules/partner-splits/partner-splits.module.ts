@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { PartnerSplitConfig } from '../../entities/partner-split-config.entity';
+import { PartnerSplitRun } from '../../entities/partner-split-run.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { Movement } from '../../entities/movement.entity';
 import { ShopsModule } from '../shops/shops.module';
@@ -10,7 +11,7 @@ import { PartnerSplitsService } from './partner-splits.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([PartnerSplitConfig, LedgerAccount, Movement]),
+    TypeOrmModule.forFeature([PartnerSplitConfig, PartnerSplitRun, LedgerAccount, Movement]),
     ShopsModule,
     MovementsModule,
   ],

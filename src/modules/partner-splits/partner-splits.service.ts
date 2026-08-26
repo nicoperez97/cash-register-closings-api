@@ -1,7 +1,8 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { PartnerSplitConfig } from '../../entities/partner-split-config.entity';
+import { PartnerSplitRun } from '../../entities/partner-split-run.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { Movement } from '../../entities/movement.entity';
 import { AuthUser } from '../../common/decorators';
@@ -40,16 +41,42 @@ export type PartnerSplitConfigDto = {
 };
 
 @Injectable()
-export class PartnerSplitsService {
+export class PartnerSplitsService implements OnModuleInit {
   constructor(
     @InjectRepository(PartnerSplitConfig)
     private readonly configs: Repository<PartnerSplitConfig>,
+    @InjectRepository(PartnerSplitRun)
+    private readonly runs: Repository<PartnerSplitRun>,
     @InjectRepository(LedgerAccount)
     private readonly accounts: Repository<LedgerAccount>,
     @InjectRepository(Movement) private readonly movementsRepo: Repository<Movement>,
     private readonly shops: ShopsService,
     private readonly movements: MovementsService,
   ) {}
+
+  async onModuleInit() {
+    try {
+      await this.runs.query(`
+        CREATE TABLE IF NOT EXISTS partner_split_runs (
+          id CHAR(36) NOT NULL PRIMARY KEY,
+          shopId CHAR(36) NOT NULL,
+          appliedAt DATETIME(6) NOT NULL,
+          appliedByUserId CHAR(36) NULL,
+          appliedByName VARCHAR(160) NULL,
+          transferCount INT NOT NULL DEFAULT 0,
+          distributedAmount DECIMAL(14,2) NOT NULL DEFAULT 0,
+          snapshot JSON NOT NULL,
+          createdAt DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+          updatedAt DATETIME(6) NULL,
+          deletedAt DATETIME(6) NULL,
+          active TINYINT(1) NOT NULL DEFAULT 1,
+          INDEX idx_partner_split_runs_shop (shopId)
+        )
+      `);
+    } catch {
+      // ya existe
+    }
+  }
 
   async getPreview(user: AuthUser, shopId: string, incoming?: Partial<PartnerSplitConfigDto>) {
         this.shops.assertShopAccess(user, shopId);
@@ -100,8 +127,58 @@ export class PartnerSplitsService {
       created.push(row.id);
     }
     await this.saveConfig(user, shopId, preview.config);
+    const distributed = round2(transfers.reduce((s, t) => s + n(t.amount), 0));
+    const run = await this.runs.save(
+      this.runs.create({
+        shopId,
+        appliedAt: new Date(),
+        appliedByUserId: user.id,
+        appliedByName: user.fullName || user.email || null,
+        transferCount: created.length,
+        distributedAmount: money(distributed),
+        snapshot: {
+          config: preview.config,
+          partners: preview.partners,
+          channels: preview.channels,
+          extras: preview.extras,
+          totals: preview.totals,
+          transfers: preview.transfers,
+          createdIds: created,
+        },
+      }),
+    );
     const after = await this.buildPreview(user, shopId, preview.config);
-    return { createdCount: created.length, createdIds: created, ...after };
+    return { createdCount: created.length, createdIds: created, runId: run.id, ...after };
+  }
+
+  async listRuns(user: AuthUser, shopId: string) {
+    this.shops.assertShopAccess(user, shopId);
+    const rows = await this.runs.find({
+      where: { shopId, active: true },
+      order: { appliedAt: 'DESC' },
+      take: 200,
+    });
+    return rows.map((r) => this.toRunDto(r, false));
+  }
+
+  async getRun(user: AuthUser, shopId: string, id: string) {
+    this.shops.assertShopAccess(user, shopId);
+    const row = await this.runs.findOne({ where: { id, shopId, active: true } });
+    if (!row) throw new BadRequestException('División no encontrada');
+    return this.toRunDto(row, true);
+  }
+
+  private toRunDto(row: PartnerSplitRun, withSnapshot: boolean) {
+    return {
+      id: row.id,
+      shopId: row.shopId,
+      appliedAt: row.appliedAt,
+      appliedByUserId: row.appliedByUserId ?? null,
+      appliedByName: row.appliedByName ?? null,
+      transferCount: row.transferCount,
+      distributedAmount: n(row.distributedAmount),
+      ...(withSnapshot ? { snapshot: row.snapshot } : {}),
+    };
   }
 
   private async resolveConfig(
@@ -162,15 +239,16 @@ export class PartnerSplitsService {
       throw new BadRequestException('Elegí al menos un socio');
     }
 
+    const leaveOf = (accountId: string) =>
+      config.channelLeaves.find((c) => c.accountId === accountId)?.leaveAmount ?? 0;
+
     const partners = includedPartners.map((a) => {
       const current = round2(n(byId.get(a.id)?.balance));
-      return { accountId: a.id, name: a.name, current };
+      return { accountId: a.id, name: a.name, current, leaveAmount: leaveOf(a.id) };
     });
     const channels = channelAccs.map((a) => {
       const current = round2(n(byId.get(a.id)?.balance));
-      const leaveAmount =
-        config.channelLeaves.find((c) => c.accountId === a.id)?.leaveAmount ?? 0;
-      return { accountId: a.id, name: a.name, current, leaveAmount };
+      return { accountId: a.id, name: a.name, current, leaveAmount: leaveOf(a.id) };
     });
 
     const extrasTotal = round2(config.extras.reduce((s, e) => s + n(e.amount), 0));
@@ -178,19 +256,23 @@ export class PartnerSplitsService {
       partners.reduce((s, p) => s + p.current, 0) +
         channels.reduce((s, c) => s + c.current, 0),
     );
-    const reserves = round2(channels.reduce((s, c) => s + c.leaveAmount, 0));
+    const reserves = round2(
+      partners.reduce((s, p) => s + p.leaveAmount, 0) +
+        channels.reduce((s, c) => s + c.leaveAmount, 0),
+    );
     const toDistribute = round2(balancesTotal - reserves - extrasTotal);
     const count = partners.length;
     const shareBase = count ? round2(toDistribute / count) : 0;
     const shareLast = count ? round2(toDistribute - shareBase * (count - 1)) : 0;
 
     const partnerRows = partners.map((p, i) => {
-      const target = i === count - 1 ? shareLast : shareBase;
+      const share = i === count - 1 ? shareLast : shareBase;
+      const target = round2(share + p.leaveAmount);
       return {
         ...p,
         included: true,
         target,
-        share: target,
+        share,
         difference: round2(target - p.current),
       };
     });
