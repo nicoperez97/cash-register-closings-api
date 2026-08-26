@@ -1109,6 +1109,7 @@ export class MovementsService implements OnModuleInit {
     type: NotificationType,
     title: string,
     movement: {
+      id?: string;
       businessDate?: string;
       amountUyu?: number;
       fromAccountName?: string | null;
@@ -1147,6 +1148,7 @@ export class MovementsService implements OnModuleInit {
         type,
         title,
         body,
+        targetId: type === NotificationType.MOVEMENT_DELETED ? null : movement.id ?? null,
       })),
     );
   }
@@ -1209,6 +1211,7 @@ export class MovementsService implements OnModuleInit {
         type: NotificationType.MOVEMENT_CREATED,
         title,
         body,
+        targetId: movement.id,
       })),
     );
   }

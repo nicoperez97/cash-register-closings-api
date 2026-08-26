@@ -12,31 +12,72 @@ import { PushService } from './push.service';
 import { MailService } from './mail.service';
 import { muteChannels } from '../profile/notification-eligibility';
 
-function deepLinkFor(type: NotificationType, opts: {
-  shopId?: string | null;
-  closingId?: string | null;
-  paymentId?: string | null;
-}): string {
-  if (opts.closingId) return `/closings/${opts.closingId}`;
-  if (type === NotificationType.CLOSING_CREATED) return '/closings';
-  if (type === NotificationType.CASH_WITHDRAWAL_PICKED) return '/cash-withdrawals';
-  if (type === NotificationType.PRODUCTION_HOURS_LOGGED) return '/production-attendance';
-  if (type === NotificationType.STOCK_BELOW_MINIMUM) return '/stock';
-  if (type === NotificationType.STOCK_SHARED) return '/stock';
-  if (type === NotificationType.BEVERAGE_STOCK_BELOW_MINIMUM) return '/beverage-stock';
-  if (type === NotificationType.BEVERAGE_STOCK_SHARED) return '/beverage-stock';
+function queryString(params: Record<string, string | null | undefined>): string {
+  const q = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value) q.set(key, value);
+  }
+  const s = q.toString();
+  return s ? `?${s}` : '';
+}
+
+function deepLinkFor(
+  type: NotificationType,
+  opts: {
+    shopId?: string | null;
+    closingId?: string | null;
+    paymentId?: string | null;
+    targetId?: string | null;
+  },
+): string {
+  const shop = opts.shopId ?? null;
+  if (opts.closingId) {
+    return `/closings/${opts.closingId}${queryString({ shop })}`;
+  }
+  if (type === NotificationType.CLOSING_CREATED) {
+    return `/closings${queryString({ shop })}`;
+  }
+  if (type === NotificationType.CASH_WITHDRAWAL_PICKED) {
+    return `/cash-withdrawals${queryString({ shop })}`;
+  }
+  if (type === NotificationType.PRODUCTION_HOURS_LOGGED) {
+    return `/production-attendance${queryString({ shop })}`;
+  }
+  if (
+    type === NotificationType.STOCK_BELOW_MINIMUM ||
+    type === NotificationType.STOCK_SHARED
+  ) {
+    return `/stock${queryString({ shop })}`;
+  }
+  if (
+    type === NotificationType.BEVERAGE_STOCK_BELOW_MINIMUM ||
+    type === NotificationType.BEVERAGE_STOCK_SHARED
+  ) {
+    return `/beverage-stock${queryString({ shop })}`;
+  }
   if (
     type === NotificationType.SHORTAGE_CREATED ||
     type === NotificationType.SHORTAGE_LEVEL_LOW ||
     type === NotificationType.SHORTAGE_RESOLVED
   ) {
-    return '/shortages';
+    return `/shortages${queryString({ shop, shortage: opts.targetId })}`;
   }
-  if (String(type).startsWith('PAYMENT_')) return '/payments/suppliers';
-  if (type === NotificationType.RESERVATION_REQUEST) return '/reservations';
-  if (String(type).startsWith('MOVEMENT_')) return '/movements';
-  if (type === NotificationType.REIMBURSEMENT_CREATED) return '/reimbursements';
-  return '/';
+  if (String(type).startsWith('PAYMENT_')) {
+    return `/payments/suppliers${queryString({ shop, payment: opts.paymentId })}`;
+  }
+  if (type === NotificationType.RESERVATION_REQUEST) {
+    return `/reservations${queryString({ shop, request: opts.targetId })}`;
+  }
+  if (type === NotificationType.MOVEMENT_DELETED) {
+    return `/expenses${queryString({ shop })}`;
+  }
+  if (String(type).startsWith('MOVEMENT_')) {
+    return `/expenses${queryString({ shop, movement: opts.targetId })}`;
+  }
+  if (type === NotificationType.REIMBURSEMENT_CREATED) {
+    return `/reimbursements${queryString({ shop, reimbursement: opts.targetId })}`;
+  }
+  return `/${queryString({ shop })}`.replace(/\/\?/, '/?') || '/';
 }
 
 function isHttpUrl(raw?: string | null): boolean {
@@ -100,6 +141,14 @@ export class NotificationsService implements OnModuleInit {
     try {
       await this.notifications.query(`
         ALTER TABLE notifications
+          ADD COLUMN targetId CHAR(36) NULL
+      `);
+    } catch {
+      // ya existe
+    }
+    try {
+      await this.notifications.query(`
+        ALTER TABLE notifications
           MODIFY COLUMN type ENUM(
             'PAYMENT_VALIDATE',
             'PAYMENT_PAY',
@@ -145,6 +194,7 @@ export class NotificationsService implements OnModuleInit {
     body: string;
     paymentId?: string | null;
     closingId?: string | null;
+    targetId?: string | null;
   }) {
     const mute = await this.muteChannelsFor(input.userId, input.shopId, input.type);
     if (mute.app && mute.email) {
@@ -162,6 +212,7 @@ export class NotificationsService implements OnModuleInit {
           body: input.body,
           paymentId: input.paymentId ?? null,
           closingId: input.closingId ?? null,
+          targetId: input.targetId ?? null,
           isRead: false,
           active: true,
         }),
@@ -206,6 +257,7 @@ export class NotificationsService implements OnModuleInit {
       body: string;
       paymentId?: string | null;
       closingId?: string | null;
+      targetId?: string | null;
     }>,
   ) {
     if (!inputs.length) return [];
@@ -242,6 +294,7 @@ export class NotificationsService implements OnModuleInit {
           body: input.body,
           paymentId: input.paymentId ?? null,
           closingId: input.closingId ?? null,
+          targetId: input.targetId ?? null,
           isRead: false,
           active: true,
         }),
@@ -273,6 +326,7 @@ export class NotificationsService implements OnModuleInit {
               shopId: row.shopId,
               closingId: row.closingId,
               paymentId: row.paymentId,
+              targetId: row.targetId,
             }),
             tag: `crc-${row.type}-${row.id}`,
             shopId: row.shopId ?? null,
@@ -499,6 +553,7 @@ export class NotificationsService implements OnModuleInit {
       body: n.body,
       paymentId: n.paymentId ?? null,
       closingId: n.closingId ?? null,
+      targetId: n.targetId ?? null,
       read: !!n.isRead,
       readAt: n.readAt ?? null,
       createdAt: n.createdAt,
