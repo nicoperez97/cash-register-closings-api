@@ -445,7 +445,7 @@ export class ReservationRequestsService implements OnModuleInit {
     await this.notifyStaff(shop.id, shop.name, {
       title: 'Nueva solicitud de reserva',
       body: `${guestName} · ${partySize} ${partySize === 1 ? 'persona' : 'personas'} · ${when}${areaBit}${igBit}`,
-    });
+    }, row.id);
     this.live.tick(shop.id, 'reservations');
 
     return {
@@ -702,6 +702,7 @@ export class ReservationRequestsService implements OnModuleInit {
     shopId: string,
     shopName: string,
     msg: { title: string; body: string },
+    targetId?: string | null,
   ) {
     const links = await this.userShops.find({ where: { shopId } });
     const userIds = [
@@ -715,6 +716,7 @@ export class ReservationRequestsService implements OnModuleInit {
         type: NotificationType.RESERVATION_REQUEST,
         title: msg.title,
         body: `${shopName}: ${msg.body}`,
+        targetId: targetId ?? null,
       })),
     );
   }

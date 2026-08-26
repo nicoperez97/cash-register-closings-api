@@ -449,6 +449,7 @@ export class ReimbursementsService implements OnModuleInit {
         type: NotificationType.REIMBURSEMENT_CREATED,
         title: 'Gasto a reintegrar',
         body: `${shopName} · ${employee.fullName} cargó $${amount} (${row.description})`,
+        targetId: row.id,
       })),
     );
   }

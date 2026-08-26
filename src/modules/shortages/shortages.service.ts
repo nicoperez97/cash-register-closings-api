@@ -257,6 +257,7 @@ export class ShortagesService implements OnModuleInit {
         type,
         title,
         body,
+        targetId: row.id,
       })),
     );
   }

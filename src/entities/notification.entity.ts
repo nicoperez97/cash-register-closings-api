@@ -27,6 +27,10 @@ export class AppNotification extends BaseEntity {
   @Column({ type: 'varchar', nullable: true })
   closingId?: string | null;
 
+  /** Movimiento, reintegro, faltante, solicitud de reserva, etc. */
+  @Column({ type: 'varchar', nullable: true })
+  targetId?: string | null;
+
   @Column({ type: 'tinyint', default: 0 })
   isRead: boolean;
 
