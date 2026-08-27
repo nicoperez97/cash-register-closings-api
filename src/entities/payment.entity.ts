@@ -42,6 +42,10 @@ export class Payment extends BaseEntity {
   @Column({ type: 'varchar', nullable: true })
   accountId?: string | null;
 
+  /** Cuenta que recibe (pagos a socios). */
+  @Column({ type: 'varchar', nullable: true })
+  toAccountId?: string | null;
+
   /** Concepto del catálogo (opcional; el título se copia del nombre). */
   @Column({ type: 'varchar', nullable: true })
   conceptId?: string | null;
@@ -145,6 +149,10 @@ export class Payment extends BaseEntity {
   @ManyToOne(() => LedgerAccount, { nullable: true })
   @JoinColumn({ name: 'accountId' })
   account?: LedgerAccount | null;
+
+  @ManyToOne(() => LedgerAccount, { nullable: true })
+  @JoinColumn({ name: 'toAccountId' })
+  toAccount?: LedgerAccount | null;
 
   @ManyToOne(() => Concept, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'conceptId' })

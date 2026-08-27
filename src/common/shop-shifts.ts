@@ -12,9 +12,40 @@ export interface ShopShift {
   opensAt: string;
   /** Cierre de turno (HH:mm). Puede ser de madrugada (menor o igual que la apertura). */
   closesAt: string;
+  /** 0=domingo … 6=sábado. Vacío o ausente = todos los días. */
+  weekdays: number[];
 }
 
+export const ALL_SHIFT_WEEKDAYS = [0, 1, 2, 3, 4, 5, 6];
+
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+export function weekdayFromYmd(year: number, month: number, day: number): number {
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0)).getUTCDay();
+}
+
+export function weekdayFromIsoDate(isoDate?: string | null): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(isoDate ?? '').slice(0, 10));
+  if (!m) return null;
+  return weekdayFromYmd(Number(m[1]), Number(m[2]), Number(m[3]));
+}
+
+export function normalizeShiftWeekdays(raw?: number[] | null): number[] {
+  if (!Array.isArray(raw) || !raw.length) return [...ALL_SHIFT_WEEKDAYS];
+  const next = [
+    ...new Set(raw.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n >= 0 && n <= 6)),
+  ].sort((a, b) => a - b);
+  return next.length ? next : [...ALL_SHIFT_WEEKDAYS];
+}
+
+export function shiftRunsOnWeekday(shift: ShopShift, weekday: number): boolean {
+  const days = normalizeShiftWeekdays(shift.weekdays);
+  return days.includes(((weekday % 7) + 7) % 7);
+}
+
+export function shiftsOnWeekday(shifts: ShopShift[], weekday: number): ShopShift[] {
+  return shifts.filter((s) => shiftRunsOnWeekday(s, weekday));
+}
 
 export function defaultShopShift(openingTime?: string | null): ShopShift {
   const opensAt = normalizeOpeningTime(openingTime);
@@ -23,6 +54,7 @@ export function defaultShopShift(openingTime?: string | null): ShopShift {
     name: 'Turno',
     opensAt,
     closesAt: opensAt,
+    weekdays: [...ALL_SHIFT_WEEKDAYS],
   };
 }
 
@@ -49,7 +81,13 @@ export function isTimeInShiftWindow(
 }
 
 export function normalizeShopShifts(
-  raw?: Array<{ id?: string; name?: string; opensAt?: string; closesAt?: string }> | null,
+  raw?: Array<{
+    id?: string;
+    name?: string;
+    opensAt?: string;
+    closesAt?: string;
+    weekdays?: number[] | null;
+  }> | null,
   fallbackOpening?: string | null,
 ): ShopShift[] {
   const opening = normalizeOpeningTime(fallbackOpening);
@@ -60,16 +98,18 @@ export function normalizeShopShifts(
   const seen = new Set<string>();
   for (const row of raw) {
     const name = String(row?.name ?? '').trim() || `Turno ${out.length + 1}`;
-    const opensAt = isValidHhMm(row?.opensAt)
-      ? String(row.opensAt).trim()
-      : opening;
-    const closesAt = isValidHhMm(row?.closesAt)
-      ? String(row.closesAt).trim()
-      : opensAt;
+    const opensAt = isValidHhMm(row?.opensAt) ? String(row.opensAt).trim() : opening;
+    const closesAt = isValidHhMm(row?.closesAt) ? String(row.closesAt).trim() : opensAt;
     let id = String(row?.id ?? '').trim() || randomUUID();
     if (seen.has(id)) id = randomUUID();
     seen.add(id);
-    out.push({ id, name, opensAt, closesAt });
+    out.push({
+      id,
+      name,
+      opensAt,
+      closesAt,
+      weekdays: normalizeShiftWeekdays(row?.weekdays),
+    });
   }
   return out.length ? out : [defaultShopShift(opening)];
 }
@@ -88,6 +128,15 @@ export function earliestShiftOpening(shifts: ShopShift[] | null | undefined): st
   return normalizeOpeningTime(best.opensAt);
 }
 
+export function earliestShiftOpeningOnWeekday(
+  shifts: ShopShift[] | null | undefined,
+  weekday: number,
+): string {
+  const all = Array.isArray(shifts) && shifts.length ? shifts : [defaultShopShift()];
+  const list = shiftsOnWeekday(all, weekday);
+  return earliestShiftOpening(list.length ? list : all);
+}
+
 export function findShopShift(
   shifts: ShopShift[] | null | undefined,
   shiftId?: string | null,
@@ -99,8 +148,8 @@ export function findShopShift(
 }
 
 /**
- * Turno vigente: el que abrió más recientemente.
- * Sigue hasta que abre el siguiente (no hasta su hora de cierre).
+ * Turno vigente: el que abrió más recientemente entre los que corren ese día
+ * (y el de ayer, si todavía no abrió el de hoy).
  */
 export function resolveCurrentShift(
   shifts: ShopShift[] | null | undefined,
@@ -108,18 +157,33 @@ export function resolveCurrentShift(
   timezone?: string | null,
 ): ShopShift {
   const list = Array.isArray(shifts) && shifts.length ? shifts : [defaultShopShift()];
-  if (list.length === 1) return list[0];
   const p = zonedDateParts(when, timezone);
   const nowMins = p.hour * 60 + p.minute;
+  const todayWd = weekdayFromYmd(p.year, p.month, p.day);
+  const yest = new Date(Date.UTC(p.year, p.month - 1, p.day - 1, 12, 0, 0));
+  const yestWd = yest.getUTCDay();
+
   let best = list[0];
   let bestSince = Infinity;
   for (const s of list) {
-    let since = nowMins - minutesOfHhMm(s.opensAt);
-    if (since < 0) since += 24 * 60;
-    if (since < bestSince) {
-      bestSince = since;
-      best = s;
+    if (shiftRunsOnWeekday(s, todayWd)) {
+      const since = nowMins - minutesOfHhMm(s.opensAt);
+      if (since >= 0 && since < bestSince) {
+        bestSince = since;
+        best = s;
+      }
     }
+    if (shiftRunsOnWeekday(s, yestWd)) {
+      const since = nowMins + 24 * 60 - minutesOfHhMm(s.opensAt);
+      if (since < bestSince) {
+        bestSince = since;
+        best = s;
+      }
+    }
+  }
+  if (bestSince === Infinity) {
+    const today = shiftsOnWeekday(list, todayWd);
+    return today[0] ?? list[0];
   }
   return best;
 }

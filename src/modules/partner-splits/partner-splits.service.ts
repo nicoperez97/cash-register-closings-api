@@ -5,8 +5,9 @@ import { PartnerSplitConfig } from '../../entities/partner-split-config.entity';
 import { PartnerSplitRun } from '../../entities/partner-split-run.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { Movement } from '../../entities/movement.entity';
+import { Payment } from '../../entities/payment.entity';
 import { AuthUser } from '../../common/decorators';
-import { LedgerAccountType } from '../../common/enums';
+import { LedgerAccountType, PaymentStatus } from '../../common/enums';
 import { ShopsService } from '../shops/shops.service';
 import { MovementsService } from '../movements/movements.service';
 
@@ -38,6 +39,18 @@ export type PartnerSplitConfigDto = {
   partnerAccountIds: string[];
   channelLeaves: Array<{ accountId: string; leaveAmount: number }>;
   extras: Array<{ id: string; label: string; amount: number }>;
+  partnerActions?: Array<{
+    accountId?: string;
+    fromAccountId?: string;
+    toAccountId?: string;
+    generate: 'payment' | 'movement';
+  }>;
+  partnerComplete?: Array<{
+    accountId?: string;
+    fromAccountId?: string;
+    toAccountId?: string;
+    complete: boolean;
+  }>;
 };
 
 @Injectable()
@@ -50,6 +63,7 @@ export class PartnerSplitsService implements OnModuleInit {
     @InjectRepository(LedgerAccount)
     private readonly accounts: Repository<LedgerAccount>,
     @InjectRepository(Movement) private readonly movementsRepo: Repository<Movement>,
+    @InjectRepository(Payment) private readonly payments: Repository<Payment>,
     private readonly shops: ShopsService,
     private readonly movements: MovementsService,
   ) {}
@@ -110,8 +124,38 @@ export class PartnerSplitsService implements OnModuleInit {
       throw new BadRequestException('No hay diferencias para saldar');
     }
     const today = new Date().toISOString().slice(0, 10);
-    const created: string[] = [];
+    const partnerIds = new Set((preview.partners ?? []).map((p) => p.accountId));
+    const actions = incoming?.partnerActions ?? [];
+    const completes = incoming?.partnerComplete ?? [];
+    const createdMovementIds: string[] = [];
+    const createdPaymentIds: string[] = [];
+    let distributed = 0;
     for (const t of transfers) {
+      const betweenPartners =
+        partnerIds.has(t.fromAccountId) && partnerIds.has(t.toAccountId);
+      if (!betweenPartners && !this.isComplete(t, completes)) continue;
+      const asPayment =
+        betweenPartners && this.generateOf(t, actions) === 'payment';
+      if (asPayment) {
+        const pay = await this.payments.save(
+          this.payments.create({
+            shopId,
+            title: `División · ${t.fromName} → ${t.toName}`,
+            notes: `División de socios · sale de ${t.fromName} · entra a ${t.toName}`,
+            amount: money(t.amount),
+            accountId: t.fromAccountId,
+            toAccountId: t.toAccountId,
+            status: PaymentStatus.VALIDATED,
+            validatedAt: new Date(),
+            validatedByUserId: user.id,
+            createdByUserId: user.id,
+            active: true,
+          }),
+        );
+        createdPaymentIds.push(pay.id);
+        distributed = round2(distributed + n(t.amount));
+        continue;
+      }
       const row = await this.movementsRepo.save(
         this.movementsRepo.create({
           shopId,
@@ -124,10 +168,16 @@ export class PartnerSplitsService implements OnModuleInit {
           active: true,
         }),
       );
-      created.push(row.id);
+      createdMovementIds.push(row.id);
+      distributed = round2(distributed + n(t.amount));
+    }
+    const created = [...createdMovementIds, ...createdPaymentIds];
+    if (!created.length) {
+      throw new BadRequestException(
+        'Marcá Completo en al menos un pase de canal, o no hay pases entre socios',
+      );
     }
     await this.saveConfig(user, shopId, preview.config);
-    const distributed = round2(transfers.reduce((s, t) => s + n(t.amount), 0));
     const run = await this.runs.save(
       this.runs.create({
         shopId,
@@ -144,11 +194,22 @@ export class PartnerSplitsService implements OnModuleInit {
           totals: preview.totals,
           transfers: preview.transfers,
           createdIds: created,
+          createdMovementIds: createdMovementIds,
+          createdPaymentIds: createdPaymentIds,
+          partnerActions: incoming?.partnerActions ?? [],
+          partnerComplete: incoming?.partnerComplete ?? [],
         },
       }),
     );
     const after = await this.buildPreview(user, shopId, preview.config);
-    return { createdCount: created.length, createdIds: created, runId: run.id, ...after };
+    return {
+      createdCount: created.length,
+      createdIds: created,
+      createdMovementCount: createdMovementIds.length,
+      createdPaymentCount: createdPaymentIds.length,
+      runId: run.id,
+      ...after,
+    };
   }
 
   async listRuns(user: AuthUser, shopId: string) {
@@ -318,6 +379,35 @@ export class PartnerSplitsService implements OnModuleInit {
       },
       transfers,
     };
+  }
+
+  private isComplete(
+    t: { fromAccountId: string; toAccountId: string },
+    completes: NonNullable<PartnerSplitConfigDto['partnerComplete']>,
+  ): boolean {
+    const exact = completes.find(
+      (a) => a.fromAccountId === t.fromAccountId && a.toAccountId === t.toAccountId,
+    );
+    if (exact) return !!exact.complete;
+    return completes.some(
+      (a) =>
+        !!a.complete &&
+        (a.accountId === t.toAccountId || a.accountId === t.fromAccountId),
+    );
+  }
+
+  private generateOf(
+    t: { fromAccountId: string; toAccountId: string },
+    actions: NonNullable<PartnerSplitConfigDto['partnerActions']>,
+  ): 'payment' | 'movement' {
+    const exact = actions.find(
+      (a) => a.fromAccountId === t.fromAccountId && a.toAccountId === t.toAccountId,
+    );
+    if (exact) return exact.generate;
+    const from = actions.find((a) => a.accountId === t.fromAccountId);
+    const to = actions.find((a) => a.accountId === t.toAccountId);
+    if (from?.generate === 'payment' || to?.generate === 'payment') return 'payment';
+    return 'movement';
   }
 
   private planTransfers(

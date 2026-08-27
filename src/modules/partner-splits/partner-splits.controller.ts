@@ -4,6 +4,8 @@ import { AuthGuard } from '@nestjs/passport';
 import { Type } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
+  IsIn,
   IsNumber,
   IsOptional,
   IsString,
@@ -41,6 +43,48 @@ class ExtraLineDto {
   amount: number;
 }
 
+class PartnerGenerateDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  accountId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  fromAccountId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  toAccountId?: string;
+
+  @ApiProperty({ enum: ['payment', 'movement'] })
+  @IsIn(['payment', 'movement'])
+  generate: 'payment' | 'movement';
+}
+
+class PartnerCompleteDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  accountId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  fromAccountId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  toAccountId?: string;
+
+  @ApiProperty()
+  @IsBoolean()
+  complete: boolean;
+}
+
 class PartnerSplitConfigDto {
   @ApiPropertyOptional()
   @IsOptional()
@@ -61,6 +105,20 @@ class PartnerSplitConfigDto {
   @ValidateNested({ each: true })
   @Type(() => ExtraLineDto)
   extras?: ExtraLineDto[];
+
+  @ApiPropertyOptional({ type: [PartnerGenerateDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => PartnerGenerateDto)
+  partnerActions?: PartnerGenerateDto[];
+
+  @ApiPropertyOptional({ type: [PartnerCompleteDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => PartnerCompleteDto)
+  partnerComplete?: PartnerCompleteDto[];
 }
 
 @ApiTags('partner-splits')
@@ -110,7 +168,13 @@ export class PartnerSplitsController {
     @Param('shopId') shopId: string,
     @Body() body: PartnerSplitConfigDto,
   ) {
-    return this.splits.apply(user, shopId, body);
+    return this.splits.apply(user, shopId, {
+      partnerAccountIds: body.partnerAccountIds ?? [],
+      channelLeaves: body.channelLeaves ?? [],
+      extras: body.extras ?? [],
+      partnerActions: body.partnerActions,
+      partnerComplete: body.partnerComplete,
+    });
   }
 
   @Get('runs')

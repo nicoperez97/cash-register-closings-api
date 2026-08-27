@@ -49,6 +49,7 @@ export interface UpsertPaymentDto {
   payerUserId?: string | null;
   validatorUserId?: string | null;
   accountId?: string | null;
+  toAccountId?: string | null;
   paymentMethod?: PaymentMethod | string | null;
   supplierId?: string | null;
   employeeId?: string | null;
@@ -144,6 +145,7 @@ export class PaymentsService implements OnModuleInit {
       `ALTER TABLE payments ADD COLUMN paymentMethod VARCHAR(32) NULL`,
       `ALTER TABLE payments ADD COLUMN priority VARCHAR(16) NULL`,
       `ALTER TABLE payments ADD COLUMN conceptId CHAR(36) NULL`,
+      `ALTER TABLE payments ADD COLUMN toAccountId CHAR(36) NULL`,
     ]) {
       try {
         await this.payments.query(sql);
@@ -182,7 +184,17 @@ export class PaymentsService implements OnModuleInit {
   private async load(shopId: string, id: string) {
     const row = await this.payments.findOne({
       where: { id, shopId, active: true },
-      relations: ['payer', 'validator', 'account', 'supplier', 'employee', 'service', 'createdBy', 'concept'],
+      relations: [
+        'payer',
+        'validator',
+        'account',
+        'toAccount',
+        'supplier',
+        'employee',
+        'service',
+        'createdBy',
+        'concept',
+      ],
     });
     if (!row) throw new NotFoundException('Pago no encontrado');
     return row;
@@ -210,6 +222,8 @@ export class PaymentsService implements OnModuleInit {
       validatorName: p.validator?.fullName ?? null,
       accountId: p.accountId ?? null,
       accountName: p.account?.name ?? null,
+      toAccountId: p.toAccountId ?? null,
+      toAccountName: p.toAccount?.name ?? null,
       paymentMethod: p.paymentMethod ?? null,
       supplierId: p.supplierId ?? null,
       supplierName: p.supplier?.name ?? null,
@@ -386,12 +400,16 @@ export class PaymentsService implements OnModuleInit {
     supplierId: string | null,
     employeeId: string | null,
     serviceId: string | null,
+    toAccountId?: string | null,
   ) {
     const n = [supplierId, employeeId, serviceId].filter(Boolean).length;
     if (n > 1) {
       throw new BadRequestException(
         'Un pago no puede tener proveedor, empleado y servicio a la vez',
       );
+    }
+    if (toAccountId && n > 0) {
+      throw new BadRequestException('Un pago a socio no puede tener proveedor, empleado o servicio');
     }
   }
 
@@ -601,6 +619,7 @@ export class PaymentsService implements OnModuleInit {
       .leftJoinAndSelect('p.payer', 'payer')
       .leftJoinAndSelect('p.validator', 'validator')
       .leftJoinAndSelect('p.account', 'account')
+      .leftJoinAndSelect('p.toAccount', 'toAccount')
       .leftJoinAndSelect('p.supplier', 'supplier')
       .leftJoinAndSelect('p.employee', 'employee')
       .leftJoinAndSelect('p.service', 'service')
@@ -731,12 +750,18 @@ export class PaymentsService implements OnModuleInit {
       amountMax: opts?.amountMax,
     });
     const kindNorm =
-      opts?.kind === 'employee' || opts?.kind === 'supplier' || opts?.kind === 'service'
+      opts?.kind === 'employee' ||
+      opts?.kind === 'supplier' ||
+      opts?.kind === 'service' ||
+      opts?.kind === 'partner'
         ? opts.kind
         : undefined;
     if (kindNorm === 'supplier') rows = rows.filter((r) => !!r.supplierId);
     if (kindNorm === 'service') rows = rows.filter((r) => !!r.serviceId);
-    if (kindNorm === 'employee') rows = rows.filter((r) => !r.supplierId && !r.serviceId);
+    if (kindNorm === 'partner') rows = rows.filter((r) => !!r.toAccountId);
+    if (kindNorm === 'employee') {
+      rows = rows.filter((r) => !r.supplierId && !r.serviceId && !r.toAccountId);
+    }
 
     const statusLabel = (s: string) =>
       (
@@ -760,7 +785,9 @@ export class PaymentsService implements OnModuleInit {
           ? 'Servicios'
           : kindNorm === 'employee'
             ? 'Empleados'
-            : 'Todos';
+            : kindNorm === 'partner'
+              ? 'Socios'
+              : 'Todos';
 
     const info = wb.addWorksheet('Resumen');
     info.getColumn(1).width = 48;
@@ -879,7 +906,9 @@ export class PaymentsService implements OnModuleInit {
           ? 'servicios'
           : kindNorm === 'employee'
             ? 'empleados'
-            : 'todos';
+            : kindNorm === 'partner'
+              ? 'socios'
+              : 'todos';
     return {
       buffer,
       filename: `pagos-${kindSlug}-${slug}-${stamp}.xlsx`,
@@ -914,6 +943,7 @@ export class PaymentsService implements OnModuleInit {
     const payerUserId = this.emptyToNull(dto.payerUserId) ?? null;
     const validatorUserId = this.emptyToNull(dto.validatorUserId) ?? null;
     const accountId = this.emptyToNull(dto.accountId) ?? null;
+    const toAccountId = this.emptyToNull(dto.toAccountId) ?? null;
     const paymentMethod =
       dto.paymentMethod === undefined
         ? null
@@ -930,10 +960,11 @@ export class PaymentsService implements OnModuleInit {
     if (amount !== null && amount < 0) {
       throw new BadRequestException('El monto no puede ser negativo');
     }
-    this.assertExclusiveParties(supplierId, employeeId, serviceId);
+    this.assertExclusiveParties(supplierId, employeeId, serviceId, toAccountId);
     if (payerUserId) await this.assertShopUser(shopId, payerUserId, 'Quién paga');
     if (validatorUserId) await this.assertShopUser(shopId, validatorUserId, 'Quién valida');
     if (accountId) await this.assertAccount(shopId, accountId);
+    if (toAccountId) await this.assertAccount(shopId, toAccountId);
     if (supplierId) await this.assertSupplier(shopId, supplierId);
     if (employeeId) await this.assertEmployee(shopId, employeeId);
     if (serviceId) await this.assertService(shopId, serviceId);
@@ -972,6 +1003,7 @@ export class PaymentsService implements OnModuleInit {
         payerUserId,
         validatorUserId,
         accountId,
+        toAccountId,
         paymentMethod,
         supplierId,
         employeeId,
@@ -1133,6 +1165,13 @@ export class PaymentsService implements OnModuleInit {
       patch.accountId = nextAccountId;
     }
 
+    let nextToAccountId = row.toAccountId ?? null;
+    if (dto.toAccountId !== undefined) {
+      nextToAccountId = this.emptyToNull(dto.toAccountId) ?? null;
+      if (nextToAccountId) await this.assertAccount(shopId, nextToAccountId);
+      patch.toAccountId = nextToAccountId;
+    }
+
     if (dto.paymentMethod !== undefined) {
       patch.paymentMethod = this.parsePaymentMethod(dto.paymentMethod as string | null);
     }
@@ -1147,8 +1186,10 @@ export class PaymentsService implements OnModuleInit {
       if (nextSupplierId) {
         nextEmployeeId = null;
         nextServiceId = null;
+        nextToAccountId = null;
         patch.employeeId = null;
         patch.serviceId = null;
+        patch.toAccountId = null;
       }
     }
     if (dto.employeeId !== undefined) {
@@ -1158,8 +1199,10 @@ export class PaymentsService implements OnModuleInit {
       if (nextEmployeeId) {
         nextSupplierId = null;
         nextServiceId = null;
+        nextToAccountId = null;
         patch.supplierId = null;
         patch.serviceId = null;
+        patch.toAccountId = null;
       }
     }
     if (dto.serviceId !== undefined) {
@@ -1169,11 +1212,21 @@ export class PaymentsService implements OnModuleInit {
       if (nextServiceId) {
         nextSupplierId = null;
         nextEmployeeId = null;
+        nextToAccountId = null;
         patch.supplierId = null;
         patch.employeeId = null;
+        patch.toAccountId = null;
       }
     }
-    this.assertExclusiveParties(nextSupplierId, nextEmployeeId, nextServiceId);
+    if (nextToAccountId) {
+      nextSupplierId = null;
+      nextEmployeeId = null;
+      nextServiceId = null;
+      patch.supplierId = null;
+      patch.employeeId = null;
+      patch.serviceId = null;
+    }
+    this.assertExclusiveParties(nextSupplierId, nextEmployeeId, nextServiceId, nextToAccountId);
 
     if (dto.invoiceLegalName !== undefined) {
       patch.invoiceLegalName = this.emptyToNull(dto.invoiceLegalName)?.trim() || null;
@@ -1369,11 +1422,17 @@ export class PaymentsService implements OnModuleInit {
       throw new BadRequestException('Fecha de pago inválida');
     }
 
-    const egreso = await this.accounts.findOne({
-      where: { shopId, code: 'EGRESO', active: true },
-    });
-    if (!egreso) {
-      throw new BadRequestException('No hay cuenta EGRESO en el local');
+    let destAccountId = row.toAccountId ?? null;
+    if (destAccountId) {
+      await this.assertAccount(shopId, destAccountId);
+    } else {
+      const egreso = await this.accounts.findOne({
+        where: { shopId, code: 'EGRESO', active: true },
+      });
+      if (!egreso) {
+        throw new BadRequestException('No hay cuenta EGRESO en el local');
+      }
+      destAccountId = egreso.id;
     }
 
     // Claim atómico: evita doble egreso por doble clic / reintento.
@@ -1400,7 +1459,7 @@ export class PaymentsService implements OnModuleInit {
       const createPayload = {
         businessDate: paidAt,
         fromAccountId: accountId,
-        toAccountId: egreso.id,
+        toAccountId: destAccountId,
         fromUserId: row.payerUserId ?? null,
         employeeId: row.employeeId ?? null,
         description: [
@@ -1408,6 +1467,7 @@ export class PaymentsService implements OnModuleInit {
           row.supplier?.name ? `Proveedor: ${row.supplier.name}` : null,
           row.service?.name ? `Servicio: ${row.service.name}` : null,
           row.employee?.fullName ? `Empleado: ${row.employee.fullName}` : null,
+          row.toAccount?.name ? `Socio: ${row.toAccount.name}` : null,
         ]
           .filter(Boolean)
           .join(' · '),
