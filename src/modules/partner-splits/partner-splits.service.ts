@@ -43,7 +43,7 @@ export type PartnerSplitConfigDto = {
     accountId?: string;
     fromAccountId?: string;
     toAccountId?: string;
-    generate: 'payment' | 'movement';
+    generate: 'skip' | 'payment' | 'movement';
   }>;
   partnerComplete?: Array<{
     accountId?: string;
@@ -133,27 +133,30 @@ export class PartnerSplitsService implements OnModuleInit {
     for (const t of transfers) {
       const betweenPartners =
         partnerIds.has(t.fromAccountId) && partnerIds.has(t.toAccountId);
-      if (!betweenPartners && !this.isComplete(t, completes)) continue;
-      const asPayment =
-        betweenPartners && this.generateOf(t, actions) === 'payment';
-      if (asPayment) {
-        const pay = await this.payments.save(
-          this.payments.create({
-            shopId,
-            title: `División · ${t.fromName} → ${t.toName}`,
-            notes: `División de socios · sale de ${t.fromName} · entra a ${t.toName}`,
-            amount: money(t.amount),
-            accountId: t.fromAccountId,
-            toAccountId: t.toAccountId,
-            status: PaymentStatus.VALIDATED,
-            validatedAt: new Date(),
-            validatedByUserId: user.id,
-            createdByUserId: user.id,
-            active: true,
-          }),
-        );
-        createdPaymentIds.push(pay.id);
-        distributed = round2(distributed + n(t.amount));
+      if (betweenPartners) {
+        const mode = this.generateOf(t, actions);
+        if (mode === 'skip') continue;
+        if (mode === 'payment') {
+          const pay = await this.payments.save(
+            this.payments.create({
+              shopId,
+              title: `División · ${t.fromName} → ${t.toName}`,
+              notes: `División de socios · sale de ${t.fromName} · entra a ${t.toName}`,
+              amount: money(t.amount),
+              accountId: t.fromAccountId,
+              toAccountId: t.toAccountId,
+              status: PaymentStatus.VALIDATED,
+              validatedAt: new Date(),
+              validatedByUserId: user.id,
+              createdByUserId: user.id,
+              active: true,
+            }),
+          );
+          createdPaymentIds.push(pay.id);
+          distributed = round2(distributed + n(t.amount));
+          continue;
+        }
+      } else if (!this.isComplete(t, completes)) {
         continue;
       }
       const row = await this.movementsRepo.save(
@@ -174,7 +177,7 @@ export class PartnerSplitsService implements OnModuleInit {
     const created = [...createdMovementIds, ...createdPaymentIds];
     if (!created.length) {
       throw new BadRequestException(
-        'Marcá Completo en al menos un pase de canal, o no hay pases entre socios',
+        'Elegí Pago o Movimiento en un pase entre socios, o Completo en un canal',
       );
     }
     await this.saveConfig(user, shopId, preview.config);
@@ -399,15 +402,18 @@ export class PartnerSplitsService implements OnModuleInit {
   private generateOf(
     t: { fromAccountId: string; toAccountId: string },
     actions: NonNullable<PartnerSplitConfigDto['partnerActions']>,
-  ): 'payment' | 'movement' {
+  ): 'skip' | 'payment' | 'movement' {
     const exact = actions.find(
       (a) => a.fromAccountId === t.fromAccountId && a.toAccountId === t.toAccountId,
     );
-    if (exact) return exact.generate;
+    if (exact?.generate === 'payment' || exact?.generate === 'movement' || exact?.generate === 'skip') {
+      return exact.generate;
+    }
     const from = actions.find((a) => a.accountId === t.fromAccountId);
     const to = actions.find((a) => a.accountId === t.toAccountId);
     if (from?.generate === 'payment' || to?.generate === 'payment') return 'payment';
-    return 'movement';
+    if (from?.generate === 'movement' || to?.generate === 'movement') return 'movement';
+    return 'skip';
   }
 
   private planTransfers(

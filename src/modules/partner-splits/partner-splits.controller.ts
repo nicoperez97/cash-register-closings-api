@@ -59,9 +59,9 @@ class PartnerGenerateDto {
   @IsString()
   toAccountId?: string;
 
-  @ApiProperty({ enum: ['payment', 'movement'] })
-  @IsIn(['payment', 'movement'])
-  generate: 'payment' | 'movement';
+  @ApiProperty({ enum: ['skip', 'payment', 'movement'] })
+  @IsIn(['skip', 'payment', 'movement'])
+  generate: 'skip' | 'payment' | 'movement';
 }
 
 class PartnerCompleteDto {
