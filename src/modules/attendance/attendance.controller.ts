@@ -41,6 +41,10 @@ import { AttendanceExcelImportService } from './attendance-excel-import.service'
 class UpsertAttendanceDto {
   @ApiProperty() @IsUUID() employeeId: string;
   @ApiProperty() @IsDateString() date: string;
+  @ApiPropertyOptional({ description: 'Turno. Si no se envía, se usa el vigente.' })
+  @IsOptional()
+  @IsString()
+  shiftId?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() isPresent?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() isHoliday?: boolean;
   @ApiPropertyOptional({ example: '18:00' })
@@ -85,12 +89,13 @@ export class AttendanceController {
     @Param('shopId') shopId: string,
     @Query('year') year: string,
     @Query('month') month: string,
+    @Query('shiftId') shiftId: string,
     @Res({ passthrough: true }) res: Response,
   ) {
     res.setHeader('Cache-Control', 'no-store');
     const y = Number(year) || new Date().getFullYear();
     const m = Number(month) || new Date().getMonth() + 1;
-    return this.attendance.getMonth(user, shopId, y, m);
+    return this.attendance.getMonth(user, shopId, y, m, shiftId || null);
   }
 
   @Get('overtime-summary')

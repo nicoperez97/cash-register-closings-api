@@ -15,6 +15,11 @@ import {
   parseHhMm,
   requireHhMm,
 } from '../../common/shift-hours.util';
+import {
+  findShopShift,
+  normalizeShopShifts,
+  resolveCurrentShift,
+} from '../../common/shop-shifts';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 
@@ -51,6 +56,75 @@ export class AttendanceService implements OnModuleInit {
     } catch {
       // ya existe
     }
+    try {
+      await this.days.query(`
+        ALTER TABLE attendance_days
+          ADD COLUMN shiftId VARCHAR(36) NULL
+      `);
+    } catch {
+      // ya existe
+    }
+    await this.backfillAttendanceShifts();
+    try {
+      await this.days.query(`
+        CREATE INDEX IDX_attendance_days_employeeId ON attendance_days (employeeId)
+      `);
+    } catch {
+      // ya existe
+    }
+    for (const idx of [
+      'uq_attendance_emp_date',
+      'IDX_attendance_days_employeeId_date',
+      'IDX_1008e668552b6b78be7ea20d11',
+    ]) {
+      try {
+        await this.days.query(`ALTER TABLE attendance_days DROP INDEX \`${idx}\``);
+      } catch {
+        // no estaba o lo usa una FK
+      }
+    }
+    try {
+      await this.days.query(`
+        ALTER TABLE attendance_days
+          ADD UNIQUE INDEX uq_attendance_emp_date_shift (employeeId, date, shiftId)
+      `);
+    } catch {
+      // ya existe
+    }
+  }
+
+  private async backfillAttendanceShifts() {
+    const ids: Array<{ shopId: string }> = await this.days.query(
+      `SELECT DISTINCT shopId AS shopId FROM attendance_days WHERE shiftId IS NULL OR shiftId = ''`,
+    );
+    for (const row of ids) {
+      const shop = await this.shops.getShopEntity(row.shopId);
+      if (!shop) continue;
+      const shifts = normalizeShopShifts(shop.shifts, shop.openingTime);
+      const shift = shifts[0];
+      if (!shift) continue;
+      await this.days.query(
+        `
+        UPDATE attendance_days
+        SET shiftId = ?
+        WHERE shopId = ? AND (shiftId IS NULL OR shiftId = '')
+        `,
+        [shift.id, shop.id],
+      );
+    }
+  }
+
+  private async resolveAttendanceShift(shopId: string, shiftId?: string | null) {
+    const shop = await this.shops.getShopEntity(shopId);
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    const shifts = normalizeShopShifts(shop.shifts, shop.openingTime);
+    const shift = shiftId
+      ? findShopShift(shifts, shiftId)
+      : resolveCurrentShift(shifts, new Date(), shop.timezone);
+    if (!shift || (shiftId && shift.id !== shiftId)) {
+      throw new BadRequestException('Turno inválido para este local');
+    }
+    return { shop, shift };
   }
 
   private monthRange(year: number, month: number) {
@@ -69,14 +143,22 @@ export class AttendanceService implements OnModuleInit {
     return rows.filter((e) => isEntityActive(e.active));
   }
 
-  async getMonth(user: AuthUser, shopId: string, year: number, month: number) {
+  async getMonth(
+    user: AuthUser,
+    shopId: string,
+    year: number,
+    month: number,
+    shiftId?: string | null,
+  ) {
     this.shops.assertShopAccess(user, shopId);
     if (month < 1 || month > 12) throw new BadRequestException('Mes inválido');
+    const { shift } = await this.resolveAttendanceShift(shopId, shiftId);
     const { from, to, last } = this.monthRange(year, month);
     const employees = await this.activeEmployees(shopId);
     const rows = await this.days.find({
       where: {
         shopId,
+        shiftId: shift.id,
         date: Between(from, to),
         employeeId: In(employees.map((e) => e.id).concat(['__none__'])),
       },
@@ -208,6 +290,7 @@ export class AttendanceService implements OnModuleInit {
     dto: {
       employeeId: string;
       date: string;
+      shiftId?: string | null;
       isPresent?: boolean;
       isHoliday?: boolean;
       checkInAt?: string | null;
@@ -221,18 +304,22 @@ export class AttendanceService implements OnModuleInit {
     if (!emp || !isEntityActive(emp.active)) {
       throw new NotFoundException('Empleado no encontrado');
     }
-    const shop = await this.shops.getShopEntity(shopId);
+    const { shop, shift } = await this.resolveAttendanceShift(shopId, dto.shiftId);
     const withHours = this.withHours(shop);
-    const defaults = this.employeeShiftDefaults(shop ?? {}, emp);
+    const shiftHours = shift.opensAt !== shift.closesAt;
+    const defaults = shiftHours
+      ? { checkIn: shift.opensAt, checkOut: shift.closesAt }
+      : this.employeeShiftDefaults(shop ?? {}, emp);
 
     let row = await this.days.findOne({
-      where: { employeeId: dto.employeeId, date: dto.date },
+      where: { employeeId: dto.employeeId, date: dto.date, shiftId: shift.id },
     });
     if (!row) {
       row = this.days.create({
         shopId,
         employeeId: dto.employeeId,
         date: dto.date,
+        shiftId: shift.id,
         isPresent: false,
         isHoliday: false,
         overtimeHours: '0',
@@ -241,6 +328,7 @@ export class AttendanceService implements OnModuleInit {
         active: true,
       });
     }
+    row.shiftId = shift.id;
     if (dto.isHoliday !== undefined) row.isHoliday = dto.isHoliday;
     this.applyShift(row, dto, defaults, withHours);
     await this.days.save(row);
@@ -263,6 +351,7 @@ export class AttendanceService implements OnModuleInit {
     items: Array<{
       employeeId: string;
       date: string;
+      shiftId?: string | null;
       isPresent?: boolean;
       isHoliday?: boolean;
       checkInAt?: string | null;
@@ -338,7 +427,7 @@ export class AttendanceService implements OnModuleInit {
           return s + n(d.overtimeHours);
         }, 0) * 100,
       ) / 100;
-      const presentDays = days.filter((d) => d.isPresent).length;
+      const presentDays = new Set(days.filter((d) => d.isPresent).map((d) => d.date)).size;
       const rate = n(e.overtimeHourRate);
       return {
         employeeId: e.id,

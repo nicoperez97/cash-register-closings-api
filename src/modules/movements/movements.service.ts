@@ -78,6 +78,11 @@ export interface MovementFilters {
   invoiced?: string;
   /** Filtra el egreso ligado a un pago concreto. */
   paymentId?: string;
+  paymentMethod?: string;
+  employeeId?: string;
+  /** true | false */
+  hasReceipt?: string;
+  shiftId?: string;
 }
 
 export interface UpsertMovementDto {
@@ -319,30 +324,52 @@ export class MovementsService implements OnModuleInit {
       qb.andWhere('m.description LIKE :q', { q: `%${filters.q.trim()}%` });
     }
 
+    if (filters.source === 'closing') {
+      qb.andWhere('m.closingId IS NOT NULL');
+    } else if (filters.source === 'payment') {
+      qb.andWhere('pay.id IS NOT NULL');
+    } else if (filters.source === 'manual') {
+      qb.andWhere('m.closingId IS NULL AND pay.id IS NULL');
+    }
+    if (filters.partyType === 'supplier') {
+      qb.andWhere('pay.supplierId IS NOT NULL');
+    } else if (filters.partyType === 'service') {
+      qb.andWhere('pay.serviceId IS NOT NULL');
+    } else if (filters.partyType === 'employee') {
+      qb.andWhere('pay.employeeId IS NOT NULL');
+    }
+    if (filters.invoiced === 'true') {
+      qb.andWhere('m.invoiced = true');
+    } else if (filters.invoiced === 'false') {
+      qb.andWhere('(m.invoiced = false OR m.invoiced IS NULL)');
+    }
+    if (filters.paymentMethod) {
+      qb.andWhere('m.paymentMethod = :paymentMethod', {
+        paymentMethod: filters.paymentMethod,
+      });
+    }
+    if (filters.employeeId) {
+      qb.andWhere('m.employeeId = :employeeId', { employeeId: filters.employeeId });
+    }
+    if (filters.hasReceipt === 'true') {
+      qb.andWhere('m.receiptFilePath IS NOT NULL AND m.receiptFilePath <> :emptyReceipt', {
+        emptyReceipt: '',
+      });
+    } else if (filters.hasReceipt === 'false') {
+      qb.andWhere('(m.receiptFilePath IS NULL OR m.receiptFilePath = :emptyReceipt)', {
+        emptyReceipt: '',
+      });
+    }
+    if (filters.shiftId) {
+      qb.leftJoin('m.closing', 'closingForShift');
+      qb.andWhere('closingForShift.shiftId = :shiftId', { shiftId: filters.shiftId });
+    }
+
     if (filters.kind === 'expense') {
       qb.andWhere(
         `(concept.kind = :expenseKind OR LOWER(toAccount.name) LIKE :egresoName OR UPPER(toAccount.code) = :egresoCode)`,
         { expenseKind: ConceptKind.EXPENSE, egresoName: '%egreso%', egresoCode: 'EGRESO' },
       );
-      if (filters.source === 'closing') {
-        qb.andWhere('m.closingId IS NOT NULL');
-      } else if (filters.source === 'payment') {
-        qb.andWhere('pay.id IS NOT NULL');
-      } else if (filters.source === 'manual') {
-        qb.andWhere('m.closingId IS NULL AND pay.id IS NULL');
-      }
-      if (filters.partyType === 'supplier') {
-        qb.andWhere('pay.supplierId IS NOT NULL');
-      } else if (filters.partyType === 'service') {
-        qb.andWhere('pay.serviceId IS NOT NULL');
-      } else if (filters.partyType === 'employee') {
-        qb.andWhere('pay.employeeId IS NOT NULL');
-      }
-      if (filters.invoiced === 'true') {
-        qb.andWhere('m.invoiced = true');
-      } else if (filters.invoiced === 'false') {
-        qb.andWhere('(m.invoiced = false OR m.invoiced IS NULL)');
-      }
     } else if (filters.kind === 'income') {
       qb.andWhere(
         `(concept.kind = :incomeKind OR LOWER(fromAccount.name) LIKE :ingresoName OR UPPER(fromAccount.code) = :ingresoCode)`,
@@ -526,7 +553,7 @@ export class MovementsService implements OnModuleInit {
     user: AuthUser,
     shopId: string,
     dto: UpsertMovementDto,
-    opts?: { fromPayment?: boolean },
+    opts?: { fromPayment?: boolean; closingId?: string | null },
   ) {
     this.shops.assertShopAccess(user, shopId);
     const kind = dto.kind;
@@ -635,7 +662,7 @@ export class MovementsService implements OnModuleInit {
         invoiceNumber: dto.invoiceNumber ?? null,
         employeeId: dto.employeeId ?? null,
         paymentMethod,
-        closingId: null,
+        closingId: opts?.fromPayment ? null : (opts?.closingId ?? null),
         active: true,
       }),
     );

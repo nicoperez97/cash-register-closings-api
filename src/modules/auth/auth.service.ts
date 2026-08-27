@@ -661,6 +661,7 @@ export class AuthService implements OnModuleInit {
         currency: s.currency,
         timezone: s.timezone,
         openingTime: s.openingTime ?? '10:00',
+        shifts: Array.isArray(s.shifts) ? s.shifts : [],
         closedWeekdays: Array.isArray(s.closedWeekdays) ? s.closedWeekdays : [],
         logoUrl: s.logoUrl ?? null,
         accentColor: s.accentColor ?? null,

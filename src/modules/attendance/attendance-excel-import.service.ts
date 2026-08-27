@@ -27,6 +27,7 @@ export interface AttendanceImportItem {
   checkInAt: string | null;
   checkOutAt: string | null;
   overtimeHours: number;
+  shiftId?: string | null;
   employeeId: string | null;
   willCreateEmployee: boolean;
   baseSalaryHint: number | null;
@@ -372,20 +373,30 @@ export class AttendanceExcelImportService {
     for (const item of valid) {
       const emp = await ensureEmployee(item.employeeName, salaries.get(this.norm(item.employeeName)));
 
+      const shop = await this.shops.getShopEntity(shopId);
+      const shifts = shop
+        ? (await import('../../common/shop-shifts')).normalizeShopShifts(
+            shop.shifts,
+            shop.openingTime,
+          )
+        : [];
+      const shiftId = item.shiftId || shifts[0]?.id || null;
       let day = await this.days.findOne({
-        where: { employeeId: emp.id, date: item.date },
+        where: { employeeId: emp.id, date: item.date, shiftId: shiftId ?? undefined },
       });
       if (!day) {
         day = this.days.create({
           shopId,
           employeeId: emp.id,
           date: item.date,
+          shiftId,
           isPresent: false,
           isHoliday: false,
           overtimeHours: '0',
           active: true,
         });
       }
+      day.shiftId = shiftId;
       day.isPresent = item.isPresent;
       day.isHoliday = item.isHoliday;
       day.checkInAt = item.isPresent ? item.checkInAt : null;

@@ -1,6 +1,8 @@
-/** Clave de unicidad de fecha de negocio (YYYY-MM-DD). */
-export function closingDateKey(businessDate: string): string {
-  return String(businessDate ?? '').slice(0, 10);
+/** Clave de unicidad de fecha de negocio (YYYY-MM-DD o YYYY-MM-DD__shiftId). */
+export function closingDateKey(businessDate: string, shiftId?: string | null): string {
+  const date = String(businessDate ?? '').slice(0, 10);
+  const shift = String(shiftId ?? '').trim();
+  return shift ? `${date}__${shift}` : date;
 }
 
 /**

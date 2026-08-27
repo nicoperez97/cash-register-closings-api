@@ -50,6 +50,28 @@ export class PaymentConceptCategoriesDto {
   movement?: ConceptCategory[];
 }
 
+export class ShopShiftDto {
+  @ApiPropertyOptional({ description: 'Si no se envía, el servidor genera uno' })
+  @IsOptional()
+  @IsString()
+  id?: string;
+
+  @ApiProperty({ example: 'Mediodía' })
+  @IsString()
+  @MinLength(1)
+  name: string;
+
+  @ApiProperty({ example: '10:00', description: 'Apertura de turno (HH:mm)' })
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
+  opensAt: string;
+
+  @ApiProperty({ example: '16:00', description: 'Cierre de turno (HH:mm)' })
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
+  closesAt: string;
+}
+
 export class ShopPosnetDto {
   @ApiPropertyOptional({ description: 'Si no se envía, el servidor genera uno' })
   @IsOptional()
@@ -209,11 +231,19 @@ export class CreateShopDto {
 
   @ApiPropertyOptional({
     example: '10:00',
-    description: 'Hora de apertura (HH:mm). El día laboral dura hasta esa hora del día siguiente.',
+    description:
+      'Hora de apertura (HH:mm). Si hay turnos, se toma la apertura más temprana. El día laboral dura hasta esa hora del día siguiente.',
   })
   @IsOptional()
   @IsString()
   openingTime?: string;
+
+  @ApiPropertyOptional({ type: [ShopShiftDto], description: 'Turnos del local (apertura y cierre de cada uno)' })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ShopShiftDto)
+  shifts?: ShopShiftDto[] | null;
 
   @ApiPropertyOptional({
     type: [Number],

@@ -4,6 +4,7 @@ import { UserShop } from './user-shop.entity';
 import { CashClosing } from './cash-closing.entity';
 import { SalesSystem } from './sales-system.entity';
 import { ShopPosnet } from '../common/posnet';
+import { ShopShift } from '../common/shop-shifts';
 
 /** Mapa código POS → campo de cierre (cash|card|mercadoPago|delivery|transfer|accountDni|other). */
 export type PosPaymentMap = Record<string, string>;
@@ -25,6 +26,13 @@ export class Shop extends BaseEntity {
    */
   @Column({ type: 'varchar', length: 5, default: '10:00' })
   openingTime: string;
+
+  /**
+   * Turnos del local. Apertura/cierre de caja y presentismo van por turno.
+   * openingTime se sincroniza con la apertura más temprana.
+   */
+  @Column({ type: 'simple-json', nullable: true })
+  shifts?: ShopShift[] | null;
 
   /**
    * Días de franco del local (0=domingo … 6=sábado, como Date.getDay()).

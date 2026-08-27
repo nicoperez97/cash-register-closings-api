@@ -26,9 +26,17 @@ export class CashClosing extends BaseEntity {
   @Column({ type: 'date' })
   businessDate: string;
 
-  /** Clave única (YYYY-MM-DD); en soft-delete pasa a `fecha__DELETED__{id}`. */
+  /** Clave única (YYYY-MM-DD o YYYY-MM-DD__shiftId); en soft-delete pasa a `…__DELETED__{id}`. */
   @Column({ type: 'varchar', length: 80, nullable: true })
   businessDateKey: string | null;
+
+  /** Turno del local al que corresponde este cierre. */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  shiftId?: string | null;
+
+  /** Nombre del turno al guardar (queda aunque se renombre después). */
+  @Column({ type: 'varchar', length: 80, nullable: true })
+  shiftName?: string | null;
 
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
   posSystemAmount: string;

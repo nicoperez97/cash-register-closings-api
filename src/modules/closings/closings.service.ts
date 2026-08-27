@@ -33,6 +33,11 @@ import {
 import { isGlobalAdmin } from '../../common/guards';
 import { isEntityActive } from '../../common/active.util';
 import { closingDateKey, markDeletedUnique } from '../../common/soft-delete.util';
+import {
+  findShopShift,
+  normalizeShopShifts,
+  resolveCurrentShift,
+} from '../../common/shop-shifts';
 import { CreateClosingDto, UpdateClosingDto } from './dto/closing.dto';
 import { applyClosingFilters, ClosingListFilters } from './closing-filters';
 import { ClosingPosnetAmount, sumPosnetsByType } from '../../common/posnet';
@@ -95,6 +100,23 @@ export class ClosingsService implements OnModuleInit {
     } catch (err) {
       this.logger.warn(`No se pudo backfill businessDateKey: ${(err as Error)?.message}`);
     }
+    try {
+      await this.closings.query(`
+        ALTER TABLE cash_closings
+          ADD COLUMN shiftId VARCHAR(36) NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.closings.query(`
+        ALTER TABLE cash_closings
+          ADD COLUMN shiftName VARCHAR(80) NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    await this.backfillClosingShifts();
     try {
       await this.closings.query(`
         ALTER TABLE cash_closings
@@ -249,9 +271,44 @@ export class ClosingsService implements OnModuleInit {
     }));
   }
 
+  private async backfillClosingShifts() {
+    const shops = await this.shopRepo.find();
+    for (const shop of shops) {
+      const shifts = normalizeShopShifts(shop.shifts, shop.openingTime);
+      const shift = shifts[0];
+      if (!shift) continue;
+      await this.closings.query(
+        `
+        UPDATE cash_closings
+        SET shiftId = ?, shiftName = ?,
+            businessDateKey = CONCAT(DATE_FORMAT(businessDate, '%Y-%m-%d'), '__', ?)
+        WHERE shopId = ?
+          AND active = 1
+          AND (shiftId IS NULL OR shiftId = '' OR businessDateKey NOT LIKE '%\\_\\_%')
+        `,
+        [shift.id, shift.name, shift.id, shop.id],
+      );
+    }
+  }
+
+  private async resolveClosingShift(shopId: string, shiftId?: string | null) {
+    const shop = await this.shops.getShopEntity(shopId);
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    const shifts = normalizeShopShifts(shop.shifts, shop.openingTime);
+    const shift = shiftId
+      ? findShopShift(shifts, shiftId)
+      : resolveCurrentShift(shifts, new Date(), shop.timezone);
+    if (!shift || (shiftId && shift.id !== shiftId)) {
+      throw new BadRequestException('Turno inválido para este local');
+    }
+    return shift;
+  }
+
   private toDto(c: CashClosing) {
     return {
       id: c.id, shopId: c.shopId, businessDate: c.businessDate,
+      shiftId: c.shiftId ?? null,
+      shiftName: c.shiftName ?? null,
       posSystemAmount: n(c.posSystemAmount), cardAmount: n(c.cardAmount), cashAmount: n(c.cashAmount),
       mercadoPagoAmount: n(c.mercadoPagoAmount), deliveryAppsAmount: n(c.deliveryAppsAmount),
       transferAmount: n(c.transferAmount), accountDniAmount: n(c.accountDniAmount), otherAmount: n(c.otherAmount),
@@ -346,9 +403,10 @@ export class ClosingsService implements OnModuleInit {
 
   async create(user: AuthUser, shopId: string, dto: CreateClosingDto) {
     this.shops.assertShopAccess(user, shopId);
-    const dateKey = closingDateKey(dto.businessDate);
+    const shift = await this.resolveClosingShift(shopId, dto.shiftId);
+    const dateKey = closingDateKey(dto.businessDate, shift.id);
     const exists = await this.closings.findOne({ where: { shopId, businessDateKey: dateKey } });
-    if (exists) throw new ConflictException('Ya existe un cierre para esa fecha');
+    if (exists) throw new ConflictException('Ya existe un cierre para esa fecha y turno');
     const normalized = this.applyPosnetSums(dto);
     const posnetAmounts = this.normalizePosnetAmounts(normalized.posnetAmounts);
     const incomeExtras = (normalized.extraLines ?? [])
@@ -371,6 +429,7 @@ export class ClosingsService implements OnModuleInit {
     );
     const closing = await this.closings.save(this.closings.create({
       shopId, businessDate: normalized.businessDate, businessDateKey: dateKey,
+      shiftId: shift.id, shiftName: shift.name,
       posSystemAmount: money(n(normalized.posSystemAmount)), cardAmount: money(n(normalized.cardAmount)),
       cashAmount: money(n(normalized.cashAmount)), mercadoPagoAmount: money(n(normalized.mercadoPagoAmount)),
       deliveryAppsAmount: money(n(normalized.deliveryAppsAmount)), transferAmount: money(n(normalized.transferAmount)),
@@ -413,11 +472,16 @@ export class ClosingsService implements OnModuleInit {
     if (row.status === ClosingStatus.LOCKED && !isGlobalAdmin(user.globalRole as GlobalRole)) {
       throw new BadRequestException('El cierre está bloqueado');
     }
-    if (dto.businessDate && dto.businessDate !== row.businessDate) {
+    const shift = await this.resolveClosingShift(shopId, dto.shiftId ?? row.shiftId);
+    const nextDate = dto.businessDate ?? row.businessDate;
+    const nextKey = closingDateKey(nextDate, shift.id);
+    if (nextKey !== row.businessDateKey) {
       const clash = await this.closings.findOne({
-        where: { shopId, businessDateKey: closingDateKey(dto.businessDate) },
+        where: { shopId, businessDateKey: nextKey },
       });
-      if (clash) throw new ConflictException('Ya existe un cierre para esa fecha');
+      if (clash && clash.id !== row.id) {
+        throw new ConflictException('Ya existe un cierre para esa fecha y turno');
+      }
     }
     const mergedRaw: CreateClosingDto = {
       businessDate: dto.businessDate ?? row.businessDate,
@@ -477,7 +541,9 @@ export class ClosingsService implements OnModuleInit {
     );
     Object.assign(row, {
       businessDate: merged.businessDate,
-      businessDateKey: closingDateKey(merged.businessDate),
+      businessDateKey: closingDateKey(merged.businessDate, shift.id),
+      shiftId: shift.id,
+      shiftName: shift.name,
       posSystemAmount: money(n(merged.posSystemAmount)), cardAmount: money(n(merged.cardAmount)),
       cashAmount: money(n(merged.cashAmount)), mercadoPagoAmount: money(n(merged.mercadoPagoAmount)),
       deliveryAppsAmount: money(n(merged.deliveryAppsAmount)), transferAmount: money(n(merged.transferAmount)),

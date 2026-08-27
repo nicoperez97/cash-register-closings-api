@@ -20,6 +20,7 @@ import {
   parseWhatsAppChat,
   ParsedClosingDraft,
 } from './whatsapp-chat.parser';
+import { earliestShiftOpening, normalizeShopShifts } from '../../common/shop-shifts';
 
 export interface WhatsappImportItem {
   businessDate: string;
@@ -154,7 +155,9 @@ export class WhatsappImportService {
     }
     const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
     const drafts = extractClosingDrafts(messages, {
-      openingTime: shop?.openingTime ?? '10:00',
+      openingTime: earliestShiftOpening(
+        normalizeShopShifts(shop?.shifts, shop?.openingTime),
+      ),
     });
     if (!drafts.length) {
       throw new BadRequestException('No se detectaron cierres en la conversación');

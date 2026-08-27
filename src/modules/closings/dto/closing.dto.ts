@@ -86,6 +86,11 @@ export class CreateClosingDto {
   @IsDateString()
   businessDate: string;
 
+  @ApiPropertyOptional({ description: 'Turno del cierre. Si no se envía, se usa el vigente.' })
+  @IsOptional()
+  @IsString()
+  shiftId?: string | null;
+
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) posSystemAmount?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) cardAmount?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) cashAmount?: number;
