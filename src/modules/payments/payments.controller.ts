@@ -268,6 +268,11 @@ class PayPaymentDto {
   @IsOptional()
   @IsIn(['cash', 'transfer', 'card', 'other'])
   paymentMethod?: 'cash' | 'transfer' | 'card' | 'other';
+  @ApiPropertyOptional({ description: 'Monto a abonar (parcial deja deuda)' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0.01)
+  amount?: number;
 }
 
 class ValidatePaymentDto {

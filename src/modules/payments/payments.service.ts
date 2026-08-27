@@ -33,6 +33,7 @@ import { GeminiDocumentService } from '../ai/gemini-document.service';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
+const round2 = (v: number) => Math.round(n(v) * 100) / 100;
 
 const PAYMENT_METHODS = new Set<string>(Object.values(PaymentMethod));
 const PAYMENT_PRIORITIES = new Set<string>(Object.values(PaymentPriority));
@@ -1393,7 +1394,7 @@ export class PaymentsService implements OnModuleInit {
     user: AuthUser,
     shopId: string,
     id: string,
-    body?: { paidAt?: string; accountId?: string; paymentMethod?: string },
+    body?: { paidAt?: string; accountId?: string; paymentMethod?: string; amount?: number },
   ) {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.load(shopId, id);
@@ -1406,9 +1407,22 @@ export class PaymentsService implements OnModuleInit {
     if (!accountId) {
       throw new BadRequestException('Indicá la cuenta con la que se paga');
     }
-    if (!(n(row.amount) > 0)) {
+    const totalAmount = round2(n(row.amount));
+    if (!(totalAmount > 0)) {
       throw new BadRequestException('El pago necesita un monto mayor a 0 para abonarlo');
     }
+    const payAmount =
+      body?.amount !== undefined && body?.amount !== null
+        ? round2(n(body.amount))
+        : totalAmount;
+    if (!(payAmount > 0)) {
+      throw new BadRequestException('Indicá un monto mayor a 0');
+    }
+    if (payAmount > totalAmount + 0.004) {
+      throw new BadRequestException('El monto no puede superar el total del pago');
+    }
+    const remainder = round2(totalAmount - payAmount);
+    const isPartial = remainder > 0.004;
     await this.assertAccount(shopId, accountId);
 
     const paymentMethod = this.parsePaymentMethod(
@@ -1444,6 +1458,7 @@ export class PaymentsService implements OnModuleInit {
         paidAt,
         accountId,
         paymentMethod,
+        ...(isPartial ? { amount: money(payAmount) } : {}),
       })
       .where('id = :id AND shopId = :shopId AND status = :st AND active = true', {
         id,
@@ -1464,6 +1479,7 @@ export class PaymentsService implements OnModuleInit {
         employeeId: row.employeeId ?? null,
         description: [
           `Pago: ${this.displayTitle(row)}`,
+          isPartial ? `Parcial $${money(payAmount)} de $${money(totalAmount)}` : null,
           row.supplier?.name ? `Proveedor: ${row.supplier.name}` : null,
           row.service?.name ? `Servicio: ${row.service.name}` : null,
           row.employee?.fullName ? `Empleado: ${row.employee.fullName}` : null,
@@ -1471,7 +1487,7 @@ export class PaymentsService implements OnModuleInit {
         ]
           .filter(Boolean)
           .join(' · '),
-        amountUyu: n(row.amount),
+        amountUyu: payAmount,
         conceptId: row.conceptId ?? null,
         invoiced: !!(row.invoiceNumber || row.invoiceFilePath),
         invoiceNumber: row.invoiceNumber ?? null,
@@ -1502,6 +1518,39 @@ export class PaymentsService implements OnModuleInit {
         .set({ movementId: movement.id })
         .where('id = :id AND shopId = :shopId', { id, shopId })
         .execute();
+
+      if (isPartial) {
+        const debtNotes = [
+          row.notes?.trim() || null,
+          `Saldo pendiente · parcial de $${money(totalAmount)}`,
+        ]
+          .filter(Boolean)
+          .join(' · ');
+        await this.payments.save(
+          this.payments.create({
+            shopId,
+            title: row.title ?? null,
+            notes: debtNotes || null,
+            amount: money(remainder),
+            dueDate: row.dueDate ?? null,
+            priority: row.priority ?? null,
+            payerUserId: row.payerUserId ?? null,
+            validatorUserId: row.validatorUserId ?? null,
+            accountId: row.accountId ?? null,
+            toAccountId: row.toAccountId ?? null,
+            conceptId: row.conceptId ?? null,
+            paymentMethod: row.paymentMethod ?? null,
+            supplierId: row.supplierId ?? null,
+            employeeId: row.employeeId ?? null,
+            serviceId: row.serviceId ?? null,
+            status: PaymentStatus.VALIDATED,
+            validatedAt: row.validatedAt ?? new Date(),
+            validatedByUserId: row.validatedByUserId ?? user.id,
+            createdByUserId: user.id,
+            active: true,
+          }),
+        );
+      }
     } catch (err) {
       await this.payments.update(
         { id, shopId },
@@ -1511,6 +1560,7 @@ export class PaymentsService implements OnModuleInit {
           movementId: null,
           accountId: row.accountId ?? null,
           paymentMethod: row.paymentMethod ?? null,
+          amount: row.amount ?? null,
         },
       );
       throw err;
