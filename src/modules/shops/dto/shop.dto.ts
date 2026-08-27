@@ -70,6 +70,18 @@ export class ShopShiftDto {
   @IsString()
   @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
   closesAt: string;
+
+  @ApiPropertyOptional({
+    type: [Number],
+    description: 'Días de la semana (0=domingo … 6=sábado). Vacío = todos.',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  @Min(0, { each: true })
+  @Max(6, { each: true })
+  @Type(() => Number)
+  weekdays?: number[] | null;
 }
 
 export class ShopPosnetDto {

@@ -101,6 +101,11 @@ class CreatePaymentDto {
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
   @IsUUID()
   accountId?: string | null;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  toAccountId?: string | null;
   @ApiPropertyOptional({ enum: ['cash', 'transfer', 'card', 'other'] })
   @IsOptional()
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
@@ -195,6 +200,11 @@ class UpdatePaymentDto {
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
   @IsUUID()
   accountId?: string | null;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  toAccountId?: string | null;
   @ApiPropertyOptional({ enum: ['cash', 'transfer', 'card', 'other'] })
   @IsOptional()
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')

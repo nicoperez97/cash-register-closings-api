@@ -11,9 +11,13 @@ export type PushPayload = {
   body: string;
   url?: string;
   tag?: string;
+  type?: string | null;
   shopId?: string | null;
   shopName?: string | null;
   notificationId?: string | null;
+  paymentId?: string | null;
+  closingId?: string | null;
+  targetId?: string | null;
   /** URL absoluta del logo del local (icono de la notificación). */
   icon?: string | null;
   /** Imagen grande (Android/Chrome expanded). */
@@ -164,9 +168,13 @@ export class PushService implements OnModuleInit {
       body: payload.body,
       url: payload.url || '/',
       tag: payload.tag || 'crc-notification',
+      type: payload.type ?? null,
       shopId: payload.shopId ?? null,
       shopName: payload.shopName ?? null,
       notificationId: payload.notificationId ?? null,
+      paymentId: payload.paymentId ?? null,
+      closingId: payload.closingId ?? null,
+      targetId: payload.targetId ?? null,
       icon: payload.icon || undefined,
       image: payload.image || undefined,
       unreadCount:
