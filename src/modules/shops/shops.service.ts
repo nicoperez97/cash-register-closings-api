@@ -28,6 +28,11 @@ import {
 } from '../../common/shift-hours.util';
 import { CreateShopDto, UpdateShopDto } from './dto/shop.dto';
 import { PosnetType, ShopPosnet } from '../../common/posnet';
+import {
+  earliestShiftOpening,
+  normalizeShopShifts,
+  type ShopShift,
+} from '../../common/shop-shifts';
 import { randomUUID } from 'crypto';
 import { normalizeUserVisibility, UserVisibility } from '../../common/user-visibility';
 import { normalizePartyRule } from '../reservations/reservation-party-rules.util';
@@ -320,6 +325,30 @@ export class ShopsService implements OnModuleInit {
     } catch {
       // columna ya existe
     }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN shifts JSON NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    await this.ensureDefaultShifts();
+  }
+
+  private async ensureDefaultShifts() {
+    const rows = await this.shops.find();
+    for (const shop of rows) {
+      const next = normalizeShopShifts(shop.shifts, shop.openingTime);
+      const opening = earliestShiftOpening(next);
+      const same =
+        JSON.stringify(shop.shifts ?? null) === JSON.stringify(next) &&
+        shop.openingTime === opening;
+      if (same) continue;
+      shop.shifts = next;
+      shop.openingTime = opening;
+      await this.shops.save(shop);
+    }
   }
 
   assertShopAccess(user: AuthUser, shopId: string) {
@@ -559,7 +588,10 @@ export class ShopsService implements OnModuleInit {
             : 8,
         ),
         timezone: dto.timezone ?? 'America/Argentina/Buenos_Aires',
-        openingTime: normalizeOpeningTime(dto.openingTime),
+        openingTime: earliestShiftOpening(
+          normalizeShopShifts(dto.shifts, dto.openingTime),
+        ),
+        shifts: normalizeShopShifts(dto.shifts, dto.openingTime),
         closedWeekdays: this.normalizeClosedWeekdays(dto.closedWeekdays),
         currency: dto.currency ?? 'ARS',
         logoUrl: normalizeLogoUrl(dto.logoUrl),
@@ -656,8 +688,12 @@ export class ShopsService implements OnModuleInit {
       shop.menuEnabled = dto.menuEnabled;
     }
     if (dto.timezone !== undefined) shop.timezone = dto.timezone;
-    if (dto.openingTime !== undefined) {
+    if (dto.shifts !== undefined) {
+      shop.shifts = this.normalizeShifts(dto.shifts, dto.openingTime ?? shop.openingTime);
+      shop.openingTime = earliestShiftOpening(shop.shifts);
+    } else if (dto.openingTime !== undefined) {
       shop.openingTime = normalizeOpeningTime(dto.openingTime);
+      shop.shifts = this.syncOpeningOnShifts(shop.shifts, shop.openingTime);
     }
     if (dto.closedWeekdays !== undefined) {
       shop.closedWeekdays = this.normalizeClosedWeekdays(dto.closedWeekdays);
@@ -763,6 +799,37 @@ export class ShopsService implements OnModuleInit {
     return this.toDto(await this.shops.findOneOrFail({ where: { id } }), {
       emailSmtpConfigured: await this.hasSmtpPassword(id),
     });
+  }
+
+  private normalizeShifts(
+    raw?: Array<{ id?: string; name?: string; opensAt?: string; closesAt?: string }> | null,
+    fallbackOpening?: string | null,
+  ): ShopShift[] {
+    if (raw != null && !Array.isArray(raw)) {
+      throw new BadRequestException('shifts inválido');
+    }
+    if (Array.isArray(raw) && !raw.length) {
+      throw new BadRequestException('El local necesita al menos un turno');
+    }
+    for (const row of raw ?? []) {
+      const name = String(row?.name ?? '').trim();
+      if (!name) throw new BadRequestException('Cada turno necesita un nombre');
+    }
+    return normalizeShopShifts(raw, fallbackOpening);
+  }
+
+  private syncOpeningOnShifts(
+    raw?: ShopShift[] | null,
+    openingTime?: string | null,
+  ): ShopShift[] {
+    const shifts = normalizeShopShifts(raw, openingTime);
+    if (shifts.length !== 1) return shifts;
+    const open = normalizeOpeningTime(openingTime);
+    const only = shifts[0];
+    const was24h = only.opensAt === only.closesAt;
+    only.opensAt = open;
+    if (was24h) only.closesAt = open;
+    return shifts;
   }
 
   private normalizePosnets(
@@ -974,6 +1041,7 @@ export class ShopsService implements OnModuleInit {
       slug: s.slug,
       timezone: s.timezone,
       openingTime: normalizeOpeningTime(s.openingTime),
+      shifts: normalizeShopShifts(s.shifts, s.openingTime),
       closedWeekdays: Array.isArray(s.closedWeekdays) ? s.closedWeekdays : [],
       currency: s.currency,
       unitsLabel: s.unitsLabel,

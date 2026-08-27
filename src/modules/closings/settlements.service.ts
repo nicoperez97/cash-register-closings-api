@@ -235,14 +235,22 @@ export class SettlementsService implements OnModuleInit {
     const today = new Date();
     const businessDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
-    const movement = await this.movements.create(user, shopId, {
-      businessDate,
-      fromAccountId: ingreso.id,
-      toAccountId: dest.id,
-      description: `Rendición · ${nameSummary}`,
-      amountUyu: total,
-      conceptId: concept?.id ?? fallback?.id ?? null,
-    });
+    const uniqueClosingIds = [
+      ...new Set(rows.map((r) => r.closingId).filter((id): id is string => !!id)),
+    ];
+    const movement = await this.movements.create(
+      user,
+      shopId,
+      {
+        businessDate,
+        fromAccountId: ingreso.id,
+        toAccountId: dest.id,
+        description: `Rendición · ${nameSummary}`,
+        amountUyu: total,
+        conceptId: concept?.id ?? fallback?.id ?? null,
+      },
+      { closingId: uniqueClosingIds.length === 1 ? uniqueClosingIds[0] : null },
+    );
 
     const now = new Date();
     const settleBatchId = randomUUID();

@@ -10,6 +10,7 @@ import { ConceptKind, LedgerAccountType } from '../../common/enums';
 import { ShopsService } from '../shops/shops.service';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
 import { GeminiDocumentService } from '../ai/gemini-document.service';
+import { MovementFilters, MovementsService } from './movements.service';
 
 export interface MovementImportItem {
   rowNumber: number;
@@ -91,6 +92,7 @@ export class MovementsExcelImportService {
     private readonly shops: ShopsService,
     private readonly catalogSeed: CatalogSeedService,
     private readonly gemini: GeminiDocumentService,
+    private readonly movementsService: MovementsService,
   ) {}
 
   async buildTemplate(
@@ -191,57 +193,10 @@ export class MovementsExcelImportService {
   }
 
   /** Exporta movimientos del período en el mismo formato que la plantilla de importación. */
-  async exportRange(
-    user: AuthUser,
-    shopId: string,
-    filters: { from?: string; to?: string; kind?: LedgerImportKind } = {},
-  ) {
+  async exportRange(user: AuthUser, shopId: string, filters: MovementFilters = {}) {
     this.shops.assertShopAccess(user, shopId);
     const shop = await this.shops.findOne(user, shopId);
-
-    const qb = this.movements
-      .createQueryBuilder('m')
-      .leftJoinAndSelect('m.fromAccount', 'fromAccount')
-      .leftJoinAndSelect('m.toAccount', 'toAccount')
-      .leftJoinAndSelect('m.fromUser', 'fromUser')
-      .leftJoinAndSelect('m.toUser', 'toUser')
-      .leftJoinAndSelect('m.concept', 'concept')
-      .where('m.shopId = :shopId', { shopId })
-      .andWhere('m.active = true');
-
-    if (filters.from) qb.andWhere('m.businessDate >= :from', { from: filters.from });
-    if (filters.to) qb.andWhere('m.businessDate <= :to', { to: filters.to });
-    if (filters.kind === 'expense') {
-      qb.andWhere(
-        `(concept.kind = :expenseKind OR LOWER(toAccount.name) LIKE :egresoName OR UPPER(toAccount.code) = :egresoCode)`,
-        { expenseKind: 'EXPENSE', egresoName: '%egreso%', egresoCode: 'EGRESO' },
-      );
-    } else if (filters.kind === 'income') {
-      qb.andWhere(
-        `(concept.kind = :incomeKind OR LOWER(fromAccount.name) LIKE :ingresoName OR UPPER(fromAccount.code) = :ingresoCode)`,
-        { incomeKind: 'INCOME', ingresoName: '%ingreso%', ingresoCode: 'INGRESO' },
-      );
-      qb.andWhere(
-        `(concept.kind IS NULL OR concept.kind <> :expenseKind) AND (toAccount.id IS NULL OR (LOWER(toAccount.name) NOT LIKE :egresoName AND UPPER(COALESCE(toAccount.code, '')) <> :egresoCode))`,
-        { expenseKind: 'EXPENSE', egresoName: '%egreso%', egresoCode: 'EGRESO' },
-      );
-    } else if (filters.kind === 'transfer') {
-      qb.andWhere(
-        `(concept.kind IS NULL OR (concept.kind <> :expenseKind AND concept.kind <> :incomeKind))
-         AND (toAccount.id IS NULL OR (LOWER(toAccount.name) NOT LIKE :egresoName AND UPPER(COALESCE(toAccount.code, '')) <> :egresoCode))
-         AND (fromAccount.id IS NULL OR (LOWER(fromAccount.name) NOT LIKE :ingresoName AND UPPER(COALESCE(fromAccount.code, '')) <> :ingresoCode))`,
-        {
-          expenseKind: 'EXPENSE',
-          incomeKind: 'INCOME',
-          egresoName: '%egreso%',
-          egresoCode: 'EGRESO',
-          ingresoName: '%ingreso%',
-          ingresoCode: 'INGRESO',
-        },
-      );
-    }
-    qb.orderBy('m.businessDate', 'ASC').addOrderBy('m.createdAt', 'ASC');
-    const rows = await qb.getMany();
+    const rows = [...(await this.movementsService.list(user, shopId, filters))].reverse();
 
     const wb = new ExcelJS.Workbook();
     wb.creator = 'Cash Register Closings';
@@ -270,8 +225,8 @@ export class MovementsExcelImportService {
     };
 
     for (const m of rows) {
-      const fromName = m.fromAccount?.name || m.fromUser?.fullName || '';
-      const toName = m.toAccount?.name || m.toUser?.fullName || '';
+      const fromName = m.fromAccountName || m.fromUserName || '';
+      const toName = m.toAccountName || m.toUserName || '';
       ws.addRow([
         m.businessDate,
         fromName,
@@ -280,7 +235,7 @@ export class MovementsExcelImportService {
         n(m.amountUyu),
         m.usdRate != null ? n(m.usdRate) : '',
         m.amountUsd != null ? n(m.amountUsd) : '',
-        m.concept?.name ?? '',
+        m.conceptName ?? '',
         !!m.invoiced,
         m.invoiceNumber ?? '',
       ]);

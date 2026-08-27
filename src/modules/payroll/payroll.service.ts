@@ -126,9 +126,12 @@ export class PayrollService {
     const created: PayrollLine[] = [];
     for (const emp of employees) {
       const empDays = days.filter((d) => d.employeeId === emp.id);
-      const daysWorked = empDays.filter((d) => d.isPresent).length;
-      // Feriado solo suma si no se marcó presente (evita doble conteo).
-      const holidayDays = empDays.filter((d) => d.isHoliday && !d.isPresent).length;
+      const presentDates = new Set(empDays.filter((d) => d.isPresent).map((d) => d.date));
+      const daysWorked = presentDates.size;
+      // Feriado solo suma si ese día no se marcó presente en ningún turno.
+      const holidayDays = new Set(
+        empDays.filter((d) => d.isHoliday && !presentDates.has(d.date)).map((d) => d.date),
+      ).size;
       const overtimeHours = empDays.reduce((s, d) => s + n(d.overtimeHours), 0);
       const base = n(emp.baseSalary);
       const daily = base / WORK_DAYS_BASE;

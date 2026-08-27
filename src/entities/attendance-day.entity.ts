@@ -1,10 +1,12 @@
-import { Column, Entity, JoinColumn, ManyToOne, Unique } from 'typeorm';
+import { Column, Entity, Index, JoinColumn, ManyToOne, Unique } from 'typeorm';
 import { BaseEntity } from './base.entity';
 import { Shop } from './shop.entity';
 import { Employee } from './employee.entity';
 
 @Entity({ name: 'attendance_days' })
-@Unique(['employeeId', 'date'])
+@Index('IDX_attendance_days_shopId', ['shopId'])
+@Index('IDX_attendance_days_employeeId', ['employeeId'])
+@Unique('uq_attendance_emp_date_shift', ['employeeId', 'date', 'shiftId'])
 export class AttendanceDay extends BaseEntity {
   @Column()
   shopId: string;
@@ -14,6 +16,10 @@ export class AttendanceDay extends BaseEntity {
 
   @Column({ type: 'date' })
   date: string;
+
+  /** Turno del local. Obligatorio cuando el local tiene turnos. */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  shiftId?: string | null;
 
   @Column({ type: 'tinyint', default: 0 })
   isHoliday: boolean;

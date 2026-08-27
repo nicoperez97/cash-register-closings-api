@@ -165,6 +165,10 @@ export class MovementsController {
     @Query('partyType') partyType?: 'supplier' | 'service' | 'employee',
     @Query('invoiced') invoiced?: string,
     @Query('paymentId') paymentId?: string,
+    @Query('paymentMethod') paymentMethod?: string,
+    @Query('employeeId') employeeId?: string,
+    @Query('hasReceipt') hasReceipt?: string,
+    @Query('shiftId') shiftId?: string,
   ) {
     return this.movements.list(user, shopId, {
       from,
@@ -180,6 +184,10 @@ export class MovementsController {
       partyType,
       invoiced,
       paymentId,
+      paymentMethod,
+      employeeId,
+      hasReceipt,
+      shiftId,
     });
   }
 
@@ -260,12 +268,40 @@ export class MovementsController {
     @Query('from') from: string | undefined,
     @Query('to') to: string | undefined,
     @Query('kind') kind: 'expense' | 'income' | 'transfer' | undefined,
+    @Query('fromAccountId') fromAccountId: string | undefined,
+    @Query('toAccountId') toAccountId: string | undefined,
+    @Query('accountId') accountId: string | undefined,
+    @Query('conceptId') conceptId: string | undefined,
+    @Query('closingId') closingId: string | undefined,
+    @Query('q') q: string | undefined,
+    @Query('source') source: 'closing' | 'payment' | 'manual' | undefined,
+    @Query('partyType') partyType: 'supplier' | 'service' | 'employee' | undefined,
+    @Query('invoiced') invoiced: string | undefined,
+    @Query('paymentId') paymentId: string | undefined,
+    @Query('paymentMethod') paymentMethod: string | undefined,
+    @Query('employeeId') employeeId: string | undefined,
+    @Query('hasReceipt') hasReceipt: string | undefined,
+    @Query('shiftId') shiftId: string | undefined,
     @Res() res: Response,
   ) {
     const { buffer, filename } = await this.excelImport.exportRange(user, shopId, {
       from,
       to,
       kind,
+      fromAccountId,
+      toAccountId,
+      accountId,
+      conceptId,
+      closingId,
+      q,
+      source,
+      partyType,
+      invoiced,
+      paymentId,
+      paymentMethod,
+      employeeId,
+      hasReceipt,
+      shiftId,
     });
     res.setHeader(
       'Content-Type',
