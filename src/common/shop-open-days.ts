@@ -26,14 +26,9 @@ export function isShopClosedOnDate(
   return weekday != null && closed.includes(weekday);
 }
 
-/** True si es sábado (6) o domingo (0). */
-export function isWeekendIsoDate(isoDate: string): boolean {
-  const weekday = isoDateWeekday(isoDate);
-  return weekday === 0 || weekday === 6;
-}
-
 /**
- * Días hábiles inclusivos: excluye fines de semana y francos del local (`closedWeekdays`).
+ * Días hábiles inclusivos: excluye solo los francos del local (`closedWeekdays`).
+ * Los fines de semana cuentan si el local abre ese día.
  */
 export function countBusinessDays(
   fromDate: string,
@@ -50,7 +45,7 @@ export function countBusinessDays(
   let cur = from;
   while (cur <= to) {
     const weekday = isoDateWeekday(cur);
-    if (weekday != null && weekday !== 0 && weekday !== 6 && !closed.includes(weekday)) {
+    if (weekday != null && !closed.includes(weekday)) {
       count += 1;
     }
     cur = nextCalendarDate(cur);
