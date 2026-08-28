@@ -3,6 +3,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import type { Response } from 'express';
 import { ReportsService } from './reports.service';
+import { UserActivityService } from './user-activity.service';
 import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { parseClosingFilters } from '../closings/closing-filters';
@@ -12,7 +13,10 @@ import { parseClosingFilters } from '../closings/closing-filters';
 @UseGuards(AuthGuard('jwt'), PermissionsGuard)
 @Controller('shops/:shopId/reports')
 export class ReportsController {
-  constructor(private readonly reports: ReportsService) {}
+  constructor(
+    private readonly reports: ReportsService,
+    private readonly userActivityService: UserActivityService,
+  ) {}
 
   private conceptFilters(query: Record<string, string | undefined>): {
     from?: string;
@@ -103,6 +107,17 @@ export class ReportsController {
     @Query() query: Record<string, string | undefined>,
   ) {
     return this.reports.conceptsAnalytics(user, shopId, this.conceptFilters(query));
+  }
+
+  @Get('user-activity')
+  @RequirePermissions('users.manage')
+  userActivity(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Query() query: Record<string, string | undefined>,
+  ) {
+    const base = parseClosingFilters(query);
+    return this.userActivityService.ranking(user, shopId, { from: base.from, to: base.to });
   }
 
   @Get('export.xlsx')
