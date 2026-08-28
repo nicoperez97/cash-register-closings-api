@@ -176,6 +176,7 @@ export class AccountsController {
     'closings.read',
     'closings.create',
     'payments.read',
+    'vacations.read',
   )
   list(
     @CurrentUser() user: AuthUser,

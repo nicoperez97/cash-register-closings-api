@@ -24,7 +24,7 @@ import {
   MinLength,
   ValidateIf,
 } from 'class-validator';
-import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
+import { CurrentUser, AuthUser, RequirePermissions, RequireAnyPermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { EmployeeType } from '../../entities/employee.entity';
 import { EmployeesService } from './employees.service';
@@ -124,7 +124,7 @@ export class EmployeesController {
   constructor(private readonly employees: EmployeesService) {}
 
   @Get()
-  @RequirePermissions('employees.read')
+  @RequireAnyPermissions('employees.read', 'vacations.read')
   list(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
