@@ -282,6 +282,8 @@ export const PERMISSIONS = [
   'reimbursements.self',
   'reimbursements.read',
   'reimbursements.manage',
+  'vacations.read',
+  'vacations.manage',
   'serviceRules.read',
   'serviceRules.manage',
 ] as const;
@@ -348,6 +350,8 @@ export const ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     'tips.manage',
     'reimbursements.read',
     'reimbursements.manage',
+    'vacations.read',
+    'vacations.manage',
     'serviceRules.read',
     'serviceRules.manage',
   ],
@@ -378,6 +382,7 @@ export const ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     'orders.read',
     'tips.read',
     'reimbursements.read',
+    'vacations.read',
   ],
   [GlobalRole.PARTNER]: [
     'closings.read',

@@ -29,6 +29,7 @@ export type ModuleKey =
   | 'orders'
   | 'tips'
   | 'reimbursements'
+  | 'vacations'
   | 'serviceRules'
   | 'shop'
   | 'users';
@@ -287,6 +288,15 @@ export const MODULE_DEFS: ModuleDef[] = [
     ],
   },
   {
+    key: 'vacations',
+    label: 'Vacaciones',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
     key: 'serviceRules',
     label: 'Normas de servicio',
     levels: [
@@ -430,6 +440,7 @@ export function expandModulePermissions(
       add(set, 'reimbursements.read', 'reimbursements.manage');
       break;
   }
+  pair('vacations', 'vacations.read', 'vacations.manage');
   switch (modules.serviceRules) {
     case 'read':
       add(set, 'serviceRules.read');
@@ -523,6 +534,7 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
       if (has('reimbursements.self')) return 'self';
       return 'none';
     })(),
+    vacations: level('vacations.read', 'vacations.manage'),
     serviceRules: level('serviceRules.read', 'serviceRules.manage'),
     accounts: has('accounts.manage') ? 'manage' : 'none',
     concepts: has('concepts.manage') ? 'manage' : 'none',

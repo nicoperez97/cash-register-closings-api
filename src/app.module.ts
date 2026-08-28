@@ -29,6 +29,7 @@ import { ShortagesModule } from './modules/shortages/shortages.module';
 import { OrdersModule } from './modules/orders/orders.module';
 import { TipsModule } from './modules/tips/tips.module';
 import { ReimbursementsModule } from './modules/reimbursements/reimbursements.module';
+import { VacationsModule } from './modules/vacations/vacations.module';
 import { SalonFloorModule } from './modules/salon-floor/salon-floor.module';
 import { MenuModule } from './modules/menu/menu.module';
 import { ServiceRulesModule } from './modules/service-rules/service-rules.module';
@@ -70,6 +71,7 @@ import { PublicAbuseGuard } from './common/public-abuse.guard';
     OrdersModule,
     TipsModule,
     ReimbursementsModule,
+    VacationsModule,
     SalonFloorModule,
     MenuModule,
     ServiceRulesModule,
