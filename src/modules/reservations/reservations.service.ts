@@ -27,13 +27,12 @@ import { isEntityActive } from '../../common/active.util';
 import { normalizeLogoUrl } from '../../common/drive-url';
 import { isIsoDateOnly, toIsoDateOnly } from '../../common/iso-date';
 import {
-  assertPartyFitsAreaCapacity,
   consumeDayAreaCapacity,
   dayOverridesFromRow,
   normalizeCapacityRemaining,
   rowHasDayContent,
 } from './reservation-day-settings.util';
-import { assertPartyFitsShopArea, effectivePartyRules, normalizePartyRule } from './reservation-party-rules.util';
+import { normalizePartyRule } from './reservation-party-rules.util';
 
 /** Estados que cuentan para totales / capacidad (excluye canceladas y no-show). */
 const ACTIVE_RESERVATION_STATUSES = [
@@ -585,16 +584,7 @@ export class ReservationsService implements OnModuleInit {
     if (dto.tableNumber !== undefined) {
       row.tableNumber = this.normalizeTableNumber(dto.tableNumber);
     }
-    const shop = await this.shops.assertReservationsEnabled(shopId);
-    const dayRow = await this.findDayNoticeRow(
-      shopId,
-      toIsoDateOnly(row.businessDate) || String(row.businessDate ?? '').slice(0, 10),
-    );
-    assertPartyFitsShopArea(
-      row.area,
-      Number(row.partySize ?? 0),
-      effectivePartyRules(shop, dayOverridesFromRow(dayRow)),
-    );
+    // Staff con reservations.manage puede saltar topes adentro/afuera (el alta pública sí los aplica).
     await this.reservations.save(row);
     this.live.tick(shopId, 'reservations');
     return this.toReservationDto(row);

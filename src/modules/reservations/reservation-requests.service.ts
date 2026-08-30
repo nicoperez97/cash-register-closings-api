@@ -510,14 +510,14 @@ export class ReservationRequestsService implements OnModuleInit {
       area = ReservationArea.OUTSIDE;
       row.area = ReservationArea.OUTSIDE;
     }
-    assertPartyFitsShopArea(area, Number(row.partySize ?? 0), partyRules);
-    assertPartyFitsAreaCapacity(area, Number(row.partySize ?? 0), overrides);
+    // Panel admin: no aplicar topes públicos de personas/cupo.
     await consumeDayAreaCapacity(
       this.dayNotices,
       shopId,
       businessDate,
       area,
       Number(row.partySize ?? 0),
+      { force: true },
     );
 
     const reservation = await this.reservations.save(
