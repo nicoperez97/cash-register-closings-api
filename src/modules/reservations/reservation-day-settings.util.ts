@@ -225,13 +225,16 @@ export function readAreaCapacityRemaining(
   );
 }
 
-/** Descuenta cupo del día; no-op si el sector no tiene cupo configurado. */
+/** Descuenta cupo del día; no-op si el sector no tiene cupo configurado.
+ *  `force: true` permite aceptar aunque no alcance el cupo (panel admin).
+ */
 export async function consumeDayAreaCapacity(
   dayNotices: Repository<ReservationDayNotice>,
   shopId: string,
   businessDate: string,
   area: ReservationArea | string,
   partySize: number,
+  opts?: { force?: boolean },
 ): Promise<{ managed: boolean; remaining: number | null }> {
   const isOutside = String(area).toUpperCase() === ReservationArea.OUTSIDE;
   const label = isOutside ? 'afuera' : 'adentro';
@@ -239,6 +242,7 @@ export async function consumeDayAreaCapacity(
   if (!Number.isFinite(size) || size < 1) {
     throw new BadRequestException('La cantidad de personas debe ser al menos 1');
   }
+  const force = !!opts?.force;
 
   return dayNotices.manager.transaction(async (manager) => {
     const repo = manager.getRepository(ReservationDayNotice);
@@ -260,16 +264,18 @@ export async function consumeDayAreaCapacity(
     }
 
     const cap = Number(current);
-    if (cap <= 0) {
-      throw new BadRequestException(`No quedan lugares ${label}`);
-    }
-    if (size > cap) {
-      throw new BadRequestException(
-        `Solo quedan ${cap} lugar${cap === 1 ? '' : 'es'} ${label}`,
-      );
+    if (!force) {
+      if (cap <= 0) {
+        throw new BadRequestException(`No quedan lugares ${label}`);
+      }
+      if (size > cap) {
+        throw new BadRequestException(
+          `Solo quedan ${cap} lugar${cap === 1 ? '' : 'es'} ${label}`,
+        );
+      }
     }
 
-    const next = cap - size;
+    const next = Math.max(0, cap - size);
     if (isOutside) {
       row.outsideCapacityRemaining = next;
     } else {
