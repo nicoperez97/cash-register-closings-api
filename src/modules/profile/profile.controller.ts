@@ -16,7 +16,17 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
-import { IsArray, IsObject, IsOptional, IsString, MinLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  Allow,
+  IsArray,
+  IsObject,
+  IsOptional,
+  IsString,
+  MinLength,
+  ValidateIf,
+  ValidateNested,
+} from 'class-validator';
 import { Response } from 'express';
 import { memoryStorage } from 'multer';
 import { AuthUser, CurrentUser, Public } from '../../common/decorators';
@@ -51,6 +61,38 @@ class UpdateProfileDto {
   cbu?: string | null;
 }
 
+class ToolbarCustomActionDto {
+  @IsString()
+  id!: string;
+
+  @IsString()
+  label!: string;
+
+  @IsString()
+  icon!: string;
+
+  @IsString()
+  route!: string;
+}
+
+class ToolbarConfigDto {
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  order?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  hidden?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ToolbarCustomActionDto)
+  custom?: ToolbarCustomActionDto[];
+}
+
 class UpdateShopPreferencesDto {
   @ApiPropertyOptional({
     nullable: true,
@@ -58,8 +100,22 @@ class UpdateShopPreferencesDto {
     additionalProperties: true,
   })
   @IsOptional()
+  @ValidateIf((_, v) => v !== null)
   @IsObject()
+  @Allow()
   navConfig?: Record<string, unknown> | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    type: 'object',
+    additionalProperties: true,
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsObject()
+  @ValidateNested()
+  @Type(() => ToolbarConfigDto)
+  toolbarConfig?: ToolbarConfigDto | null;
 
   @ApiPropertyOptional({ nullable: true, type: [String] })
   @IsOptional()
