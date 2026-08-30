@@ -320,6 +320,14 @@ export class ShopsService implements OnModuleInit {
     try {
       await this.shops.query(`
         ALTER TABLE shops
+          ADD COLUMN toolbarConfig JSON NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
           ADD COLUMN reservationPublicForm JSON NULL
       `);
     } catch {
@@ -657,7 +665,12 @@ export class ShopsService implements OnModuleInit {
     if (outsideMax !== undefined) {
       shop.reservationOutsideMinPartySize = normalizePartyRule(outsideMax);
     }
-    if (shop.reservationInsideEnabled === false && shop.reservationOutsideEnabled === false) {
+    // Si el módulo de reservas está apagado, ambos sectores pueden quedar off.
+    if (
+      shop.reservationsEnabled !== false &&
+      shop.reservationInsideEnabled === false &&
+      shop.reservationOutsideEnabled === false
+    ) {
       throw new BadRequestException('Dejá al menos un sector habilitado (adentro o afuera)');
     }
     if (dto.waitingListEnabled !== undefined) {
@@ -765,6 +778,11 @@ export class ShopsService implements OnModuleInit {
     }
     if (dto.navConfig !== undefined) {
       shop.navConfig = dto.navConfig ? this.normalizeNavConfig(dto.navConfig) : null;
+    }
+    if (dto.toolbarConfig !== undefined) {
+      shop.toolbarConfig = dto.toolbarConfig
+        ? this.normalizeToolbarConfig(dto.toolbarConfig)
+        : null;
     }
 
     await this.shops.save(shop);
@@ -1112,6 +1130,8 @@ export class ShopsService implements OnModuleInit {
       posnets: s.posnets ?? [],
       paymentConceptCategories: normalizePaymentConceptCategories(s.paymentConceptCategories),
       navConfig: s.navConfig && typeof s.navConfig === 'object' ? s.navConfig : null,
+      toolbarConfig:
+        s.toolbarConfig && typeof s.toolbarConfig === 'object' ? s.toolbarConfig : null,
       active: isEntityActive(s.active),
     };
   }
@@ -1163,6 +1183,31 @@ export class ShopsService implements OnModuleInit {
           )
         : undefined;
     return { groups, itemGroup, itemOrder, hidden, itemLabels };
+  }
+
+  private normalizeToolbarConfig(raw: {
+    order?: string[];
+    hidden?: string[];
+    custom?: Array<{ id?: string; label?: string; icon?: string; route?: string }>;
+  }): Shop['toolbarConfig'] {
+    const order = Array.isArray(raw.order)
+      ? raw.order.map(String).filter(Boolean)
+      : undefined;
+    const hidden = Array.isArray(raw.hidden)
+      ? raw.hidden.map(String).filter(Boolean)
+      : undefined;
+    const custom = Array.isArray(raw.custom)
+      ? raw.custom
+          .filter((c) => c && typeof c === 'object')
+          .map((c) => ({
+            id: String(c.id ?? '').trim(),
+            label: String(c.label ?? '').trim(),
+            icon: String(c.icon ?? '').trim() || 'bolt',
+            route: String(c.route ?? '').trim(),
+          }))
+          .filter((c) => c.id && c.label && c.route.startsWith('/'))
+      : undefined;
+    return { order, hidden, custom: custom?.length ? custom : undefined };
   }
 
   private async withSettlementsEnabled<T extends { id: string; settlementsEnabled?: boolean }>(

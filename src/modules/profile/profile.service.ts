@@ -46,6 +46,7 @@ export type UpdateProfileDto = {
 
 export type UpdateShopPreferencesDto = {
   navConfig?: Shop['navConfig'] | null;
+  toolbarConfig?: Shop['toolbarConfig'] | null;
   mutedNotificationTypes?: string[] | null;
   mutedAppNotificationTypes?: string[] | null;
   mutedEmailNotificationTypes?: string[] | null;
@@ -77,6 +78,14 @@ export class ProfileService implements OnModuleInit {
       await this.userShops.query(`
         ALTER TABLE user_shops
           ADD COLUMN navConfig JSON NULL
+      `);
+    } catch {
+      // ya existe
+    }
+    try {
+      await this.userShops.query(`
+        ALTER TABLE user_shops
+          ADD COLUMN toolbarConfig JSON NULL
       `);
     } catch {
       // ya existe
@@ -229,6 +238,8 @@ export class ProfileService implements OnModuleInit {
       shopId,
       shopNavConfig: shop.navConfig ?? null,
       navConfig: link?.navConfig ?? null,
+      shopToolbarConfig: shop.toolbarConfig ?? null,
+      toolbarConfig: link?.toolbarConfig ?? null,
       mutedNotificationTypes: Array.isArray(link?.mutedNotificationTypes)
         ? link!.mutedNotificationTypes
         : [],
@@ -243,6 +254,7 @@ export class ProfileService implements OnModuleInit {
         globalRole: user.globalRole,
       }),
       usingShopMenuDefault: link?.navConfig == null,
+      usingShopToolbarDefault: link?.toolbarConfig == null,
     };
   }
 
@@ -263,6 +275,28 @@ export class ProfileService implements OnModuleInit {
         const normalized = this.normalizeNavConfig(dto.navConfig);
         link.navConfig = this.isMeaningfulNavConfig(normalized) ? normalized : null;
       }
+    }
+    if (dto.toolbarConfig !== undefined) {
+      if (dto.toolbarConfig == null) {
+        link.toolbarConfig = null;
+      } else {
+        const normalized = this.normalizeToolbarConfig(
+          dto.toolbarConfig as NonNullable<Shop['toolbarConfig']>,
+        );
+        // Siempre persistir el override personal (aunque sea “igual” al del local).
+        link.toolbarConfig = this.isMeaningfulToolbarConfig(normalized)
+          ? {
+              ...(normalized.order?.length ? { order: normalized.order } : {}),
+              ...(normalized.hidden?.length ? { hidden: normalized.hidden } : {}),
+              ...(normalized.custom?.length ? { custom: normalized.custom } : {}),
+            }
+          : null;
+      }
+      // TypeORM a veces no detecta cambios en simple-json: forzar update.
+      await this.userShops.update(
+        { id: link.id },
+        { toolbarConfig: link.toolbarConfig },
+      );
     }
     const cleanTypes = (raw: string[] | null | undefined) =>
       raw == null
@@ -311,6 +345,36 @@ export class ProfileService implements OnModuleInit {
       (cfg.itemOrder && Object.keys(cfg.itemOrder).length) ||
       (Array.isArray(cfg.hidden) && cfg.hidden.length) ||
       (cfg.itemLabels && Object.keys(cfg.itemLabels).length)
+    );
+  }
+
+  private normalizeToolbarConfig(
+    raw: NonNullable<Shop['toolbarConfig']>,
+  ): NonNullable<Shop['toolbarConfig']> {
+    const custom = Array.isArray(raw.custom)
+      ? raw.custom
+          .filter((c) => c && typeof c === 'object')
+          .map((c) => ({
+            id: String(c.id ?? '').trim(),
+            label: String(c.label ?? '').trim(),
+            icon: String(c.icon ?? '').trim() || 'bolt',
+            route: String(c.route ?? '').trim(),
+          }))
+          .filter((c) => c.id && c.label && c.route.startsWith('/'))
+      : undefined;
+    return {
+      order: Array.isArray(raw.order) ? raw.order.map(String).filter(Boolean) : undefined,
+      hidden: Array.isArray(raw.hidden) ? raw.hidden.map(String).filter(Boolean) : undefined,
+      custom: custom?.length ? custom : undefined,
+    };
+  }
+
+  private isMeaningfulToolbarConfig(cfg: Shop['toolbarConfig']): boolean {
+    if (!cfg || typeof cfg !== 'object') return false;
+    return !!(
+      (Array.isArray(cfg.order) && cfg.order.length) ||
+      (Array.isArray(cfg.hidden) && cfg.hidden.length) ||
+      (Array.isArray(cfg.custom) && cfg.custom.length)
     );
   }
 

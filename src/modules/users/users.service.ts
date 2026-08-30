@@ -202,6 +202,14 @@ export class UsersService implements OnModuleInit {
     try {
       await this.userShops.query(`
         ALTER TABLE user_shops
+          ADD COLUMN toolbarConfig JSON NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.userShops.query(`
+        ALTER TABLE user_shops
           ADD COLUMN mutedNotificationTypes JSON NULL
       `);
     } catch {

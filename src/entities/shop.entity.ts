@@ -259,6 +259,17 @@ export class Shop extends BaseEntity {
     itemLabels?: Record<string, string>;
   } | null;
 
+  /**
+   * Orden / visibilidad de la barra de herramientas del local.
+   * null = defaults de la app.
+   */
+  @Column({ type: 'simple-json', nullable: true })
+  toolbarConfig?: {
+    order?: string[];
+    hidden?: string[];
+    custom?: Array<{ id: string; label: string; icon: string; route: string }>;
+  } | null;
+
   @ManyToOne(() => SalesSystem, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'salesSystemId' })
   salesSystem?: SalesSystem | null;

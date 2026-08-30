@@ -85,6 +85,17 @@ export class UserShop {
   } | null;
 
   /**
+   * Override de la barra de herramientas para este usuario en este local.
+   * null = usar shop.toolbarConfig.
+   */
+  @Column({ type: 'simple-json', nullable: true })
+  toolbarConfig?: {
+    order?: string[];
+    hidden?: string[];
+    custom?: Array<{ id: string; label: string; icon: string; route: string }>;
+  } | null;
+
+  /**
    * Tipos silenciados en ambos canales (legado).
    * null / [] = no silencia ninguno.
    */

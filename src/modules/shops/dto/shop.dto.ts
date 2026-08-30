@@ -410,6 +410,18 @@ export class CreateShopDto {
     hidden?: string[];
     itemLabels?: Record<string, string>;
   } | null;
+
+  @ApiPropertyOptional({
+    description:
+      'Config de la barra de herramientas: orden y ocultos. null = defaults.',
+  })
+  @IsOptional()
+  @IsObject()
+  toolbarConfig?: {
+    order?: string[];
+    hidden?: string[];
+    custom?: Array<{ id: string; label: string; icon: string; route: string }>;
+  } | null;
 }
 
 export class UpdateShopDto extends PartialType(CreateShopDto) {

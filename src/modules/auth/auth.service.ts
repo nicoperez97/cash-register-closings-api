@@ -677,6 +677,12 @@ export class AuthService implements OnModuleInit {
         posnets: s.posnets ?? [],
         navConfig: s.navConfig && typeof s.navConfig === 'object' ? s.navConfig : null,
         myNavConfig: link?.navConfig && typeof link.navConfig === 'object' ? link.navConfig : null,
+        toolbarConfig:
+          s.toolbarConfig && typeof s.toolbarConfig === 'object' ? s.toolbarConfig : null,
+        myToolbarConfig:
+          link?.toolbarConfig && typeof link.toolbarConfig === 'object'
+            ? link.toolbarConfig
+            : null,
         mutedNotificationTypes: Array.isArray(link?.mutedNotificationTypes)
           ? link!.mutedNotificationTypes
           : [],
