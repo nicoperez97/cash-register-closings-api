@@ -7,8 +7,10 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AuthGuard } from '@nestjs/passport';
-import { AuthUser, IS_PUBLIC_KEY, PERMISSIONS_ANY_KEY, PERMISSIONS_KEY } from './decorators';
+import { AuthUser, IS_PUBLIC_KEY, MANAGE_USERS_KEY, PERMISSIONS_ANY_KEY, PERMISSIONS_KEY } from './decorators';
 import { GlobalRole, Permission, ROLE_PERMISSIONS } from './enums';
+
+const SHOP_ADMIN_ROLES = new Set<GlobalRole>([GlobalRole.OWNER, GlobalRole.ADMIN]);
 
 @Injectable()
 export class JwtAuthGuard extends AuthGuard('jwt') {
@@ -36,6 +38,20 @@ export class PermissionsGuard implements CanActivate {
       context.getClass(),
     ]);
     if (isPublic) return true;
+
+    const manageUsers = this.reflector.getAllAndOverride<boolean>(MANAGE_USERS_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (manageUsers) {
+      const req = context.switchToHttp().getRequest();
+      const user = req.user as AuthUser | undefined;
+      if (!user) throw new UnauthorizedException();
+      if (!canManageUsersSomewhere(user)) {
+        throw new ForbiddenException('Sin permiso para gestionar usuarios');
+      }
+      return true;
+    }
 
     const requiredAny = this.reflector.getAllAndOverride<Permission[]>(PERMISSIONS_ANY_KEY, [
       context.getHandler(),
@@ -92,7 +108,7 @@ export function resolveUserPermissions(
   if (isGlobalAdmin(user.globalRole as GlobalRole)) {
     return user.permissions?.length ? user.permissions : [...(ROLE_PERMISSIONS[GlobalRole.OWNER] ?? [])];
   }
-  if (shopId && user.shopPermissions?.[shopId]) {
+  if (shopId && user.shopPermissions && Object.prototype.hasOwnProperty.call(user.shopPermissions, shopId)) {
     return user.shopPermissions[shopId];
   }
   if (shopId) {
@@ -136,4 +152,15 @@ export function canEditPayments(user: AuthUser, shopId: string): boolean {
 /** Saldos iniciales de cuentas: solo super admin. */
 export function canConfigureOpeningBalances(user: AuthUser): boolean {
   return isSuperAdmin(user.globalRole);
+}
+
+/** Admin global, permiso users.manage, o admin/owner del local. */
+export function canManageUsersSomewhere(user: AuthUser): boolean {
+  if (isGlobalAdmin(user.globalRole as GlobalRole)) return true;
+  if (user.permissions.includes('users.manage')) return true;
+  return user.shopIds.some((id) => {
+    if (user.shopPermissions?.[id]?.includes('users.manage')) return true;
+    const role = (user.shopRoles?.[id] ?? user.globalRole) as GlobalRole;
+    return SHOP_ADMIN_ROLES.has(role);
+  });
 }

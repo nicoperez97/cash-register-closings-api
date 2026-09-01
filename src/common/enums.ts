@@ -373,6 +373,7 @@ export const ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     'partnerSplits.read',
     'incomes.read',
     'reservations.read',
+    'waitingList.read',
     'payments.read',
     'suppliers.read',
     'services.read',

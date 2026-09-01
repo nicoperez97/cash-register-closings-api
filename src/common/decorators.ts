@@ -12,6 +12,10 @@ export const RequireAnyPermissions = (...permissions: Permission[]) =>
 export const IS_PUBLIC_KEY = 'isPublic';
 export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
 
+/** CRUD de usuarios: admin global, users.manage o admin/owner del local. */
+export const MANAGE_USERS_KEY = 'manage_users';
+export const RequireManageUsers = () => SetMetadata(MANAGE_USERS_KEY, true);
+
 export type AuthUser = {
   id: string;
   email: string;
