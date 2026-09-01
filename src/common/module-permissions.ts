@@ -563,7 +563,8 @@ export function sanitizeModulePermissions(
   if (rawInput.expenses && rawInput.expenses !== 'none' && (!rawInput.incomes || rawInput.incomes === 'none')) {
     rawInput.incomes = rawInput.expenses;
   }
-  if (!rawInput.orders || rawInput.orders === 'none') {
+  const ordersExplicit = Object.prototype.hasOwnProperty.call(rawInput, 'orders');
+  if (!ordersExplicit) {
     const fromStock = [rawInput.stock, rawInput.beverageStock, rawInput.shortages];
     if (fromStock.includes('manage')) rawInput.orders = 'manage';
     else if (fromStock.includes('read')) rawInput.orders = 'read';
@@ -572,6 +573,10 @@ export function sanitizeModulePermissions(
   for (const def of MODULE_DEFS) {
     if (def.key === 'users' && !allowUsers) continue;
     const raw = rawInput[def.key];
+    if (def.key === 'orders' && raw === 'none') {
+      out[def.key] = 'none';
+      continue;
+    }
     if (!raw || raw === 'none') continue;
     if (!def.levels.some((l) => l.value === raw)) continue;
     out[def.key] = raw;

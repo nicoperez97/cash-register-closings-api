@@ -82,4 +82,23 @@ describe('sanitizeModulePermissions', () => {
     );
     expect(out.users).toBe('manage');
   });
+
+  it('orders explícito none no se infiere desde stock', () => {
+    const out = sanitizeModulePermissions({
+      stock: 'manage',
+      beverageStock: 'manage',
+      shortages: 'manage',
+      orders: 'none',
+    });
+    expect(out.orders).toBe('none');
+    expect(expandModulePermissions(out)).not.toContain('orders.read');
+  });
+
+  it('sin orders en el mapa sí se infiere desde stock (legacy)', () => {
+    const out = sanitizeModulePermissions({
+      stock: 'read',
+      beverageStock: 'manage',
+    });
+    expect(out.orders).toBe('manage');
+  });
 });
