@@ -114,6 +114,17 @@ export class Shop extends BaseEntity {
   @Column({ type: 'tinyint', default: 1 })
   serviceAttendanceWithHours: boolean;
 
+  /**
+   * Multiplicador de días feriados en liquidación (default 2 = cuenta doble).
+   * Cada empleado puede override con `holidayPayMultiplier`.
+   */
+  @Column({ type: 'decimal', precision: 4, scale: 2, default: 2 })
+  holidayPayMultiplier: string;
+
+  /** Legacy: marca de conversión automática mensual→diario (ya no se usa). */
+  @Column({ type: 'datetime', precision: 6, nullable: true })
+  dailySalaryConvertedAt?: Date | null;
+
   /** Carta pública del local. */
   @Column({ type: 'tinyint', default: 0 })
   menuEnabled: boolean;

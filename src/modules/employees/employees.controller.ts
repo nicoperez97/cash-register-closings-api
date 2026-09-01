@@ -12,6 +12,7 @@ import {
 import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import {
+  IsArray,
   IsBoolean,
   IsDateString,
   IsEnum,
@@ -23,11 +24,23 @@ import {
   Min,
   MinLength,
   ValidateIf,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 import { CurrentUser, AuthUser, RequirePermissions, RequireAnyPermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { EmployeeType } from '../../entities/employee.entity';
 import { EmployeesService } from './employees.service';
+
+class ShiftAssignmentDto {
+  @ApiProperty()
+  @IsString()
+  shiftId: string;
+
+  @ApiProperty({ enum: EmployeeType })
+  @IsEnum(EmployeeType)
+  type: EmployeeType;
+}
 
 class CreateEmployeeDto {
   @ApiProperty() @IsString() @MinLength(2) fullName: string;
@@ -39,6 +52,16 @@ class CreateEmployeeDto {
   @IsOptional()
   @IsEnum(EmployeeType)
   type?: EmployeeType;
+  @ApiPropertyOptional({ type: [ShiftAssignmentDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ShiftAssignmentDto)
+  shiftAssignments?: ShiftAssignmentDto[] | null;
+  @ApiPropertyOptional({ description: 'Si cuenta para el presentismo semanal' })
+  @IsOptional()
+  @IsBoolean()
+  countsForAttendanceBonus?: boolean;
   @ApiPropertyOptional({ description: 'Si produce comida (asistencia en producción)' })
   @IsOptional()
   @IsBoolean()
@@ -53,11 +76,23 @@ class CreateEmployeeDto {
   @IsOptional()
   @IsString()
   bankAlias?: string | null;
-  @ApiPropertyOptional({ description: 'Precio por hora extra de servicio' })
+  @ApiPropertyOptional({
+    description:
+      'Precio por hora extra (0 = auto: sueldo diario ÷ horas del turno entrada→retirada)',
+  })
   @IsOptional()
   @IsNumber()
   @Min(0)
   overtimeHourRate?: number;
+  @ApiPropertyOptional({
+    description: 'Multiplicador de feriado; vacío = hereda el del local',
+    nullable: true,
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined)
+  @IsNumber()
+  @Min(0.01)
+  holidayPayMultiplier?: number | null;
   @ApiPropertyOptional({ example: '18:00' })
   @IsOptional()
   @ValidateIf((_, v) => v != null && v !== '')
@@ -75,7 +110,6 @@ class CreateEmployeeDto {
 
 class UpdateEmployeeDto {
   @ApiPropertyOptional() @IsOptional() @IsString() @MinLength(2) fullName?: string;
-  @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) baseSalary?: number;
   @ApiPropertyOptional() @IsOptional() userId?: string | null;
   @ApiPropertyOptional() @IsOptional() hireDate?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string | null;
@@ -83,6 +117,16 @@ class UpdateEmployeeDto {
   @IsOptional()
   @IsEnum(EmployeeType)
   type?: EmployeeType;
+  @ApiPropertyOptional({ type: [ShiftAssignmentDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ShiftAssignmentDto)
+  shiftAssignments?: ShiftAssignmentDto[] | null;
+  @ApiPropertyOptional({ description: 'Si cuenta para el presentismo semanal' })
+  @IsOptional()
+  @IsBoolean()
+  countsForAttendanceBonus?: boolean;
   @ApiPropertyOptional()
   @IsOptional()
   @IsBoolean()
@@ -96,11 +140,6 @@ class UpdateEmployeeDto {
   @IsOptional()
   @IsString()
   bankAlias?: string | null;
-  @ApiPropertyOptional({ description: 'Precio por hora extra de servicio' })
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  overtimeHourRate?: number;
   @ApiPropertyOptional({ example: '18:00' })
   @IsOptional()
   @ValidateIf((_, v) => v != null && v !== '')

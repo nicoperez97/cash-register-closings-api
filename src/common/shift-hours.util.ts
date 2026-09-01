@@ -74,3 +74,36 @@ export function computeOvertimeHours(opts: {
 
 export const DEFAULT_SERVICE_CHECK_IN = '18:00';
 export const DEFAULT_SERVICE_CHECK_OUT = '00:00';
+
+/**
+ * Duración del turno de servicio en horas (soporta cruce de medianoche).
+ * Si faltan horarios o la duración es 0, usa `fallbackHours` (default 8).
+ */
+export function scheduledShiftHours(
+  checkIn?: string | null,
+  checkOut?: string | null,
+  fallbackHours = 8,
+): number {
+  const start = parseHhMm(checkIn);
+  const end = parseHhMm(checkOut);
+  if (!start || !end) return fallbackHours > 0 ? fallbackHours : 8;
+  const minutes = minutesOnShift(start, end) - minutesOf(start);
+  if (minutes <= 0) return fallbackHours > 0 ? fallbackHours : 8;
+  return Math.round((minutes / 60) * 100) / 100;
+}
+
+/**
+ * Precio/hora para liquidación: tarifa seteada, o sueldo diario ÷ horas del turno.
+ */
+export function dailyOvertimeHourRate(
+  dailySalary: number,
+  overtimeHourRate: number,
+  checkIn?: string | null,
+  checkOut?: string | null,
+  fallbackHours = 8,
+): number {
+  if (overtimeHourRate > 0) return overtimeHourRate;
+  const hours = scheduledShiftHours(checkIn, checkOut, fallbackHours);
+  if (hours <= 0 || dailySalary <= 0) return 0;
+  return dailySalary / hours;
+}
