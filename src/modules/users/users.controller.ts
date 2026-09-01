@@ -29,7 +29,7 @@ import {
   MinLength,
   ValidateIf,
 } from 'class-validator';
-import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
+import { CurrentUser, AuthUser, RequireManageUsers } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { GlobalRole } from '../../common/enums';
 import { UsersService } from './users.service';
@@ -199,13 +199,13 @@ export class UsersController {
   ) {}
 
   @Get()
-  @RequirePermissions('closings.read')
+  @RequireManageUsers()
   list(@CurrentUser() user: AuthUser, @Query('shopId') shopId?: string) {
     return this.users.list(user, shopId);
   }
 
   @Post()
-  @RequirePermissions('closings.read')
+  @RequireManageUsers()
   create(
     @CurrentUser() user: AuthUser,
     @Body() dto: CreateUserDto,
@@ -215,13 +215,12 @@ export class UsersController {
   }
 
   @Get('me-profile')
-  @RequirePermissions('closings.read')
   me(@CurrentUser() user: AuthUser) {
     return user;
   }
 
   @Post(':id/avatar')
-  @RequirePermissions('closings.read')
+  @RequireManageUsers()
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
@@ -251,7 +250,7 @@ export class UsersController {
   }
 
   @Get(':id')
-  @RequirePermissions('closings.read')
+  @RequireManageUsers()
   one(
     @CurrentUser() user: AuthUser,
     @Param('id') id: string,
@@ -261,7 +260,7 @@ export class UsersController {
   }
 
   @Patch(':id')
-  @RequirePermissions('closings.read')
+  @RequireManageUsers()
   update(
     @CurrentUser() user: AuthUser,
     @Param('id') id: string,
@@ -272,7 +271,7 @@ export class UsersController {
   }
 
   @Delete(':id')
-  @RequirePermissions('closings.read')
+  @RequireManageUsers()
   remove(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.users.remove(user, id);
   }
