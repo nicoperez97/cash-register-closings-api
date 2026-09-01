@@ -18,9 +18,9 @@ export type PushPayload = {
   paymentId?: string | null;
   closingId?: string | null;
   targetId?: string | null;
-  /** URL absoluta del logo del local (icono de la notificación). */
+  /** URL absoluta del logo del local (icono chico de la notificación). */
   icon?: string | null;
-  /** Imagen grande (Android/Chrome expanded). */
+  /** Imagen grande opcional (Android/Chrome expandida). No usar el logo acá. */
   image?: string | null;
   /** Total de no leídas del usuario (para badge del ícono PWA). */
   unreadCount?: number;

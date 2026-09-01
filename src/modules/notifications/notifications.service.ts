@@ -235,7 +235,6 @@ export class NotificationsService implements OnModuleInit {
           targetId: input.targetId ?? null,
           unreadCount,
           icon: branding.pushIconUrl,
-          image: branding.pushIconUrl,
         })
         .catch(() => undefined);
     }
@@ -343,7 +342,6 @@ export class NotificationsService implements OnModuleInit {
             targetId: row.targetId ?? null,
             unreadCount,
             icon: branding.pushIconUrl,
-            image: branding.pushIconUrl,
           })
           .catch(() => undefined);
       }),
