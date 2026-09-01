@@ -6,6 +6,9 @@ import { AuthUser } from './decorators';
 import {
   PermissionsGuard,
   canManageUsersSomewhere,
+  canViewClosingsList,
+  isClosingsCreateOnly,
+  isShopAdministrator,
   resolveUserPermissions,
 } from './guards';
 import { MANAGE_USERS_KEY } from './decorators';
@@ -64,6 +67,38 @@ describe('resolveUserPermissions', () => {
   });
 });
 
+describe('isClosingsCreateOnly', () => {
+  const shopId = 'shop-1';
+
+  it('create + read sin update/lock → solo crear', () => {
+    const user = mockUser({
+      id: 'u1',
+      email: 'b@b.com',
+      fullName: 'Bebidas',
+      globalRole: GlobalRole.CASHIER,
+      shopIds: [shopId],
+      shopPermissions: {
+        [shopId]: ['closings.create', 'closings.read', 'beverageStock.read'],
+      },
+    });
+    expect(isClosingsCreateOnly(user, shopId)).toBe(true);
+    expect(canViewClosingsList(user, shopId)).toBe(false);
+  });
+
+  it('read sin create → puede listar', () => {
+    const user = mockUser({
+      id: 'u1',
+      email: 'v@b.com',
+      fullName: 'Visor',
+      globalRole: GlobalRole.VIEWER,
+      shopIds: [shopId],
+      shopPermissions: { [shopId]: ['closings.read'] },
+    });
+    expect(isClosingsCreateOnly(user, shopId)).toBe(false);
+    expect(canViewClosingsList(user, shopId)).toBe(true);
+  });
+});
+
 describe('canManageUsersSomewhere', () => {
   it('cajero closings-only no gestiona usuarios', () => {
     const user = mockUser({
@@ -91,6 +126,21 @@ describe('canManageUsersSomewhere', () => {
       permissions: [],
     });
     expect(canManageUsersSomewhere(user)).toBe(true);
+    expect(isShopAdministrator(user, 's1')).toBe(true);
+  });
+
+  it('gerente no es administrador del local', () => {
+    const user = mockUser({
+      id: 'u1',
+      email: 'm@b.com',
+      fullName: 'Gerente',
+      globalRole: GlobalRole.MANAGER,
+      shopIds: ['s1'],
+      shopRoles: { s1: GlobalRole.MANAGER },
+      shopPermissions: { s1: ['closings.read', 'stock.read'] },
+      permissions: ['closings.read', 'stock.read'],
+    });
+    expect(isShopAdministrator(user, 's1')).toBe(false);
   });
 });
 

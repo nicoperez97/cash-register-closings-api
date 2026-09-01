@@ -154,6 +154,32 @@ export function canConfigureOpeningBalances(user: AuthUser): boolean {
   return isSuperAdmin(user.globalRole);
 }
 
+/** Super admin global o administrador del local (rol ADMIN/OWNER en ese shop). */
+export function isShopAdministrator(user: AuthUser, shopId: string): boolean {
+  if (isGlobalAdmin(user.globalRole as GlobalRole)) return true;
+  const role = (user.shopRoles?.[shopId] ?? user.globalRole) as GlobalRole;
+  return role === GlobalRole.OWNER || role === GlobalRole.ADMIN;
+}
+
+/** Usuario con permiso solo de crear cierres (sin editar/bloquear/listar). */
+export function isClosingsCreateOnly(user: AuthUser, shopId: string): boolean {
+  const perms = resolveUserPermissions(user, shopId);
+  if (!perms.includes('closings.create')) return false;
+  return !perms.includes('closings.update') && !perms.includes('closings.lock');
+}
+
+/** Puede ver el listado con filtros (no aplica a “solo crear”). */
+export function canViewClosingsList(user: AuthUser, shopId: string): boolean {
+  if (isClosingsCreateOnly(user, shopId)) return false;
+  return resolveUserPermissions(user, shopId).includes('closings.read');
+}
+
+export function assertCanViewClosingsList(user: AuthUser, shopId: string): void {
+  if (!canViewClosingsList(user, shopId)) {
+    throw new ForbiddenException('Sin permiso para listar cierres');
+  }
+}
+
 /** Admin global, permiso users.manage, o admin/owner del local. */
 export function canManageUsersSomewhere(user: AuthUser): boolean {
   if (isGlobalAdmin(user.globalRole as GlobalRole)) return true;
