@@ -100,14 +100,13 @@ describe('Permisos HTTP (e2e)', () => {
   describe('cajero (solo cierres)', () => {
     const auth = bearerFor('cashier');
 
-    it('GET /closings → 200', async () => {
-      const res = await request(app.getHttpServer())
+    it('GET /closings → 403', async () => {
+      await request(app.getHttpServer())
         .get(api(`/shops/${TEST_SHOP_ID}/closings`))
         .set('Authorization', auth)
-        .expect(200);
+        .expect(403);
 
-      expect(res.body).toEqual([]);
-      expect(closingsService.list).toHaveBeenCalled();
+      expect(closingsService.list).not.toHaveBeenCalled();
     });
 
     it('GET /waiting-list → 403', async () => {

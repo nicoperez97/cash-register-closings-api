@@ -13,6 +13,7 @@ import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { Shop } from '../../entities/shop.entity';
 import { AuthUser } from '../../common/decorators';
+import { isShopAdministrator } from '../../common/guards';
 import { isEntityActive } from '../../common/active.util';
 import { deleteUploadIfExists, resolveUploadPath, saveUploadFile } from '../../common/uploads';
 import { eligibleNotificationsPayload } from './notification-eligibility';
@@ -267,6 +268,12 @@ export class ProfileService implements OnModuleInit {
     let link = await this.userShops.findOne({ where: { userId: actor.id, shopId } });
     if (!link) {
       throw new ForbiddenException('No pertenecés a este local');
+    }
+    if (
+      (dto.navConfig !== undefined || dto.toolbarConfig !== undefined) &&
+      !isShopAdministrator(actor, shopId)
+    ) {
+      throw new ForbiddenException('Solo un administrador puede personalizar menú y atajos');
     }
     if (dto.navConfig !== undefined) {
       if (dto.navConfig == null) {

@@ -23,6 +23,7 @@ import { ClosingMovementsSyncService } from '../movements/closing-movements-sync
 import { AccountsService } from '../accounts/accounts.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AuthUser } from '../../common/decorators';
+import { assertCanViewClosingsList } from '../../common/guards';
 import {
   ClosingStatus,
   ExpenseCategory,
@@ -376,6 +377,7 @@ export class ClosingsService implements OnModuleInit {
 
   async list(user: AuthUser, shopId: string, filters: ClosingListFilters = {}) {
     this.shops.assertShopAccess(user, shopId);
+    assertCanViewClosingsList(user, shopId);
     return (await this.queryFiltered(shopId, filters, true)).map((r) => this.toDto(r));
   }
 
@@ -616,6 +618,7 @@ export class ClosingsService implements OnModuleInit {
 
   async previewReloadIncomes(user: AuthUser, shopId: string) {
     this.shops.assertShopAccess(user, shopId);
+    assertCanViewClosingsList(user, shopId);
     return this.closingMovements.previewMissingIncomes(shopId);
   }
 

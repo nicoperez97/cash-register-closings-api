@@ -21,7 +21,7 @@ import { ClosingsService } from './closings.service';
 import { WhatsappImportService } from './whatsapp-import.service';
 import { ExcelImportService } from './excel-import.service';
 import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
-import { PermissionsGuard } from '../../common/guards';
+import { PermissionsGuard, assertCanViewClosingsList } from '../../common/guards';
 import { CreateClosingDto, UpdateClosingDto } from './dto/closing.dto';
 import { parseClosingFilters } from './closing-filters';
 
@@ -43,6 +43,7 @@ export class ClosingsController {
     @Param('shopId') shopId: string,
     @Query() query: Record<string, string | undefined>,
   ) {
+    assertCanViewClosingsList(user, shopId);
     return this.closings.list(user, shopId, parseClosingFilters(query));
   }
 
@@ -152,6 +153,7 @@ export class ClosingsController {
       }>;
     },
   ) {
+    assertCanViewClosingsList(user, shopId);
     const doCommit = commit === 'true' || commit === '1';
     return doCommit
       ? this.closings.commitReloadIncomes(user, shopId, body?.selected)
