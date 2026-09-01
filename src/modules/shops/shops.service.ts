@@ -288,6 +288,22 @@ export class ShopsService implements OnModuleInit {
     try {
       await this.shops.query(`
         ALTER TABLE shops
+          ADD COLUMN holidayPayMultiplier DECIMAL(4,2) NOT NULL DEFAULT 2.00
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN dailySalaryConvertedAt DATETIME(6) NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
           ADD COLUMN menuEnabled TINYINT(1) NOT NULL DEFAULT 0
       `);
     } catch {
@@ -588,6 +604,11 @@ export class ShopsService implements OnModuleInit {
         serviceDefaultCheckIn: requireHhMm(dto.serviceDefaultCheckIn, DEFAULT_SERVICE_CHECK_IN),
         serviceDefaultCheckOut: requireHhMm(dto.serviceDefaultCheckOut, DEFAULT_SERVICE_CHECK_OUT),
         serviceAttendanceWithHours: dto.serviceAttendanceWithHours ?? true,
+        holidayPayMultiplier: String(
+          dto.holidayPayMultiplier !== undefined && dto.holidayPayMultiplier !== null
+            ? Math.max(0.01, Number(dto.holidayPayMultiplier) || 2)
+            : 2,
+        ),
         menuEnabled: dto.menuEnabled ?? false,
         defaultChangeAmount: String(dto.defaultChangeAmount ?? 0),
         productionDefaultHours: String(
@@ -696,6 +717,12 @@ export class ShopsService implements OnModuleInit {
     }
     if (dto.serviceAttendanceWithHours !== undefined) {
       shop.serviceAttendanceWithHours = dto.serviceAttendanceWithHours;
+    }
+    if (dto.holidayPayMultiplier !== undefined) {
+      if (Number(dto.holidayPayMultiplier) <= 0) {
+        throw new BadRequestException('El multiplicador de feriado debe ser mayor a 0');
+      }
+      shop.holidayPayMultiplier = Number(dto.holidayPayMultiplier).toFixed(2);
     }
     if (dto.menuEnabled !== undefined) {
       shop.menuEnabled = dto.menuEnabled;
@@ -1101,6 +1128,7 @@ export class ShopsService implements OnModuleInit {
         s.serviceAttendanceWithHours === undefined || s.serviceAttendanceWithHours === null
           ? true
           : !!s.serviceAttendanceWithHours,
+      holidayPayMultiplier: Number(s.holidayPayMultiplier ?? 2) || 2,
       menuEnabled: !!s.menuEnabled,
       defaultChangeAmount: Number(s.defaultChangeAmount),
       productionDefaultHours: Number(s.productionDefaultHours ?? 8) || 8,

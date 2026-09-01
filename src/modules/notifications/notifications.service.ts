@@ -8,6 +8,7 @@ import { UserShop } from '../../entities/user-shop.entity';
 import { NotificationType } from '../../common/enums';
 import { AuthUser } from '../../common/decorators';
 import { normalizeLogoUrl } from '../../common/drive-url';
+import { resolveShopLogoUrlForEmail } from '../../common/shop-branding.util';
 import { PushService } from './push.service';
 import { MailService } from './mail.service';
 import { muteChannels } from '../profile/notification-eligibility';
@@ -484,10 +485,16 @@ export class NotificationsService implements OnModuleInit {
     return null;
   }
 
-  /** Icono same-origin para Web Push (más fiable que Drive en el SW). */
-  private pushIconForShop(shopId: string, hasLogo: boolean): string | null {
-    if (!shopId || !hasLogo) return null;
-    return `${this.appOrigin}/api/v1/public/shops/${shopId}/logo`;
+  /**
+   * Logo same-origin para Web Push e inbox.
+   * Los uploads se guardan como `shops/{id}/logo…` (sin http ni `/`); el endpoint
+   * público los sirve. Antes se gatedeaba con absoluteLogoUrl y el push caía al ícono genérico.
+   */
+  private shopLogoPublicUrl(
+    shopId: string,
+    logoUrlRaw?: string | null,
+  ): string | null {
+    return resolveShopLogoUrlForEmail(this.appOrigin, shopId, logoUrlRaw);
   }
 
   private async resolveShopBranding(
@@ -523,11 +530,12 @@ export class NotificationsService implements OnModuleInit {
       select: ['id', 'name', 'logoUrl'],
     });
     for (const shop of shops) {
-      const logoUrl = this.absoluteLogoUrl(shop.logoUrl);
+      const publicUrl = this.shopLogoPublicUrl(shop.id, shop.logoUrl);
+      const logoUrl = publicUrl ?? this.absoluteLogoUrl(shop.logoUrl);
       out.set(shop.id, {
         name: shop.name?.trim() || null,
         logoUrl,
-        pushIconUrl: this.pushIconForShop(shop.id, !!logoUrl),
+        pushIconUrl: publicUrl ?? logoUrl,
       });
     }
     return out;

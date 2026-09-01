@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, NotFoundException, OnModuleInit } from
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, In, Repository } from 'typeorm';
 import { AttendanceDay } from '../../entities/attendance-day.entity';
-import { Employee, EmployeeType } from '../../entities/employee.entity';
+import { Employee } from '../../entities/employee.entity';
 import { ProductionAttendanceDay } from '../../entities/production-attendance-day.entity';
 import { AuthUser } from '../../common/decorators';
 import { isEntityActive } from '../../common/active.util';
@@ -10,6 +10,7 @@ import { ShopLiveService } from '../shop-live/shop-live.service';
 import { ShopsService } from '../shops/shops.service';
 import {
   computeOvertimeHours,
+  dailyOvertimeHourRate,
   DEFAULT_SERVICE_CHECK_IN,
   DEFAULT_SERVICE_CHECK_OUT,
   parseHhMm,
@@ -20,12 +21,13 @@ import {
   normalizeShopShifts,
   resolveCurrentShift,
 } from '../../common/shop-shifts';
+import {
+  employeeTypeForShift,
+  employeeWorksShift,
+  normalizeShiftAssignments,
+} from '../../common/employee-shift.util';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
-
-function employeeTypeOf(e: Employee): EmployeeType {
-  return e.type === EmployeeType.ROTATING ? EmployeeType.ROTATING : EmployeeType.FIXED;
-}
 
 @Injectable()
 export class AttendanceService implements OnModuleInit {
@@ -205,7 +207,13 @@ export class AttendanceService implements OnModuleInit {
           overtimeHourRate: n(e.overtimeHourRate),
           serviceCheckIn: e.serviceCheckIn ?? null,
           serviceCheckOut: e.serviceCheckOut ?? null,
-          type: employeeTypeOf(e),
+          type: employeeTypeForShift(e, shift.id),
+          shiftAssignments: normalizeShiftAssignments(e.shiftAssignments),
+          countsForAttendanceBonus:
+            e.countsForAttendanceBonus === undefined || e.countsForAttendanceBonus === null
+              ? true
+              : !!e.countsForAttendanceBonus,
+          worksThisShift: employeeWorksShift(e, shift.id),
           days: byDate,
         };
       }),
@@ -240,6 +248,25 @@ export class AttendanceService implements OnModuleInit {
       checkIn: requireHhMm(emp?.serviceCheckIn, shopDefaults.checkIn),
       checkOut: requireHhMm(emp?.serviceCheckOut, shopDefaults.checkOut),
     };
+  }
+
+  /** Baseline de extras: horario del turno de caja si tiene rango; si no, empleado/local. */
+  private overtimeBaseline(
+    shop: {
+      serviceDefaultCheckIn?: string | null;
+      serviceDefaultCheckOut?: string | null;
+      shifts?: Parameters<typeof normalizeShopShifts>[0];
+      openingTime?: string | null;
+    },
+    emp: { serviceCheckIn?: string | null; serviceCheckOut?: string | null } | null | undefined,
+    shiftId?: string | null,
+  ) {
+    const shifts = normalizeShopShifts(shop.shifts, shop.openingTime);
+    const shift = shiftId ? findShopShift(shifts, shiftId) : null;
+    if (shift && shift.opensAt !== shift.closesAt) {
+      return { checkIn: shift.opensAt, checkOut: shift.closesAt };
+    }
+    return this.employeeShiftDefaults(shop, emp);
   }
 
   private applyShift(
@@ -306,10 +333,7 @@ export class AttendanceService implements OnModuleInit {
     }
     const { shop, shift } = await this.resolveAttendanceShift(shopId, dto.shiftId);
     const withHours = this.withHours(shop);
-    const shiftHours = shift.opensAt !== shift.closesAt;
-    const defaults = shiftHours
-      ? { checkIn: shift.opensAt, checkOut: shift.closesAt }
-      : this.employeeShiftDefaults(shop ?? {}, emp);
+    const defaults = this.overtimeBaseline(shop ?? {}, emp, shift.id);
 
     let row = await this.days.findOne({
       where: { employeeId: dto.employeeId, date: dto.date, shiftId: shift.id },
@@ -406,36 +430,44 @@ export class AttendanceService implements OnModuleInit {
     }
     const items = employees.map((e) => {
       const days = byEmp.get(e.id) ?? [];
-      const defaults = this.employeeShiftDefaults(shop ?? {}, e);
-      const overtimeHours = Math.round(
-        days.reduce((s, d) => {
-          if (!d.isPresent) return s;
-          if (withHours && d.checkInAt && d.checkOutAt) {
-            return (
-              s +
-              computeOvertimeHours({
-                isPresent: true,
-                checkInAt: d.checkInAt,
-                checkOutAt: d.checkOutAt,
-                defaultCheckIn: defaults.checkIn,
-                defaultCheckOut: defaults.checkOut,
-                countLateArrival,
-                countEarlyLeave,
-              })
-            );
-          }
-          return s + n(d.overtimeHours);
-        }, 0) * 100,
-      ) / 100;
+      const payDefaults = this.employeeShiftDefaults(shop ?? {}, e);
+      const overtimeHours =
+        Math.round(
+          days.reduce((s, d) => {
+            if (!d.isPresent) return s;
+            if (withHours && d.checkInAt && d.checkOutAt) {
+              const defaults = this.overtimeBaseline(shop ?? {}, e, d.shiftId);
+              return (
+                s +
+                computeOvertimeHours({
+                  isPresent: true,
+                  checkInAt: d.checkInAt,
+                  checkOutAt: d.checkOutAt,
+                  defaultCheckIn: defaults.checkIn,
+                  defaultCheckOut: defaults.checkOut,
+                  countLateArrival,
+                  countEarlyLeave,
+                })
+              );
+            }
+            return s + n(d.overtimeHours);
+          }, 0) * 100,
+        ) / 100;
       const presentDays = new Set(days.filter((d) => d.isPresent).map((d) => d.date)).size;
-      const rate = n(e.overtimeHourRate);
+      const rate = dailyOvertimeHourRate(
+        n(e.baseSalary),
+        n(e.overtimeHourRate),
+        payDefaults.checkIn,
+        payDefaults.checkOut,
+      );
+      const roundedRate = Math.round(rate * 100) / 100;
       return {
         employeeId: e.id,
         fullName: e.fullName,
         presentDays,
         overtimeHours,
-        overtimeHourRate: rate,
-        overtimeCost: Math.round(overtimeHours * rate * 100) / 100,
+        overtimeHourRate: roundedRate,
+        overtimeCost: Math.round(overtimeHours * roundedRate * 100) / 100,
       };
     });
     const totals = items.reduce(

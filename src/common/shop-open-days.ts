@@ -52,3 +52,61 @@ export function countBusinessDays(
   }
   return count;
 }
+
+/** Lunes de la semana (lun–dom) que contiene `isoDate`. */
+export function mondayOfWeek(isoDate: string): string | null {
+  const weekday = isoDateWeekday(isoDate);
+  if (weekday == null) return null;
+  const daysFromMonday = weekday === 0 ? 6 : weekday - 1;
+  let cur = String(isoDate).slice(0, 10);
+  for (let i = 0; i < daysFromMonday; i++) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(cur);
+    if (!m) return null;
+    const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0));
+    d.setUTCDate(d.getUTCDate() - 1);
+    cur = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+  }
+  return cur;
+}
+
+/**
+ * Semanas completas (lun–dom) en el rango: todos los días hábiles del local
+ * que caen en esa semana ∩ rango están cubiertos (presente o feriado).
+ * Semanas sin días hábiles en el rango no cuentan.
+ */
+export function countCompletedAttendanceWeeks(
+  fromDate: string,
+  toDate: string,
+  closedWeekdays: number[] | null | undefined,
+  coveredDates: Set<string>,
+): number {
+  const from = String(fromDate ?? '').slice(0, 10);
+  const to = String(toDate ?? '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return 0;
+  if (from > to) return 0;
+
+  const closed = new Set(normalizeClosedWeekdays(closedWeekdays));
+  const startMonday = mondayOfWeek(from);
+  if (!startMonday) return 0;
+
+  let completed = 0;
+  let weekStart = startMonday;
+  let guard = 0;
+  while (weekStart <= to && guard < 80) {
+    guard += 1;
+    const required: string[] = [];
+    let day = weekStart;
+    for (let i = 0; i < 7; i++) {
+      if (day >= from && day <= to) {
+        const wd = isoDateWeekday(day);
+        if (wd != null && !closed.has(wd)) required.push(day);
+      }
+      day = nextCalendarDate(day);
+    }
+    if (required.length > 0 && required.every((d) => coveredDates.has(d))) {
+      completed += 1;
+    }
+    weekStart = day;
+  }
+  return completed;
+}

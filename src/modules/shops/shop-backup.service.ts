@@ -587,6 +587,8 @@ export class ShopBackupService {
           id: e.id,
           fullName: e.fullName,
           baseSalary: e.baseSalary,
+          overtimeHourRate: e.overtimeHourRate,
+          holidayPayMultiplier: e.holidayPayMultiplier ?? '',
           userId: e.userId ?? '',
           hireDate: e.hireDate ?? '',
           notes: e.notes ?? '',
@@ -643,6 +645,8 @@ export class ShopBackupService {
           id: p.id,
           year: p.year,
           month: p.month,
+          fromDate: p.fromDate ?? '',
+          toDate: p.toDate ?? '',
           status: p.status,
           active: p.active ? 1 : 0,
         })),
@@ -666,6 +670,7 @@ export class ShopBackupService {
           daysWorked: l.daysWorked,
           holidayDays: l.holidayDays,
           baseSalarySnapshot: l.baseSalarySnapshot,
+          holidayMultiplierSnapshot: l.holidayMultiplierSnapshot ?? '',
           overtimeAmount: l.overtimeAmount,
           attendanceBonus: l.attendanceBonus,
           total: l.total,
@@ -1062,6 +1067,8 @@ export class ShopBackupService {
           shopId,
           fullName: String(r.fullName ?? ''),
           baseSalary: String(r.baseSalary ?? '0'),
+          overtimeHourRate: String(r.overtimeHourRate ?? '0'),
+          holidayPayMultiplier: this.emptyToNull(r.holidayPayMultiplier),
           userId: userId && existingUserIds.has(userId) ? userId : null,
           hireDate: this.emptyToNull(r.hireDate),
           notes: this.emptyToNull(r.notes),
@@ -1104,12 +1111,19 @@ export class ShopBackupService {
     }
 
     for (const r of this.readRowsSheet(wb, 'payroll_periods')) {
+      const year = Number(r.year);
+      const month = Number(r.month);
+      const fromFallback = `${year}-${String(month).padStart(2, '0')}-01`;
+      const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
+      const toFallback = `${year}-${String(month).padStart(2, '0')}-${String(last).padStart(2, '0')}`;
       await manager.getRepository(PayrollPeriod).save(
         manager.getRepository(PayrollPeriod).create({
           id: newId(String(r.id)),
           shopId,
-          year: Number(r.year),
-          month: Number(r.month),
+          year,
+          month,
+          fromDate: this.emptyToNull(r.fromDate) || fromFallback,
+          toDate: this.emptyToNull(r.toDate) || toFallback,
           status: r.status as any,
           active: this.toBool(r.active, true),
         }),
@@ -1128,6 +1142,7 @@ export class ShopBackupService {
           daysWorked: String(r.daysWorked ?? '0'),
           holidayDays: String(r.holidayDays ?? '0'),
           baseSalarySnapshot: String(r.baseSalarySnapshot ?? '0'),
+          holidayMultiplierSnapshot: this.emptyToNull(r.holidayMultiplierSnapshot),
           overtimeAmount: String(r.overtimeAmount ?? '0'),
           attendanceBonus: String(r.attendanceBonus ?? '0'),
           total: String(r.total ?? '0'),

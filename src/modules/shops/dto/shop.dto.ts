@@ -216,6 +216,15 @@ export class CreateShopDto {
   @IsBoolean()
   serviceAttendanceWithHours?: boolean;
 
+  @ApiPropertyOptional({
+    example: 2,
+    description: 'Multiplicador de días feriados en liquidación (default 2)',
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0.01)
+  holidayPayMultiplier?: number;
+
   @ApiPropertyOptional({ description: 'Carta pública del local' })
   @IsOptional()
   @IsBoolean()

@@ -343,10 +343,7 @@ export class AttendanceExcelImportService {
         emp.active = true;
         changed = true;
       }
-      if (salary != null && salary > 0 && n(emp.baseSalary) !== salary) {
-        emp.baseSalary = money(salary);
-        changed = true;
-      }
+      // El sueldo solo se gestiona en el módulo Sueldos (no se actualiza por import).
       if (changed) {
         await this.employees.save(emp);
         updatedEmployees.push(emp.fullName);

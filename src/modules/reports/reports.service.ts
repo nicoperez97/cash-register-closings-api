@@ -945,7 +945,9 @@ export class ReportsService {
         for (const p of periods) {
           for (const l of p.lines ?? []) {
             wsPay.addRow({
-              period: `${p.year}-${String(p.month).padStart(2, '0')}`,
+              period: p.fromDate && p.toDate
+                ? `${p.fromDate} → ${p.toDate}`
+                : `${p.year}-${String(p.month).padStart(2, '0')}`,
               name: l.employee?.fullName ?? l.employeeId,
               days: n(l.daysWorked),
               hol: n(l.holidayDays),

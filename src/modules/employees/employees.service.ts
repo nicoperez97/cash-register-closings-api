@@ -3,24 +3,31 @@ import {
   Injectable,
   NotFoundException,
   OnModuleInit,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Not, Repository } from 'typeorm';
 import { Employee, EmployeeType } from '../../entities/employee.entity';
+import { SalaryHistorySource } from '../../entities/employee-salary-history.entity';
 import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { AuthUser } from '../../common/decorators';
 import { isEntityActive } from '../../common/active.util';
 import { parseHhMm } from '../../common/shift-hours.util';
+import {
+  deriveEmployeeType,
+  normalizeEmployeeType,
+  normalizeShiftAssignments,
+  type EmployeeShiftAssignment,
+} from '../../common/employee-shift.util';
+import { normalizeShopShifts } from '../../common/shop-shifts';
 import { ShopLiveService } from '../shop-live/shop-live.service';
 import { ShopsService } from '../shops/shops.service';
+import { SalariesService } from '../payroll/salaries.service';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
-
-function normalizeEmployeeType(value?: EmployeeType | string | null): EmployeeType {
-  return value === EmployeeType.ROTATING ? EmployeeType.ROTATING : EmployeeType.FIXED;
-}
 
 @Injectable()
 export class EmployeesService implements OnModuleInit {
@@ -30,6 +37,8 @@ export class EmployeesService implements OnModuleInit {
     @InjectRepository(UserShop) private readonly userShops: Repository<UserShop>,
     private readonly shops: ShopsService,
     private readonly live: ShopLiveService,
+    @Inject(forwardRef(() => SalariesService))
+    private readonly salaries: SalariesService,
   ) {}
 
   async onModuleInit() {
@@ -89,9 +98,53 @@ export class EmployeesService implements OnModuleInit {
     } catch {
       // ya existe
     }
+    try {
+      await this.employees.query(`
+        ALTER TABLE employees
+          ADD COLUMN holidayPayMultiplier DECIMAL(4,2) NULL
+      `);
+    } catch {
+      // ya existe
+    }
+    try {
+      await this.employees.query(`
+        ALTER TABLE employees
+          ADD COLUMN shiftAssignments TEXT NULL
+      `);
+    } catch {
+      // ya existe
+    }
+    try {
+      await this.employees.query(`
+        ALTER TABLE employees
+          ADD COLUMN countsForAttendanceBonus TINYINT NOT NULL DEFAULT 1
+      `);
+    } catch {
+      // ya existe
+    }
+  }
+
+  private async assertShiftAssignments(
+    shopId: string,
+    raw?: Array<{ shiftId?: string | null; type?: string | null }> | null,
+  ): Promise<EmployeeShiftAssignment[]> {
+    const assignments = normalizeShiftAssignments(raw);
+    if (!assignments.length) return [];
+    const shop = await this.shops.getShopEntity(shopId);
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    const validIds = new Set(
+      normalizeShopShifts(shop.shifts, shop.openingTime).map((s) => s.id),
+    );
+    for (const a of assignments) {
+      if (!validIds.has(a.shiftId)) {
+        throw new BadRequestException('Turno inválido para este local');
+      }
+    }
+    return assignments;
   }
 
   private toDto(e: Employee) {
+    const shiftAssignments = normalizeShiftAssignments(e.shiftAssignments);
     return {
       id: e.id,
       shopId: e.shopId,
@@ -100,11 +153,20 @@ export class EmployeesService implements OnModuleInit {
       userId: e.userId ?? null,
       hireDate: e.hireDate ?? null,
       notes: e.notes ?? null,
-      type: normalizeEmployeeType(e.type),
+      type: deriveEmployeeType(shiftAssignments, e.type),
+      shiftAssignments,
+      countsForAttendanceBonus:
+        e.countsForAttendanceBonus === undefined || e.countsForAttendanceBonus === null
+          ? true
+          : !!e.countsForAttendanceBonus,
       producesFood: !!e.producesFood,
       supervisorEmployeeId: e.supervisorEmployeeId ?? null,
       bankAlias: e.bankAlias?.trim() || null,
       overtimeHourRate: n(e.overtimeHourRate),
+      holidayPayMultiplier:
+        e.holidayPayMultiplier == null || e.holidayPayMultiplier === ''
+          ? null
+          : n(e.holidayPayMultiplier),
       serviceCheckIn: e.serviceCheckIn ?? null,
       serviceCheckOut: e.serviceCheckOut ?? null,
       active: isEntityActive(e.active),
@@ -174,7 +236,6 @@ export class EmployeesService implements OnModuleInit {
         'El supervisor debe ser un productor activo del mismo local',
       );
     }
-    // Evitar ciclo directo A→B y B→A
     if (employeeId && supervisor.supervisorEmployeeId === employeeId) {
       throw new BadRequestException(
         'No se puede crear un ciclo de supervisión entre estos productores',
@@ -192,10 +253,13 @@ export class EmployeesService implements OnModuleInit {
       hireDate?: string | null;
       notes?: string | null;
       type?: EmployeeType;
+      shiftAssignments?: Array<{ shiftId: string; type?: EmployeeType | string }> | null;
+      countsForAttendanceBonus?: boolean;
       producesFood?: boolean;
       supervisorEmployeeId?: string | null;
       bankAlias?: string | null;
       overtimeHourRate?: number;
+      holidayPayMultiplier?: number | null;
       serviceCheckIn?: string | null;
       serviceCheckOut?: string | null;
       active?: boolean;
@@ -205,6 +269,17 @@ export class EmployeesService implements OnModuleInit {
     await this.assertUserLink(shopId, dto.userId);
     const producesFood = !!dto.producesFood;
     await this.assertSupervisor(shopId, undefined, dto.supervisorEmployeeId, producesFood);
+    const shiftAssignments = await this.assertShiftAssignments(shopId, dto.shiftAssignments);
+    const type = shiftAssignments.length
+      ? deriveEmployeeType(shiftAssignments, dto.type)
+      : normalizeEmployeeType(dto.type);
+    let holidayPayMultiplier: string | null = null;
+    if (dto.holidayPayMultiplier != null) {
+      if (dto.holidayPayMultiplier <= 0) {
+        throw new BadRequestException('El multiplicador de feriado debe ser mayor a 0');
+      }
+      holidayPayMultiplier = Number(dto.holidayPayMultiplier).toFixed(2);
+    }
     const row = await this.employees.save(
       this.employees.create({
         shopId,
@@ -213,16 +288,30 @@ export class EmployeesService implements OnModuleInit {
         userId: dto.userId ?? null,
         hireDate: dto.hireDate ?? null,
         notes: dto.notes ?? null,
-        type: normalizeEmployeeType(dto.type),
+        type,
+        shiftAssignments: shiftAssignments.length ? shiftAssignments : null,
+        countsForAttendanceBonus:
+          dto.countsForAttendanceBonus === undefined ? true : !!dto.countsForAttendanceBonus,
         producesFood,
         supervisorEmployeeId: producesFood ? (dto.supervisorEmployeeId ?? null) : null,
         bankAlias: dto.bankAlias?.trim() || null,
         overtimeHourRate: money(n(dto.overtimeHourRate)),
+        holidayPayMultiplier,
         serviceCheckIn: parseHhMm(dto.serviceCheckIn),
         serviceCheckOut: parseHhMm(dto.serviceCheckOut),
         active: dto.active ?? true,
       }),
     );
+    await this.salaries.recordHistory({
+      shopId,
+      employeeId: row.id,
+      baseSalary: row.baseSalary,
+      overtimeHourRate: row.overtimeHourRate,
+      holidayPayMultiplier: row.holidayPayMultiplier ?? null,
+      note: 'Alta de empleado',
+      source: SalaryHistorySource.CREATE,
+      createdByUserId: user.id,
+    });
     this.live.tick(shopId, 'attendance');
     return this.toDto(row);
   }
@@ -238,16 +327,28 @@ export class EmployeesService implements OnModuleInit {
       hireDate?: string | null;
       notes?: string | null;
       type?: EmployeeType;
+      shiftAssignments?: Array<{ shiftId: string; type?: EmployeeType | string }> | null;
+      countsForAttendanceBonus?: boolean;
       producesFood?: boolean;
       supervisorEmployeeId?: string | null;
       bankAlias?: string | null;
       overtimeHourRate?: number;
+      holidayPayMultiplier?: number | null;
       serviceCheckIn?: string | null;
       serviceCheckOut?: string | null;
       active?: boolean;
     },
   ) {
     this.shops.assertShopAccess(user, shopId);
+    if (
+      dto.baseSalary !== undefined ||
+      dto.overtimeHourRate !== undefined ||
+      dto.holidayPayMultiplier !== undefined
+    ) {
+      throw new BadRequestException(
+        'El sueldo, la hora extra y el multiplicador de feriado se editan en el módulo Sueldos',
+      );
+    }
     const row = await this.employees.findOne({ where: { id, shopId } });
     if (!row) throw new NotFoundException('Empleado no encontrado');
     if (dto.userId !== undefined) {
@@ -255,13 +356,20 @@ export class EmployeesService implements OnModuleInit {
       row.userId = dto.userId;
     }
     if (dto.fullName !== undefined) row.fullName = dto.fullName.trim();
-    if (dto.baseSalary !== undefined) row.baseSalary = money(n(dto.baseSalary));
     if (dto.hireDate !== undefined) row.hireDate = dto.hireDate;
     if (dto.notes !== undefined) row.notes = dto.notes;
-    if (dto.type !== undefined) row.type = normalizeEmployeeType(dto.type);
+    if (dto.shiftAssignments !== undefined) {
+      const shiftAssignments = await this.assertShiftAssignments(shopId, dto.shiftAssignments);
+      row.shiftAssignments = shiftAssignments.length ? shiftAssignments : null;
+      row.type = deriveEmployeeType(shiftAssignments, dto.type ?? row.type);
+    } else if (dto.type !== undefined) {
+      row.type = normalizeEmployeeType(dto.type);
+    }
+    if (dto.countsForAttendanceBonus !== undefined) {
+      row.countsForAttendanceBonus = !!dto.countsForAttendanceBonus;
+    }
     if (dto.producesFood !== undefined) row.producesFood = !!dto.producesFood;
     if (dto.bankAlias !== undefined) row.bankAlias = dto.bankAlias?.trim() || null;
-    if (dto.overtimeHourRate !== undefined) row.overtimeHourRate = money(n(dto.overtimeHourRate));
     if (dto.serviceCheckIn !== undefined) row.serviceCheckIn = parseHhMm(dto.serviceCheckIn);
     if (dto.serviceCheckOut !== undefined) row.serviceCheckOut = parseHhMm(dto.serviceCheckOut);
     if (dto.active !== undefined) row.active = dto.active;
