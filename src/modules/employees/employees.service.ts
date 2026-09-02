@@ -126,7 +126,12 @@ export class EmployeesService implements OnModuleInit {
 
   private async assertShiftAssignments(
     shopId: string,
-    raw?: Array<{ shiftId?: string | null; type?: string | null }> | null,
+    raw?: Array<{
+      shiftId?: string | null;
+      type?: string | null;
+      serviceCheckIn?: string | null;
+      serviceCheckOut?: string | null;
+    }> | null,
   ): Promise<EmployeeShiftAssignment[]> {
     const assignments = normalizeShiftAssignments(raw);
     if (!assignments.length) return [];
@@ -253,7 +258,12 @@ export class EmployeesService implements OnModuleInit {
       hireDate?: string | null;
       notes?: string | null;
       type?: EmployeeType;
-      shiftAssignments?: Array<{ shiftId: string; type?: EmployeeType | string }> | null;
+      shiftAssignments?: Array<{
+        shiftId: string;
+        type?: EmployeeType | string;
+        serviceCheckIn?: string | null;
+        serviceCheckOut?: string | null;
+      }> | null;
       countsForAttendanceBonus?: boolean;
       producesFood?: boolean;
       supervisorEmployeeId?: string | null;
@@ -327,7 +337,12 @@ export class EmployeesService implements OnModuleInit {
       hireDate?: string | null;
       notes?: string | null;
       type?: EmployeeType;
-      shiftAssignments?: Array<{ shiftId: string; type?: EmployeeType | string }> | null;
+      shiftAssignments?: Array<{
+        shiftId: string;
+        type?: EmployeeType | string;
+        serviceCheckIn?: string | null;
+        serviceCheckOut?: string | null;
+      }> | null;
       countsForAttendanceBonus?: boolean;
       producesFood?: boolean;
       supervisorEmployeeId?: string | null;

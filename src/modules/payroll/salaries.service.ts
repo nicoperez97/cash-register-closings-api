@@ -18,9 +18,11 @@ import { isEntityActive } from '../../common/active.util';
 import {
   DEFAULT_SERVICE_CHECK_IN,
   DEFAULT_SERVICE_CHECK_OUT,
-  dailyOvertimeHourRate,
   requireHhMm,
+  resolveOvertimeHourRate,
+  scheduledShiftHours,
 } from '../../common/shift-hours.util';
+import { shiftServiceSchedule } from '../../common/employee-shift.util';
 import { ShopsService } from '../shops/shops.service';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
@@ -88,6 +90,45 @@ export class SalariesService implements OnModuleInit {
     } catch {
       // ya existe / sync
     }
+    await this.migrateDailyToHourly();
+  }
+
+  /** Convierte sueldos diarios existentes a precio hora (una vez por local). */
+  private async migrateDailyToHourly() {
+    const shops = await this.shopsRepo.find();
+    for (const shop of shops) {
+      if (shop.dailySalaryConvertedAt) continue;
+      const shopDefaults = {
+        checkIn: requireHhMm(shop.serviceDefaultCheckIn, DEFAULT_SERVICE_CHECK_IN),
+        checkOut: requireHhMm(shop.serviceDefaultCheckOut, DEFAULT_SERVICE_CHECK_OUT),
+      };
+      const employees = await this.employees.find({ where: { shopId: shop.id } });
+      for (const emp of employees) {
+        const daily = n(emp.baseSalary);
+        if (daily <= 0) continue;
+        const schedule = shiftServiceSchedule(emp, null, shopDefaults);
+        const hours = scheduledShiftHours(schedule.checkIn, schedule.checkOut);
+        const hourly = hours > 0 ? daily / hours : daily / 8;
+        const prevBase = emp.baseSalary;
+        emp.baseSalary = money(hourly);
+        await this.employees.save(emp);
+        await this.recordHistory({
+          shopId: shop.id,
+          employeeId: emp.id,
+          baseSalary: emp.baseSalary,
+          overtimeHourRate: emp.overtimeHourRate,
+          holidayPayMultiplier: emp.holidayPayMultiplier ?? null,
+          previousBaseSalary: prevBase,
+          previousOvertimeHourRate: emp.overtimeHourRate,
+          previousHolidayPayMultiplier: emp.holidayPayMultiplier ?? null,
+          note: `Migración automática: sueldo diario → precio hora (${hours} h/turno)`,
+          source: SalaryHistorySource.MIGRATE_DAILY,
+          createdByUserId: null,
+        });
+      }
+      shop.dailySalaryConvertedAt = new Date();
+      await this.shopsRepo.save(shop);
+    }
   }
 
   private shopHolidayMult(shop: Shop): number {
@@ -105,23 +146,23 @@ export class SalariesService implements OnModuleInit {
 
   private toSalaryRow(e: Employee, shop: Shop) {
     const overtimeHourRate = n(e.overtimeHourRate);
-    const daily = n(e.baseSalary);
+    const hourlyRate = n(e.baseSalary);
     const defaultIn = requireHhMm(shop.serviceDefaultCheckIn, DEFAULT_SERVICE_CHECK_IN);
     const defaultOut = requireHhMm(shop.serviceDefaultCheckOut, DEFAULT_SERVICE_CHECK_OUT);
-    const effectiveRate = dailyOvertimeHourRate(
-      daily,
-      overtimeHourRate,
-      e.serviceCheckIn || defaultIn,
-      e.serviceCheckOut || defaultOut,
-    );
+    const schedule = shiftServiceSchedule(e, null, {
+      checkIn: defaultIn,
+      checkOut: defaultOut,
+    });
+    const effectiveRate = resolveOvertimeHourRate(hourlyRate, overtimeHourRate);
     return {
       id: e.id,
       shopId: e.shopId,
       fullName: e.fullName,
       active: isEntityActive(e.active),
-      baseSalary: daily,
+      baseSalary: hourlyRate,
       overtimeHourRate,
       overtimeHourRateEffective: Math.round(effectiveRate * 100) / 100,
+      hasDifferentOvertimeRate: overtimeHourRate > 0,
       holidayPayMultiplier:
         e.holidayPayMultiplier == null || e.holidayPayMultiplier === ''
           ? null
@@ -130,6 +171,9 @@ export class SalariesService implements OnModuleInit {
       hireDate: e.hireDate ?? null,
       serviceCheckIn: e.serviceCheckIn ?? null,
       serviceCheckOut: e.serviceCheckOut ?? null,
+      shiftAssignments: e.shiftAssignments ?? null,
+      effectiveCheckIn: schedule.checkIn,
+      effectiveCheckOut: schedule.checkOut,
     };
   }
 
@@ -299,7 +343,7 @@ export class SalariesService implements OnModuleInit {
     ws.addRow([
       'Empleado',
       'Estado',
-      'Sueldo diario',
+      '$ / hora',
       'Precio hora extra',
       'Hora extra efectiva',
       'Mult. feriado (override)',

@@ -17,9 +17,11 @@ import { isEntityActive } from '../../common/active.util';
 import {
   DEFAULT_SERVICE_CHECK_IN,
   DEFAULT_SERVICE_CHECK_OUT,
-  dailyOvertimeHourRate,
   requireHhMm,
+  resolveOvertimeHourRate,
+  scheduledShiftHours,
 } from '../../common/shift-hours.util';
+import { shiftServiceSchedule } from '../../common/employee-shift.util';
 import { ShopsService } from '../shops/shops.service';
 import { AttendanceService } from '../attendance/attendance.service';
 import { countCompletedAttendanceWeeks } from '../../common/shop-open-days';
@@ -349,15 +351,43 @@ export class PayrollService implements OnModuleInit {
     range: { from: string; to: string },
     bonusAmount: number,
     includePresentismo: boolean,
+    filterShiftId?: string | null,
   ) {
-    const presentDates = new Set(empDays.filter((d) => d.isPresent).map((d) => d.date));
+    const shopDefaults = {
+      checkIn: requireHhMm(shop?.serviceDefaultCheckIn, DEFAULT_SERVICE_CHECK_IN),
+      checkOut: requireHhMm(shop?.serviceDefaultCheckOut, DEFAULT_SERVICE_CHECK_OUT),
+    };
+    const days =
+      filterShiftId != null && filterShiftId !== ''
+        ? empDays.filter((d) => d.shiftId === filterShiftId)
+        : empDays;
+
+    const scheduledHoursForDay = (day: AttendanceDay) => {
+      const schedule = shiftServiceSchedule(emp, day.shiftId, shopDefaults);
+      return scheduledShiftHours(schedule.checkIn, schedule.checkOut);
+    };
+
+    let regularHours = 0;
+    let holidayHours = 0;
+    for (const d of days) {
+      const hrs = scheduledHoursForDay(d);
+      if (d.isHoliday) {
+        holidayHours += hrs;
+      } else if (d.isPresent) {
+        regularHours += hrs;
+      }
+    }
+    regularHours = Math.round(regularHours * 100) / 100;
+    holidayHours = Math.round(holidayHours * 100) / 100;
+
+    const presentDates = new Set(
+      days.filter((d) => d.isPresent && !d.isHoliday).map((d) => d.date),
+    );
     const daysWorked = presentDates.size;
-    const holidayDays = new Set(
-      empDays.filter((d) => d.isHoliday && !presentDates.has(d.date)).map((d) => d.date),
-    ).size;
+    const holidayDays = new Set(days.filter((d) => d.isHoliday).map((d) => d.date)).size;
     const coveredDates = new Set<string>([
       ...presentDates,
-      ...empDays.filter((d) => d.isHoliday).map((d) => d.date),
+      ...days.filter((d) => d.isHoliday).map((d) => d.date),
     ]);
     const completedWeeks =
       !includePresentismo || emp.countsForAttendanceBonus === false
@@ -368,24 +398,20 @@ export class PayrollService implements OnModuleInit {
             shop?.closedWeekdays,
             coveredDates,
           );
-    const overtimeHours = empDays.reduce((s, d) => s + n(d.overtimeHours), 0);
-    const daily = n(emp.baseSalary);
+    const overtimeHours = days.reduce((s, d) => s + n(d.overtimeHours), 0);
+    const hourlyRate = n(emp.baseSalary);
     const mult = this.employeeHolidayMult(emp, shop);
-    const defaultIn = requireHhMm(shop?.serviceDefaultCheckIn, DEFAULT_SERVICE_CHECK_IN);
-    const defaultOut = requireHhMm(shop?.serviceDefaultCheckOut, DEFAULT_SERVICE_CHECK_OUT);
-    const hourRate = dailyOvertimeHourRate(
-      daily,
-      n(emp.overtimeHourRate),
-      emp.serviceCheckIn || defaultIn,
-      emp.serviceCheckOut || defaultOut,
-    );
-    const salaryPart = daily * (daysWorked + holidayDays * mult);
+    const hourRate = resolveOvertimeHourRate(hourlyRate, n(emp.overtimeHourRate));
+    const salaryPart =
+      hourlyRate * regularHours + hourlyRate * holidayHours * mult;
     const overtimeAmount = hourRate * overtimeHours;
     const bonus = bonusAmount > 0 ? bonusAmount * completedWeeks : 0;
     return {
       daysWorked,
       holidayDays,
-      daily,
+      regularHours,
+      holidayHours,
+      hourlyRate,
       mult,
       overtimeAmount,
       bonus,
@@ -478,7 +504,7 @@ export class PayrollService implements OnModuleInit {
             shiftName: null,
             daysWorked: String(amounts.daysWorked),
             holidayDays: String(amounts.holidayDays),
-            baseSalarySnapshot: money(amounts.daily),
+            baseSalarySnapshot: money(amounts.hourlyRate),
             holidayMultiplierSnapshot: amounts.mult.toFixed(2),
             overtimeAmount: money(amounts.overtimeAmount),
             attendanceBonus: money(amounts.bonus),
@@ -517,11 +543,14 @@ export class PayrollService implements OnModuleInit {
           range,
           bonusAmount,
           false,
+          shift.id,
         );
         const bonus = idx === 0 ? personPresentismo : 0;
-        const total = amounts.daily * (amounts.daysWorked + amounts.holidayDays * amounts.mult)
-          + amounts.overtimeAmount
-          + bonus;
+        const total =
+          amounts.hourlyRate * amounts.regularHours +
+          amounts.hourlyRate * amounts.holidayHours * amounts.mult +
+          amounts.overtimeAmount +
+          bonus;
         created.push(
           this.lines.create({
             periodId: period.id,
@@ -530,7 +559,7 @@ export class PayrollService implements OnModuleInit {
             shiftName: shift.name,
             daysWorked: String(amounts.daysWorked),
             holidayDays: String(amounts.holidayDays),
-            baseSalarySnapshot: money(amounts.daily),
+            baseSalarySnapshot: money(amounts.hourlyRate),
             holidayMultiplierSnapshot: amounts.mult.toFixed(2),
             overtimeAmount: money(amounts.overtimeAmount),
             attendanceBonus: money(bonus),
@@ -609,8 +638,7 @@ export class PayrollService implements OnModuleInit {
       'Turno',
       'Días trabajados',
       'Feriados',
-      'Sueldo diario',
-      'Mult. feriado',
+      '$ / hora',
       'Horas extra ($)',
       'Presentismo',
       'Total',
@@ -622,7 +650,6 @@ export class PayrollService implements OnModuleInit {
         l.daysWorked,
         l.holidayDays,
         l.baseSalarySnapshot,
-        l.holidayMultiplierSnapshot ?? '',
         l.overtimeAmount,
         l.attendanceBonus,
         l.total,

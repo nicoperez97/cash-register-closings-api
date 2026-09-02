@@ -10,11 +10,11 @@ import { ShopLiveService } from '../shop-live/shop-live.service';
 import { ShopsService } from '../shops/shops.service';
 import {
   computeOvertimeHours,
-  dailyOvertimeHourRate,
   DEFAULT_SERVICE_CHECK_IN,
   DEFAULT_SERVICE_CHECK_OUT,
   parseHhMm,
   requireHhMm,
+  resolveOvertimeHourRate,
 } from '../../common/shift-hours.util';
 import {
   findShopShift,
@@ -25,6 +25,7 @@ import {
   employeeTypeForShift,
   employeeWorksShift,
   normalizeShiftAssignments,
+  shiftServiceSchedule,
 } from '../../common/employee-shift.util';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
@@ -241,32 +242,31 @@ export class AttendanceService implements OnModuleInit {
       serviceDefaultCheckIn?: string | null;
       serviceDefaultCheckOut?: string | null;
     },
-    emp?: { serviceCheckIn?: string | null; serviceCheckOut?: string | null } | null,
+    emp?: {
+      serviceCheckIn?: string | null;
+      serviceCheckOut?: string | null;
+      shiftAssignments?: Parameters<typeof shiftServiceSchedule>[0]['shiftAssignments'];
+    } | null,
+    shiftId?: string | null,
   ) {
     const shopDefaults = this.shopShiftDefaults(shop);
-    return {
-      checkIn: requireHhMm(emp?.serviceCheckIn, shopDefaults.checkIn),
-      checkOut: requireHhMm(emp?.serviceCheckOut, shopDefaults.checkOut),
-    };
+    return shiftServiceSchedule(emp ?? {}, shiftId, shopDefaults);
   }
 
-  /** Baseline de extras: horario del turno de caja si tiene rango; si no, empleado/local. */
+  /** Baseline de extras: horario de servicio del turno (asignación → empleado → local). */
   private overtimeBaseline(
     shop: {
       serviceDefaultCheckIn?: string | null;
       serviceDefaultCheckOut?: string | null;
-      shifts?: Parameters<typeof normalizeShopShifts>[0];
-      openingTime?: string | null;
     },
-    emp: { serviceCheckIn?: string | null; serviceCheckOut?: string | null } | null | undefined,
+    emp: {
+      serviceCheckIn?: string | null;
+      serviceCheckOut?: string | null;
+      shiftAssignments?: Parameters<typeof shiftServiceSchedule>[0]['shiftAssignments'];
+    } | null | undefined,
     shiftId?: string | null,
   ) {
-    const shifts = normalizeShopShifts(shop.shifts, shop.openingTime);
-    const shift = shiftId ? findShopShift(shifts, shiftId) : null;
-    if (shift && shift.opensAt !== shift.closesAt) {
-      return { checkIn: shift.opensAt, checkOut: shift.closesAt };
-    }
-    return this.employeeShiftDefaults(shop, emp);
+    return this.employeeShiftDefaults(shop, emp, shiftId);
   }
 
   private applyShift(
@@ -430,7 +430,7 @@ export class AttendanceService implements OnModuleInit {
     }
     const items = employees.map((e) => {
       const days = byEmp.get(e.id) ?? [];
-      const payDefaults = this.employeeShiftDefaults(shop ?? {}, e);
+      const payDefaults = this.employeeShiftDefaults(shop ?? {}, e, null);
       const overtimeHours =
         Math.round(
           days.reduce((s, d) => {
@@ -454,12 +454,7 @@ export class AttendanceService implements OnModuleInit {
           }, 0) * 100,
         ) / 100;
       const presentDays = new Set(days.filter((d) => d.isPresent).map((d) => d.date)).size;
-      const rate = dailyOvertimeHourRate(
-        n(e.baseSalary),
-        n(e.overtimeHourRate),
-        payDefaults.checkIn,
-        payDefaults.checkOut,
-      );
+      const rate = resolveOvertimeHourRate(n(e.baseSalary), n(e.overtimeHourRate));
       const roundedRate = Math.round(rate * 100) / 100;
       return {
         employeeId: e.id,

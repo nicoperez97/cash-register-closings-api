@@ -93,7 +93,8 @@ export function scheduledShiftHours(
 }
 
 /**
- * Precio/hora para liquidación: tarifa seteada, o sueldo diario ÷ horas del turno.
+ * Precio/hora para liquidación: tarifa extra seteada, o el precio hora base.
+ * @deprecated Usar resolveOvertimeHourRate. Se mantiene para migración diario→hora.
  */
 export function dailyOvertimeHourRate(
   dailySalary: number,
@@ -106,4 +107,13 @@ export function dailyOvertimeHourRate(
   const hours = scheduledShiftHours(checkIn, checkOut, fallbackHours);
   if (hours <= 0 || dailySalary <= 0) return 0;
   return dailySalary / hours;
+}
+
+/** Precio hora extra: tarifa seteada o el precio hora base del empleado. */
+export function resolveOvertimeHourRate(
+  hourlyRate: number,
+  overtimeHourRate: number,
+): number {
+  if (overtimeHourRate > 0) return overtimeHourRate;
+  return hourlyRate > 0 ? hourlyRate : 0;
 }

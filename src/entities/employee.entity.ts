@@ -17,7 +17,7 @@ export class Employee extends BaseEntity {
   @Column()
   fullName: string;
 
-  /** Sueldo diario (no mensual). */
+  /** Precio por hora (no mensual ni diario). */
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
   baseSalary: string;
 
@@ -68,7 +68,7 @@ export class Employee extends BaseEntity {
 
   /**
    * Precio por hora extra.
-   * Si es 0, la liquidación usa sueldo diario ÷ horas del turno (entrada→retirada).
+   * Si es 0, la liquidación usa el mismo precio hora base.
    */
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
   overtimeHourRate: string;
