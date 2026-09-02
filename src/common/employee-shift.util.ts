@@ -1,8 +1,13 @@
 import { EmployeeType } from '../entities/employee.entity';
+import { parseHhMm, requireHhMm } from './shift-hours.util';
 
 export type EmployeeShiftAssignment = {
   shiftId: string;
   type: EmployeeType;
+  /** Entrada de servicio en este turno (HH:mm). Vacío = hereda empleado/local. */
+  serviceCheckIn?: string | null;
+  /** Retirada de servicio en este turno (HH:mm). Vacío = hereda empleado/local. */
+  serviceCheckOut?: string | null;
 };
 
 export function normalizeEmployeeType(value?: string | null): EmployeeType {
@@ -10,7 +15,12 @@ export function normalizeEmployeeType(value?: string | null): EmployeeType {
 }
 
 export function normalizeShiftAssignments(
-  raw?: Array<{ shiftId?: string | null; type?: string | null }> | null,
+  raw?: Array<{
+    shiftId?: string | null;
+    type?: string | null;
+    serviceCheckIn?: string | null;
+    serviceCheckOut?: string | null;
+  }> | null,
 ): EmployeeShiftAssignment[] {
   if (!Array.isArray(raw) || !raw.length) return [];
   const out: EmployeeShiftAssignment[] = [];
@@ -19,12 +29,40 @@ export function normalizeShiftAssignments(
     const shiftId = String(row?.shiftId ?? '').trim();
     if (!shiftId || seen.has(shiftId)) continue;
     seen.add(shiftId);
+    const checkIn = parseHhMm(row?.serviceCheckIn);
+    const checkOut = parseHhMm(row?.serviceCheckOut);
     out.push({
       shiftId,
       type: normalizeEmployeeType(row?.type),
+      serviceCheckIn: checkIn,
+      serviceCheckOut: checkOut,
     });
   }
   return out;
+}
+
+/** Horario de servicio efectivo para un turno (asignación → empleado → local). */
+export function shiftServiceSchedule(
+  emp: {
+    serviceCheckIn?: string | null;
+    serviceCheckOut?: string | null;
+    shiftAssignments?: EmployeeShiftAssignment[] | null;
+  },
+  shiftId: string | null | undefined,
+  shopDefaults: { checkIn: string; checkOut: string },
+): { checkIn: string; checkOut: string } {
+  const assignments = normalizeShiftAssignments(emp.shiftAssignments);
+  const hit = shiftId ? assignments.find((a) => a.shiftId === shiftId) : assignments[0];
+  return {
+    checkIn: requireHhMm(
+      hit?.serviceCheckIn ?? emp.serviceCheckIn,
+      shopDefaults.checkIn,
+    ),
+    checkOut: requireHhMm(
+      hit?.serviceCheckOut ?? emp.serviceCheckOut,
+      shopDefaults.checkOut,
+    ),
+  };
 }
 
 /** Tipo efectivo en un turno. Sin asignaciones = usa type legacy en todos. */

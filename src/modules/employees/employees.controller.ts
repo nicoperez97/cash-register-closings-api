@@ -40,11 +40,31 @@ class ShiftAssignmentDto {
   @ApiProperty({ enum: EmployeeType })
   @IsEnum(EmployeeType)
   type: EmployeeType;
+
+  @ApiPropertyOptional({ example: '18:00' })
+  @IsOptional()
+  @ValidateIf((_, v) => v != null && v !== '')
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
+  serviceCheckIn?: string | null;
+
+  @ApiPropertyOptional({ example: '00:00' })
+  @IsOptional()
+  @ValidateIf((_, v) => v != null && v !== '')
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
+  serviceCheckOut?: string | null;
 }
 
 class CreateEmployeeDto {
   @ApiProperty() @IsString() @MinLength(2) fullName: string;
-  @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) baseSalary?: number;
+  @ApiPropertyOptional({
+    description: 'Precio por hora',
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  baseSalary?: number;
   @ApiPropertyOptional() @IsOptional() @IsUUID() userId?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsDateString() hireDate?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string | null;
@@ -78,7 +98,7 @@ class CreateEmployeeDto {
   bankAlias?: string | null;
   @ApiPropertyOptional({
     description:
-      'Precio por hora extra (0 = auto: sueldo diario ÷ horas del turno entrada→retirada)',
+      'Precio por hora extra (0 = mismo precio hora base)',
   })
   @IsOptional()
   @IsNumber()
