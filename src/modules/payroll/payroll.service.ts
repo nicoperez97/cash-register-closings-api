@@ -126,6 +126,14 @@ export class PayrollService implements OnModuleInit {
     } catch {
       // ya existe
     }
+    try {
+      await this.lines.query(`
+        ALTER TABLE payroll_lines
+          ADD COLUMN hoursWorked DECIMAL(10,2) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // ya existe
+    }
     // Índices simples para las FK, así MySQL deja dropear el unique (periodId, employeeId).
     for (const sql of [
       `CREATE INDEX IDX_payroll_lines_periodId ON payroll_lines (periodId)`,
@@ -278,6 +286,7 @@ export class PayrollService implements OnModuleInit {
         shiftId: l.shiftId || null,
         shiftName: l.shiftName ?? null,
         daysWorked: n(l.daysWorked),
+        hoursWorked: n(l.hoursWorked),
         holidayDays: n(l.holidayDays),
         baseSalarySnapshot: n(l.baseSalarySnapshot),
         holidayMultiplierSnapshot:
@@ -503,6 +512,7 @@ export class PayrollService implements OnModuleInit {
             shiftId: '',
             shiftName: null,
             daysWorked: String(amounts.daysWorked),
+            hoursWorked: String(amounts.regularHours),
             holidayDays: String(amounts.holidayDays),
             baseSalarySnapshot: money(amounts.hourlyRate),
             holidayMultiplierSnapshot: amounts.mult.toFixed(2),
@@ -558,6 +568,7 @@ export class PayrollService implements OnModuleInit {
             shiftId: shift.id,
             shiftName: shift.name,
             daysWorked: String(amounts.daysWorked),
+            hoursWorked: String(amounts.regularHours),
             holidayDays: String(amounts.holidayDays),
             baseSalarySnapshot: money(amounts.hourlyRate),
             holidayMultiplierSnapshot: amounts.mult.toFixed(2),
@@ -637,6 +648,7 @@ export class PayrollService implements OnModuleInit {
       'Empleado',
       'Turno',
       'Días trabajados',
+      'Horas trabajadas',
       'Feriados',
       '$ / hora',
       'Horas extra ($)',
@@ -648,6 +660,7 @@ export class PayrollService implements OnModuleInit {
         l.employeeName ?? '',
         l.shiftName || 'Todos',
         l.daysWorked,
+        l.hoursWorked,
         l.holidayDays,
         l.baseSalarySnapshot,
         l.overtimeAmount,

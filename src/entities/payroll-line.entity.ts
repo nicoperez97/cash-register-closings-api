@@ -27,6 +27,10 @@ export class PayrollLine extends BaseEntity {
   @Column({ type: 'decimal', precision: 8, scale: 2, default: 0 })
   daysWorked: string;
 
+  /** Horas ordinarias del período (días presentes, sin feriado). */
+  @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
+  hoursWorked: string;
+
   @Column({ type: 'decimal', precision: 8, scale: 2, default: 0 })
   holidayDays: string;
 
