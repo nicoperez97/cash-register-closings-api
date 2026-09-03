@@ -79,6 +79,20 @@ export class SettlementsService implements OnModuleInit {
     }
   }
 
+  async pendingCount(user: AuthUser, shopId: string) {
+    this.shops.assertShopAccess(user, shopId);
+    const count = await this.sourceAmounts
+      .createQueryBuilder('s')
+      .innerJoin('s.closing', 'c')
+      .where('c.shopId = :shopId', { shopId })
+      .andWhere('c.active = true')
+      .andWhere('s.kind IN (:...kinds)', { kinds: SETTLE_KINDS })
+      .andWhere('s.settledAt IS NULL')
+      .andWhere('s.amount > 0')
+      .getCount();
+    return { count };
+  }
+
   async listPending(user: AuthUser, shopId: string) {
     this.shops.assertShopAccess(user, shopId);
     const rows = await this.sourceAmounts

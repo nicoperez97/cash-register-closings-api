@@ -158,7 +158,6 @@ export class CashWithdrawalsService implements OnModuleInit {
   async listPending(user: AuthUser, shopId: string) {
     this.shops.assertShopAccess(user, shopId);
     const view = await this.computePendingView(shopId);
-    await this.persistAllocations(shopId, view.items);
     return {
       items: view.items
         .filter((i) => i.remainingAmount > 0.009)
@@ -294,7 +293,7 @@ export class CashWithdrawalsService implements OnModuleInit {
       dto.accountId,
     );
 
-    const view = await this.computePendingView(shopId);
+    const view = await this.computePendingView(shopId, { purgeStaleOffsets: true });
     const byId = new Map(view.items.map((i) => [i.id, i]));
     for (const row of rows) {
       if (!byId.has(row.id)) {
@@ -377,11 +376,21 @@ export class CashWithdrawalsService implements OnModuleInit {
     return { ok: true, picked: toPick.length, pickBatchId };
   }
 
+  async pendingCount(user: AuthUser, shopId: string) {
+    this.shops.assertShopAccess(user, shopId);
+    const view = await this.computePendingView(shopId, { includeExpenses: false });
+    const count = view.items.filter((i) => i.remainingAmount > 0.009).length;
+    return { count };
+  }
+
   /**
    * Resta gastos de caja (movimientos desde Efectivo, sin cierre) a los pendientes.
    * FIFO: el gasto se imputa al retiro más viejo que ya existía cuando se registró.
    */
-  private async computePendingView(shopId: string) {
+  private async computePendingView(
+    shopId: string,
+    opts?: { includeExpenses?: boolean; purgeStaleOffsets?: boolean },
+  ) {
     const pending = await this.pending.find({
       where: {
         shopId,
@@ -409,7 +418,7 @@ export class CashWithdrawalsService implements OnModuleInit {
         .map((m) => m.id),
     );
     const staleOffsets = savedOffsets.filter((o) => !validOffsetMovementIds.has(o.movementId));
-    if (staleOffsets.length) {
+    if (opts?.purgeStaleOffsets && staleOffsets.length) {
       await this.offsets.remove(staleOffsets);
     }
     const liveOffsets = savedOffsets.filter((o) => validOffsetMovementIds.has(o.movementId));
@@ -492,6 +501,11 @@ export class CashWithdrawalsService implements OnModuleInit {
       }
     }
 
+    const availableTotal = items.reduce((s, i) => s + Math.max(0, i.remainingAmount), 0);
+    if (opts?.includeExpenses === false) {
+      return { items, cashExpenses: [], expensesTotal: 0, availableTotal };
+    }
+
     const expenseIds = [...applied.entries()]
       .filter(([, amount]) => amount > 0.009)
       .map(([id]) => id);
@@ -513,31 +527,8 @@ export class CashWithdrawalsService implements OnModuleInit {
       };
     });
 
-    const availableTotal = items.reduce((s, i) => s + Math.max(0, i.remainingAmount), 0);
     const expensesTotal = cashExpenses.reduce((s, e) => s + e.amount, 0);
     return { items, cashExpenses, expensesTotal, availableTotal };
-  }
-
-  private async persistAllocations(
-    shopId: string,
-    items: Array<{ id: string; allocations: Array<{ movementId: string; amount: number }> }>,
-  ) {
-    for (const item of items) {
-      for (const alloc of item.allocations) {
-        const exists = await this.offsets.findOne({
-          where: { pendingId: item.id, movementId: alloc.movementId },
-        });
-        if (exists) continue;
-        await this.offsets.save(
-          this.offsets.create({
-            shopId,
-            pendingId: item.id,
-            movementId: alloc.movementId,
-            amount: money(alloc.amount),
-          }),
-        );
-      }
-    }
   }
 
   private async cashDrawerAccountIds(shopId: string): Promise<string[]> {

@@ -13,6 +13,12 @@ import { SettleClosingSourcesDto } from './dto/settlement.dto';
 export class SettlementsController {
   constructor(private readonly settlements: SettlementsService) {}
 
+  @Get('pending-count')
+  @RequirePermissions('settlements.read')
+  pendingCount(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
+    return this.settlements.pendingCount(user, shopId);
+  }
+
   @Get('pending')
   @RequirePermissions('settlements.read')
   listPending(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {

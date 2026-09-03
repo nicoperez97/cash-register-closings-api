@@ -11,7 +11,6 @@ import { In, Repository } from 'typeorm';
 import { createReadStream } from 'fs';
 import * as ExcelJS from 'exceljs';
 import { Payment } from '../../entities/payment.entity';
-import { Movement } from '../../entities/movement.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
@@ -476,26 +475,6 @@ export class PaymentsService implements OnModuleInit {
     return this.load(shopId, payment.id);
   }
 
-  private async repairOrphanPaidMovements(user: AuthUser, shopId: string) {
-    const orphans = await this.payments
-      .createQueryBuilder('p')
-      .leftJoin(Movement, 'm', 'm.id = p.movementId AND m.deletedAt IS NULL')
-      .where('p.shopId = :shopId', { shopId })
-      .andWhere('p.active = true')
-      .andWhere('p.status = :st', { st: PaymentStatus.PAID })
-      .andWhere('(p.movementId IS NULL OR m.id IS NULL)')
-      .take(40)
-      .getMany();
-    for (const orphan of orphans) {
-      try {
-        const full = await this.load(shopId, orphan.id);
-        await this.ensurePaidMovement(user, shopId, full);
-      } catch {
-        // seguir con el resto
-      }
-    }
-  }
-
   /** Actualiza o recrea el movimiento del pago abonado. */
   private async syncPaidMovement(user: AuthUser, shopId: string, payment: Payment) {
     if (!payment.accountId) {
@@ -614,7 +593,6 @@ export class PaymentsService implements OnModuleInit {
     },
   ) {
     this.shops.assertShopAccess(user, shopId);
-    await this.repairOrphanPaidMovements(user, shopId);
     const qb = this.payments
       .createQueryBuilder('p')
       .leftJoinAndSelect('p.payer', 'payer')
@@ -707,9 +685,52 @@ export class PaymentsService implements OnModuleInit {
       'ASC',
     )
       .addOrderBy('p.dueDate', 'ASC')
-      .addOrderBy('p.createdAt', 'DESC');
+      .addOrderBy('p.createdAt', 'DESC')
+      .take(2500);
     const rows = await qb.getMany();
     return rows.map((r) => this.toDto(r));
+  }
+
+  /** Badges de menú: no carga filas ni repara huérfanos. */
+  async pendingCounts(user: AuthUser, shopId: string) {
+    this.shops.assertShopAccess(user, shopId);
+    const pending = `p.status IN ('PENDING_VALIDATION', 'VALIDATED')`;
+    const raw = await this.payments
+      .createQueryBuilder('p')
+      .select(`COALESCE(SUM(CASE WHEN ${pending} THEN 1 ELSE 0 END), 0)`, 'total')
+      .addSelect(
+        `COALESCE(SUM(CASE WHEN ${pending} AND p.supplierId IS NOT NULL THEN 1 ELSE 0 END), 0)`,
+        'suppliers',
+      )
+      .addSelect(
+        `COALESCE(SUM(CASE WHEN ${pending} AND p.serviceId IS NOT NULL THEN 1 ELSE 0 END), 0)`,
+        'services',
+      )
+      .addSelect(
+        `COALESCE(SUM(CASE WHEN ${pending} AND p.toAccountId IS NOT NULL THEN 1 ELSE 0 END), 0)`,
+        'partners',
+      )
+      .addSelect(
+        `COALESCE(SUM(CASE WHEN ${pending} AND p.supplierId IS NULL AND p.serviceId IS NULL AND p.toAccountId IS NULL THEN 1 ELSE 0 END), 0)`,
+        'employees',
+      )
+      .where('p.shopId = :shopId', { shopId })
+      .andWhere('p.active = true')
+      .getRawOne<{
+        total: string | number;
+        suppliers: string | number;
+        services: string | number;
+        employees: string | number;
+        partners: string | number;
+      }>();
+    const n = (v: string | number | undefined) => Math.max(0, Number(v ?? 0) || 0);
+    return {
+      total: n(raw?.total),
+      suppliers: n(raw?.suppliers),
+      services: n(raw?.services),
+      employees: n(raw?.employees),
+      partners: n(raw?.partners),
+    };
   }
 
   async exportExcel(

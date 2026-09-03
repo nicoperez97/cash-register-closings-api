@@ -297,6 +297,12 @@ class ResendPaymentNotificationDto {
 export class PaymentsController {
   constructor(private readonly payments: PaymentsService) {}
 
+  @Get('pending-count')
+  @RequirePermissions('payments.read')
+  pendingCount(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
+    return this.payments.pendingCounts(user, shopId);
+  }
+
   @Get()
   @RequirePermissions('payments.read')
   list(
