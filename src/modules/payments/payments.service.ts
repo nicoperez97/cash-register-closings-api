@@ -685,8 +685,8 @@ export class PaymentsService implements OnModuleInit {
       'ASC',
     )
       .addOrderBy('p.dueDate', 'ASC')
-      .addOrderBy('p.createdAt', 'DESC')
-      .take(2500);
+      .addOrderBy('p.createdAt', 'DESC');
+    // Sin .take(): TypeORM + LIMIT reescribe el ORDER BY CASE y busca el alias "CASE p".
     const rows = await qb.getMany();
     return rows.map((r) => this.toDto(r));
   }
