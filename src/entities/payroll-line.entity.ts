@@ -34,7 +34,7 @@ export class PayrollLine extends BaseEntity {
   @Column({ type: 'decimal', precision: 8, scale: 2, default: 0 })
   holidayDays: string;
 
-  /** Snapshot del sueldo diario al liquidar. */
+  /** Snapshot del precio/hora al liquidar. */
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
   baseSalarySnapshot: string;
 

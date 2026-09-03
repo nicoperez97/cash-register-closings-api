@@ -21,11 +21,7 @@ import { isEntityActive } from '../../common/active.util';
 import { ShopLiveService } from '../shop-live/shop-live.service';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
 import { normalizeOpeningTime } from '../../common/business-date';
-import {
-  DEFAULT_SERVICE_CHECK_IN,
-  DEFAULT_SERVICE_CHECK_OUT,
-  requireHhMm,
-} from '../../common/shift-hours.util';
+import { shiftWindowFallback } from '../../common/employee-shift.util';
 import { CreateShopDto, UpdateShopDto } from './dto/shop.dto';
 import { PosnetType, ShopPosnet } from '../../common/posnet';
 import {
@@ -589,6 +585,8 @@ export class ShopsService implements OnModuleInit {
     }
     const slug = this.normalizeSlug(dto.slug || dto.name);
     await this.assertSlugFree(slug);
+    const shifts = normalizeShopShifts(dto.shifts, dto.openingTime);
+    const serviceFromShift = shiftWindowFallback(shifts, null);
     const shop = await this.shops.save(
       this.shops.create({
         name: dto.name.trim(),
@@ -609,8 +607,9 @@ export class ShopsService implements OnModuleInit {
         tipsEnabled: dto.tipsEnabled ?? false,
         publicAttendanceEnabled: dto.publicAttendanceEnabled ?? false,
         publicServiceRulesEnabled: dto.publicServiceRulesEnabled ?? false,
-        serviceDefaultCheckIn: requireHhMm(dto.serviceDefaultCheckIn, DEFAULT_SERVICE_CHECK_IN),
-        serviceDefaultCheckOut: requireHhMm(dto.serviceDefaultCheckOut, DEFAULT_SERVICE_CHECK_OUT),
+        /** Legacy mirror of shift window (entrada/retirada ya no se configuran aparte). */
+        serviceDefaultCheckIn: serviceFromShift.checkIn,
+        serviceDefaultCheckOut: serviceFromShift.checkOut,
         serviceAttendanceWithHours: dto.serviceAttendanceWithHours ?? true,
         holidayPayMultiplier: String(
           dto.holidayPayMultiplier !== undefined && dto.holidayPayMultiplier !== null
@@ -625,10 +624,8 @@ export class ShopsService implements OnModuleInit {
             : 8,
         ),
         timezone: dto.timezone ?? 'America/Argentina/Buenos_Aires',
-        openingTime: earliestShiftOpening(
-          normalizeShopShifts(dto.shifts, dto.openingTime),
-        ),
-        shifts: normalizeShopShifts(dto.shifts, dto.openingTime),
+        openingTime: earliestShiftOpening(shifts),
+        shifts,
         closedWeekdays: this.normalizeClosedWeekdays(dto.closedWeekdays),
         currency: dto.currency ?? 'ARS',
         logoUrl: normalizeLogoUrl(dto.logoUrl),
@@ -714,15 +711,6 @@ export class ShopsService implements OnModuleInit {
     if (dto.publicServiceRulesEnabled !== undefined) {
       shop.publicServiceRulesEnabled = dto.publicServiceRulesEnabled;
     }
-    if (dto.serviceDefaultCheckIn !== undefined) {
-      shop.serviceDefaultCheckIn = requireHhMm(dto.serviceDefaultCheckIn, DEFAULT_SERVICE_CHECK_IN);
-    }
-    if (dto.serviceDefaultCheckOut !== undefined) {
-      shop.serviceDefaultCheckOut = requireHhMm(
-        dto.serviceDefaultCheckOut,
-        DEFAULT_SERVICE_CHECK_OUT,
-      );
-    }
     if (dto.serviceAttendanceWithHours !== undefined) {
       shop.serviceAttendanceWithHours = dto.serviceAttendanceWithHours;
     }
@@ -739,9 +727,11 @@ export class ShopsService implements OnModuleInit {
     if (dto.shifts !== undefined) {
       shop.shifts = this.normalizeShifts(dto.shifts, dto.openingTime ?? shop.openingTime);
       shop.openingTime = earliestShiftOpening(shop.shifts);
+      this.syncLegacyServiceDefaultsFromShifts(shop);
     } else if (dto.openingTime !== undefined) {
       shop.openingTime = normalizeOpeningTime(dto.openingTime);
       shop.shifts = this.syncOpeningOnShifts(shop.shifts, shop.openingTime);
+      this.syncLegacyServiceDefaultsFromShifts(shop);
     }
     if (dto.closedWeekdays !== undefined) {
       shop.closedWeekdays = this.normalizeClosedWeekdays(dto.closedWeekdays);
@@ -844,14 +834,22 @@ export class ShopsService implements OnModuleInit {
     if (
       dto.publicAttendanceEnabled !== undefined ||
       dto.serviceAttendanceWithHours !== undefined ||
-      dto.serviceDefaultCheckIn !== undefined ||
-      dto.serviceDefaultCheckOut !== undefined
+      dto.shifts !== undefined ||
+      dto.openingTime !== undefined
     ) {
       this.live.tick(id, 'attendance');
     }
     return this.toDto(await this.shops.findOneOrFail({ where: { id } }), {
       emailSmtpConfigured: await this.hasSmtpPassword(id),
     });
+  }
+
+  /** Mirror legacy columns from the primary shift window (no longer user-editable). */
+  private syncLegacyServiceDefaultsFromShifts(shop: Shop): void {
+    const shifts = normalizeShopShifts(shop.shifts, shop.openingTime);
+    const fb = shiftWindowFallback(shifts, null);
+    shop.serviceDefaultCheckIn = fb.checkIn;
+    shop.serviceDefaultCheckOut = fb.checkOut;
   }
 
   private normalizeShifts(

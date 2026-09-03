@@ -102,11 +102,11 @@ export class Shop extends BaseEntity {
   @Column({ type: 'tinyint', default: 0 })
   publicServiceRulesEnabled: boolean;
 
-  /** Hora de entrada default al marcar presente en servicio (HH:mm). */
+  /** @deprecated Legacy mirror of shift opensAt; use shifts for attendance defaults. */
   @Column({ type: 'varchar', length: 5, default: '18:00' })
   serviceDefaultCheckIn: string;
 
-  /** Hora de retirada default al marcar presente en servicio (HH:mm). */
+  /** @deprecated Legacy mirror of shift closesAt; use shifts for attendance defaults. */
   @Column({ type: 'varchar', length: 5, default: '00:00' })
   serviceDefaultCheckOut: string;
 

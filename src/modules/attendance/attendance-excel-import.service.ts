@@ -12,11 +12,11 @@ import { AttendanceService } from './attendance.service';
 import { isIsoDateOnly, toIsoDateOnly } from '../../common/iso-date';
 import {
   computeOvertimeHours,
-  DEFAULT_SERVICE_CHECK_IN,
-  DEFAULT_SERVICE_CHECK_OUT,
   parseHhMm,
   requireHhMm,
 } from '../../common/shift-hours.util';
+import { shiftWindowFallback } from '../../common/employee-shift.util';
+import { normalizeShopShifts } from '../../common/shop-shifts';
 
 export interface AttendanceImportItem {
   rowNumber: number;
@@ -439,8 +439,8 @@ export class AttendanceExcelImportService {
     const employees = await this.employees.find({ where: { shopId } });
     const byName = new Map(employees.map((e) => [this.norm(e.fullName), e]));
     const shop = await this.shops.getShopEntity(shopId);
-    const shopDefaultIn = requireHhMm(shop?.serviceDefaultCheckIn, DEFAULT_SERVICE_CHECK_IN);
-    const shopDefaultOut = requireHhMm(shop?.serviceDefaultCheckOut, DEFAULT_SERVICE_CHECK_OUT);
+    const shifts = normalizeShopShifts(shop?.shifts, shop?.openingTime);
+    const fallback = shiftWindowFallback(shifts, null);
 
     return rows.map((r) => {
       const emp = byName.get(this.norm(r.employeeName));
@@ -450,8 +450,8 @@ export class AttendanceExcelImportService {
       const willCreate = !!r.employeeName && !emp;
       const willReactivate = !!emp && !emp.active;
       const withHours = shop?.serviceAttendanceWithHours !== false;
-      const defaultIn = requireHhMm(emp?.serviceCheckIn, shopDefaultIn);
-      const defaultOut = requireHhMm(emp?.serviceCheckOut, shopDefaultOut);
+      const defaultIn = requireHhMm(emp?.serviceCheckIn, fallback.checkIn);
+      const defaultOut = requireHhMm(emp?.serviceCheckOut, fallback.checkOut);
       const checkInAt = withHours && r.isPresent ? r.checkInAt ?? defaultIn : null;
       const checkOutAt = withHours && r.isPresent ? r.checkOutAt ?? defaultOut : null;
       const overtimeHours = withHours

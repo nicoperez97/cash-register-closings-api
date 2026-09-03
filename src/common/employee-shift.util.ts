@@ -1,12 +1,18 @@
 import { EmployeeType } from '../entities/employee.entity';
-import { parseHhMm, requireHhMm } from './shift-hours.util';
+import {
+  DEFAULT_SERVICE_CHECK_IN,
+  DEFAULT_SERVICE_CHECK_OUT,
+  parseHhMm,
+  requireHhMm,
+} from './shift-hours.util';
+import type { ShopShift } from './shop-shifts';
 
 export type EmployeeShiftAssignment = {
   shiftId: string;
   type: EmployeeType;
-  /** Entrada de servicio en este turno (HH:mm). Vacío = hereda empleado/local. */
+  /** Entrada de servicio en este turno (HH:mm). Vacío = hereda empleado/turno. */
   serviceCheckIn?: string | null;
-  /** Retirada de servicio en este turno (HH:mm). Vacío = hereda empleado/local. */
+  /** Retirada de servicio en este turno (HH:mm). Vacío = hereda empleado/turno. */
   serviceCheckOut?: string | null;
 };
 
@@ -41,7 +47,21 @@ export function normalizeShiftAssignments(
   return out;
 }
 
-/** Horario de servicio efectivo para un turno (asignación → empleado → local). */
+/** Ventana del turno de caja como fallback de entrada/retirada. */
+export function shiftWindowFallback(
+  shifts: Array<Pick<ShopShift, 'id' | 'opensAt' | 'closesAt'>>,
+  shiftId?: string | null,
+): { checkIn: string; checkOut: string } {
+  const hit = shiftId
+    ? shifts.find((s) => s.id === shiftId)
+    : shifts[0];
+  return {
+    checkIn: requireHhMm(hit?.opensAt, DEFAULT_SERVICE_CHECK_IN),
+    checkOut: requireHhMm(hit?.closesAt, DEFAULT_SERVICE_CHECK_OUT),
+  };
+}
+
+/** Horario de servicio efectivo: asignación → empleado → ventana del turno. */
 export function shiftServiceSchedule(
   emp: {
     serviceCheckIn?: string | null;
@@ -49,18 +69,18 @@ export function shiftServiceSchedule(
     shiftAssignments?: EmployeeShiftAssignment[] | null;
   },
   shiftId: string | null | undefined,
-  shopDefaults: { checkIn: string; checkOut: string },
+  fallback: { checkIn: string; checkOut: string },
 ): { checkIn: string; checkOut: string } {
   const assignments = normalizeShiftAssignments(emp.shiftAssignments);
   const hit = shiftId ? assignments.find((a) => a.shiftId === shiftId) : assignments[0];
   return {
     checkIn: requireHhMm(
       hit?.serviceCheckIn ?? emp.serviceCheckIn,
-      shopDefaults.checkIn,
+      fallback.checkIn,
     ),
     checkOut: requireHhMm(
       hit?.serviceCheckOut ?? emp.serviceCheckOut,
-      shopDefaults.checkOut,
+      fallback.checkOut,
     ),
   };
 }

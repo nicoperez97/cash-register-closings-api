@@ -10,10 +10,7 @@ import { ShopLiveService } from '../shop-live/shop-live.service';
 import { ShopsService } from '../shops/shops.service';
 import {
   computeOvertimeHours,
-  DEFAULT_SERVICE_CHECK_IN,
-  DEFAULT_SERVICE_CHECK_OUT,
   parseHhMm,
-  requireHhMm,
   resolveOvertimeHourRate,
 } from '../../common/shift-hours.util';
 import {
@@ -26,6 +23,7 @@ import {
   employeeWorksShift,
   normalizeShiftAssignments,
   shiftServiceSchedule,
+  shiftWindowFallback,
 } from '../../common/employee-shift.util';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
@@ -227,21 +225,22 @@ export class AttendanceService implements OnModuleInit {
     return true;
   }
 
-  private shopShiftDefaults(shop: {
-    serviceDefaultCheckIn?: string | null;
-    serviceDefaultCheckOut?: string | null;
-  }) {
-    return {
-      checkIn: requireHhMm(shop.serviceDefaultCheckIn, DEFAULT_SERVICE_CHECK_IN),
-      checkOut: requireHhMm(shop.serviceDefaultCheckOut, DEFAULT_SERVICE_CHECK_OUT),
-    };
+  private scheduleFallback(
+    shop?: {
+      shifts?: Parameters<typeof normalizeShopShifts>[0];
+      openingTime?: string | null;
+    } | null,
+    shiftId?: string | null,
+  ) {
+    const shifts = normalizeShopShifts(shop?.shifts, shop?.openingTime);
+    return shiftWindowFallback(shifts, shiftId);
   }
 
   private employeeShiftDefaults(
     shop: {
-      serviceDefaultCheckIn?: string | null;
-      serviceDefaultCheckOut?: string | null;
-    },
+      shifts?: Parameters<typeof normalizeShopShifts>[0];
+      openingTime?: string | null;
+    } | null | undefined,
     emp?: {
       serviceCheckIn?: string | null;
       serviceCheckOut?: string | null;
@@ -249,16 +248,15 @@ export class AttendanceService implements OnModuleInit {
     } | null,
     shiftId?: string | null,
   ) {
-    const shopDefaults = this.shopShiftDefaults(shop);
-    return shiftServiceSchedule(emp ?? {}, shiftId, shopDefaults);
+    return shiftServiceSchedule(emp ?? {}, shiftId, this.scheduleFallback(shop, shiftId));
   }
 
-  /** Baseline de extras: horario de servicio del turno (asignación → empleado → local). */
+  /** Baseline de extras: asignación → empleado → ventana del turno. */
   private overtimeBaseline(
     shop: {
-      serviceDefaultCheckIn?: string | null;
-      serviceDefaultCheckOut?: string | null;
-    },
+      shifts?: Parameters<typeof normalizeShopShifts>[0];
+      openingTime?: string | null;
+    } | null | undefined,
     emp: {
       serviceCheckIn?: string | null;
       serviceCheckOut?: string | null;

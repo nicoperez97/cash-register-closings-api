@@ -15,20 +15,18 @@ import { AuthUser } from '../../common/decorators';
 import { PayrollStatus } from '../../common/enums';
 import { isEntityActive } from '../../common/active.util';
 import {
-  DEFAULT_SERVICE_CHECK_IN,
-  DEFAULT_SERVICE_CHECK_OUT,
-  requireHhMm,
   resolveOvertimeHourRate,
   scheduledShiftHours,
 } from '../../common/shift-hours.util';
-import { shiftServiceSchedule } from '../../common/employee-shift.util';
+import {
+  employeeWorksShift,
+  shiftServiceSchedule,
+  shiftWindowFallback,
+} from '../../common/employee-shift.util';
+import { normalizeShopShifts } from '../../common/shop-shifts';
 import { ShopsService } from '../shops/shops.service';
 import { AttendanceService } from '../attendance/attendance.service';
 import { countCompletedAttendanceWeeks } from '../../common/shop-open-days';
-import {
-  employeeWorksShift,
-} from '../../common/employee-shift.util';
-import { normalizeShopShifts } from '../../common/shop-shifts';
 import { AttendanceDay } from '../../entities/attendance-day.entity';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
@@ -362,17 +360,18 @@ export class PayrollService implements OnModuleInit {
     includePresentismo: boolean,
     filterShiftId?: string | null,
   ) {
-    const shopDefaults = {
-      checkIn: requireHhMm(shop?.serviceDefaultCheckIn, DEFAULT_SERVICE_CHECK_IN),
-      checkOut: requireHhMm(shop?.serviceDefaultCheckOut, DEFAULT_SERVICE_CHECK_OUT),
-    };
+    const shifts = normalizeShopShifts(shop?.shifts, shop?.openingTime);
     const days =
       filterShiftId != null && filterShiftId !== ''
         ? empDays.filter((d) => d.shiftId === filterShiftId)
         : empDays;
 
     const scheduledHoursForDay = (day: AttendanceDay) => {
-      const schedule = shiftServiceSchedule(emp, day.shiftId, shopDefaults);
+      const schedule = shiftServiceSchedule(
+        emp,
+        day.shiftId,
+        shiftWindowFallback(shifts, day.shiftId),
+      );
       return scheduledShiftHours(schedule.checkIn, schedule.checkOut);
     };
 

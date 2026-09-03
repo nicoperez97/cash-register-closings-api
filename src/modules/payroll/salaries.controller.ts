@@ -30,7 +30,7 @@ class UpdateSalaryDto {
   baseSalary?: number;
 
   @ApiPropertyOptional({
-    description: '0 = calcular desde sueldo diario ÷ horas del turno (entrada→retirada)',
+    description: '0 = usar el mismo precio hora base del empleado',
   })
   @IsOptional()
   @IsNumber()
