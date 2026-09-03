@@ -13,6 +13,12 @@ import { PickCashWithdrawalsDto } from './dto/cash-withdrawal.dto';
 export class CashWithdrawalsController {
   constructor(private readonly withdrawals: CashWithdrawalsService) {}
 
+  @Get('pending-count')
+  @RequirePermissions('cashWithdrawals.read')
+  pendingCount(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
+    return this.withdrawals.pendingCount(user, shopId);
+  }
+
   @Get('pending')
   @RequirePermissions('cashWithdrawals.read')
   listPending(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {

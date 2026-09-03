@@ -305,7 +305,7 @@ export class ClosingsService implements OnModuleInit {
     return shift;
   }
 
-  private toDto(c: CashClosing) {
+  private toDto(c: CashClosing, extras?: { expensesTotal?: number }) {
     return {
       id: c.id, shopId: c.shopId, businessDate: c.businessDate,
       shiftId: c.shiftId ?? null,
@@ -337,7 +337,8 @@ export class ClosingsService implements OnModuleInit {
         conceptId: e.conceptId ?? null,
         notes: e.notes ?? null,
       })),
-      expensesTotal: (c.expenses ?? []).reduce((s, e) => s + n(e.amount), 0),
+      expensesTotal:
+        extras?.expensesTotal ?? (c.expenses ?? []).reduce((s, e) => s + n(e.amount), 0),
       extraLines: (c.extraLines ?? []).map((e) => ({ id: e.id, type: e.type, label: e.label, amount: n(e.amount), meta: e.meta })),
       sourceAmounts: (c.sourceAmounts ?? []).map((s) => ({
         id: s.id,
@@ -378,7 +379,22 @@ export class ClosingsService implements OnModuleInit {
   async list(user: AuthUser, shopId: string, filters: ClosingListFilters = {}) {
     this.shops.assertShopAccess(user, shopId);
     assertCanViewClosingsList(user, shopId);
-    return (await this.queryFiltered(shopId, filters, true)).map((r) => this.toDto(r));
+    const rows = await this.queryFiltered(shopId, filters, false);
+    const ids = rows.map((r) => r.id);
+    const totals = new Map<string, number>();
+    if (ids.length) {
+      const raw = await this.expenses
+        .createQueryBuilder('e')
+        .select('e.closingId', 'closingId')
+        .addSelect('COALESCE(SUM(e.amount), 0)', 'total')
+        .where('e.closingId IN (:...ids)', { ids })
+        .groupBy('e.closingId')
+        .getRawMany<{ closingId: string; total: string | number }>();
+      for (const row of raw) {
+        totals.set(row.closingId, n(row.total));
+      }
+    }
+    return rows.map((r) => this.toDto(r, { expensesTotal: totals.get(r.id) ?? 0 }));
   }
 
   async queryFiltered(shopId: string, filters: ClosingListFilters, withRelations = false): Promise<CashClosing[]> {

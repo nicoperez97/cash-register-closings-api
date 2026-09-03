@@ -12,6 +12,7 @@ import { resolveShopLogoUrlForEmail } from '../../common/shop-branding.util';
 import { PushService } from './push.service';
 import { MailService } from './mail.service';
 import { muteChannels } from '../profile/notification-eligibility';
+import { ShopLiveService } from '../shop-live/shop-live.service';
 
 function queryString(params: Record<string, string | null | undefined>): string {
   const q = new URLSearchParams();
@@ -99,6 +100,7 @@ export class NotificationsService implements OnModuleInit {
     private readonly config: ConfigService,
     private readonly push: PushService,
     private readonly mail: MailService,
+    private readonly live: ShopLiveService,
   ) {
     this.appOrigin = (
       this.config.get<string>('publicAppOrigin') ??
@@ -249,6 +251,7 @@ export class NotificationsService implements OnModuleInit {
         })
         .catch(() => undefined);
     }
+    if (input.shopId) this.live.tick(input.shopId, 'inbox');
     return dto ? { ...dto, shopName: branding.name, shopLogoUrl: branding.logoUrl } : null;
   }
 
@@ -358,6 +361,12 @@ export class NotificationsService implements OnModuleInit {
         })),
       )
       .catch(() => undefined);
+
+    for (const shopId of new Set(
+      rows.map((r) => r.shopId).filter((id): id is string => !!id),
+    )) {
+      this.live.tick(shopId, 'inbox');
+    }
 
     return rows.map((r) => {
       const branding = brandingByShop.get(r.shopId ?? '') ?? {

@@ -295,12 +295,17 @@ export class ReimbursementsService implements OnModuleInit {
   async pendingCount(user: AuthUser, shopId: string) {
     this.shops.assertShopAccess(user, shopId);
     if (!this.canReadAll(user, shopId)) return { count: 0, amount: 0 };
-    const rows = await this.rows.find({
-      where: { shopId, status: ReimbursementStatus.PENDING, active: true },
-    });
+    const raw = await this.rows
+      .createQueryBuilder('r')
+      .select('COUNT(*)', 'count')
+      .addSelect('COALESCE(SUM(r.amount), 0)', 'amount')
+      .where('r.shopId = :shopId', { shopId })
+      .andWhere('r.status = :st', { st: ReimbursementStatus.PENDING })
+      .andWhere('r.active = true')
+      .getRawOne<{ count: string | number; amount: string | number }>();
     return {
-      count: rows.length,
-      amount: rows.reduce((s, r) => s + n(r.amount), 0),
+      count: Math.max(0, Number(raw?.count ?? 0) || 0),
+      amount: Number(raw?.amount ?? 0) || 0,
     };
   }
 

@@ -264,7 +264,6 @@ export class MovementsService implements OnModuleInit {
     this.shops.assertShopAccess(user, shopId);
     if (filters.kind === 'expense') {
       this.assertPerm(user, shopId, 'expenses.read');
-      await this.repairOrphanPaymentExpenses(user, shopId);
     } else if (filters.kind === 'income') {
       this.assertPerm(user, shopId, 'incomes.read');
     } else if (filters.kind === 'transfer') {
@@ -397,7 +396,8 @@ export class MovementsService implements OnModuleInit {
 
     qb.distinct(true)
       .orderBy('m.businessDate', 'DESC')
-      .addOrderBy('m.createdAt', 'DESC');
+      .addOrderBy('m.createdAt', 'DESC')
+      .take(2500);
     const rows = await qb.getMany();
     const paymentLinks = await this.paymentLinksForMovements(
       shopId,
@@ -407,85 +407,68 @@ export class MovementsService implements OnModuleInit {
   }
 
   /**
-   * Pagos abonados sin egreso vivo (gasto borrado a mano): vuelve a crear el movimiento.
+   * Filas livianas para reportes (sin usuarios, pagos ni tope de UI).
    */
-  private async repairOrphanPaymentExpenses(user: AuthUser, shopId: string) {
-    const orphans = await this.payments
-      .createQueryBuilder('p')
-      .leftJoinAndSelect('p.supplier', 'supplier')
-      .leftJoinAndSelect('p.service', 'service')
-      .leftJoinAndSelect('p.employee', 'employee')
-      .leftJoin(Movement, 'm', 'm.id = p.movementId AND m.deletedAt IS NULL')
-      .where('p.shopId = :shopId', { shopId })
-      .andWhere('p.active = true')
-      .andWhere('p.status = :st', { st: PaymentStatus.PAID })
-      .andWhere('(p.movementId IS NULL OR m.id IS NULL)')
-      .take(40)
-      .getMany();
-    if (!orphans.length) return;
-
-    const egreso = await this.accounts.findOne({
-      where: { shopId, code: 'EGRESO', active: true },
-    });
-    if (!egreso) return;
-
-    for (const p of orphans) {
-      if (!p.accountId || !(n(p.amount) > 0)) continue;
-      const paidAt = String(p.paidAt ?? '').slice(0, 10);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(paidAt)) continue;
-      try {
-        if (p.movementId) {
-          await this.payments.update({ id: p.id, shopId }, { movementId: null });
-        }
-        let titleBit = (p.title || '').trim() || 'Sin concepto';
-        if (p.conceptId) {
-          const c = await this.concepts.findOne({
-            where: { id: p.conceptId, shopId },
-            select: ['name'],
-          });
-          if (c?.name) titleBit = c.name;
-        }
-        const payload = {
-          businessDate: paidAt,
-          fromAccountId: p.accountId,
-          toAccountId: egreso.id,
-          fromUserId: p.payerUserId ?? null,
-          employeeId: p.employeeId ?? null,
-          description: [
-            `Pago: ${titleBit}`,
-            p.supplier?.name ? `Proveedor: ${p.supplier.name}` : null,
-            p.service?.name ? `Servicio: ${p.service.name}` : null,
-            p.employee?.fullName ? `Empleado: ${p.employee.fullName}` : null,
-          ]
-            .filter(Boolean)
-            .join(' · '),
-          amountUyu: n(p.amount),
-          conceptId: p.conceptId ?? null,
-          invoiced: !!(p.invoiceNumber || p.invoiceFilePath),
-          invoiceNumber: p.invoiceNumber ?? null,
-          paymentMethod: p.paymentMethod ?? null,
-        };
-        let movement;
-        try {
-          movement = await this.create(user, shopId, payload, { fromPayment: true });
-        } catch (err) {
-          const msg = String((err as Error)?.message ?? err);
-          if (p.payerUserId && /no pertenece al local/i.test(msg)) {
-            movement = await this.create(
-              user,
-              shopId,
-              { ...payload, fromUserId: null },
-              { fromPayment: true },
-            );
-          } else {
-            throw err;
-          }
-        }
-        await this.payments.update({ id: p.id, shopId }, { movementId: movement.id });
-      } catch {
-        // no bloquear el listado
-      }
+  async listAnalytics(
+    user: AuthUser,
+    shopId: string,
+    filters: Pick<MovementFilters, 'from' | 'to' | 'kind'> = {},
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    if (filters.kind === 'expense') {
+      this.assertPerm(user, shopId, 'expenses.read');
+    } else if (filters.kind === 'income') {
+      this.assertPerm(user, shopId, 'incomes.read');
+    } else if (filters.kind === 'transfer') {
+      this.assertPerm(user, shopId, 'accountTransfers.read');
+    } else {
+      this.assertAnyPerm(
+        user,
+        shopId,
+        'expenses.read',
+        'accountTransfers.read',
+        'incomes.read',
+        'movements.read',
+      );
     }
+
+    const qb = this.movements
+      .createQueryBuilder('m')
+      .leftJoinAndSelect('m.fromAccount', 'fromAccount')
+      .leftJoinAndSelect('m.toAccount', 'toAccount')
+      .leftJoinAndSelect('m.concept', 'concept')
+      .where('m.shopId = :shopId', { shopId })
+      .andWhere('m.active = true');
+    if (filters.from) qb.andWhere('m.businessDate >= :from', { from: filters.from });
+    if (filters.to) qb.andWhere('m.businessDate <= :to', { to: filters.to });
+    if (filters.kind === 'expense') {
+      qb.andWhere(
+        `(concept.kind = :expenseKind OR LOWER(toAccount.name) LIKE :egresoName OR UPPER(toAccount.code) = :egresoCode)`,
+        { expenseKind: ConceptKind.EXPENSE, egresoName: '%egreso%', egresoCode: 'EGRESO' },
+      );
+    } else if (filters.kind === 'income') {
+      qb.andWhere(
+        `(concept.kind = :incomeKind OR LOWER(fromAccount.name) LIKE :ingresoName OR UPPER(fromAccount.code) = :ingresoCode)`,
+        { incomeKind: ConceptKind.INCOME, ingresoName: '%ingreso%', ingresoCode: 'INGRESO' },
+      );
+    } else if (filters.kind === 'transfer') {
+      qb.andWhere(
+        `(concept.kind IS NULL OR (concept.kind <> :expenseKind AND concept.kind <> :incomeKind))`,
+        { expenseKind: ConceptKind.EXPENSE, incomeKind: ConceptKind.INCOME },
+      );
+    }
+    qb.orderBy('m.businessDate', 'ASC');
+    const rows = await qb.getMany();
+    return rows.map((m) => ({
+      id: m.id,
+      businessDate: m.businessDate,
+      amountUyu: n(m.amountUyu),
+      conceptId: m.conceptId ?? null,
+      conceptName: m.concept?.name ?? null,
+      conceptKind: m.concept?.kind ?? null,
+      fromAccountName: m.fromAccount?.name ?? null,
+      toAccountName: m.toAccount?.name ?? null,
+    }));
   }
 
   private async paymentLinksForMovements(
@@ -939,12 +922,13 @@ export class MovementsService implements OnModuleInit {
 
   async expensesByConcept(user: AuthUser, shopId: string, filters: MovementFilters = {}) {
     this.shops.assertShopAccess(user, shopId);
-    const rows = await this.list(user, shopId, filters);
-    const expenseRows = rows.filter(
-      (r) => r.conceptKind === 'EXPENSE' || r.toAccountName === '2. Egreso',
-    );
+    const rows = await this.listAnalytics(user, shopId, {
+      from: filters.from,
+      to: filters.to,
+      kind: 'expense',
+    });
     const map = new Map<string, { conceptId: string | null; conceptName: string; total: number }>();
-    for (const r of expenseRows) {
+    for (const r of rows) {
       const key = r.conceptId ?? r.conceptName ?? 'Sin concepto';
       const cur = map.get(key) ?? {
         conceptId: r.conceptId,
@@ -970,7 +954,22 @@ export class MovementsService implements OnModuleInit {
 
   async balances(user: AuthUser, shopId: string, filters: MovementFilters = {}) {
     this.shops.assertShopAccess(user, shopId);
-    const rows = await this.list(user, shopId, filters);
+    this.assertAnyPerm(
+      user,
+      shopId,
+      'expenses.read',
+      'accountTransfers.read',
+      'incomes.read',
+      'movements.read',
+    );
+    const qb = this.movements
+      .createQueryBuilder('m')
+      .select(['m.id', 'm.fromAccountId', 'm.toAccountId', 'm.amountUyu'])
+      .where('m.shopId = :shopId', { shopId })
+      .andWhere('m.active = true');
+    if (filters.from) qb.andWhere('m.businessDate >= :from', { from: filters.from });
+    if (filters.to) qb.andWhere('m.businessDate <= :to', { to: filters.to });
+    const rows = await qb.getMany();
     // Socios + canales del local (PVS, MP, efectivo, etc.). Sin SYSTEM (INGRESO/EGRESO).
     const accounts = await this.accounts.find({
       where: [
@@ -1001,13 +1000,14 @@ export class MovementsService implements OnModuleInit {
       });
     }
     for (const r of rows) {
+      const amount = n(r.amountUyu);
       if (r.fromAccountId) {
         const from = bal.get(r.fromAccountId);
-        if (from) from.expense += r.amountUyu;
+        if (from) from.expense += amount;
       }
       if (r.toAccountId) {
         const to = bal.get(r.toAccountId);
-        if (to) to.income += r.amountUyu;
+        if (to) to.income += amount;
       }
     }
     // Canales del local primero, luego socios.

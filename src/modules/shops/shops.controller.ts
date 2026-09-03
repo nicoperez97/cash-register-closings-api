@@ -36,6 +36,7 @@ export class ShopsController {
   constructor(
     private readonly shops: ShopsService,
     private readonly backup: ShopBackupService,
+    private readonly live: ShopLiveService,
   ) {}
 
   @Get('mine')
@@ -48,6 +49,18 @@ export class ShopsController {
   @RequirePermissions('closings.read')
   findAll(@CurrentUser() user: AuthUser) {
     return this.shops.findAll(user);
+  }
+
+  /** SSE autenticado (JWT en header o ?access_token=). Tick de inbox / salón. */
+  @Sse(':id/live')
+  @Header('Cache-Control', 'no-cache, no-transform')
+  @Header('Connection', 'keep-alive')
+  @Header('X-Accel-Buffering', 'no')
+  liveStream(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+  ): Observable<MessageEvent> {
+    return from(this.shops.findOne(user, id)).pipe(switchMap(() => this.live.stream(id)));
   }
 
   /** Listado para selects de cierre (cajeros incluidos: solo acceso al local). */

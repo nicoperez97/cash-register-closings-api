@@ -71,6 +71,40 @@ export class ReportsService {
     return qb.getMany();
   }
 
+  private closingRowTotals(rows: CashClosing[]) {
+    return rows.reduce(
+      (acc, r) => {
+        acc.card += n(r.cardAmount);
+        acc.cash += n(r.cashAmount);
+        acc.mp += n(r.mercadoPagoAmount);
+        acc.delivery += n(r.deliveryAppsAmount);
+        acc.transfer += n(r.transferAmount);
+        acc.dni += n(r.accountDniAmount);
+        acc.other += n(r.otherAmount);
+        acc.declared += n(r.declaredTotal);
+        acc.withdrawn += n(r.cashWithdrawn);
+        acc.units += r.unitsSold ?? 0;
+        acc.covers += r.coversCount ?? 0;
+        acc.difference += Math.abs(n(r.difference));
+        return acc;
+      },
+      {
+        card: 0,
+        cash: 0,
+        mp: 0,
+        delivery: 0,
+        transfer: 0,
+        dni: 0,
+        other: 0,
+        declared: 0,
+        withdrawn: 0,
+        units: 0,
+        covers: 0,
+        difference: 0,
+      },
+    );
+  }
+
   /**
    * Dashboard mixto: cierres + ventas POS + reservas + propinas.
    * Solo lectura; el import POS no escribe aquí ni en cierres/saldos.
@@ -95,31 +129,32 @@ export class ReportsService {
     }
 
     const prev = previousPeriod(from, to);
-    const [closings, pos, reservations, tips, prevClosings, prevPos, prevTips] =
+    const [rows, pos, reservations, tips, prevRows, prevPos, prevTips] =
       await Promise.all([
-        this.summary(user, shopId, { from, to }),
+        this.filteredRows(shopId, { from, to }),
         this.salesProducts.summary(user, shopId, { from, to }),
         this.safeReservationsSummary(user, shopId, from, to),
         this.tips.summary(user, shopId, from, to),
-        this.summary(user, shopId, { from: prev.from, to: prev.to }),
+        this.filteredRows(shopId, { from: prev.from, to: prev.to }),
         this.salesProducts.summary(user, shopId, { from: prev.from, to: prev.to }),
         this.tips.summary(user, shopId, prev.from, prev.to),
       ]);
 
-    const rows = await this.filteredRows(shopId, { from, to });
+    const closingsTotals = this.closingRowTotals(rows);
+    const prevClosingsTotals = this.closingRowTotals(prevRows);
     const diffDays = rows.filter((r) => Math.abs(n(r.difference)) > 0.02);
-    const covers = closings.totals.covers;
+    const covers = closingsTotals.covers;
     const avgTicketBox =
-      covers > 0 ? Math.round((closings.totals.declared / covers) * 100) / 100 : null;
+      covers > 0 ? Math.round((closingsTotals.declared / covers) * 100) / 100 : null;
 
     const paymentMix = {
-      cash: closings.totals.cash,
-      card: closings.totals.card,
-      mercadoPago: closings.totals.mp,
-      transfer: closings.totals.transfer,
-      accountDni: closings.totals.dni,
-      deliveryApps: closings.totals.delivery,
-      other: closings.totals.other,
+      cash: closingsTotals.cash,
+      card: closingsTotals.card,
+      mercadoPago: closingsTotals.mp,
+      transfer: closingsTotals.transfer,
+      accountDni: closingsTotals.dni,
+      deliveryApps: closingsTotals.delivery,
+      other: closingsTotals.other,
     };
 
     const weekdayMap = new Map<number, { amount: number; count: number }>();
@@ -149,25 +184,25 @@ export class ReportsService {
       from,
       to,
       closings: {
-        count: closings.count,
+        count: rows.length,
         totals: {
-          declared: closings.totals.declared,
-          cash: closings.totals.cash,
-          withdrawn: closings.totals.withdrawn,
-          covers: closings.totals.covers,
-          units: closings.totals.units,
-          difference: closings.totals.difference,
+          declared: closingsTotals.declared,
+          cash: closingsTotals.cash,
+          withdrawn: closingsTotals.withdrawn,
+          covers: closingsTotals.covers,
+          units: closingsTotals.units,
+          difference: closingsTotals.difference,
           avgTicket: avgTicketBox,
           differenceDayCount: diffDays.length,
           differenceAbsSum: Math.round(
             diffDays.reduce((s, r) => s + Math.abs(n(r.difference)), 0) * 100,
           ) / 100,
         },
-        byDay: closings.days.map((d) => ({
+        byDay: rows.map((d) => ({
           businessDate: d.businessDate,
-          declaredTotal: d.declaredTotal,
-          cashAmount: d.cashAmount,
-          cashWithdrawn: d.cashWithdrawn,
+          declaredTotal: n(d.declaredTotal),
+          cashAmount: n(d.cashAmount),
+          cashWithdrawn: n(d.cashWithdrawn),
           status: d.status,
           tipsAmount:
             tips.byDay.find((t) => t.businessDate === d.businessDate)?.totalAmount ??
@@ -195,8 +230,8 @@ export class ReportsService {
         totals: {
           ...tips.totals,
           tipsToBoxRatio:
-            closings.totals.declared > 0
-              ? Math.round((tips.totals.total / closings.totals.declared) * 1000) / 10
+            closingsTotals.declared > 0
+              ? Math.round((tips.totals.total / closingsTotals.declared) * 1000) / 10
               : null,
           tipsToPosRatio:
             pos.totals.amount > 0
@@ -213,15 +248,15 @@ export class ReportsService {
         previousTo: prev.to,
         posAmountDeltaPct: pctDelta(pos.totals.amount, prevPos.totals.amount),
         boxDeclaredDeltaPct: pctDelta(
-          closings.totals.declared,
-          prevClosings.totals.declared,
+          closingsTotals.declared,
+          prevClosingsTotals.declared,
         ),
-        coversDeltaPct: pctDelta(closings.totals.covers, prevClosings.totals.covers),
+        coversDeltaPct: pctDelta(closingsTotals.covers, prevClosingsTotals.covers),
         tipsDeltaPct: pctDelta(tips.totals.total, prevTips.totals.total),
         previous: {
           posAmount: prevPos.totals.amount,
-          boxDeclared: prevClosings.totals.declared,
-          covers: prevClosings.totals.covers,
+          boxDeclared: prevClosingsTotals.declared,
+          covers: prevClosingsTotals.covers,
           tipsTotal: prevTips.totals.total,
         },
       },
@@ -291,37 +326,7 @@ export class ReportsService {
       to: filters.to,
     });
 
-    const totals = rows.reduce(
-      (acc, r) => {
-        acc.card += n(r.cardAmount);
-        acc.cash += n(r.cashAmount);
-        acc.mp += n(r.mercadoPagoAmount);
-        acc.delivery += n(r.deliveryAppsAmount);
-        acc.transfer += n(r.transferAmount);
-        acc.dni += n(r.accountDniAmount);
-        acc.other += n(r.otherAmount);
-        acc.declared += n(r.declaredTotal);
-        acc.withdrawn += n(r.cashWithdrawn);
-        acc.units += r.unitsSold ?? 0;
-        acc.covers += r.coversCount ?? 0;
-        acc.difference += Math.abs(n(r.difference));
-        return acc;
-      },
-      {
-        card: 0,
-        cash: 0,
-        mp: 0,
-        delivery: 0,
-        transfer: 0,
-        dni: 0,
-        other: 0,
-        declared: 0,
-        withdrawn: 0,
-        units: 0,
-        covers: 0,
-        difference: 0,
-      },
-    );
+    const totals = this.closingRowTotals(rows);
 
     return {
       shopId,
@@ -373,7 +378,7 @@ export class ReportsService {
     },
   ) {
     this.shops.assertShopAccess(user, shopId);
-    const rows = await this.movementsService.list(user, shopId, {
+    const rows = await this.movementsService.listAnalytics(user, shopId, {
       from: filters.from,
       to: filters.to,
     });
@@ -412,7 +417,7 @@ export class ReportsService {
     } | null = null;
     if (filters.from && filters.to) {
       const prevRange = previousPeriod(filters.from, filters.to);
-      const prevRows = await this.movementsService.list(user, shopId, prevRange);
+      const prevRows = await this.movementsService.listAnalytics(user, shopId, prevRange);
       let prevTagged = prevRows.map((r) => ({
         ...r,
         kind: this.inferMovementKind(r),
