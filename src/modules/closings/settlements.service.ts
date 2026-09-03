@@ -14,6 +14,7 @@ import { Concept } from '../../entities/concept.entity';
 import { ShopsService } from '../shops/shops.service';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
 import { MovementsService } from '../movements/movements.service';
+import { ShopLiveService } from '../shop-live/shop-live.service';
 import { AuthUser } from '../../common/decorators';
 import { ClosingSourceKind, ConceptKind, LedgerAccountType } from '../../common/enums';
 import { SettleClosingSourcesDto } from './dto/settlement.dto';
@@ -53,6 +54,7 @@ export class SettlementsService implements OnModuleInit {
     private readonly shops: ShopsService,
     private readonly catalogSeed: CatalogSeedService,
     private readonly movements: MovementsService,
+    private readonly live: ShopLiveService,
   ) {}
 
   async onModuleInit() {
@@ -283,6 +285,7 @@ export class SettlementsService implements OnModuleInit {
       `Rendición ${settleBatchId}: ${rows.length} montos → ${dest.name} ($${total.toFixed(2)})`,
     );
 
+    this.live.tick(shopId, 'inbox');
     return {
       ok: true,
       settled: rows.length,

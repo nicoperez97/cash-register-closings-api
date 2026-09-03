@@ -1,7 +1,7 @@
 import { Injectable, MessageEvent } from '@nestjs/common';
 import { Observable, Subject } from 'rxjs';
 
-export type ShopLiveDomain = 'reservations' | 'waiting' | 'attendance';
+export type ShopLiveDomain = 'reservations' | 'waiting' | 'attendance' | 'inbox';
 
 @Injectable()
 export class ShopLiveService {

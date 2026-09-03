@@ -20,6 +20,7 @@ import { ShopsService } from '../shops/shops.service';
 import { AccountsService } from '../accounts/accounts.service';
 import { ClosingMovementsSyncService } from '../movements/closing-movements-sync.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { ShopLiveService } from '../shop-live/shop-live.service';
 import { AuthUser } from '../../common/decorators';
 import {
   CashPendingWithdrawalStatus,
@@ -54,6 +55,7 @@ export class CashWithdrawalsService implements OnModuleInit {
     private readonly accounts: AccountsService,
     private readonly closingMovements: ClosingMovementsSyncService,
     private readonly notifications: NotificationsService,
+    private readonly live: ShopLiveService,
   ) {}
 
   async onModuleInit() {
@@ -138,6 +140,7 @@ export class CashWithdrawalsService implements OnModuleInit {
       closing.cashPendingPickup = money(amount);
       await this.closings.save(closing);
     }
+    this.live.tick(closing.shopId, 'inbox');
   }
 
   async cancelForClosing(closingId: string): Promise<void> {
@@ -373,6 +376,7 @@ export class CashWithdrawalsService implements OnModuleInit {
       );
     });
 
+    this.live.tick(shopId, 'inbox');
     return { ok: true, picked: toPick.length, pickBatchId };
   }
 
