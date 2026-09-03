@@ -67,7 +67,7 @@ export class SalariesController {
     @Param('shopId') shopId: string,
     @Query('includeInactive') includeInactive?: string,
   ) {
-    const include = includeInactive === undefined || includeInactive === 'true';
+    const include = includeInactive === 'true';
     return this.salaries.list(user, shopId, include);
   }
 
@@ -91,7 +91,7 @@ export class SalariesController {
     @Query('includeInactive') includeInactive: string | undefined,
     @Res() res: Response,
   ) {
-    const include = includeInactive === undefined || includeInactive === 'true';
+    const include = includeInactive === 'true';
     const { buffer, filename } = await this.salaries.exportXlsx(user, shopId, include);
     res.setHeader(
       'Content-Type',

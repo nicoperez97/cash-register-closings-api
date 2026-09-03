@@ -252,7 +252,7 @@ export class PayrollService implements OnModuleInit {
 
   private shopHolidayMult(shop: Shop | null | undefined): number {
     const v = n(shop?.holidayPayMultiplier);
-    return v > 0 ? v : 2;
+    return v > 0 ? v : 1;
   }
 
   private employeeHolidayMult(emp: Employee, shop: Shop | null | undefined): number {
