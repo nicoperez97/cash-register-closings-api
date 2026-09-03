@@ -50,10 +50,18 @@ export class SalariesService implements OnModuleInit {
     try {
       await this.shopsRepo.query(`
         ALTER TABLE shops
-          ADD COLUMN holidayPayMultiplier DECIMAL(4,2) NOT NULL DEFAULT 2.00
+          ADD COLUMN holidayPayMultiplier DECIMAL(4,2) NOT NULL DEFAULT 1.00
       `);
     } catch {
       // ya existe
+    }
+    try {
+      await this.shopsRepo.query(`
+        ALTER TABLE shops
+          MODIFY COLUMN holidayPayMultiplier DECIMAL(4,2) NOT NULL DEFAULT 1.00
+      `);
+    } catch {
+      // ignore
     }
     try {
       await this.shopsRepo.query(`
@@ -133,7 +141,7 @@ export class SalariesService implements OnModuleInit {
 
   private shopHolidayMult(shop: Shop): number {
     const v = n(shop.holidayPayMultiplier);
-    return v > 0 ? v : 2;
+    return v > 0 ? v : 1;
   }
 
   private effectiveHolidayMult(emp: Employee, shop: Shop): number {
@@ -177,7 +185,7 @@ export class SalariesService implements OnModuleInit {
     };
   }
 
-  async list(user: AuthUser, shopId: string, includeInactive = true) {
+  async list(user: AuthUser, shopId: string, includeInactive = false) {
     this.shops.assertShopAccess(user, shopId);
     const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
     if (!shop) throw new NotFoundException('Local no encontrado');
@@ -335,7 +343,7 @@ export class SalariesService implements OnModuleInit {
     }));
   }
 
-  async exportXlsx(user: AuthUser, shopId: string, includeInactive = true) {
+  async exportXlsx(user: AuthUser, shopId: string, includeInactive = false) {
     const data = await this.list(user, shopId, includeInactive);
     const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
     const wb = new ExcelJS.Workbook();

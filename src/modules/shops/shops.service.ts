@@ -288,10 +288,18 @@ export class ShopsService implements OnModuleInit {
     try {
       await this.shops.query(`
         ALTER TABLE shops
-          ADD COLUMN holidayPayMultiplier DECIMAL(4,2) NOT NULL DEFAULT 2.00
+          ADD COLUMN holidayPayMultiplier DECIMAL(4,2) NOT NULL DEFAULT 1.00
       `);
     } catch {
       // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          MODIFY COLUMN holidayPayMultiplier DECIMAL(4,2) NOT NULL DEFAULT 1.00
+      `);
+    } catch {
+      // ignore
     }
     try {
       await this.shops.query(`
@@ -606,8 +614,8 @@ export class ShopsService implements OnModuleInit {
         serviceAttendanceWithHours: dto.serviceAttendanceWithHours ?? true,
         holidayPayMultiplier: String(
           dto.holidayPayMultiplier !== undefined && dto.holidayPayMultiplier !== null
-            ? Math.max(0.01, Number(dto.holidayPayMultiplier) || 2)
-            : 2,
+            ? Math.max(0.01, Number(dto.holidayPayMultiplier) || 1)
+            : 1,
         ),
         menuEnabled: dto.menuEnabled ?? false,
         defaultChangeAmount: String(dto.defaultChangeAmount ?? 0),
@@ -1128,7 +1136,7 @@ export class ShopsService implements OnModuleInit {
         s.serviceAttendanceWithHours === undefined || s.serviceAttendanceWithHours === null
           ? true
           : !!s.serviceAttendanceWithHours,
-      holidayPayMultiplier: Number(s.holidayPayMultiplier ?? 2) || 2,
+      holidayPayMultiplier: Number(s.holidayPayMultiplier ?? 1) || 1,
       menuEnabled: !!s.menuEnabled,
       defaultChangeAmount: Number(s.defaultChangeAmount),
       productionDefaultHours: Number(s.productionDefaultHours ?? 8) || 8,
