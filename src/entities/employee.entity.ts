@@ -73,11 +73,11 @@ export class Employee extends BaseEntity {
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
   overtimeHourRate: string;
 
-  /** Hora de entrada de servicio de este empleado (HH:mm). Vacío = default del local. */
+  /** Hora de entrada de servicio de este empleado (HH:mm). Vacío = hereda turno. */
   @Column({ type: 'varchar', length: 5, nullable: true })
   serviceCheckIn?: string | null;
 
-  /** Hora de retirada de servicio de este empleado (HH:mm). Vacío = default del local. */
+  /** Hora de retirada de servicio de este empleado (HH:mm). Vacío = hereda turno. */
   @Column({ type: 'varchar', length: 5, nullable: true })
   serviceCheckOut?: string | null;
 

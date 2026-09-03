@@ -16,13 +16,11 @@ import { Shop } from '../../entities/shop.entity';
 import { AuthUser } from '../../common/decorators';
 import { isEntityActive } from '../../common/active.util';
 import {
-  DEFAULT_SERVICE_CHECK_IN,
-  DEFAULT_SERVICE_CHECK_OUT,
-  requireHhMm,
   resolveOvertimeHourRate,
   scheduledShiftHours,
 } from '../../common/shift-hours.util';
-import { shiftServiceSchedule } from '../../common/employee-shift.util';
+import { shiftServiceSchedule, shiftWindowFallback } from '../../common/employee-shift.util';
+import { normalizeShopShifts } from '../../common/shop-shifts';
 import { ShopsService } from '../shops/shops.service';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
@@ -106,15 +104,13 @@ export class SalariesService implements OnModuleInit {
     const shops = await this.shopsRepo.find();
     for (const shop of shops) {
       if (shop.dailySalaryConvertedAt) continue;
-      const shopDefaults = {
-        checkIn: requireHhMm(shop.serviceDefaultCheckIn, DEFAULT_SERVICE_CHECK_IN),
-        checkOut: requireHhMm(shop.serviceDefaultCheckOut, DEFAULT_SERVICE_CHECK_OUT),
-      };
+      const shifts = normalizeShopShifts(shop.shifts, shop.openingTime);
+      const fallback = shiftWindowFallback(shifts, null);
       const employees = await this.employees.find({ where: { shopId: shop.id } });
       for (const emp of employees) {
         const daily = n(emp.baseSalary);
         if (daily <= 0) continue;
-        const schedule = shiftServiceSchedule(emp, null, shopDefaults);
+        const schedule = shiftServiceSchedule(emp, null, fallback);
         const hours = scheduledShiftHours(schedule.checkIn, schedule.checkOut);
         const hourly = hours > 0 ? daily / hours : daily / 8;
         const prevBase = emp.baseSalary;
@@ -155,12 +151,8 @@ export class SalariesService implements OnModuleInit {
   private toSalaryRow(e: Employee, shop: Shop) {
     const overtimeHourRate = n(e.overtimeHourRate);
     const hourlyRate = n(e.baseSalary);
-    const defaultIn = requireHhMm(shop.serviceDefaultCheckIn, DEFAULT_SERVICE_CHECK_IN);
-    const defaultOut = requireHhMm(shop.serviceDefaultCheckOut, DEFAULT_SERVICE_CHECK_OUT);
-    const schedule = shiftServiceSchedule(e, null, {
-      checkIn: defaultIn,
-      checkOut: defaultOut,
-    });
+    const shifts = normalizeShopShifts(shop.shifts, shop.openingTime);
+    const schedule = shiftServiceSchedule(e, null, shiftWindowFallback(shifts, null));
     const effectiveRate = resolveOvertimeHourRate(hourlyRate, overtimeHourRate);
     return {
       id: e.id,

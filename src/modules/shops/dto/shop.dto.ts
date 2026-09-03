@@ -197,13 +197,23 @@ export class CreateShopDto {
   @IsBoolean()
   publicServiceRulesEnabled?: boolean;
 
-  @ApiPropertyOptional({ example: '18:00', description: 'Hora de entrada default en servicio (HH:mm)' })
+  @ApiPropertyOptional({
+    deprecated: true,
+    example: '18:00',
+    description:
+      'Legacy. Ignorado: la entrada default sale del turno (opensAt). Se mantiene por compat.',
+  })
   @IsOptional()
   @IsString()
   @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
   serviceDefaultCheckIn?: string;
 
-  @ApiPropertyOptional({ example: '00:00', description: 'Hora de retirada default en servicio (HH:mm)' })
+  @ApiPropertyOptional({
+    deprecated: true,
+    example: '00:00',
+    description:
+      'Legacy. Ignorado: la retirada default sale del turno (closesAt). Se mantiene por compat.',
+  })
   @IsOptional()
   @IsString()
   @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
@@ -217,8 +227,8 @@ export class CreateShopDto {
   serviceAttendanceWithHours?: boolean;
 
   @ApiPropertyOptional({
-    example: 2,
-    description: 'Multiplicador de días feriados en liquidación (default 2)',
+    example: 1,
+    description: 'Multiplicador de días feriados en liquidación (default 1 = mismo precio hora)',
   })
   @IsOptional()
   @IsNumber()
