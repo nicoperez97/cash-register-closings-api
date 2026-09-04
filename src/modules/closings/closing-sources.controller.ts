@@ -12,7 +12,12 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { ClosingSourcesService } from './closing-sources.service';
-import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
+import {
+  CurrentUser,
+  AuthUser,
+  RequireAnyPermissions,
+  RequirePermissions,
+} from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import {
   UpdateShopClosingSourceDto,
@@ -27,7 +32,7 @@ export class ClosingSourcesController {
   constructor(private readonly sources: ClosingSourcesService) {}
 
   @Get()
-  @RequirePermissions('closings.read')
+  @RequireAnyPermissions('closings.read', 'shops.manage')
   list(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
