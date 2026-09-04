@@ -408,19 +408,20 @@ export class ReservationRequestsService implements OnModuleInit {
           : consumed.remaining === 0
             ? ' · Sector completo'
             : ` · Quedan ${consumed.remaining}`;
-      await this.notifyStaff(shop.id, shop.name, {
-        title: 'Reserva auto-confirmada',
-        body: `${guestName} · ${people} · ${when} · ${areaLabel}${left}`,
-      });
-      this.live.tick(shop.id, 'reservations');
-
-      return {
-        ok: true,
+      const out = {
+        ok: true as const,
         id: row.id,
         status: row.status,
-        autoAccepted: true,
+        autoAccepted: true as const,
         capacityRemaining: consumed.remaining,
       };
+      this.live.tick(shop.id, 'reservations');
+      // No await: push/mail no deben frenar la respuesta al comensal.
+      void this.notifyStaff(shop.id, shop.name, {
+        title: 'Reserva auto-confirmada',
+        body: `${guestName} · ${people} · ${when} · ${areaLabel}${left}`,
+      }).catch(() => undefined);
+      return out;
     }
 
     const row = await this.requests.save(
@@ -442,18 +443,23 @@ export class ReservationRequestsService implements OnModuleInit {
     const when = this.formatWhen(businessDate, reservationTime);
     const igBit = instagramHandle ? ` · @${instagramHandle}` : '';
     const areaBit = area === ReservationArea.OUTSIDE ? ' · Afuera' : ' · Adentro';
-    await this.notifyStaff(shop.id, shop.name, {
-      title: 'Nueva solicitud de reserva',
-      body: `${guestName} · ${partySize} ${partySize === 1 ? 'persona' : 'personas'} · ${when}${areaBit}${igBit}`,
-    }, row.id);
-    this.live.tick(shop.id, 'reservations');
-
-    return {
-      ok: true,
+    const out = {
+      ok: true as const,
       id: row.id,
       status: row.status,
-      autoAccepted: false,
+      autoAccepted: false as const,
     };
+    this.live.tick(shop.id, 'reservations');
+    void this.notifyStaff(
+      shop.id,
+      shop.name,
+      {
+        title: 'Nueva solicitud de reserva',
+        body: `${guestName} · ${partySize} ${partySize === 1 ? 'persona' : 'personas'} · ${when}${areaBit}${igBit}`,
+      },
+      row.id,
+    ).catch(() => undefined);
+    return out;
   }
 
   async list(user: AuthUser, shopId: string, status?: string) {

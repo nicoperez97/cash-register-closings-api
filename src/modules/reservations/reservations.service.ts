@@ -555,8 +555,9 @@ export class ReservationsService implements OnModuleInit {
         active: true,
       }),
     );
+    const out = this.toReservationDto(row);
     this.live.tick(shopId, 'reservations');
-    return this.toReservationDto(row);
+    return out;
   }
 
   async updateReservation(
@@ -586,8 +587,9 @@ export class ReservationsService implements OnModuleInit {
     }
     // Staff con reservations.manage puede saltar topes adentro/afuera (el alta pública sí los aplica).
     await this.reservations.save(row);
+    const out = this.toReservationDto(row);
     this.live.tick(shopId, 'reservations');
-    return this.toReservationDto(row);
+    return out;
   }
 
   async sendGuestMessage(user: AuthUser, shopId: string, id: string, message: string) {
