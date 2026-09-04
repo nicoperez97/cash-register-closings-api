@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { ShopClosingSource } from '../../entities/shop-closing-source.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { ShopsService } from '../shops/shops.service';
@@ -28,15 +28,24 @@ export class ClosingSourcesService {
 
   async list(user: AuthUser, shopId: string, activeOnly = false) {
     this.shops.assertShopAccess(user, shopId);
-    const where = activeOnly
-      ? { shopId, active: true }
-      : { shopId };
+    const where = activeOnly ? { shopId, active: true } : { shopId };
+    // Sin `relations: ['account']`: el soft-delete de TypeORM a veces excluye filas
+    // cuyo destino está borrado/inactivo, y la pantalla queda vacía.
     const rows = await this.sources.find({
       where,
-      relations: ['account'],
       order: { sortOrder: 'ASC', createdAt: 'ASC' },
     });
-    return rows.map((r) => this.toDto(r));
+    const accountIds = [
+      ...new Set(rows.map((r) => r.accountId).filter((id): id is string => !!id)),
+    ];
+    const accounts = accountIds.length
+      ? await this.accounts.find({
+          where: { shopId, id: In(accountIds) },
+          withDeleted: true,
+        })
+      : [];
+    const nameById = new Map(accounts.map((a) => [a.id, a.name]));
+    return rows.map((r) => this.toDto(r, nameById.get(r.accountId ?? '') ?? null));
   }
 
   async create(user: AuthUser, shopId: string, dto: UpsertShopClosingSourceDto) {
@@ -55,13 +64,11 @@ export class ClosingSourcesService {
         includeInDeclared: !!dto.includeInDeclared,
         kind,
         accountId,
-        sortOrder: dto.sortOrder ?? (Number(maxSort?.max ?? 0) + 1),
+        sortOrder: dto.sortOrder ?? Number(maxSort?.max ?? 0) + 1,
         active: dto.active !== false,
       }),
     );
-    return this.toDto(
-      (await this.sources.findOne({ where: { id: row.id }, relations: ['account'] })) ?? row,
-    );
+    return this.toDto(row, await this.accountName(shopId, row.accountId));
   }
 
   async update(
@@ -83,9 +90,7 @@ export class ClosingSourcesService {
       row.accountId = await this.resolveAccount(shopId, kind, dto.accountId ?? row.accountId);
     }
     await this.sources.save(row);
-    return this.toDto(
-      (await this.sources.findOne({ where: { id: row.id }, relations: ['account'] })) ?? row,
-    );
+    return this.toDto(row, await this.accountName(shopId, row.accountId));
   }
 
   async remove(user: AuthUser, shopId: string, id: string) {
@@ -116,7 +121,16 @@ export class ClosingSourcesService {
     return acc.id;
   }
 
-  private toDto(r: ShopClosingSource) {
+  private async accountName(shopId: string, accountId?: string | null): Promise<string | null> {
+    if (!accountId) return null;
+    const acc = await this.accounts.findOne({
+      where: { id: accountId, shopId },
+      withDeleted: true,
+    });
+    return acc?.name ?? null;
+  }
+
+  private toDto(r: ShopClosingSource, accountName: string | null = null) {
     return {
       id: r.id,
       shopId: r.shopId,
@@ -124,7 +138,7 @@ export class ClosingSourcesService {
       includeInDeclared: !!r.includeInDeclared,
       kind: r.kind,
       accountId: r.accountId ?? null,
-      accountName: r.account?.name ?? null,
+      accountName: accountName ?? r.account?.name ?? null,
       sortOrder: r.sortOrder,
       active: !!r.active,
     };
