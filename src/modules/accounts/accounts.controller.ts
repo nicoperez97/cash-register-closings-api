@@ -81,6 +81,13 @@ class CreateAccountDto {
   @Min(0)
   @Max(100)
   commissionPercent?: number;
+  @ApiPropertyOptional({ description: '% de división del socio (solo PARTNER).' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  ownershipPercent?: number;
 }
 
 class UpdateAccountDto {
@@ -131,6 +138,13 @@ class UpdateAccountDto {
   @Min(0)
   @Max(100)
   commissionPercent?: number;
+  @ApiPropertyOptional({ description: '% de división del socio (solo PARTNER).' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  ownershipPercent?: number;
 }
 
 /** Mapa medio de cobro del cierre → id de cuenta (null = sin vincular). */

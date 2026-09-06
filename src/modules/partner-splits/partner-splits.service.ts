@@ -8,12 +8,15 @@ import { Movement } from '../../entities/movement.entity';
 import { Payment } from '../../entities/payment.entity';
 import { AuthUser } from '../../common/decorators';
 import { LedgerAccountType, PaymentStatus } from '../../common/enums';
+import { parseCommissionPercent } from '../../common/account-commission';
 import { ShopsService } from '../shops/shops.service';
 import { MovementsService } from '../movements/movements.service';
+import { CatalogSeedService } from '../../common/catalog-seed.service';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => (Math.round(Number(v || 0) * 100) / 100).toFixed(2);
 const round2 = (v: number) => Math.round(Number(v || 0) * 100) / 100;
+const PCT_EPS = 0.01;
 const EMPTY_EXTRA = { id: 'extra-1', label: '', amount: 0 };
 const PLACEHOLDER_EXTRA_IDS = new Set(['fixed', 'working']);
 const PLACEHOLDER_EXTRA_LABELS = new Set([
@@ -66,6 +69,7 @@ export class PartnerSplitsService implements OnModuleInit {
     @InjectRepository(Payment) private readonly payments: Repository<Payment>,
     private readonly shops: ShopsService,
     private readonly movements: MovementsService,
+    private readonly catalogSeed: CatalogSeedService,
   ) {}
 
   async onModuleInit() {
@@ -232,7 +236,306 @@ export class PartnerSplitsService implements OnModuleInit {
     return this.toRunDto(row, true);
   }
 
+  async saveOwnership(
+    user: AuthUser,
+    shopId: string,
+    items: Array<{ accountId: string; ownershipPercent: number }>,
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    if (!items?.length) throw new BadRequestException('Sin cambios de %');
+    const ids = [...new Set(items.map((i) => i.accountId).filter(Boolean))];
+    const rows = await this.accounts.find({
+      where: { shopId, active: true, type: LedgerAccountType.PARTNER },
+    });
+    const byId = new Map(rows.map((a) => [a.id, a]));
+    for (const item of items) {
+      const row = byId.get(item.accountId);
+      if (!row) throw new BadRequestException(`Cuenta socio no encontrada: ${item.accountId}`);
+      row.ownershipPercent = money(parseCommissionPercent(item.ownershipPercent));
+    }
+    await this.accounts.save([...byId.values()].filter((a) => ids.includes(a.id)));
+    return rows
+      .filter((a) => ids.includes(a.id))
+      .map((a) => ({
+        accountId: a.id,
+        name: a.name,
+        ownershipPercent: parseCommissionPercent(a.ownershipPercent),
+      }));
+  }
+
+  async equalizePreview(
+    user: AuthUser,
+    shopId: string,
+    body: { amount: number; partnerAccountIds?: string[] },
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    return this.buildEqualizePreview(user, shopId, body);
+  }
+
+  async equalizeApply(
+    user: AuthUser,
+    shopId: string,
+    body: {
+      amount: number;
+      partnerAccountIds?: string[];
+      transferActions?: Array<{
+        accountId?: string;
+        fromAccountId?: string;
+        toAccountId?: string;
+        generate: 'skip' | 'payment' | 'movement';
+      }>;
+      sendSurplusToDividends?: boolean;
+    },
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    if (!(round2(n(body.amount)) > 0)) {
+      throw new BadRequestException('Ingresá un monto mayor a cero');
+    }
+    const preview = await this.buildEqualizePreview(user, shopId, body);
+    const transfers = preview.transfers ?? [];
+    const actions = body.transferActions ?? [];
+    const sendSurplus = !!body.sendSurplusToDividends;
+    const today = new Date().toISOString().slice(0, 10);
+    const createdPaymentIds: string[] = [];
+    const createdMovementIds: string[] = [];
+    let distributed = 0;
+
+    if (sendSurplus) {
+      const surplusRows = (preview.partners ?? []).filter((p) => p.difference < -0.004);
+      if (!surplusRows.length) {
+        throw new BadRequestException('No hay sobrante para enviar a Dividendos');
+      }
+      const dividends = await this.catalogSeed.ensureDividendsAccount(shopId);
+      for (const p of surplusRows) {
+        const amount = round2(-p.difference);
+        if (!(amount > 0.004)) continue;
+        const row = await this.movementsRepo.save(
+          this.movementsRepo.create({
+            shopId,
+            businessDate: today,
+            fromAccountId: p.accountId,
+            toAccountId: dividends.id,
+            description: `Equilibrar · sobrante → Dividendos · ${p.name}`,
+            amountUyu: money(amount),
+            invoiced: false,
+            active: true,
+          }),
+        );
+        createdMovementIds.push(row.id);
+        distributed = round2(distributed + amount);
+      }
+    } else {
+      if (!transfers.length) {
+        throw new BadRequestException(
+          preview.surplusTotal > 0.004 && preview.deficitTotal < 0.004
+            ? 'Todos tienen sobrante respecto al objetivo: no hay pases entre socios. Subí el monto, o enviá el sobrante a Dividendos.'
+            : 'No hay diferencias para saldar',
+        );
+      }
+      for (const t of transfers) {
+        const mode = actions.length ? this.generateOf(t, actions) : 'payment';
+        if (mode === 'skip') continue;
+        if (mode === 'payment') {
+          const pay = await this.payments.save(
+            this.payments.create({
+              shopId,
+              title: `Equilibrar · ${t.fromName} → ${t.toName}`,
+              notes: `Equilibrar socios · sale de ${t.fromName} · entra a ${t.toName}`,
+              amount: money(t.amount),
+              accountId: t.fromAccountId,
+              toAccountId: t.toAccountId,
+              status: PaymentStatus.VALIDATED,
+              validatedAt: new Date(),
+              validatedByUserId: user.id,
+              createdByUserId: user.id,
+              active: true,
+            }),
+          );
+          createdPaymentIds.push(pay.id);
+          distributed = round2(distributed + n(t.amount));
+          continue;
+        }
+        const row = await this.movementsRepo.save(
+          this.movementsRepo.create({
+            shopId,
+            businessDate: today,
+            fromAccountId: t.fromAccountId,
+            toAccountId: t.toAccountId,
+            description: `Equilibrar socios · ${t.fromName} → ${t.toName}`,
+            amountUyu: money(t.amount),
+            invoiced: false,
+            active: true,
+          }),
+        );
+        createdMovementIds.push(row.id);
+        distributed = round2(distributed + n(t.amount));
+      }
+    }
+
+    const created = [...createdPaymentIds, ...createdMovementIds];
+    if (!created.length) {
+      throw new BadRequestException(
+        sendSurplus
+          ? 'No se pudo enviar sobrante a Dividendos'
+          : 'Elegí Pago o Movimiento en al menos un pase',
+      );
+    }
+
+    const run = await this.runs.save(
+      this.runs.create({
+        shopId,
+        appliedAt: new Date(),
+        appliedByUserId: user.id,
+        appliedByName: user.fullName || user.email || null,
+        transferCount: created.length,
+        distributedAmount: money(distributed),
+        snapshot: {
+          kind: 'equalize',
+          amount: preview.amount,
+          partners: preview.partners,
+          totals: preview.totals,
+          transfers: preview.transfers,
+          surplusTotal: preview.surplusTotal,
+          deficitTotal: preview.deficitTotal,
+          transferStatus: preview.transferStatus,
+          sendSurplusToDividends: sendSurplus,
+          partnerActions: actions,
+          createdIds: created,
+          createdPaymentIds,
+          createdMovementIds,
+        },
+      }),
+    );
+    const after = await this.buildEqualizePreview(user, shopId, {
+      amount: body.amount,
+      partnerAccountIds: preview.partners.map((p) => p.accountId),
+    });
+    return {
+      createdCount: created.length,
+      createdPaymentCount: createdPaymentIds.length,
+      createdMovementCount: createdMovementIds.length,
+      createdIds: created,
+      runId: run.id,
+      ...after,
+    };
+  }
+
+  private async buildEqualizePreview(
+    user: AuthUser,
+    shopId: string,
+    body: { amount: number; partnerAccountIds?: string[] },
+  ) {
+    const amount = round2(n(body.amount));
+    if (!(amount >= 0)) {
+      throw new BadRequestException('Monto inválido');
+    }
+    const balances = await this.movements.balances(user, shopId);
+    const byId = new Map((balances.accounts ?? []).map((a) => [a.accountId, a]));
+    const accounts = await this.accounts.find({
+      where: { shopId, active: true, type: LedgerAccountType.PARTNER },
+      order: { name: 'ASC' },
+    });
+    if (!accounts.length) {
+      throw new BadRequestException('No hay cuentas de socio en este local');
+    }
+    const requested = (body.partnerAccountIds ?? []).filter(Boolean);
+    const included = requested.length
+      ? accounts.filter((a) => requested.includes(a.id))
+      : accounts;
+    if (!included.length) {
+      throw new BadRequestException('Elegí al menos un socio');
+    }
+
+    let percents = included.map((a) => ({
+      accountId: a.id,
+      name: a.name,
+      ownershipPercent: parseCommissionPercent(a.ownershipPercent),
+      current: round2(n(byId.get(a.id)?.balance)),
+      proposed: false,
+    }));
+
+    const storedSum = round2(percents.reduce((s, p) => s + p.ownershipPercent, 0));
+    const allZero = percents.every((p) => p.ownershipPercent <= 0);
+    if (allZero) {
+      const count = percents.length;
+      const base = round2(100 / count);
+      percents = percents.map((p, i) => ({
+        ...p,
+        ownershipPercent: i === count - 1 ? round2(100 - base * (count - 1)) : base,
+        proposed: true,
+      }));
+    } else if (Math.abs(storedSum - 100) > PCT_EPS) {
+      throw new BadRequestException(
+        `Los % de los socios deben sumar 100 (ahora ${storedSum.toFixed(2)})`,
+      );
+    }
+
+    const partners = percents.map((p) => {
+      const rawTarget = round2((amount * p.ownershipPercent) / 100);
+      return {
+        accountId: p.accountId,
+        name: p.name,
+        current: p.current,
+        ownershipPercent: p.ownershipPercent,
+        proposedPercent: p.proposed,
+        target: rawTarget,
+        difference: round2(rawTarget - p.current),
+      };
+    });
+
+    // Ajuste de centavos: el último socio absorbe la diferencia vs el monto
+    const targetsSum = round2(partners.reduce((s, p) => s + p.target, 0));
+    const drift = round2(amount - targetsSum);
+    if (Math.abs(drift) >= 0.01 && partners.length) {
+      const last = partners[partners.length - 1];
+      last.target = round2(last.target + drift);
+      last.difference = round2(last.target - last.current);
+    }
+
+    const transfers = this.planTransfers(
+      partners.map((p) => ({
+        accountId: p.accountId,
+        name: p.name,
+        difference: p.difference,
+      })),
+    );
+
+    const surplusTotal = round2(
+      partners.filter((p) => p.difference < -0.004).reduce((s, p) => s + -p.difference, 0),
+    );
+    const deficitTotal = round2(
+      partners.filter((p) => p.difference > 0.004).reduce((s, p) => s + p.difference, 0),
+    );
+    let transferStatus: 'need_amount' | 'balanced' | 'transfers' | 'surplus_only' | 'deficit_only' =
+      'balanced';
+    if (!(amount > 0)) transferStatus = 'need_amount';
+    else if (transfers.length) transferStatus = 'transfers';
+    else if (surplusTotal > 0.004 && deficitTotal < 0.004) transferStatus = 'surplus_only';
+    else if (deficitTotal > 0.004 && surplusTotal < 0.004) transferStatus = 'deficit_only';
+
+    return {
+      kind: 'equalize' as const,
+      amount,
+      partners,
+      totals: {
+        amount,
+        ownershipSum: round2(partners.reduce((s, p) => s + p.ownershipPercent, 0)),
+        balances: round2(partners.reduce((s, p) => s + p.current, 0)),
+        targets: round2(partners.reduce((s, p) => s + p.target, 0)),
+        differences: round2(partners.reduce((s, p) => s + p.difference, 0)),
+        transferCount: transfers.length,
+        transferAmount: round2(transfers.reduce((s, t) => s + t.amount, 0)),
+      },
+      transfers,
+      surplusTotal,
+      deficitTotal,
+      transferStatus,
+      proposedEqualPercents: allZero,
+    };
+  }
+
   private toRunDto(row: PartnerSplitRun, withSnapshot: boolean) {
+    const snap = row.snapshot as { kind?: string } | null;
     return {
       id: row.id,
       shopId: row.shopId,
@@ -241,6 +544,7 @@ export class PartnerSplitsService implements OnModuleInit {
       appliedByName: row.appliedByName ?? null,
       transferCount: row.transferCount,
       distributedAmount: n(row.distributedAmount),
+      kind: snap?.kind === 'equalize' ? 'equalize' : 'split',
       ...(withSnapshot ? { snapshot: row.snapshot } : {}),
     };
   }

@@ -189,6 +189,8 @@ export enum LedgerAccountType {
   SUPPLIER = 'SUPPLIER',
   /** Cuenta de servicio: no aparece en «quién se lo lleva». */
   SERVICE = 'SERVICE',
+  /** Dividendos del local: sale del saldo del socio y acumula acá. */
+  DIVIDENDS = 'DIVIDENDS',
 }
 
 export enum ConceptKind {

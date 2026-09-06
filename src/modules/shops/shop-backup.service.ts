@@ -499,6 +499,7 @@ export class ShopBackupService {
           listInTransfers: a.listInTransfers === false ? 0 : 1,
           openingBalance: a.openingBalance ?? 0,
           commissionPercent: a.commissionPercent ?? 0,
+          ownershipPercent: a.ownershipPercent ?? 0,
           active: a.active ? 1 : 0,
         })),
       );
@@ -988,6 +989,7 @@ export class ShopBackupService {
           listInTransfers: this.toBool(r.listInTransfers, true),
           openingBalance: String(r.openingBalance ?? 0),
           commissionPercent: String(r.commissionPercent ?? 0),
+          ownershipPercent: String(r.ownershipPercent ?? 0),
           active: this.toBool(r.active, true),
         }),
       );

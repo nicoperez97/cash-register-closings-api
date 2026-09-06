@@ -13,9 +13,10 @@ import { UserShop } from '../../entities/user-shop.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
 import { AuthUser } from '../../common/decorators';
-import { GlobalRole } from '../../common/enums';
+import { GlobalRole, LedgerAccountType } from '../../common/enums';
 import { isGlobalAdmin, isSuperAdmin } from '../../common/guards';
 import { markDeletedUnique } from '../../common/soft-delete.util';
+import { parseCommissionPercent } from '../../common/account-commission';
 import {
   deriveModulesFromRole,
   ModulePermissionsMap,
@@ -344,6 +345,7 @@ export class UsersService implements OnModuleInit {
       arr.push(l.accountId);
       accountsByUser.set(l.userId, arr);
     }
+    const accountById = new Map(accounts.map((a) => [a.id, a]));
     return rows.map((u) => {
       const dto = this.toDto(u, allLinks);
       const link = links.find((l) => l.userId === u.id);
@@ -351,6 +353,14 @@ export class UsersService implements OnModuleInit {
       const ledgerAccountNames = ledgerAccountIds
         .map((id) => nameByAccount.get(id))
         .filter(Boolean) as string[];
+      const partnerAccounts = ledgerAccountIds
+        .map((id) => accountById.get(id))
+        .filter((a): a is (typeof accounts)[number] => !!a && a.type === LedgerAccountType.PARTNER)
+        .map((a) => ({
+          id: a.id,
+          name: a.name,
+          ownershipPercent: parseCommissionPercent(a.ownershipPercent),
+        }));
       return {
         ...dto,
         shopRole: link?.shopRole ?? u.globalRole,
@@ -367,6 +377,7 @@ export class UsersService implements OnModuleInit {
         ledgerAccountNames,
         ledgerAccountId: ledgerAccountIds[0] ?? null,
         ledgerAccountName: ledgerAccountNames.join(', ') || null,
+        partnerAccounts,
       };
     });
   }
@@ -805,6 +816,13 @@ export class UsersService implements OnModuleInit {
       : [];
     const names = accounts.map((a) => a.name);
     const link = links.find((l) => l.shopId === shopId);
+    const partnerAccounts = accounts
+      .filter((a) => a.type === LedgerAccountType.PARTNER)
+      .map((a) => ({
+        id: a.id,
+        name: a.name,
+        ownershipPercent: parseCommissionPercent(a.ownershipPercent),
+      }));
     return {
       ...dto,
       shopRole: link?.shopRole ?? u.globalRole,
@@ -821,6 +839,7 @@ export class UsersService implements OnModuleInit {
       ledgerAccountNames: names,
       ledgerAccountId: accountIds[0] ?? null,
       ledgerAccountName: names.join(', ') || null,
+      partnerAccounts,
     };
   }
 

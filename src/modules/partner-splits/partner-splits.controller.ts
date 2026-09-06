@@ -9,6 +9,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -83,6 +84,59 @@ class PartnerCompleteDto {
   @ApiProperty()
   @IsBoolean()
   complete: boolean;
+}
+
+class OwnershipItemDto {
+  @ApiProperty()
+  @IsString()
+  accountId: string;
+
+  @ApiProperty()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  ownershipPercent: number;
+}
+
+class OwnershipBatchDto {
+  @ApiProperty({ type: [OwnershipItemDto] })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => OwnershipItemDto)
+  items: OwnershipItemDto[];
+}
+
+class EqualizeDto {
+  @ApiProperty()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  amount: number;
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  partnerAccountIds?: string[];
+
+  @ApiPropertyOptional({
+    description: 'Por cada pase: pago, movimiento o no hacer nada',
+    type: [PartnerGenerateDto],
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => PartnerGenerateDto)
+  transferActions?: PartnerGenerateDto[];
+
+  @ApiPropertyOptional({
+    description:
+      'Si true y hay sobrante sin socio que reciba, envía el exceso de cada socio a Dividendos.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  sendSurplusToDividends?: boolean;
 }
 
 class PartnerSplitConfigDto {
@@ -175,6 +229,36 @@ export class PartnerSplitsController {
       partnerActions: body.partnerActions,
       partnerComplete: body.partnerComplete,
     });
+  }
+
+  @Put('ownership')
+  @RequirePermissions('partnerSplits.manage')
+  saveOwnership(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() body: OwnershipBatchDto,
+  ) {
+    return this.splits.saveOwnership(user, shopId, body.items ?? []);
+  }
+
+  @Post('equalize/preview')
+  @RequirePermissions('partnerSplits.read')
+  equalizePreview(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() body: EqualizeDto,
+  ) {
+    return this.splits.equalizePreview(user, shopId, body);
+  }
+
+  @Post('equalize/apply')
+  @RequirePermissions('partnerSplits.manage')
+  equalizeApply(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() body: EqualizeDto,
+  ) {
+    return this.splits.equalizeApply(user, shopId, body);
   }
 
   @Get('runs')

@@ -12,6 +12,7 @@ export const SYSTEM_LEDGER_ACCOUNTS: Array<{
 }> = [
   { name: '1. Ingreso', code: 'INGRESO', type: LedgerAccountType.SYSTEM },
   { name: '2. Egreso', code: 'EGRESO', type: LedgerAccountType.SYSTEM },
+  { name: 'Dividendos', code: 'DIVIDENDOS', type: LedgerAccountType.DIVIDENDS },
 ];
 
 /**
