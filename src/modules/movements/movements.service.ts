@@ -12,6 +12,7 @@ import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { Concept } from '../../entities/concept.entity';
 import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
+import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
 import { Payment } from '../../entities/payment.entity';
 import { AuthUser } from '../../common/decorators';
 import {
@@ -106,6 +107,13 @@ export interface UpsertMovementDto {
   paymentMethod?: string | null;
   /** expense = gasto; income = ingreso; transfer = entre cuentas */
   kind?: MovementKindFilter;
+  /** Si true, el destino es la cuenta Dividendos del local. */
+  isDividend?: boolean;
+  /**
+   * Socio beneficiario del dividendo (opcional).
+   * No recibe el monto en su saldo: solo queda anotado; el dinero va a Dividendos.
+   */
+  beneficiaryAccountId?: string | null;
 }
 
 type PaymentLink = {
@@ -125,6 +133,8 @@ export class MovementsService implements OnModuleInit {
     @InjectRepository(Concept) private readonly concepts: Repository<Concept>,
     @InjectRepository(User) private readonly users: Repository<User>,
     @InjectRepository(UserShop) private readonly userShops: Repository<UserShop>,
+    @InjectRepository(LedgerAccountUser)
+    private readonly accountLinks: Repository<LedgerAccountUser>,
     @InjectRepository(Payment) private readonly payments: Repository<Payment>,
     private readonly shops: ShopsService,
     private readonly catalogSeed: CatalogSeedService,
@@ -541,6 +551,14 @@ export class MovementsService implements OnModuleInit {
   ) {
     this.shops.assertShopAccess(user, shopId);
     const kind = dto.kind;
+
+    let conceptId = dto.conceptId ?? null;
+    let fromAccountId = this.normalizeAccountId(dto.fromAccountId);
+    let toAccountId = this.normalizeAccountId(dto.toAccountId);
+    const fromUserId = this.normalizeUserId(dto.fromUserId);
+    let toUserId = this.normalizeUserId(dto.toUserId);
+
+    // Permisos: transferencias normales requieren manage; dividendo propio puede el dueño de la cuenta socio.
     // El flujo de pagos ya autorizó el abono: no exige expenses.manage al pagador.
     if (!opts?.fromPayment) {
       if (kind === 'expense') {
@@ -548,7 +566,13 @@ export class MovementsService implements OnModuleInit {
       } else if (kind === 'income') {
         this.assertPerm(user, shopId, 'incomes.manage');
       } else if (kind === 'transfer') {
-        this.assertPerm(user, shopId, 'accountTransfers.manage');
+        const ownDividend =
+          !!dto.isDividend &&
+          !!fromAccountId &&
+          (await this.userOwnsPartnerAccount(shopId, user.id, fromAccountId));
+        if (!ownDividend) {
+          this.assertPerm(user, shopId, 'accountTransfers.manage');
+        }
       } else {
         this.assertAnyPerm(
           user,
@@ -561,12 +585,6 @@ export class MovementsService implements OnModuleInit {
       }
     }
 
-    let conceptId = dto.conceptId ?? null;
-    let fromAccountId = this.normalizeAccountId(dto.fromAccountId);
-    let toAccountId = this.normalizeAccountId(dto.toAccountId);
-    const fromUserId = this.normalizeUserId(dto.fromUserId);
-    const toUserId = this.normalizeUserId(dto.toUserId);
-
     if (kind === 'income' && !fromAccountId) {
       const ingreso = await this.findSystemAccount(shopId, 'INGRESO');
       if (!ingreso) throw new BadRequestException('Falta la cuenta de Ingreso del local');
@@ -578,12 +596,49 @@ export class MovementsService implements OnModuleInit {
       toAccountId = egreso.id;
     }
 
+    let dividendFromName: string | null = null;
+    let dividendToName: string | null = null;
     if (kind === 'transfer') {
+      if (dto.isDividend) {
+        const dividends = await this.catalogSeed.ensureDividendsAccount(shopId);
+        toAccountId = dividends.id;
+      }
       if (!fromAccountId || !toAccountId) {
         throw new BadRequestException('La transferencia requiere cuenta origen y destino');
       }
       if (fromAccountId === toAccountId) {
         throw new BadRequestException('Origen y destino deben ser distintos');
+      }
+      if (dto.isDividend) {
+        const from = await this.accounts.findOne({
+          where: { id: fromAccountId, shopId, active: true },
+        });
+        if (!from || from.type !== LedgerAccountType.PARTNER) {
+          throw new BadRequestException('El dividendo debe salir de una cuenta de socio');
+        }
+        dividendFromName = from.name;
+        const beneficiaryId = this.normalizeAccountId(dto.beneficiaryAccountId);
+        if (beneficiaryId) {
+          if (beneficiaryId === fromAccountId) {
+            throw new BadRequestException(
+              'El beneficiario del dividendo debe ser otro socio (distinto del origen)',
+            );
+          }
+          const beneficiary = await this.accounts.findOne({
+            where: { id: beneficiaryId, shopId, active: true },
+          });
+          if (!beneficiary || beneficiary.type !== LedgerAccountType.PARTNER) {
+            throw new BadRequestException('El beneficiario debe ser una cuenta de socio');
+          }
+          dividendToName = beneficiary.name;
+          // Anota el usuario ligado al socio beneficiario; el dinero NO entra a su saldo.
+          if (!toUserId) {
+            const link = await this.accountLinks.findOne({
+              where: { shopId, accountId: beneficiaryId },
+            });
+            if (link) toUserId = link.userId;
+          }
+        }
       }
     }
     if (kind === 'expense' && !conceptId) {
@@ -637,7 +692,17 @@ export class MovementsService implements OnModuleInit {
         toAccountId,
         fromUserId,
         toUserId,
-        description: dto.description?.trim() || null,
+        description:
+          dto.isDividend && kind === 'transfer'
+            ? (
+                dto.description?.trim() ||
+                (dividendFromName && dividendToName
+                  ? `Dividendo · ${dividendFromName} → ${dividendToName}`
+                  : dividendFromName
+                    ? `Dividendo · ${dividendFromName}`
+                    : 'Dividendo')
+              )
+            : dto.description?.trim() || null,
         amountUyu: money(n(dto.amountUyu)),
         usdRate: dto.usdRate != null ? String(dto.usdRate) : null,
         amountUsd: amountUsd != null ? String(amountUsd) : null,
@@ -655,6 +720,44 @@ export class MovementsService implements OnModuleInit {
       void this.notifyAdminsMovementCreated(user, shopId, created).catch(() => undefined);
     }
     return created;
+  }
+
+  /** Mueve un monto de una cuenta socio a Dividendos del local. */
+  async sendToDividends(
+    user: AuthUser,
+    shopId: string,
+    dto: {
+      fromAccountId: string;
+      amountUyu: number;
+      businessDate: string;
+      description?: string | null;
+      beneficiaryAccountId?: string | null;
+    },
+  ) {
+    return this.create(user, shopId, {
+      kind: 'transfer',
+      isDividend: true,
+      fromAccountId: dto.fromAccountId,
+      amountUyu: dto.amountUyu,
+      businessDate: dto.businessDate,
+      description: dto.description ?? null,
+      beneficiaryAccountId: dto.beneficiaryAccountId ?? null,
+    });
+  }
+
+  private async userOwnsPartnerAccount(
+    shopId: string,
+    userId: string,
+    accountId: string,
+  ): Promise<boolean> {
+    const account = await this.accounts.findOne({
+      where: { id: accountId, shopId, active: true, type: LedgerAccountType.PARTNER },
+    });
+    if (!account) return false;
+    const link = await this.accountLinks.findOne({
+      where: { shopId, accountId, userId },
+    });
+    return !!link;
   }
 
   async uploadReceiptFile(
@@ -971,11 +1074,17 @@ export class MovementsService implements OnModuleInit {
     if (filters.from) qb.andWhere('m.businessDate >= :from', { from: filters.from });
     if (filters.to) qb.andWhere('m.businessDate <= :to', { to: filters.to });
     const rows = await qb.getMany();
-    // Socios + canales del local (PVS, MP, efectivo, etc.). Sin SYSTEM (INGRESO/EGRESO).
+    // Socios + canales + Dividendos. Sin SYSTEM (INGRESO/EGRESO).
+    try {
+      await this.catalogSeed.ensureDividendsAccount(shopId);
+    } catch {
+      // best-effort
+    }
     const accounts = await this.accounts.find({
       where: [
         { shopId, active: true, type: LedgerAccountType.PARTNER },
         { shopId, active: true, type: LedgerAccountType.CHANNEL },
+        { shopId, active: true, type: LedgerAccountType.DIVIDENDS },
       ],
       order: { type: 'ASC', name: 'ASC' },
     });
@@ -1013,9 +1122,14 @@ export class MovementsService implements OnModuleInit {
         if (to) to.income += amount;
       }
     }
-    // Canales del local primero, luego socios.
+    // Canales → socios → dividendos.
     const ordered = [...bal.values()].sort((a, b) => {
-      const rank = (t: string) => (t === LedgerAccountType.CHANNEL ? 0 : 1);
+      const rank = (t: string) =>
+        t === LedgerAccountType.CHANNEL
+          ? 0
+          : t === LedgerAccountType.PARTNER
+            ? 1
+            : 2;
       const d = rank(a.type) - rank(b.type);
       if (d !== 0) return d;
       return a.name.localeCompare(b.name, 'es');

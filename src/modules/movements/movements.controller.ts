@@ -89,6 +89,47 @@ class CreateMovementDto {
   @IsOptional()
   @IsIn(['expense', 'income', 'transfer'])
   kind?: 'expense' | 'income' | 'transfer';
+  @ApiPropertyOptional({ description: 'Si true, el destino es la cuenta Dividendos del local.' })
+  @IsOptional()
+  @IsBoolean()
+  isDividend?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Socio beneficiario del dividendo (opcional). No recibe el monto en su saldo; va a Dividendos.',
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  beneficiaryAccountId?: string | null;
+}
+
+class SendToDividendsDto {
+  @ApiProperty()
+  @IsUUID()
+  fromAccountId: string;
+
+  @ApiProperty()
+  @IsNumber()
+  @Min(0.01)
+  amountUyu: number;
+
+  @ApiProperty()
+  @IsDateString()
+  businessDate: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  description?: string | null;
+
+  @ApiPropertyOptional({
+    description: 'Socio beneficiario (opcional). No recibe el monto en su saldo.',
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  beneficiaryAccountId?: string | null;
 }
 
 class UpdateMovementDto {
@@ -395,10 +436,21 @@ export class MovementsController {
     return this.movements.one(user, shopId, id);
   }
 
+  @Post('send-to-dividends')
+  @RequireAnyPermissions('accountTransfers.manage', 'accountTransfers.read', 'movements.manage')
+  sendToDividends(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: SendToDividendsDto,
+  ) {
+    return this.movements.sendToDividends(user, shopId, dto);
+  }
+
   @Post()
   @RequireAnyPermissions(
     'expenses.manage',
     'accountTransfers.manage',
+    'accountTransfers.read',
     'incomes.manage',
     'movements.manage',
   )

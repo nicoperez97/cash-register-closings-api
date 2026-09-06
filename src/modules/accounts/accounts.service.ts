@@ -53,6 +53,8 @@ export class UpsertAccountDto {
   openingBalance?: number | string | null;
   /** Comisión % (0 = sin comisión). */
   commissionPercent?: number | string | null;
+  /** % de división del socio (solo PARTNER). */
+  ownershipPercent?: number | string | null;
 }
 
 @Injectable()
@@ -116,7 +118,15 @@ export class AccountsService implements OnModuleInit {
     try {
       await this.accounts.query(`
         ALTER TABLE ledger_accounts
-          MODIFY COLUMN type ENUM('PARTNER', 'CHANNEL', 'SYSTEM', 'SUPPLIER', 'SERVICE')
+          ADD COLUMN ownershipPercent DECIMAL(6,2) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.accounts.query(`
+        ALTER TABLE ledger_accounts
+          MODIFY COLUMN type ENUM('PARTNER', 'CHANNEL', 'SYSTEM', 'SUPPLIER', 'SERVICE', 'DIVIDENDS')
           NOT NULL DEFAULT 'PARTNER'
       `);
     } catch {
@@ -175,6 +185,10 @@ export class AccountsService implements OnModuleInit {
         listInTransfers: Number(a.listInTransfers ?? 1) !== 0,
         openingBalance: n(a.openingBalance),
         commissionPercent: parseCommissionPercent(a.commissionPercent),
+        ownershipPercent:
+          a.type === LedgerAccountType.PARTNER
+            ? parseCommissionPercent(a.ownershipPercent)
+            : 0,
         userIds: uids,
         userNames: names,
         userFullName: names.join(', ') || null,
@@ -186,6 +200,21 @@ export class AccountsService implements OnModuleInit {
 
   async list(user: AuthUser, shopId: string, opts?: { includeInactive?: boolean }) {
     this.shops.assertShopAccess(user, shopId);
+    try {
+      await this.accounts.query(`
+        ALTER TABLE ledger_accounts
+          MODIFY COLUMN type ENUM('PARTNER', 'CHANNEL', 'SYSTEM', 'SUPPLIER', 'SERVICE', 'DIVIDENDS')
+          NOT NULL DEFAULT 'PARTNER'
+      `);
+    } catch {
+      // enum ya actualizado
+    }
+    try {
+      await this.catalogSeed.ensureShopCatalogs(shopId);
+      await this.catalogSeed.ensureDividendsAccount(shopId);
+    } catch {
+      // seed best-effort
+    }
     const rows = await this.accounts.find({
       where: opts?.includeInactive ? { shopId } : { shopId, active: true },
       order: { type: 'ASC', name: 'ASC' },
@@ -196,6 +225,11 @@ export class AccountsService implements OnModuleInit {
   async create(user: AuthUser, shopId: string, dto: UpsertAccountDto) {
     this.shops.assertShopAccess(user, shopId);
     this.assertOpeningBalanceAllowed(user, dto.openingBalance, 0);
+    if (dto.type === LedgerAccountType.DIVIDENDS) {
+      throw new BadRequestException(
+        'La cuenta Dividendos es única por local y se crea sola (no se agrega a mano)',
+      );
+    }
     const code = dto.code.trim().toUpperCase();
     const clash = await this.accounts.findOne({ where: { shopId, code } });
     if (clash) throw new BadRequestException('Ya existe una cuenta con ese código');
@@ -230,6 +264,11 @@ export class AccountsService implements OnModuleInit {
         commissionPercent: money(
           dto.type === LedgerAccountType.SYSTEM ? 0 : parseCommissionPercent(dto.commissionPercent),
         ),
+        ownershipPercent: money(
+          (dto.type ?? LedgerAccountType.PARTNER) === LedgerAccountType.PARTNER
+            ? parseCommissionPercent(dto.ownershipPercent)
+            : 0,
+        ),
         active: dto.active ?? true,
       }),
     );
@@ -252,7 +291,17 @@ export class AccountsService implements OnModuleInit {
       }
       row.code = code;
     }
-    if (dto.type !== undefined) row.type = dto.type;
+    if (dto.type !== undefined) {
+      if (row.type === LedgerAccountType.DIVIDENDS && dto.type !== LedgerAccountType.DIVIDENDS) {
+        throw new BadRequestException('No se puede cambiar el tipo de la cuenta Dividendos');
+      }
+      if (dto.type === LedgerAccountType.DIVIDENDS && row.type !== LedgerAccountType.DIVIDENDS) {
+        throw new BadRequestException(
+          'La cuenta Dividendos es única por local y se crea sola (no se cambia a mano)',
+        );
+      }
+      row.type = dto.type;
+    }
     if (dto.linkedPaymentMethod !== undefined) {
       const method = dto.linkedPaymentMethod;
       if (method) {
@@ -272,6 +321,14 @@ export class AccountsService implements OnModuleInit {
       row.listInIncomes = false;
       row.listInTransfers = false;
     }
+    if (row.type === LedgerAccountType.DIVIDENDS) {
+      row.hideFromCashWithdraw = true;
+      row.listInExpenses = false;
+      row.listInIncomes = false;
+      row.listInTransfers = true;
+      row.commissionPercent = money(0);
+      row.ownershipPercent = money(0);
+    }
     if (dto.active !== undefined) row.active = dto.active;
     if (dto.openingBalance !== undefined) {
       row.openingBalance = money(parseOpening(dto.openingBalance));
@@ -279,8 +336,14 @@ export class AccountsService implements OnModuleInit {
     if (dto.commissionPercent !== undefined) {
       row.commissionPercent = money(parseCommissionPercent(dto.commissionPercent));
     }
-    if (row.type === LedgerAccountType.SYSTEM) {
+    if (dto.ownershipPercent !== undefined) {
+      row.ownershipPercent = money(parseCommissionPercent(dto.ownershipPercent));
+    }
+    if (row.type === LedgerAccountType.SYSTEM || row.type === LedgerAccountType.DIVIDENDS) {
       row.commissionPercent = money(0);
+      row.ownershipPercent = money(0);
+    } else if (row.type !== LedgerAccountType.PARTNER) {
+      row.ownershipPercent = money(0);
     }
     await this.accounts.save(row);
     if (dto.userIds !== undefined || dto.userId !== undefined) {
@@ -372,8 +435,8 @@ export class AccountsService implements OnModuleInit {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.accounts.findOne({ where: { id, shopId } });
     if (!row) throw new NotFoundException('Cuenta no encontrada');
-    if (row.type === LedgerAccountType.SYSTEM) {
-      throw new BadRequestException('No se pueden eliminar cuentas de sistema');
+    if (row.type === LedgerAccountType.SYSTEM || row.type === LedgerAccountType.DIVIDENDS) {
+      throw new BadRequestException('No se pueden eliminar cuentas de sistema ni Dividendos');
     }
 
     const balance = await this.computeBalance(shopId, id, n(row.openingBalance));

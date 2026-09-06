@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Movement } from '../../entities/movement.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
+import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
 import { Concept } from '../../entities/concept.entity';
 import { CashClosing } from '../../entities/cash-closing.entity';
 import { ClosingExpense } from '../../entities/closing-expense.entity';
@@ -28,6 +29,7 @@ import { MovementsExcelImportService } from './movements-excel-import.service';
       Employee,
       User,
       UserShop,
+      LedgerAccountUser,
       Payment,
     ]),
     ShopsModule,

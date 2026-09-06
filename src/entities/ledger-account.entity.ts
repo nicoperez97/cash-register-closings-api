@@ -46,6 +46,10 @@ export class LedgerAccount extends BaseEntity {
   @Column({ type: 'decimal', precision: 6, scale: 2, default: 0 })
   commissionPercent: string;
 
+  /** % de ownership del socio en Divisiones / Equilibrar (solo PARTNER). */
+  @Column({ type: 'decimal', precision: 6, scale: 2, default: 0 })
+  ownershipPercent: string;
+
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })
   shop: Shop;

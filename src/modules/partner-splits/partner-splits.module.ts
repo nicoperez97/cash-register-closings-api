@@ -7,6 +7,7 @@ import { Movement } from '../../entities/movement.entity';
 import { Payment } from '../../entities/payment.entity';
 import { ShopsModule } from '../shops/shops.module';
 import { MovementsModule } from '../movements/movements.module';
+import { AccountsModule } from '../accounts/accounts.module';
 import { PartnerSplitsController } from './partner-splits.controller';
 import { PartnerSplitsService } from './partner-splits.service';
 
@@ -21,6 +22,7 @@ import { PartnerSplitsService } from './partner-splits.service';
     ]),
     ShopsModule,
     MovementsModule,
+    AccountsModule,
   ],
   controllers: [PartnerSplitsController],
   providers: [PartnerSplitsService],

@@ -67,6 +67,7 @@ export function accountTypeLabel(type?: string | null): string {
     SYSTEM: 'Sistema',
     SUPPLIER: 'Proveedor',
     SERVICE: 'Servicio',
+    DIVIDENDS: 'Dividendos',
   };
   return map[type ?? ''] ?? type ?? '';
 }

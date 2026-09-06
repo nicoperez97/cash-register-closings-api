@@ -8,6 +8,7 @@ import {
   DEFAULT_LEDGER_ACCOUNTS,
   SYSTEM_LEDGER_ACCOUNTS,
 } from './catalog-seed';
+import { LedgerAccountType } from './enums';
 import { inferConceptCategories } from './concept-categories';
 
 @Injectable()
@@ -32,11 +33,29 @@ export class CatalogSeedService {
           code: a.code,
           type: a.type,
           linkedPaymentMethod: null,
+          hideFromCashWithdraw: a.type === LedgerAccountType.DIVIDENDS,
+          listInExpenses: a.type !== LedgerAccountType.DIVIDENDS,
+          listInIncomes: a.type !== LedgerAccountType.DIVIDENDS,
+          listInTransfers: true,
           active: true,
         }),
       );
     }
     await this.ensureConcepts(shopId);
+  }
+
+  /** Cuenta Dividendos del local (una sola). La crea si falta. */
+  async ensureDividendsAccount(shopId: string): Promise<LedgerAccount> {
+    await this.ensureShopCatalogs(shopId);
+    const byCode = await this.accounts.findOne({
+      where: { shopId, code: 'DIVIDENDOS', active: true },
+    });
+    if (byCode) return byCode;
+    const byType = await this.accounts.findOne({
+      where: { shopId, type: LedgerAccountType.DIVIDENDS, active: true },
+    });
+    if (byType) return byType;
+    throw new Error(`No se pudo asegurar la cuenta Dividendos del local ${shopId}`);
   }
 
   /** Catálogo completo al crear un local (sin vincular medios de pago). */
@@ -50,6 +69,10 @@ export class CatalogSeedService {
           code: a.code,
           type: a.type,
           linkedPaymentMethod: null,
+          hideFromCashWithdraw: a.type === LedgerAccountType.DIVIDENDS,
+          listInExpenses: a.type !== LedgerAccountType.DIVIDENDS,
+          listInIncomes: a.type !== LedgerAccountType.DIVIDENDS,
+          listInTransfers: true,
           active: true,
         }),
       );
