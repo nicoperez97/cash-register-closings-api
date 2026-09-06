@@ -35,6 +35,7 @@ import {
 import { createReadStream } from 'fs';
 import { StreamableFile } from '@nestjs/common';
 import * as ExcelJS from 'exceljs';
+import { accountCommissionOf } from '../../common/account-commission';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
@@ -987,6 +988,7 @@ export class MovementsService implements OnModuleInit {
         income: number;
         expense: number;
         opening: number;
+        commissionPercent: number | string;
       }
     >();
     for (const a of accounts) {
@@ -997,6 +999,7 @@ export class MovementsService implements OnModuleInit {
         income: 0,
         expense: 0,
         opening: Number(a.openingBalance ?? 0),
+        commissionPercent: a.commissionPercent ?? 0,
       });
     }
     for (const r of rows) {
@@ -1021,15 +1024,22 @@ export class MovementsService implements OnModuleInit {
       shopId,
       from: filters.from ?? null,
       to: filters.to ?? null,
-      accounts: ordered.map((a) => ({
-        accountId: a.accountId,
-        name: a.name,
-        type: a.type,
-        income: a.income,
-        expense: a.expense,
-        openingBalance: a.opening,
-        balance: a.income - a.expense + a.opening,
-      })),
+      accounts: ordered.map((a) => {
+        const gross = Math.round((a.income - a.expense + a.opening) * 100) / 100;
+        const comm = accountCommissionOf(gross, a.commissionPercent);
+        return {
+          accountId: a.accountId,
+          name: a.name,
+          type: a.type,
+          income: a.income,
+          expense: a.expense,
+          openingBalance: a.opening,
+          balance: gross,
+          commissionPercent: comm.commissionPercent,
+          commissionAmount: comm.commissionAmount,
+          netBalance: comm.netBalance,
+        };
+      }),
     };
   }
 
@@ -1038,7 +1048,11 @@ export class MovementsService implements OnModuleInit {
     const shop = await this.shops.getShopEntity(shopId);
     const data = await this.balances(user, shopId, filters);
     const accounts = data.accounts ?? [];
-    const total = accounts.reduce((sum, a) => sum + Number(a.balance ?? 0), 0);
+    const hasCommission = accounts.some((a) => Number(a.commissionPercent ?? 0) > 0);
+    const colCount = hasCommission ? 4 : 2;
+    const lastCol = hasCommission ? 'D' : 'B';
+    const shownOf = (a: (typeof accounts)[number]) => Number(a.netBalance ?? a.balance ?? 0);
+    const total = accounts.reduce((sum, a) => sum + shownOf(a), 0);
 
     const wb = new ExcelJS.Workbook();
     wb.creator = 'Cash Register Closings';
@@ -1046,8 +1060,12 @@ export class MovementsService implements OnModuleInit {
     const ws = wb.addWorksheet('Saldos');
     ws.getColumn(1).width = 28;
     ws.getColumn(2).width = 18;
+    if (hasCommission) {
+      ws.getColumn(3).width = 18;
+      ws.getColumn(4).width = 18;
+    }
 
-    ws.mergeCells('A1:B1');
+    ws.mergeCells(`A1:${lastCol}1`);
     const title = ws.getCell('A1');
     title.value = 'SALDOS';
     title.font = { bold: true, size: 14 };
@@ -1058,16 +1076,20 @@ export class MovementsService implements OnModuleInit {
       bottom: { style: 'thin', color: { argb: 'FF000000' } },
       right: { style: 'thin', color: { argb: 'FF000000' } },
     };
-    ws.getCell('B1').border = {
-      top: { style: 'thin', color: { argb: 'FF000000' } },
-      left: { style: 'thin', color: { argb: 'FF000000' } },
-      bottom: { style: 'thin', color: { argb: 'FF000000' } },
-      right: { style: 'thin', color: { argb: 'FF000000' } },
-    };
+    for (let c = 2; c <= colCount; c++) {
+      ws.getCell(1, c).border = {
+        top: { style: 'thin', color: { argb: 'FF000000' } },
+        left: { style: 'thin', color: { argb: 'FF000000' } },
+        bottom: { style: 'thin', color: { argb: 'FF000000' } },
+        right: { style: 'thin', color: { argb: 'FF000000' } },
+      };
+    }
     ws.getRow(1).height = 22;
 
     const header = ws.getRow(2);
-    header.values = ['Cuenta', 'Saldo'];
+    header.values = hasCommission
+      ? ['Cuenta', 'Saldo', 'Sin comisión', 'Comisión']
+      : ['Cuenta', 'Saldo'];
     header.font = { bold: true };
     header.eachCell((cell) => {
       cell.fill = {
@@ -1094,11 +1116,21 @@ export class MovementsService implements OnModuleInit {
     for (const a of accounts) {
       const row = ws.getRow(rowIdx);
       row.getCell(1).value = a.name;
-      row.getCell(2).value = formatArMoney(a.balance);
+      row.getCell(2).value = formatArMoney(shownOf(a));
       row.getCell(1).alignment = { horizontal: 'left' };
       row.getCell(2).alignment = { horizontal: 'right' };
       row.getCell(1).border = thin;
       row.getCell(2).border = thin;
+      if (hasCommission) {
+        const percent = Number(a.commissionPercent ?? 0);
+        row.getCell(3).value = percent > 0 ? formatArMoney(a.balance) : '';
+        row.getCell(4).value =
+          percent > 0 ? `${percent} %  ${formatArMoney(a.commissionAmount)}` : '';
+        row.getCell(3).alignment = { horizontal: 'right' };
+        row.getCell(4).alignment = { horizontal: 'right' };
+        row.getCell(3).border = thin;
+        row.getCell(4).border = thin;
+      }
       rowIdx += 1;
     }
 
@@ -1108,6 +1140,10 @@ export class MovementsService implements OnModuleInit {
     totalRow.font = { bold: true };
     totalRow.getCell(1).alignment = { horizontal: 'left' };
     totalRow.getCell(2).alignment = { horizontal: 'right' };
+    if (hasCommission) {
+      totalRow.getCell(3).border = thin;
+      totalRow.getCell(4).border = thin;
+    }
     const thickTop = {
       top: { style: 'medium' as const, color: { argb: 'FF000000' } },
       left: { style: 'thin' as const, color: { argb: 'FF000000' } },
@@ -1116,6 +1152,10 @@ export class MovementsService implements OnModuleInit {
     };
     totalRow.getCell(1).border = thickTop;
     totalRow.getCell(2).border = thickTop;
+    if (hasCommission) {
+      totalRow.getCell(3).border = thickTop;
+      totalRow.getCell(4).border = thickTop;
+    }
 
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());
     const slug = String(shop?.slug || shopId)

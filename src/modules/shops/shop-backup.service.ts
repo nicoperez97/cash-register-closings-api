@@ -407,6 +407,15 @@ export class ShopBackupService {
           `DELETE FROM closing_source_amounts WHERE closingId IN (SELECT id FROM cash_closings WHERE shopId = ?)`,
         );
         return;
+      case 'closing_step_files':
+        try {
+          await run(
+            `DELETE FROM closing_step_files WHERE closingId IN (SELECT id FROM cash_closings WHERE shopId = ?)`,
+          );
+        } catch {
+          // tabla todavía no existe
+        }
+        return;
       case 'settlement_fields':
         await run(
           `UPDATE closing_source_amounts SET settledAt = NULL, settledToAccountId = NULL, settledByUserId = NULL, settledByName = NULL, settlementMovementId = NULL, settleBatchId = NULL WHERE closingId IN (SELECT id FROM cash_closings WHERE shopId = ?)`,
@@ -489,6 +498,7 @@ export class ShopBackupService {
           listInIncomes: a.listInIncomes === false ? 0 : 1,
           listInTransfers: a.listInTransfers === false ? 0 : 1,
           openingBalance: a.openingBalance ?? 0,
+          commissionPercent: a.commissionPercent ?? 0,
           active: a.active ? 1 : 0,
         })),
       );
@@ -977,6 +987,7 @@ export class ShopBackupService {
           listInIncomes: this.toBool(r.listInIncomes, true),
           listInTransfers: this.toBool(r.listInTransfers, true),
           openingBalance: String(r.openingBalance ?? 0),
+          commissionPercent: String(r.commissionPercent ?? 0),
           active: this.toBool(r.active, true),
         }),
       );

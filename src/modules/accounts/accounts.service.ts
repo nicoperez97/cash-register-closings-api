@@ -20,6 +20,7 @@ import {
   LinkedPaymentMethod,
 } from '../../common/enums';
 import { canConfigureOpeningBalances } from '../../common/guards';
+import { parseCommissionPercent } from '../../common/account-commission';
 import { ShopsService } from '../shops/shops.service';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
 import { markDeletedUnique } from '../../common/soft-delete.util';
@@ -50,6 +51,8 @@ export class UpsertAccountDto {
   listInTransfers?: boolean;
   /** Se suma al saldo de movimientos. */
   openingBalance?: number | string | null;
+  /** Comisión % (0 = sin comisión). */
+  commissionPercent?: number | string | null;
 }
 
 @Injectable()
@@ -98,6 +101,14 @@ export class AccountsService implements OnModuleInit {
       await this.accounts.query(`
         ALTER TABLE ledger_accounts
           ADD COLUMN openingBalance DECIMAL(14,2) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.accounts.query(`
+        ALTER TABLE ledger_accounts
+          ADD COLUMN commissionPercent DECIMAL(6,2) NOT NULL DEFAULT 0
       `);
     } catch {
       // columna ya existe
@@ -163,6 +174,7 @@ export class AccountsService implements OnModuleInit {
         listInIncomes: Number(a.listInIncomes ?? 1) !== 0,
         listInTransfers: Number(a.listInTransfers ?? 1) !== 0,
         openingBalance: n(a.openingBalance),
+        commissionPercent: parseCommissionPercent(a.commissionPercent),
         userIds: uids,
         userNames: names,
         userFullName: names.join(', ') || null,
@@ -215,6 +227,9 @@ export class AccountsService implements OnModuleInit {
             ? false
             : dto.listInTransfers !== false,
         openingBalance: money(parseOpening(dto.openingBalance)),
+        commissionPercent: money(
+          dto.type === LedgerAccountType.SYSTEM ? 0 : parseCommissionPercent(dto.commissionPercent),
+        ),
         active: dto.active ?? true,
       }),
     );
@@ -260,6 +275,12 @@ export class AccountsService implements OnModuleInit {
     if (dto.active !== undefined) row.active = dto.active;
     if (dto.openingBalance !== undefined) {
       row.openingBalance = money(parseOpening(dto.openingBalance));
+    }
+    if (dto.commissionPercent !== undefined) {
+      row.commissionPercent = money(parseCommissionPercent(dto.commissionPercent));
+    }
+    if (row.type === LedgerAccountType.SYSTEM) {
+      row.commissionPercent = money(0);
     }
     await this.accounts.save(row);
     if (dto.userIds !== undefined || dto.userId !== undefined) {

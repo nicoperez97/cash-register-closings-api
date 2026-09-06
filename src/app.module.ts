@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ConfigModule } from './config/config.module';
 import { DatabaseModule } from './database/database.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -36,12 +37,14 @@ import { ServiceRulesModule } from './modules/service-rules/service-rules.module
 import { AiModule } from './modules/ai/ai.module';
 import { ProfileModule } from './modules/profile/profile.module';
 import { PartnerSplitsModule } from './modules/partner-splits/partner-splits.module';
+import { UploadsModule } from './modules/uploads/uploads.module';
 import { JwtAuthGuard, PermissionsGuard } from './common/guards';
 import { PublicAbuseGuard } from './common/public-abuse.guard';
 
 @Module({
   imports: [
     ConfigModule,
+    ScheduleModule.forRoot(),
     DatabaseModule,
     ShopLiveModule,
     AiModule,
@@ -77,6 +80,7 @@ import { PublicAbuseGuard } from './common/public-abuse.guard';
     ServiceRulesModule,
     ProfileModule,
     PartnerSplitsModule,
+    UploadsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

@@ -115,6 +115,7 @@ export type BackupPurgeStep =
   | 'cash_pending_withdrawal_offsets'
   | 'cash_pending_withdrawals'
   | 'closing_source_amounts'
+  | 'closing_step_files'
   | 'settlement_fields'
   | 'shop_closing_sources'
   | 'partner_split_configs'
@@ -179,6 +180,7 @@ export const BACKUP_MODULES: BackupModuleDef[] = [
       'shop_closing_sources',
     ],
     purgeSteps: [
+      'closing_step_files',
       'closing_source_amounts',
       'closing_expenses',
       'closing_extra_lines',
@@ -510,6 +512,7 @@ export const PURGE_STEP_ORDER: BackupPurgeStep[] = [
   'payments',
   'partner_split_configs',
   'settlement_fields',
+  'closing_step_files',
   'closing_source_amounts',
   'movements',
   'expenses',

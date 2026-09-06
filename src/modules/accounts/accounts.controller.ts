@@ -16,12 +16,16 @@ import {
   IsBoolean,
   IsEnum,
   IsArray,
+  IsNumber,
   IsOptional,
   IsString,
   IsUUID,
+  Max,
+  Min,
   MinLength,
   ValidateIf,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 import { CurrentUser, AuthUser, RequireAnyPermissions, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { LedgerAccountType, LinkedPaymentMethod } from '../../common/enums';
@@ -70,6 +74,13 @@ class CreateAccountDto {
   @ApiPropertyOptional({ description: 'Saldo inicial. Se suma al saldo de movimientos.' })
   @IsOptional()
   openingBalance?: number;
+  @ApiPropertyOptional({ description: 'Comisión % (0 = sin comisión). En Saldos se muestra el neto.' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  commissionPercent?: number;
 }
 
 class UpdateAccountDto {
@@ -113,6 +124,13 @@ class UpdateAccountDto {
   @ApiPropertyOptional({ description: 'Saldo inicial. Se suma al saldo de movimientos.' })
   @IsOptional()
   openingBalance?: number;
+  @ApiPropertyOptional({ description: 'Comisión % (0 = sin comisión). En Saldos se muestra el neto.' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  commissionPercent?: number;
 }
 
 /** Mapa medio de cobro del cierre → id de cuenta (null = sin vincular). */

@@ -7,6 +7,7 @@ import { CashPendingWithdrawal } from '../../entities/cash-pending-withdrawal.en
 import { CashPendingWithdrawalOffset } from '../../entities/cash-pending-withdrawal-offset.entity';
 import { ShopClosingSource } from '../../entities/shop-closing-source.entity';
 import { ClosingSourceAmount } from '../../entities/closing-source-amount.entity';
+import { ClosingStepFile } from '../../entities/closing-step-file.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { Concept } from '../../entities/concept.entity';
 import { User } from '../../entities/user.entity';
@@ -21,6 +22,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { TipsModule } from '../tips/tips.module';
 import { ClosingsController } from './closings.controller';
 import { ClosingsService } from './closings.service';
+import { ClosingStepFilesService } from './closing-step-files.service';
 import { ClosingSourcesController } from './closing-sources.controller';
 import { ClosingSourcesService } from './closing-sources.service';
 import { CashWithdrawalsController } from './cash-withdrawals.controller';
@@ -40,6 +42,7 @@ import { ExcelImportService } from './excel-import.service';
       CashPendingWithdrawalOffset,
       ShopClosingSource,
       ClosingSourceAmount,
+      ClosingStepFile,
       LedgerAccount,
       Concept,
       User,
@@ -62,12 +65,19 @@ import { ExcelImportService } from './excel-import.service';
   ],
   providers: [
     ClosingsService,
+    ClosingStepFilesService,
     CashWithdrawalsService,
     ClosingSourcesService,
     SettlementsService,
     WhatsappImportService,
     ExcelImportService,
   ],
-  exports: [ClosingsService, CashWithdrawalsService, ClosingSourcesService, SettlementsService],
+  exports: [
+    ClosingsService,
+    ClosingStepFilesService,
+    CashWithdrawalsService,
+    ClosingSourcesService,
+    SettlementsService,
+  ],
 })
 export class ClosingsModule {}

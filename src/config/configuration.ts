@@ -64,6 +64,12 @@ export default () => {
     google: {
       clientId: (env.GOOGLE_CLIENT_ID ?? '').trim(),
     },
+    uploads: {
+      dir: (env.UPLOADS_DIR ?? '').trim(),
+      retentionDays: parseInt(env.UPLOADS_RETENTION_DAYS ?? '365', 10),
+      purgeCron: (env.UPLOADS_PURGE_CRON ?? '0 5 * * *').trim(),
+      purgeTz: (env.UPLOADS_PURGE_TZ ?? 'America/Argentina/Buenos_Aires').trim(),
+    },
   };
 };
 

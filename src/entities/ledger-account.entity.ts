@@ -42,6 +42,10 @@ export class LedgerAccount extends BaseEntity {
   @Column({ type: 'decimal', precision: 14, scale: 2, default: 0 })
   openingBalance: string;
 
+  /** Comisión % sobre el saldo (0 = sin comisión). En Saldos se muestra el neto. */
+  @Column({ type: 'decimal', precision: 6, scale: 2, default: 0 })
+  commissionPercent: string;
+
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })
   shop: Shop;

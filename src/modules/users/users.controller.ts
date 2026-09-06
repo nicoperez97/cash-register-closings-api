@@ -106,6 +106,12 @@ class CreateUserDto {
   @IsOptional()
   @IsBoolean()
   canEditPayments?: boolean;
+  @ApiPropertyOptional({
+    description: 'Si es true, en el cierre hay que adjuntar archivo cuando el campo tiene monto',
+  })
+  @IsOptional()
+  @IsBoolean()
+  requireClosingFiles?: boolean;
   @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() phone?: string | null;
   @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() bankAlias?: string | null;
   @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() cbu?: string | null;
@@ -183,6 +189,12 @@ class UpdateUserDto {
   @IsOptional()
   @IsBoolean()
   canEditPayments?: boolean;
+  @ApiPropertyOptional({
+    description: 'Si es true, en el cierre hay que adjuntar archivo cuando el campo tiene monto',
+  })
+  @IsOptional()
+  @IsBoolean()
+  requireClosingFiles?: boolean;
   @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() phone?: string | null;
   @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() bankAlias?: string | null;
   @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() cbu?: string | null;

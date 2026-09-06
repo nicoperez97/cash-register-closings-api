@@ -859,11 +859,21 @@ export class ReportsService {
     wsExp.getRow(1).font = { bold: true };
 
     const wsBal = wb.addWorksheet('Saldos');
-    wsBal.columns = [
-      { key: 'name', width: 22 },
-      { key: 'balance', width: 16 },
-    ];
-    wsBal.mergeCells('A1:B1');
+    const hasCommission = (balances.accounts ?? []).some(
+      (a) => Number(a.commissionPercent ?? 0) > 0,
+    );
+    wsBal.columns = hasCommission
+      ? [
+          { key: 'name', width: 22 },
+          { key: 'balance', width: 16 },
+          { key: 'gross', width: 16 },
+          { key: 'commission', width: 18 },
+        ]
+      : [
+          { key: 'name', width: 22 },
+          { key: 'balance', width: 16 },
+        ];
+    wsBal.mergeCells(hasCommission ? 'A1:D1' : 'A1:B1');
     wsBal.getCell('A1').value = 'SALDOS';
     wsBal.getCell('A1').font = { bold: true };
     wsBal.getCell('A1').alignment = { horizontal: 'center' };
@@ -882,19 +892,55 @@ export class ReportsService {
       fgColor: { argb: 'FFD9D9D9' },
     };
     wsBal.getCell('B2').alignment = { horizontal: 'center' };
+    if (hasCommission) {
+      wsBal.getCell('C2').value = 'Sin comisión';
+      wsBal.getCell('D2').value = 'Comisión';
+      for (const col of ['C', 'D']) {
+        wsBal.getCell(`${col}2`).font = { bold: true };
+        wsBal.getCell(`${col}2`).fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFD9D9D9' },
+        };
+        wsBal.getCell(`${col}2`).alignment = { horizontal: 'center' };
+      }
+    }
     let balTotal = 0;
     for (const a of balances.accounts) {
-      balTotal += n(a.balance);
-      const row = wsBal.addRow({ name: a.name, balance: n(a.balance) });
+      const shown = n(a.netBalance ?? a.balance);
+      balTotal += shown;
+      const row = wsBal.addRow(
+        hasCommission
+          ? {
+              name: a.name,
+              balance: shown,
+              gross: Number(a.commissionPercent ?? 0) > 0 ? n(a.balance) : '',
+              commission:
+                Number(a.commissionPercent ?? 0) > 0
+                  ? `${a.commissionPercent} %  ${n(a.commissionAmount)}`
+                  : '',
+            }
+          : { name: a.name, balance: shown },
+      );
       row.getCell(2).numFmt = '"$"#,##0.00';
       row.getCell(2).alignment = { horizontal: 'right' };
+      if (hasCommission && Number(a.commissionPercent ?? 0) > 0) {
+        row.getCell(3).numFmt = '"$"#,##0.00';
+        row.getCell(3).alignment = { horizontal: 'right' };
+        row.getCell(4).alignment = { horizontal: 'right' };
+      }
     }
-    const totalRow = wsBal.addRow({ name: 'TOTAL', balance: balTotal });
+    const totalRow = wsBal.addRow(
+      hasCommission
+        ? { name: 'TOTAL', balance: balTotal, gross: '', commission: '' }
+        : { name: 'TOTAL', balance: balTotal },
+    );
     totalRow.font = { bold: true };
     totalRow.getCell(2).numFmt = '"$"#,##0.00';
     totalRow.getCell(2).alignment = { horizontal: 'right' };
+    const balCols = hasCommission ? ['A', 'B', 'C', 'D'] : ['A', 'B'];
     for (let r = 1; r <= wsBal.rowCount; r++) {
-      for (const col of ['A', 'B']) {
+      for (const col of balCols) {
         const cell = wsBal.getCell(`${col}${r}`);
         cell.border = {
           top: { style: 'thin' },

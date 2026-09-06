@@ -43,6 +43,8 @@ import { CreateClosingDto, UpdateClosingDto } from './dto/closing.dto';
 import { applyClosingFilters, ClosingListFilters } from './closing-filters';
 import { ClosingPosnetAmount, sumPosnetsByType } from '../../common/posnet';
 import { CashWithdrawalsService } from './cash-withdrawals.service';
+import { ClosingStepFilesService } from './closing-step-files.service';
+import { missingRequiredClosingFiles } from './closing-required-files';
 import { TipsService } from '../tips/tips.service';
 
 const n = (v?: number | string | null) => Number(v ?? 0);
@@ -88,6 +90,7 @@ export class ClosingsService implements OnModuleInit {
     private readonly accounts: AccountsService,
     private readonly notifications: NotificationsService,
     private readonly cashWithdrawals: CashWithdrawalsService,
+    private readonly stepFiles: ClosingStepFilesService,
     private readonly tips: TipsService,
   ) {}
 
@@ -305,7 +308,10 @@ export class ClosingsService implements OnModuleInit {
     return shift;
   }
 
-  private toDto(c: CashClosing, extras?: { expensesTotal?: number }) {
+  private toDto(
+    c: CashClosing,
+    extras?: { expensesTotal?: number; stepFiles?: Awaited<ReturnType<ClosingStepFilesService['listForClosing']>> },
+  ) {
     return {
       id: c.id, shopId: c.shopId, businessDate: c.businessDate,
       shiftId: c.shiftId ?? null,
@@ -350,6 +356,7 @@ export class ClosingsService implements OnModuleInit {
         amount: n(s.amount),
         lines: sourceLinesOf(s.lines),
       })),
+      stepFiles: extras?.stepFiles ?? [],
     };
   }
 
@@ -416,7 +423,8 @@ export class ClosingsService implements OnModuleInit {
       relations: ['expenses', 'extraLines', 'sourceAmounts'],
     });
     if (!row) throw new NotFoundException('Cierre no encontrado');
-    return this.toDto(row);
+    const stepFiles = await this.stepFiles.listForClosing(id);
+    return this.toDto(row, { stepFiles });
   }
 
   async create(user: AuthUser, shopId: string, dto: CreateClosingDto) {
@@ -597,6 +605,19 @@ export class ClosingsService implements OnModuleInit {
     }
     await this.syncMovements(row.id);
     await this.syncTipsFromClosing(user, shopId, row.id, merged);
+    await this.assertRequiredStepFiles(user, shopId, row.id, {
+      posnetAmounts: posnetAmounts ?? [],
+      posSystemAmount: row.posSystemAmount,
+      cardAmount: row.cardAmount,
+      mercadoPagoAmount: row.mercadoPagoAmount,
+      accountDniAmount: row.accountDniAmount,
+      otherAmount: row.otherAmount,
+      sourceAmounts: (dto.sourceAmounts ??
+        row.sourceAmounts?.map((s) => ({
+          sourceId: s.sourceId,
+          amount: n(s.amount),
+        }))) as Array<{ sourceId?: string | null; amount?: number | null }>,
+    });
     return this.getOne(user, shopId, id);
   }
 
@@ -659,6 +680,18 @@ export class ClosingsService implements OnModuleInit {
       relations: ['expenses', 'extraLines', 'sourceAmounts'],
     });
     if (!row) throw new NotFoundException('Cierre no encontrado');
+    await this.assertRequiredStepFiles(user, shopId, row.id, {
+      posnetAmounts: row.posnetAmounts ?? [],
+      posSystemAmount: row.posSystemAmount,
+      cardAmount: row.cardAmount,
+      mercadoPagoAmount: row.mercadoPagoAmount,
+      accountDniAmount: row.accountDniAmount,
+      otherAmount: row.otherAmount,
+      sourceAmounts: row.sourceAmounts?.map((s) => ({
+        sourceId: s.sourceId,
+        amount: n(s.amount),
+      })),
+    });
     row.status = ClosingStatus.LOCKED;
     await this.closings.save(row);
     await this.syncMovements(row.id);
@@ -700,6 +733,7 @@ export class ClosingsService implements OnModuleInit {
     await this.expenses.delete({ closingId: id });
     await this.extras.delete({ closingId: id });
     await this.sourceAmounts.delete({ closingId: id });
+    await this.stepFiles.deleteForClosing(shopId, id);
     row.businessDateKey = markDeletedUnique(
       row.businessDateKey || closingDateKey(row.businessDate),
       row.id,
@@ -861,5 +895,42 @@ export class ClosingsService implements OnModuleInit {
         closingId: closing.id,
       })),
     );
+  }
+
+  private async assertRequiredStepFiles(
+    user: AuthUser,
+    shopId: string,
+    closingId: string,
+    snapshot: {
+      posnetAmounts: Array<{
+        posnetId: string;
+        type?: string | null;
+        name?: string | null;
+        amount?: number | string | null;
+      }>;
+      posSystemAmount?: number | string | null;
+      cardAmount?: number | string | null;
+      mercadoPagoAmount?: number | string | null;
+      accountDniAmount?: number | string | null;
+      otherAmount?: number | string | null;
+      sourceAmounts?: Array<{
+        sourceId?: string | null;
+        name?: string | null;
+        amount?: number | string | null;
+      }>;
+    },
+  ) {
+    const link = await this.userShops.findOne({ where: { userId: user.id, shopId } });
+    if (!link?.requireClosingFiles) return;
+    const shop = await this.shopRepo.findOne({ where: { id: shopId } });
+    const files = await this.stepFiles.listForClosing(closingId);
+    const missing = missingRequiredClosingFiles({
+      ...snapshot,
+      shopPosnets: (shop?.posnets ?? []).map((p) => ({ id: p.id, type: p.type })),
+      files,
+    });
+    if (missing.length) {
+      throw new BadRequestException(`Falta archivo en ${missing.join(', ')}`);
+    }
   }
 }

@@ -404,6 +404,71 @@ taxId = CUIT (XX-XXXXXXXX-X). invoiceType = A/B/C/etc. Montos numéricos con dec
     };
   }
 
+  async parseClosingStepAmount(
+    file: Express.Multer.File,
+    opts: { slot: string; sourceName?: string | null },
+  ): Promise<
+    GeminiResult<{
+      amount: number | null;
+      label: string | null;
+      note: string | null;
+    }>
+  > {
+    if (!this.isEnabled()) {
+      return this.fail('disabled', 'Gemini no está configurado (falta GEMINI_API_KEY).');
+    }
+    const part = this.filePart(file);
+    if (!part) return this.fail('empty', 'No se pudo leer el archivo para Gemini.');
+    const isPos = opts.slot === 'pos_system';
+    const source = String(opts.sourceName ?? '').trim() || 'el canal';
+    const system = `Sos un extractor de totales de cierre de caja de un local gastronómico (Argentina/Uruguay).
+Devolvé SOLO JSON:
+{"amount":number|null,"label":"string|null","note":"string|null"}
+Reglas:
+- amount: el total del día o turno en pesos, número con decimales, SIN puntos de miles (ej. 12345.67).
+- ${
+      isPos
+        ? 'Este archivo es la caja del sistema / POS (Restosoft, WeMenu, u otro). Priorizá "total del sistema", "total ventas", "total caja", "total del día", "neto del día".'
+        : `Este archivo es "${source}" (posnet, PVS, Mercado Pago, Cuenta DNI, Pedidos Ya, Rappi u otro canal). Priorizá el total a rendir, liquidación o ventas de ESA fuente. Si hay comisión, usá el monto cobrado/bruto del local, no la comisión.`
+    }
+- label: de dónde salió el número (ej. "Total ventas").
+- note: una frase corta si hay duda. Vacío si está claro.
+- No inventes. Si no hay un total claro, amount=null.`;
+    const data = await this.generateJson<{
+      amount?: number | null;
+      label?: string | null;
+      note?: string | null;
+    }>(
+      [
+        {
+          text: `Archivo: ${file.originalname || 'comprobante'}. Extraé el total.`,
+        },
+        part,
+      ],
+      system,
+    );
+    if (!data.ok) {
+      return this.fail(
+        data.reason,
+        data.message.replace(/\s*Se usó el parseo local\.?/gi, '').trim() || data.message,
+      );
+    }
+    const raw = data.data.amount;
+    const amount =
+      raw == null || !Number.isFinite(Number(raw)) ? null : Math.round(Number(raw) * 100) / 100;
+    if (amount != null && amount < 0) {
+      return this.fail('empty', 'Gemini devolvió un total inválido.');
+    }
+    return {
+      ok: true,
+      data: {
+        amount,
+        label: String(data.data.label ?? '').trim().slice(0, 80) || null,
+        note: String(data.data.note ?? '').trim().slice(0, 240) || null,
+      },
+    };
+  }
+
   async analyzeLedgerImport(digest: unknown): Promise<
     GeminiResult<{
       summary: string;

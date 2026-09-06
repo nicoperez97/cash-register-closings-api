@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { extname, join, resolve } from 'path';
+import { DOCUMENT_UPLOAD_FOLDERS } from './upload-retention';
 
 const DEFAULT_DIR = join(process.cwd(), 'uploads');
 
@@ -88,6 +89,29 @@ export function deleteCandidateUploads(shopId: string, candidateId: string): voi
   }
 }
 
+/** Borra los archivos de un cierre (cuentas canales / caja sistema) y la carpeta. */
+export function deleteClosingUploads(shopId: string, closingId: string): void {
+  const root = uploadsRoot();
+  const dir = resolve(root, 'closings', shopId, closingId);
+  if (!dir.startsWith(root) || !existsSync(dir)) return;
+  try {
+    rmSync(dir, { recursive: true, force: true });
+  } catch {
+    try {
+      for (const name of readdirSync(dir)) {
+        try {
+          unlinkSync(join(dir, name));
+        } catch {
+          // ignore
+        }
+      }
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  }
+}
+
 /** Borra todos los archivos del pago (factura + comprobante) y la carpeta. */
 export function deletePaymentUploads(shopId: string, paymentId: string): void {
   const root = uploadsRoot();
@@ -110,4 +134,83 @@ export function deletePaymentUploads(shopId: string, paymentId: string): void {
       // ignore
     }
   }
+}
+
+/** Fecha de subida: la más vieja entre nacimiento y mtime del archivo. */
+export function uploadFileTime(relativePath: string | null | undefined): Date | null {
+  const abs = resolveUploadPath(relativePath);
+  if (!abs) return null;
+  try {
+    const st = statSync(abs);
+    const times = [st.mtime.getTime()];
+    const born = st.birthtime?.getTime() ?? 0;
+    if (born > 0 && born < Date.now() + 60_000) times.push(born);
+    return new Date(Math.min(...times));
+  } catch {
+    return null;
+  }
+}
+
+function listFilesRecursive(dir: string, root: string, out: string[]): void {
+  if (!existsSync(dir)) return;
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const abs = resolve(dir, entry.name);
+    if (!abs.startsWith(root)) continue;
+    if (entry.isDirectory()) listFilesRecursive(abs, root, out);
+    else if (entry.isFile()) out.push(abs);
+  }
+}
+
+function removeEmptyDirs(dir: string, root: string): void {
+  if (!existsSync(dir) || !dir.startsWith(root) || dir === root) return;
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) removeEmptyDirs(join(dir, entry.name), root);
+  }
+  try {
+    if (readdirSync(dir).length === 0 && dir !== root) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  } catch {
+    // ignore
+  }
+}
+
+/** Borra documentos vencidos en disco. No toca logos, avatares ni cartas. */
+export function purgeExpiredDocumentUploads(cutoff: Date): number {
+  const root = uploadsRoot();
+  let removed = 0;
+  for (const folder of DOCUMENT_UPLOAD_FOLDERS) {
+    const base = resolve(root, folder);
+    if (!base.startsWith(root) || !existsSync(base)) continue;
+    const files: string[] = [];
+    listFilesRecursive(base, root, files);
+    for (const abs of files) {
+      try {
+        const st = statSync(abs);
+        const times = [st.mtime.getTime()];
+        const born = st.birthtime?.getTime() ?? 0;
+        if (born > 0 && born < Date.now() + 60_000) times.push(born);
+        if (Math.min(...times) < cutoff.getTime()) {
+          unlinkSync(abs);
+          removed += 1;
+        }
+      } catch {
+        // ignore
+      }
+    }
+    removeEmptyDirs(base, root);
+  }
+  return removed;
 }

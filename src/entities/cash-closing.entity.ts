@@ -15,6 +15,7 @@ import { ClosingPosnetAmount } from '../common/posnet';
 import { ClosingExpense } from './closing-expense.entity';
 import { ClosingExtraLine } from './closing-extra-line.entity';
 import { ClosingSourceAmount } from './closing-source-amount.entity';
+import { ClosingStepFile } from './closing-step-file.entity';
 
 @Entity({ name: 'cash_closings' })
 @Index('IDX_cash_closings_shopId', ['shopId'])
@@ -147,4 +148,7 @@ export class CashClosing extends BaseEntity {
 
   @OneToMany(() => ClosingSourceAmount, (e) => e.closing, { cascade: true })
   sourceAmounts?: ClosingSourceAmount[];
+
+  @OneToMany(() => ClosingStepFile, (e) => e.closing, { cascade: true })
+  stepFiles?: ClosingStepFile[];
 }
