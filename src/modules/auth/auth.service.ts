@@ -692,6 +692,7 @@ export class AuthService implements OnModuleInit {
         isReservationAdmin: !!link?.isReservationAdmin,
         canEditExpenses: !!link?.canEditExpenses,
         canEditPayments: !!link?.canEditPayments,
+        requireClosingFiles: !!link?.requireClosingFiles,
         active: true,
       };
       }),

@@ -10,6 +10,7 @@ import {
   Query,
   Res,
   UploadedFile,
+  UseFilters,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
@@ -17,13 +18,20 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import type { Response } from 'express';
+import { memoryStorage } from 'multer';
 import { ClosingsService } from './closings.service';
 import { WhatsappImportService } from './whatsapp-import.service';
 import { ExcelImportService } from './excel-import.service';
-import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
+import { ClosingStepFilesService } from './closing-step-files.service';
+import { CurrentUser, AuthUser, RequireAnyPermissions, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard, assertCanViewClosingsList } from '../../common/guards';
 import { CreateClosingDto, UpdateClosingDto } from './dto/closing.dto';
 import { parseClosingFilters } from './closing-filters';
+import { MulterExceptionFilter } from '../../common/filters/multer-exception.filter';
+import {
+  isClosingStepFileSlot,
+  type ClosingStepFileSlot,
+} from '../../entities/closing-step-file.entity';
 
 @ApiTags('closings')
 @ApiBearerAuth()
@@ -34,6 +42,7 @@ export class ClosingsController {
     private readonly closings: ClosingsService,
     private readonly whatsappImport: WhatsappImportService,
     private readonly excelImport: ExcelImportService,
+    private readonly stepFiles: ClosingStepFilesService,
   ) {}
 
   @Get()
@@ -137,6 +146,49 @@ export class ClosingsController {
       : this.excelImport.preview(user, shopId, file);
   }
 
+  @Post('parse-step-file')
+  @RequireAnyPermissions('closings.create', 'closings.update')
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+        slot: {
+          type: 'string',
+          enum: [
+            'pos_system',
+            'channel',
+            'posnet',
+            'card',
+            'mercado_pago',
+            'account_dni',
+            'other',
+          ],
+        },
+        sourceName: { type: 'string' },
+      },
+      required: ['file', 'slot'],
+    },
+  })
+  @UseFilters(MulterExceptionFilter)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 15 * 1024 * 1024, fieldSize: 2 * 1024 * 1024 },
+    }),
+  )
+  parseStepFile(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body('slot') slot?: string,
+    @Body('sourceName') sourceName?: string,
+  ) {
+    if (!file) throw new BadRequestException('Archivo requerido');
+    return this.stepFiles.parse(user, shopId, file, this.parseSlot(slot), sourceName);
+  }
+
   @Post('reload-incomes')
   @RequirePermissions('closings.create')
   reloadIncomes(
@@ -219,5 +271,94 @@ export class ClosingsController {
     @Param('id') id: string,
   ) {
     return this.closings.remove(user, shopId, id);
+  }
+
+  @Post(':id/step-files')
+  @RequireAnyPermissions('closings.create', 'closings.update')
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+        slot: {
+          type: 'string',
+          enum: [
+            'pos_system',
+            'channel',
+            'posnet',
+            'card',
+            'mercado_pago',
+            'account_dni',
+            'other',
+          ],
+        },
+        sourceId: { type: 'string' },
+        sourceName: { type: 'string' },
+      },
+      required: ['file', 'slot'],
+    },
+  })
+  @UseFilters(MulterExceptionFilter)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 15 * 1024 * 1024, fieldSize: 2 * 1024 * 1024 },
+    }),
+  )
+  uploadStepFile(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body('slot') slot?: string,
+    @Body('sourceId') sourceId?: string,
+    @Body('sourceName') sourceName?: string,
+  ) {
+    if (!file) throw new BadRequestException('Archivo requerido');
+    return this.stepFiles.upload(
+      user,
+      shopId,
+      id,
+      file,
+      this.parseSlot(slot),
+      sourceId || null,
+      sourceName,
+    );
+  }
+
+  @Get(':id/step-files/:fileId')
+  @RequireAnyPermissions('closings.read', 'closings.create', 'closings.update')
+  async downloadStepFile(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+    @Param('fileId') fileId: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { stream, fileName, mime } = await this.stepFiles.download(user, shopId, id, fileId);
+    res.setHeader('Content-Type', mime);
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${encodeURIComponent(fileName)}"`,
+    );
+    return stream;
+  }
+
+  @Delete(':id/step-files/:fileId')
+  @RequireAnyPermissions('closings.create', 'closings.update')
+  removeStepFile(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+    @Param('fileId') fileId: string,
+  ) {
+    return this.stepFiles.remove(user, shopId, id, fileId);
+  }
+
+  private parseSlot(raw?: string): ClosingStepFileSlot {
+    const slot = String(raw ?? '').trim();
+    if (isClosingStepFileSlot(slot)) return slot;
+    throw new BadRequestException('Paso de archivo inválido');
   }
 }

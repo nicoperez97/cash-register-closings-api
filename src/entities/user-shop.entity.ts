@@ -71,6 +71,10 @@ export class UserShop {
   @Column({ default: false })
   canEditPayments: boolean;
 
+  /** En el cierre, si un campo tiene monto hay que adjuntar foto o archivo. Default: no. */
+  @Column({ type: 'tinyint', default: 0 })
+  requireClosingFiles: boolean;
+
   /**
    * Override del menú lateral para este usuario en este local.
    * null = usar shop.navConfig.

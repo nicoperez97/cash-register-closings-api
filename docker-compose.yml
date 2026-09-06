@@ -46,6 +46,9 @@ services:
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-https://cierres.perezcompany.com.ar}
       UPLOADS_DIR: /app/uploads
+      UPLOADS_RETENTION_DAYS: ${UPLOADS_RETENTION_DAYS:-365}
+      UPLOADS_PURGE_CRON: "${UPLOADS_PURGE_CRON:-0 5 * * *}"
+      UPLOADS_PURGE_TZ: ${UPLOADS_PURGE_TZ:-America/Argentina/Buenos_Aires}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}

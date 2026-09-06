@@ -64,6 +64,8 @@ export class CreateUserBody {
   isReservationAdmin?: boolean;
   canEditExpenses?: boolean;
   canEditPayments?: boolean;
+  /** En el cierre, si hay monto hay que adjuntar archivo. */
+  requireClosingFiles?: boolean;
   phone?: string | null;
   bankAlias?: string | null;
   cbu?: string | null;
@@ -94,6 +96,7 @@ export class UpdateUserBody {
   isReservationAdmin?: boolean;
   canEditExpenses?: boolean;
   canEditPayments?: boolean;
+  requireClosingFiles?: boolean;
   phone?: string | null;
   bankAlias?: string | null;
   cbu?: string | null;
@@ -187,6 +190,14 @@ export class UsersService implements OnModuleInit {
       await this.userShops.query(`
         ALTER TABLE user_shops
           ADD COLUMN canEditPayments TINYINT(1) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.userShops.query(`
+        ALTER TABLE user_shops
+          ADD COLUMN requireClosingFiles TINYINT(1) NOT NULL DEFAULT 0
       `);
     } catch {
       // columna ya existe
@@ -351,6 +362,7 @@ export class UsersService implements OnModuleInit {
         isReservationAdmin: !!link?.isReservationAdmin,
         canEditExpenses: !!link?.canEditExpenses,
         canEditPayments: !!link?.canEditPayments,
+        requireClosingFiles: !!link?.requireClosingFiles,
         ledgerAccountIds,
         ledgerAccountNames,
         ledgerAccountId: ledgerAccountIds[0] ?? null,
@@ -423,6 +435,7 @@ export class UsersService implements OnModuleInit {
             defaultShopId === shopId && isSuperAdmin(actor.globalRole as GlobalRole)
               ? !!dto.canEditPayments
               : false,
+          requireClosingFiles: defaultShopId === shopId ? !!dto.requireClosingFiles : false,
         }),
       );
     }
@@ -549,6 +562,7 @@ export class UsersService implements OnModuleInit {
                   shopId === sid ? !!dto.isBeverageStockAdmin : false,
                 isShortageAdmin: shopId === sid ? !!dto.isShortageAdmin : false,
                 isReservationAdmin: shopId === sid ? !!dto.isReservationAdmin : false,
+                requireClosingFiles: shopId === sid ? !!dto.requireClosingFiles : false,
                 ...this.editFlagsFromDto(actor, dto, undefined, shopId === sid),
               }),
             );
@@ -576,6 +590,9 @@ export class UsersService implements OnModuleInit {
             if (shopId === sid && dto.isReservationAdmin !== undefined) {
               exists.isReservationAdmin = !!dto.isReservationAdmin;
             }
+            if (shopId === sid && dto.requireClosingFiles !== undefined) {
+              exists.requireClosingFiles = !!dto.requireClosingFiles;
+            }
             if (shopId === sid && isSuperAdmin(actor.globalRole as GlobalRole)) {
               if (dto.canEditExpenses !== undefined) exists.canEditExpenses = !!dto.canEditExpenses;
               if (dto.canEditPayments !== undefined) exists.canEditPayments = !!dto.canEditPayments;
@@ -599,6 +616,9 @@ export class UsersService implements OnModuleInit {
         );
         const prevEditExpenses = new Map(links.map((l) => [l.shopId, !!l.canEditExpenses]));
         const prevEditPayments = new Map(links.map((l) => [l.shopId, !!l.canEditPayments]));
+        const prevRequireClosingFiles = new Map(
+          links.map((l) => [l.shopId, !!l.requireClosingFiles]),
+        );
         await this.userShops.delete({ userId: id });
         for (const sid of nextIds) {
           const visibility =
@@ -624,6 +644,10 @@ export class UsersService implements OnModuleInit {
             shopId === sid && dto.isReservationAdmin !== undefined
               ? !!dto.isReservationAdmin
               : (prevReservationAdmin.get(sid) ?? false);
+          const requireClosingFiles =
+            shopId === sid && dto.requireClosingFiles !== undefined
+              ? !!dto.requireClosingFiles
+              : (prevRequireClosingFiles.get(sid) ?? false);
           const editFlags = this.editFlagsFromDto(
             actor,
             dto,
@@ -650,6 +674,7 @@ export class UsersService implements OnModuleInit {
               isBeverageStockAdmin: beverageStockAdmin,
               isShortageAdmin: shortageAdmin,
               isReservationAdmin: reservationAdmin,
+              requireClosingFiles,
               canEditExpenses: editFlags.canEditExpenses,
               canEditPayments: editFlags.canEditPayments,
             }),
@@ -665,6 +690,7 @@ export class UsersService implements OnModuleInit {
         dto.isBeverageStockAdmin !== undefined ||
         dto.isShortageAdmin !== undefined ||
         dto.isReservationAdmin !== undefined ||
+        dto.requireClosingFiles !== undefined ||
         dto.canEditExpenses !== undefined ||
         dto.canEditPayments !== undefined)
     ) {
@@ -693,6 +719,9 @@ export class UsersService implements OnModuleInit {
         if (dto.isReservationAdmin !== undefined) {
           link.isReservationAdmin = !!dto.isReservationAdmin;
         }
+        if (dto.requireClosingFiles !== undefined) {
+          link.requireClosingFiles = !!dto.requireClosingFiles;
+        }
         if (isSuperAdmin(actor.globalRole as GlobalRole)) {
           if (dto.canEditExpenses !== undefined) link.canEditExpenses = !!dto.canEditExpenses;
           if (dto.canEditPayments !== undefined) link.canEditPayments = !!dto.canEditPayments;
@@ -717,6 +746,7 @@ export class UsersService implements OnModuleInit {
             isBeverageStockAdmin: !!dto.isBeverageStockAdmin,
             isShortageAdmin: !!dto.isShortageAdmin,
             isReservationAdmin: !!dto.isReservationAdmin,
+            requireClosingFiles: !!dto.requireClosingFiles,
             ...this.editFlagsFromDto(actor, dto, undefined, true),
           }),
         );
@@ -786,6 +816,7 @@ export class UsersService implements OnModuleInit {
       isReservationAdmin: !!link?.isReservationAdmin,
       canEditExpenses: !!link?.canEditExpenses,
       canEditPayments: !!link?.canEditPayments,
+      requireClosingFiles: !!link?.requireClosingFiles,
       ledgerAccountIds: accountIds,
       ledgerAccountNames: names,
       ledgerAccountId: accountIds[0] ?? null,
