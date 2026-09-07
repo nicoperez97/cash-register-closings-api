@@ -77,6 +77,8 @@ export interface MovementFilters {
   /** true | false */
   hasReceipt?: string;
   shiftId?: string;
+  /** panel (default) | all */
+  scope?: 'panel' | 'all';
 }
 
 export interface UpsertMovementDto {
@@ -642,7 +644,7 @@ export class MovementsService implements OnModuleInit {
     opts?: { fromPayment?: boolean; closingId?: string | null },
   ) {
     this.shops.assertShopAccess(user, shopId);
-    const kind = dto.kind;
+    const kind = dto.isDividend ? 'transfer' : dto.kind;
 
     let conceptId = dto.conceptId ?? null;
     let fromAccountId = this.normalizeAccountId(dto.fromAccountId);
@@ -954,13 +956,16 @@ export class MovementsService implements OnModuleInit {
       } else this.assertPerm(user, shopId, 'accountTransfers.manage');
     }
 
-    const kind = dto.kind ?? this.classifyRow({
-      conceptKind: row.concept?.kind,
-      fromAccountName: row.fromAccount?.name,
-      fromAccountCode: row.fromAccount?.code,
-      toAccountName: row.toAccount?.name,
-      toAccountCode: row.toAccount?.code,
-    });
+    const kind = dto.isDividend
+      ? 'transfer'
+      : (dto.kind ??
+        this.classifyRow({
+          conceptKind: row.concept?.kind,
+          fromAccountName: row.fromAccount?.name,
+          fromAccountCode: row.fromAccount?.code,
+          toAccountName: row.toAccount?.name,
+          toAccountCode: row.toAccount?.code,
+        }));
 
     let fromId =
       dto.fromAccountId !== undefined

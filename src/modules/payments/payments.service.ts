@@ -51,6 +51,8 @@ export interface UpsertPaymentDto {
   validatorUserId?: string | null;
   accountId?: string | null;
   toAccountId?: string | null;
+  /** Pago a socio que al abonar va a Dividendos (anotado, sin sumar saldo). */
+  isDividend?: boolean;
   paymentMethod?: PaymentMethod | string | null;
   supplierId?: string | null;
   employeeId?: string | null;
@@ -121,7 +123,7 @@ export class PaymentsService implements OnModuleInit {
     }
     for (const sql of [
       `ALTER TABLE payments MODIFY COLUMN title VARCHAR(200) NULL`,
-      `ALTER TABLE payments MODIFY COLUMN amount DECIMAL(14,2) NULL`,
+      `ALTER TABLE payments MODIFY COLUMN amount DECIMAL(20,2) NULL`,
       `ALTER TABLE payments MODIFY COLUMN dueDate DATE NULL`,
       `ALTER TABLE payments MODIFY COLUMN payerUserId CHAR(36) NULL`,
       `ALTER TABLE payments MODIFY COLUMN validatorUserId CHAR(36) NULL`,
@@ -516,6 +518,7 @@ export class PaymentsService implements OnModuleInit {
       invoiced: boolean;
       invoiceNumber: string | null;
       paymentMethod?: string | null;
+      kind?: 'transfer';
       isDividend?: boolean;
       beneficiaryAccountId?: string | null;
     } = {
@@ -530,6 +533,7 @@ export class PaymentsService implements OnModuleInit {
       paymentMethod: payment.paymentMethod ?? null,
     };
     if (isDividendPay) {
+      basePayload.kind = 'transfer';
       basePayload.isDividend = true;
       basePayload.beneficiaryAccountId = payment.toAccountId;
     }
@@ -1042,6 +1046,7 @@ export class PaymentsService implements OnModuleInit {
         validatorUserId,
         accountId,
         toAccountId,
+        isDividend: !!(dto.isDividend && toAccountId),
         paymentMethod,
         supplierId,
         employeeId,
@@ -1210,6 +1215,12 @@ export class PaymentsService implements OnModuleInit {
       patch.toAccountId = nextToAccountId;
     }
 
+    if (dto.isDividend !== undefined || dto.toAccountId !== undefined) {
+      const wantDividend =
+        dto.isDividend !== undefined ? !!dto.isDividend : !!row.isDividend;
+      patch.isDividend = wantDividend && !!nextToAccountId;
+    }
+
     if (dto.paymentMethod !== undefined) {
       patch.paymentMethod = this.parsePaymentMethod(dto.paymentMethod as string | null);
     }
@@ -1228,6 +1239,7 @@ export class PaymentsService implements OnModuleInit {
         patch.employeeId = null;
         patch.serviceId = null;
         patch.toAccountId = null;
+        patch.isDividend = false;
       }
     }
     if (dto.employeeId !== undefined) {
@@ -1241,6 +1253,7 @@ export class PaymentsService implements OnModuleInit {
         patch.supplierId = null;
         patch.serviceId = null;
         patch.toAccountId = null;
+        patch.isDividend = false;
       }
     }
     if (dto.serviceId !== undefined) {
@@ -1254,6 +1267,7 @@ export class PaymentsService implements OnModuleInit {
         patch.supplierId = null;
         patch.employeeId = null;
         patch.toAccountId = null;
+        patch.isDividend = false;
       }
     }
     if (nextToAccountId) {
@@ -1521,6 +1535,7 @@ export class PaymentsService implements OnModuleInit {
         invoiced: boolean;
         invoiceNumber: string | null;
         paymentMethod: string | null;
+        kind?: 'transfer';
         isDividend?: boolean;
         beneficiaryAccountId?: string | null;
       } = {
@@ -1552,6 +1567,7 @@ export class PaymentsService implements OnModuleInit {
         paymentMethod: row.paymentMethod ?? null,
       };
       if (isDividendPay) {
+        createPayload.kind = 'transfer';
         createPayload.isDividend = true;
         createPayload.beneficiaryAccountId = row.toAccountId;
       }

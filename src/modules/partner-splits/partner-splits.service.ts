@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { PartnerSplitConfig } from '../../entities/partner-split-config.entity';
 import { PartnerSplitRun } from '../../entities/partner-split-run.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
+import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
 import { Movement } from '../../entities/movement.entity';
 import { Payment } from '../../entities/payment.entity';
 import { AuthUser } from '../../common/decorators';
@@ -67,6 +68,8 @@ export class PartnerSplitsService implements OnModuleInit {
     private readonly accounts: Repository<LedgerAccount>,
     @InjectRepository(Movement) private readonly movementsRepo: Repository<Movement>,
     @InjectRepository(Payment) private readonly payments: Repository<Payment>,
+    @InjectRepository(LedgerAccountUser)
+    private readonly accountLinks: Repository<LedgerAccountUser>,
     private readonly shops: ShopsService,
     private readonly movements: MovementsService,
     private readonly catalogSeed: CatalogSeedService,
@@ -390,6 +393,9 @@ export class PartnerSplitsService implements OnModuleInit {
           distributed = round2(distributed + n(t.amount));
           continue;
         }
+        const link = await this.accountLinks.findOne({
+          where: { shopId, accountId: t.toAccountId },
+        });
         const row = await this.movementsRepo.save(
           this.movementsRepo.create({
             shopId,
@@ -397,6 +403,7 @@ export class PartnerSplitsService implements OnModuleInit {
             fromAccountId: t.fromAccountId,
             toAccountId: dividends.id,
             beneficiaryAccountId: t.toAccountId,
+            toUserId: link?.userId ?? null,
             description: `Equilibrar · Dividendo · ${t.fromName} → ${t.toName}`,
             amountUyu: money(t.amount),
             invoiced: false,
@@ -469,7 +476,7 @@ export class PartnerSplitsService implements OnModuleInit {
     if (!(amount >= 0)) {
       throw new BadRequestException('Monto inválido');
     }
-    const balances = await this.movements.balances(user, shopId);
+    const balances = await this.movements.balances(user, shopId, { scope: 'all' });
     const byId = new Map((balances.accounts ?? []).map((a) => [a.accountId, a]));
     const accounts = await this.accounts.find({
       where: { shopId, active: true, type: LedgerAccountType.PARTNER },
@@ -634,7 +641,7 @@ export class PartnerSplitsService implements OnModuleInit {
   }
 
   private async buildPreview(user: AuthUser, shopId: string, config: PartnerSplitConfigDto) {
-    const balances = await this.movements.balances(user, shopId);
+    const balances = await this.movements.balances(user, shopId, { scope: 'all' });
     const byId = new Map((balances.accounts ?? []).map((a) => [a.accountId, a]));
     const accounts = await this.accounts.find({ where: { shopId, active: true } });
     const partnerAccs = accounts.filter((a) => a.type === LedgerAccountType.PARTNER);

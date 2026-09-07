@@ -106,6 +106,12 @@ class CreatePaymentDto {
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
   @IsUUID()
   toAccountId?: string | null;
+  @ApiPropertyOptional({
+    description: 'Si true, al abonar el movimiento va a Dividendos (socio anotado, sin sumar saldo).',
+  })
+  @IsOptional()
+  @IsBoolean()
+  isDividend?: boolean;
   @ApiPropertyOptional({ enum: ['cash', 'transfer', 'card', 'other'] })
   @IsOptional()
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
@@ -205,6 +211,12 @@ class UpdatePaymentDto {
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
   @IsUUID()
   toAccountId?: string | null;
+  @ApiPropertyOptional({
+    description: 'Si true, al abonar el movimiento va a Dividendos (socio anotado, sin sumar saldo).',
+  })
+  @IsOptional()
+  @IsBoolean()
+  isDividend?: boolean;
   @ApiPropertyOptional({ enum: ['cash', 'transfer', 'card', 'other'] })
   @IsOptional()
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
