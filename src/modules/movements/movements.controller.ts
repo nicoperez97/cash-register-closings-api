@@ -176,6 +176,20 @@ class UpdateMovementDto {
   @IsArray()
   @IsUUID('4', { each: true })
   notifyUserIds?: string[];
+
+  @ApiPropertyOptional({ description: 'Si true, el destino es la cuenta Dividendos del local.' })
+  @IsOptional()
+  @IsBoolean()
+  isDividend?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Socio beneficiario del dividendo (opcional). No recibe el monto en su saldo; va a Dividendos.',
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  beneficiaryAccountId?: string | null;
 }
 
 @ApiTags('movements')
@@ -250,8 +264,13 @@ export class MovementsController {
     @Param('shopId') shopId: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
+    @Query('scope') scope?: 'panel' | 'all',
   ) {
-    return this.movements.balances(user, shopId, { from, to });
+    return this.movements.balances(user, shopId, {
+      from,
+      to,
+      scope: scope === 'all' ? 'all' : 'panel',
+    });
   }
 
   @Get('balances/export.xlsx')
@@ -261,11 +280,13 @@ export class MovementsController {
     @Param('shopId') shopId: string,
     @Query('from') from: string | undefined,
     @Query('to') to: string | undefined,
+    @Query('scope') scope: 'panel' | 'all' | undefined,
     @Res() res: Response,
   ) {
     const { buffer, filename } = await this.movements.exportBalancesXlsx(user, shopId, {
       from,
       to,
+      scope: scope === 'all' ? 'all' : 'panel',
     });
     res.setHeader(
       'Content-Type',

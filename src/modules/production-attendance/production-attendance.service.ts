@@ -18,6 +18,7 @@ import { isEntityActive } from '../../common/active.util';
 import { ShopsService } from '../shops/shops.service';
 import { ShopLiveService } from '../shop-live/shop-live.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { formatNumber } from '../../common/format-money';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const hoursStr = (v: number) => Math.max(0, Number(v) || 0).toFixed(2);
@@ -522,16 +523,10 @@ export class ProductionAttendanceService implements OnModuleInit {
     const title = 'Horas de producción cargadas';
     let body: string;
     if (days.length === 1) {
-      const h = n(days[0].hours).toLocaleString('es-AR', {
-        minimumFractionDigits: 0,
-        maximumFractionDigits: 2,
-      });
+      const h = formatNumber(days[0].hours, { compact: false });
       body = `${shopName} · ${producerName} cargó ${h} h el ${sortedDates[0]}`;
     } else {
-      const total = totalHours.toLocaleString('es-AR', {
-        minimumFractionDigits: 0,
-        maximumFractionDigits: 2,
-      });
+      const total = formatNumber(totalHours, { compact: false });
       body = `${shopName} · ${producerName} actualizó ${days.length} días (${sortedDates[0]} – ${sortedDates[sortedDates.length - 1]}, total ${total} h)`;
     }
 

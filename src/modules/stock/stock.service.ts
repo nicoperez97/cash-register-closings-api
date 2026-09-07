@@ -21,6 +21,7 @@ import {
   stockLabel,
   stockSharedType,
 } from './stock-kind';
+import { formatNumber } from '../../common/format-money';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const qty = (v: number) => Math.max(0, Number(v) || 0).toFixed(2);
@@ -615,11 +616,7 @@ export class StockService implements OnModuleInit {
     }>,
     kind: StockKind,
   ) {
-    const fmt = (v: number) =>
-      v.toLocaleString('es-AR', {
-        minimumFractionDigits: 0,
-        maximumFractionDigits: 2,
-      });
+    const fmt = (v: number) => formatNumber(v);
 
     const label = stockLabel(kind);
     const below = products.filter((p) => p.belowMinimum);
@@ -685,14 +682,8 @@ export class StockService implements OnModuleInit {
     ];
     if (!recipientIds.length) return;
 
-    const qtyLabel = quantity.toLocaleString('es-AR', {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 2,
-    });
-    const minLabel = minQuantity.toLocaleString('es-AR', {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 2,
-    });
+    const qtyLabel = formatNumber(quantity);
+    const minLabel = formatNumber(minQuantity);
     const label = stockLabel(kind);
 
     await this.notifications.createMany(

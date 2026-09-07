@@ -38,8 +38,12 @@ export class LedgerAccount extends BaseEntity {
   @Column({ type: 'tinyint', default: 1 })
   listInTransfers: boolean;
 
+  /** Si es false, no aparece en el panel de Saldos. */
+  @Column({ type: 'tinyint', default: 1 })
+  listInBalances: boolean;
+
   /** Se suma al saldo de movimientos (puede ser negativo). */
-  @Column({ type: 'decimal', precision: 14, scale: 2, default: 0 })
+  @Column({ type: 'decimal', precision: 20, scale: 2, default: 0 })
   openingBalance: string;
 
   /** Comisión % sobre el saldo (0 = sin comisión). En Saldos se muestra el neto. */

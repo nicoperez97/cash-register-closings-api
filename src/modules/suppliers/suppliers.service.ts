@@ -156,6 +156,7 @@ export class SuppliersService implements OnModuleInit {
         listInExpenses: false,
         listInIncomes: false,
         listInTransfers: false,
+        listInBalances: false,
         active: true,
       }),
     );

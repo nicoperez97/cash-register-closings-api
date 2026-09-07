@@ -25,6 +25,7 @@ import {
 } from '../../common/uploads';
 import { ShopsService } from '../shops/shops.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { formatMoney } from '../../common/format-money';
 
 function n(v: unknown): number {
   const x = Number(v ?? 0);
@@ -443,17 +444,13 @@ export class ReimbursementsService implements OnModuleInit {
     recipientIds.delete(actor.id);
     if (!recipientIds.size) return;
 
-    const amount = n(row.amount).toLocaleString('es-AR', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    });
     await this.notifications.createMany(
       [...recipientIds].map((userId) => ({
         userId,
         shopId,
         type: NotificationType.REIMBURSEMENT_CREATED,
         title: 'Gasto a reintegrar',
-        body: `${shopName} · ${employee.fullName} cargó $${amount} (${row.description})`,
+        body: `${shopName} · ${employee.fullName} cargó ${formatMoney(row.amount)} (${row.description})`,
         targetId: row.id,
       })),
     );

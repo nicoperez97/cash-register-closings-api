@@ -137,6 +137,14 @@ class EqualizeDto {
   @IsOptional()
   @IsBoolean()
   sendSurplusToDividends?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Si true y los saldos ya coinciden con el objetivo, envía el saldo de cada socio a Dividendos (sale del pool del local).',
+  })
+  @IsOptional()
+  @IsBoolean()
+  sendBalancedToDividends?: boolean;
 }
 
 class PartnerSplitConfigDto {

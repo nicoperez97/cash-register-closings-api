@@ -22,6 +22,7 @@ import { ClosingMovementsSyncService } from '../movements/closing-movements-sync
 import { NotificationsService } from '../notifications/notifications.service';
 import { ShopLiveService } from '../shop-live/shop-live.service';
 import { AuthUser } from '../../common/decorators';
+import { formatMoney } from '../../common/format-money';
 import {
   CashPendingWithdrawalStatus,
   ConceptKind,
@@ -590,10 +591,9 @@ export class CashWithdrawalsService implements OnModuleInit {
     recipientIds.delete(actor.id);
     if (!recipientIds.size) return;
 
-    const total = info.totalAmount.toLocaleString('es-AR');
     const title =
       info.count === 1 ? 'Retiro de efectivo' : `${info.count} retiros de efectivo`;
-    const body = `${shopName} · $${total} · ${info.pickedByName} → ${info.accountName}${
+    const body = `${shopName} · ${formatMoney(info.totalAmount)} · ${info.pickedByName} → ${info.accountName}${
       actor.fullName || actor.email ? ` · por ${actor.fullName || actor.email}` : ''
     }`;
 

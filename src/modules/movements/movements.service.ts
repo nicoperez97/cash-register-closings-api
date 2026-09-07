@@ -37,6 +37,7 @@ import { createReadStream } from 'fs';
 import { StreamableFile } from '@nestjs/common';
 import * as ExcelJS from 'exceljs';
 import { accountCommissionOf } from '../../common/account-commission';
+import { formatMoney } from '../../common/format-money';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
@@ -46,15 +47,6 @@ const EXPENSE_PAYMENT_METHODS = new Set(['cash', 'transfer', 'card']);
 function parseExpensePaymentMethod(raw?: string | null): string | null {
   const v = String(raw ?? '').trim().toLowerCase();
   return EXPENSE_PAYMENT_METHODS.has(v) ? v : null;
-}
-
-function formatArMoney(value: number): string {
-  const num = Number(value ?? 0);
-  const abs = Math.abs(num).toLocaleString('es-AR', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-  return num < 0 ? `- $${abs}` : `$${abs}`;
 }
 
 export type MovementKindFilter = 'expense' | 'income' | 'transfer';
@@ -122,6 +114,8 @@ type PaymentLink = {
   supplierId?: string | null;
   serviceId?: string | null;
   employeeId?: string | null;
+  isDividend?: boolean;
+  toAccountId?: string | null;
 };
 
 @Injectable()
@@ -158,11 +152,24 @@ export class MovementsService implements OnModuleInit {
       `ALTER TABLE movements ADD COLUMN receiptFileName VARCHAR(255) NULL`,
       `ALTER TABLE movements ADD COLUMN receiptFileMime VARCHAR(120) NULL`,
       `ALTER TABLE movements ADD COLUMN paymentMethod VARCHAR(20) NULL`,
+      `ALTER TABLE movements ADD COLUMN beneficiaryAccountId CHAR(36) NULL`,
+      `ALTER TABLE movements MODIFY COLUMN amountUyu DECIMAL(20,2) NOT NULL DEFAULT 0`,
     ]) {
       try {
         await this.movements.query(sql);
       } catch {
         // ya existe
+      }
+    }
+    for (const sql of [
+      `ALTER TABLE payments MODIFY COLUMN amount DECIMAL(20,2) NULL`,
+      `ALTER TABLE partner_split_runs MODIFY COLUMN distributedAmount DECIMAL(20,2) NOT NULL DEFAULT 0`,
+      `ALTER TABLE ledger_accounts MODIFY COLUMN openingBalance DECIMAL(20,2) NOT NULL DEFAULT 0`,
+    ]) {
+      try {
+        await this.movements.query(sql);
+      } catch {
+        // ya aplicado
       }
     }
   }
@@ -178,6 +185,12 @@ export class MovementsService implements OnModuleInit {
             : null
       : null;
     const source = m.closingId ? 'closing' : payment ? 'payment' : 'manual';
+    const toType = m.toAccount?.type ?? null;
+    const isDividend =
+      !!payment?.isDividend || toType === LedgerAccountType.DIVIDENDS;
+    const beneficiaryAccountId =
+      m.beneficiaryAccountId ??
+      (payment?.isDividend ? (payment.toAccountId ?? null) : null);
     return {
       id: m.id,
       shopId: m.shopId,
@@ -186,6 +199,7 @@ export class MovementsService implements OnModuleInit {
       toAccountId: m.toAccountId,
       fromAccountName: m.fromAccount?.name ?? null,
       toAccountName: m.toAccount?.name ?? null,
+      toAccountType: toType,
       fromUserId: m.fromUserId ?? null,
       toUserId: m.toUserId ?? null,
       fromUserName: m.fromUser?.fullName ?? null,
@@ -204,6 +218,8 @@ export class MovementsService implements OnModuleInit {
       source,
       paymentId: payment?.id ?? null,
       paymentPartyType: partyType,
+      isDividend,
+      beneficiaryAccountId,
       hasReceiptFile: !!m.receiptFilePath,
       receiptFileName: m.receiptFileName ?? null,
       paymentMethod: m.paymentMethod ?? null,
@@ -211,6 +227,70 @@ export class MovementsService implements OnModuleInit {
     };
   }
 
+  /**
+   * Completa beneficiaryAccountId en dividendos viejos (solo toUserId o texto "→ Nombre").
+   */
+  private async enrichDividendBeneficiaries(
+    shopId: string,
+    dtos: Array<{ isDividend?: boolean; beneficiaryAccountId?: string | null; description?: string | null }>,
+    rows: Movement[],
+  ) {
+    const needIdx: number[] = [];
+    for (let i = 0; i < dtos.length; i++) {
+      if (dtos[i].isDividend && !dtos[i].beneficiaryAccountId) needIdx.push(i);
+    }
+    if (!needIdx.length) return;
+
+    const userIds = [
+      ...new Set(
+        needIdx
+          .map((i) => rows[i].toUserId)
+          .filter((id): id is string => !!id),
+      ),
+    ];
+    const byUser = new Map<string, string>();
+    if (userIds.length) {
+      const links = await this.accountLinks.find({
+        where: { shopId, userId: In(userIds) },
+        relations: ['account'],
+      });
+      for (const link of links) {
+        if (
+          link.account?.type === LedgerAccountType.PARTNER &&
+          link.account.active !== false &&
+          !byUser.has(link.userId)
+        ) {
+          byUser.set(link.userId, link.accountId);
+        }
+      }
+    }
+
+    const needNames = needIdx.filter(
+      (i) => !rows[i].toUserId || !byUser.has(rows[i].toUserId!),
+    );
+    let partnersByName: Map<string, string> | null = null;
+    if (needNames.length) {
+      const partners = await this.accounts.find({
+        where: { shopId, active: true, type: LedgerAccountType.PARTNER },
+      });
+      partnersByName = new Map(
+        partners.map((p) => [(p.name ?? '').trim().toLowerCase(), p.id]),
+      );
+    }
+
+    for (const i of needIdx) {
+      const row = rows[i];
+      if (row.toUserId && byUser.has(row.toUserId)) {
+        dtos[i].beneficiaryAccountId = byUser.get(row.toUserId)!;
+        continue;
+      }
+      const arrow = (row.description ?? dtos[i].description ?? '').match(/→\s*(.+?)\s*$/u);
+      const name = arrow?.[1]?.trim().toLowerCase();
+      if (name && partnersByName?.has(name)) {
+        dtos[i].beneficiaryAccountId = partnersByName.get(name)!;
+      }
+    }
+  }
 
   private assertPerm(user: AuthUser, shopId: string, ...need: Permission[]) {
     const perms = resolveUserPermissions(user, shopId);
@@ -414,7 +494,9 @@ export class MovementsService implements OnModuleInit {
       shopId,
       rows.map((r) => r.id),
     );
-    return rows.map((r) => this.toDto(r, paymentLinks.get(r.id) ?? null));
+    const dtos = rows.map((r) => this.toDto(r, paymentLinks.get(r.id) ?? null));
+    await this.enrichDividendBeneficiaries(shopId, dtos, rows);
+    return dtos;
   }
 
   /**
@@ -490,7 +572,15 @@ export class MovementsService implements OnModuleInit {
     if (!movementIds.length) return map;
     const rows = await this.payments.find({
       where: { shopId, movementId: In(movementIds), active: true },
-      select: ['id', 'movementId', 'supplierId', 'serviceId', 'employeeId'],
+      select: [
+        'id',
+        'movementId',
+        'supplierId',
+        'serviceId',
+        'employeeId',
+        'isDividend',
+        'toAccountId',
+      ],
     });
     for (const p of rows) {
       if (!p.movementId) continue;
@@ -500,6 +590,8 @@ export class MovementsService implements OnModuleInit {
         supplierId: p.supplierId ?? null,
         serviceId: p.serviceId ?? null,
         employeeId: p.employeeId ?? null,
+        isDividend: !!p.isDividend,
+        toAccountId: p.toAccountId ?? null,
       });
     }
     return map;
@@ -598,6 +690,7 @@ export class MovementsService implements OnModuleInit {
 
     let dividendFromName: string | null = null;
     let dividendToName: string | null = null;
+    let beneficiaryAccountId: string | null = null;
     if (kind === 'transfer') {
       if (dto.isDividend) {
         const dividends = await this.catalogSeed.ensureDividendsAccount(shopId);
@@ -631,6 +724,7 @@ export class MovementsService implements OnModuleInit {
             throw new BadRequestException('El beneficiario debe ser una cuenta de socio');
           }
           dividendToName = beneficiary.name;
+          beneficiaryAccountId = beneficiaryId;
           // Anota el usuario ligado al socio beneficiario; el dinero NO entra a su saldo.
           if (!toUserId) {
             const link = await this.accountLinks.findOne({
@@ -711,6 +805,7 @@ export class MovementsService implements OnModuleInit {
         invoiceNumber: dto.invoiceNumber ?? null,
         employeeId: dto.employeeId ?? null,
         paymentMethod,
+        beneficiaryAccountId,
         closingId: opts?.fromPayment ? null : (opts?.closingId ?? null),
         active: true,
       }),
@@ -811,7 +906,11 @@ export class MovementsService implements OnModuleInit {
     });
     if (!row) throw new NotFoundException('Movimiento no encontrado');
     const paymentLinks = await this.paymentLinksForMovements(shopId, [row.id]);
-    return this.toDto(row, paymentLinks.get(row.id) ?? null);
+    const dto = this.toDto(row, paymentLinks.get(row.id) ?? null);
+    if (dto.isDividend && !dto.beneficiaryAccountId) {
+      await this.enrichDividendBeneficiaries(shopId, [dto], [row]);
+    }
+    return dto;
   }
 
   async update(
@@ -863,14 +962,56 @@ export class MovementsService implements OnModuleInit {
       toAccountCode: row.toAccount?.code,
     });
 
-    const fromId =
+    let fromId =
       dto.fromAccountId !== undefined
         ? this.normalizeAccountId(dto.fromAccountId)
         : row.fromAccountId;
-    const toId =
+    let toId =
       dto.toAccountId !== undefined
         ? this.normalizeAccountId(dto.toAccountId)
         : row.toAccountId;
+
+    let dividendFromName: string | null = null;
+    let dividendToName: string | null = null;
+    let dividendBeneficiaryId: string | null | undefined = undefined;
+    if (kind === 'transfer' && dto.isDividend) {
+      const dividends = await this.catalogSeed.ensureDividendsAccount(shopId);
+      toId = dividends.id;
+      const from = fromId
+        ? await this.accounts.findOne({ where: { id: fromId, shopId, active: true } })
+        : null;
+      if (!from || from.type !== LedgerAccountType.PARTNER) {
+        throw new BadRequestException('El dividendo debe salir de una cuenta de socio');
+      }
+      dividendFromName = from.name;
+      if (dto.beneficiaryAccountId !== undefined) {
+        const beneficiaryId = this.normalizeAccountId(dto.beneficiaryAccountId);
+        dividendBeneficiaryId = beneficiaryId;
+        if (beneficiaryId) {
+          if (beneficiaryId === fromId) {
+            throw new BadRequestException(
+              'El beneficiario del dividendo debe ser otro socio (distinto del origen)',
+            );
+          }
+          const beneficiary = await this.accounts.findOne({
+            where: { id: beneficiaryId, shopId, active: true },
+          });
+          if (!beneficiary || beneficiary.type !== LedgerAccountType.PARTNER) {
+            throw new BadRequestException('El beneficiario debe ser una cuenta de socio');
+          }
+          dividendToName = beneficiary.name;
+          if (dto.toUserId === undefined) {
+            const link = await this.accountLinks.findOne({
+              where: { shopId, accountId: beneficiaryId },
+            });
+            row.toUserId = link?.userId ?? null;
+          }
+        } else if (dto.toUserId === undefined) {
+          row.toUserId = null;
+        }
+      }
+    }
+
     await this.assertAccounts(shopId, fromId, toId);
 
     if (dto.fromUserId !== undefined) {
@@ -885,9 +1026,18 @@ export class MovementsService implements OnModuleInit {
     }
 
     if (dto.businessDate !== undefined) row.businessDate = dto.businessDate;
-    if (dto.fromAccountId !== undefined) row.fromAccountId = fromId;
-    if (dto.toAccountId !== undefined) row.toAccountId = toId;
-    if (dto.description !== undefined) row.description = dto.description?.trim() || null;
+    if (dto.fromAccountId !== undefined || dto.isDividend) row.fromAccountId = fromId;
+    if (dto.toAccountId !== undefined || dto.isDividend) row.toAccountId = toId;
+    if (dto.description !== undefined) {
+      row.description = dto.description?.trim() || null;
+    } else if (dto.isDividend && kind === 'transfer') {
+      row.description =
+        dividendFromName && dividendToName
+          ? `Dividendo · ${dividendFromName} → ${dividendToName}`
+          : dividendFromName
+            ? `Dividendo · ${dividendFromName}`
+            : 'Dividendo';
+    }
     if (dto.amountUyu !== undefined) row.amountUyu = money(n(dto.amountUyu));
     if (dto.usdRate !== undefined) {
       row.usdRate = dto.usdRate != null ? String(dto.usdRate) : null;
@@ -918,6 +1068,9 @@ export class MovementsService implements OnModuleInit {
     if (dto.invoiced !== undefined) row.invoiced = dto.invoiced;
     if (dto.invoiceNumber !== undefined) row.invoiceNumber = dto.invoiceNumber;
     if (dto.employeeId !== undefined) row.employeeId = dto.employeeId;
+    if (dividendBeneficiaryId !== undefined) {
+      row.beneficiaryAccountId = dividendBeneficiaryId;
+    }
     if (dto.paymentMethod !== undefined) {
       const paymentMethod = parseExpensePaymentMethod(dto.paymentMethod);
       if (dto.paymentMethod && !paymentMethod) {
@@ -1056,7 +1209,11 @@ export class MovementsService implements OnModuleInit {
     };
   }
 
-  async balances(user: AuthUser, shopId: string, filters: MovementFilters = {}) {
+  async balances(
+    user: AuthUser,
+    shopId: string,
+    filters: MovementFilters & { scope?: 'panel' | 'all' } = {},
+  ) {
     this.shops.assertShopAccess(user, shopId);
     this.assertAnyPerm(
       user,
@@ -1066,6 +1223,7 @@ export class MovementsService implements OnModuleInit {
       'incomes.read',
       'movements.read',
     );
+    const scopeAll = filters.scope === 'all';
     const qb = this.movements
       .createQueryBuilder('m')
       .select(['m.id', 'm.fromAccountId', 'm.toAccountId', 'm.amountUyu'])
@@ -1074,20 +1232,31 @@ export class MovementsService implements OnModuleInit {
     if (filters.from) qb.andWhere('m.businessDate >= :from', { from: filters.from });
     if (filters.to) qb.andWhere('m.businessDate <= :to', { to: filters.to });
     const rows = await qb.getMany();
-    // Socios + canales + Dividendos. Sin SYSTEM (INGRESO/EGRESO).
     try {
       await this.catalogSeed.ensureDividendsAccount(shopId);
     } catch {
       // best-effort
     }
-    const accounts = await this.accounts.find({
-      where: [
-        { shopId, active: true, type: LedgerAccountType.PARTNER },
-        { shopId, active: true, type: LedgerAccountType.CHANNEL },
-        { shopId, active: true, type: LedgerAccountType.DIVIDENDS },
-      ],
-      order: { type: 'ASC', name: 'ASC' },
-    });
+    let accounts: LedgerAccount[];
+    if (scopeAll) {
+      accounts = await this.accounts.find({
+        where: { shopId, active: true },
+        order: { type: 'ASC', name: 'ASC' },
+      });
+    } else {
+      // Socios + canales (+ Dividendos solo si listInBalances). Sin SYSTEM (INGRESO/EGRESO).
+      // Dividendos por defecto no entra: esa plata ya no es del local.
+      accounts = (
+        await this.accounts.find({
+          where: [
+            { shopId, active: true, type: LedgerAccountType.PARTNER },
+            { shopId, active: true, type: LedgerAccountType.CHANNEL },
+            { shopId, active: true, type: LedgerAccountType.DIVIDENDS },
+          ],
+          order: { type: 'ASC', name: 'ASC' },
+        })
+      ).filter((a) => Number(a.listInBalances ?? 1) !== 0);
+    }
     const bal = new Map<
       string,
       {
@@ -1098,6 +1267,7 @@ export class MovementsService implements OnModuleInit {
         expense: number;
         opening: number;
         commissionPercent: number | string;
+        listInBalances: boolean;
       }
     >();
     for (const a of accounts) {
@@ -1109,6 +1279,7 @@ export class MovementsService implements OnModuleInit {
         expense: 0,
         opening: Number(a.openingBalance ?? 0),
         commissionPercent: a.commissionPercent ?? 0,
+        listInBalances: Number(a.listInBalances ?? 1) !== 0,
       });
     }
     for (const r of rows) {
@@ -1122,14 +1293,16 @@ export class MovementsService implements OnModuleInit {
         if (to) to.income += amount;
       }
     }
-    // Canales → socios → dividendos.
     const ordered = [...bal.values()].sort((a, b) => {
-      const rank = (t: string) =>
-        t === LedgerAccountType.CHANNEL
-          ? 0
-          : t === LedgerAccountType.PARTNER
-            ? 1
-            : 2;
+      const rank = (t: string) => {
+        if (t === LedgerAccountType.CHANNEL) return 0;
+        if (t === LedgerAccountType.PARTNER) return 1;
+        if (t === LedgerAccountType.DIVIDENDS) return 2;
+        if (t === LedgerAccountType.SYSTEM) return 3;
+        if (t === LedgerAccountType.SUPPLIER) return 4;
+        if (t === LedgerAccountType.SERVICE) return 5;
+        return 9;
+      };
       const d = rank(a.type) - rank(b.type);
       if (d !== 0) return d;
       return a.name.localeCompare(b.name, 'es');
@@ -1138,6 +1311,7 @@ export class MovementsService implements OnModuleInit {
       shopId,
       from: filters.from ?? null,
       to: filters.to ?? null,
+      scope: scopeAll ? 'all' : 'panel',
       accounts: ordered.map((a) => {
         const gross = Math.round((a.income - a.expense + a.opening) * 100) / 100;
         const comm = accountCommissionOf(gross, a.commissionPercent);
@@ -1152,12 +1326,17 @@ export class MovementsService implements OnModuleInit {
           commissionPercent: comm.commissionPercent,
           commissionAmount: comm.commissionAmount,
           netBalance: comm.netBalance,
+          listInBalances: a.listInBalances,
         };
       }),
     };
   }
 
-  async exportBalancesXlsx(user: AuthUser, shopId: string, filters: MovementFilters = {}) {
+  async exportBalancesXlsx(
+    user: AuthUser,
+    shopId: string,
+    filters: MovementFilters & { scope?: 'panel' | 'all' } = {},
+  ) {
     this.shops.assertShopAccess(user, shopId);
     const shop = await this.shops.getShopEntity(shopId);
     const data = await this.balances(user, shopId, filters);
@@ -1181,7 +1360,7 @@ export class MovementsService implements OnModuleInit {
 
     ws.mergeCells(`A1:${lastCol}1`);
     const title = ws.getCell('A1');
-    title.value = 'SALDOS';
+    title.value = filters.scope === 'all' ? 'SALDOS · TODAS LAS CUENTAS' : 'SALDOS';
     title.font = { bold: true, size: 14 };
     title.alignment = { horizontal: 'left', vertical: 'middle' };
     title.border = {
@@ -1230,16 +1409,16 @@ export class MovementsService implements OnModuleInit {
     for (const a of accounts) {
       const row = ws.getRow(rowIdx);
       row.getCell(1).value = a.name;
-      row.getCell(2).value = formatArMoney(shownOf(a));
+      row.getCell(2).value = formatMoney(shownOf(a));
       row.getCell(1).alignment = { horizontal: 'left' };
       row.getCell(2).alignment = { horizontal: 'right' };
       row.getCell(1).border = thin;
       row.getCell(2).border = thin;
       if (hasCommission) {
         const percent = Number(a.commissionPercent ?? 0);
-        row.getCell(3).value = percent > 0 ? formatArMoney(a.balance) : '';
+        row.getCell(3).value = percent > 0 ? formatMoney(a.balance) : '';
         row.getCell(4).value =
-          percent > 0 ? `${percent} %  ${formatArMoney(a.commissionAmount)}` : '';
+          percent > 0 ? `${percent} %  ${formatMoney(a.commissionAmount)}` : '';
         row.getCell(3).alignment = { horizontal: 'right' };
         row.getCell(4).alignment = { horizontal: 'right' };
         row.getCell(3).border = thin;
@@ -1250,7 +1429,7 @@ export class MovementsService implements OnModuleInit {
 
     const totalRow = ws.getRow(rowIdx);
     totalRow.getCell(1).value = 'TOTAL';
-    totalRow.getCell(2).value = formatArMoney(total);
+    totalRow.getCell(2).value = formatMoney(total);
     totalRow.font = { bold: true };
     totalRow.getCell(1).alignment = { horizontal: 'left' };
     totalRow.getCell(2).alignment = { horizontal: 'right' };
@@ -1306,7 +1485,7 @@ export class MovementsService implements OnModuleInit {
     const shop = await this.shops.findOne(actor, shopId);
     const shopName = shop?.name?.trim() || 'Local';
     const date = String(movement.businessDate || '').slice(0, 10);
-    const amount = formatArMoney(Number(movement.amountUyu || 0));
+    const amount = formatMoney(Number(movement.amountUyu || 0));
     const fromName = (movement.fromAccountName ?? '').trim();
     const toName = (movement.toAccountName ?? '').trim();
     const route =
@@ -1367,7 +1546,7 @@ export class MovementsService implements OnModuleInit {
     if (!recipientIds.size) return;
 
     const date = String(movement.businessDate || '').slice(0, 10);
-    const amount = formatArMoney(Number(movement.amountUyu || 0));
+    const amount = formatMoney(Number(movement.amountUyu || 0));
     const fromName = (movement.fromAccountName ?? '').trim();
     const toName = (movement.toAccountName ?? '').trim();
     const route =

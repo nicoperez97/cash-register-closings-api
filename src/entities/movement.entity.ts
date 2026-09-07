@@ -32,7 +32,7 @@ export class Movement extends BaseEntity {
   @Column({ type: 'varchar', length: 500, nullable: true })
   description?: string | null;
 
-  @Column({ type: 'decimal', precision: 14, scale: 2, default: 0 })
+  @Column({ type: 'decimal', precision: 20, scale: 2, default: 0 })
   amountUyu: string;
 
   @Column({ type: 'decimal', precision: 12, scale: 4, nullable: true })
@@ -68,6 +68,12 @@ export class Movement extends BaseEntity {
   /** cash | transfer | card · solo gastos manuales. */
   @Column({ type: 'varchar', length: 20, nullable: true })
   paymentMethod?: string | null;
+
+  /**
+   * Socio anotado en un dividendo (el dinero va a Dividendos; este id no mueve saldo).
+   */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  beneficiaryAccountId?: string | null;
 
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })

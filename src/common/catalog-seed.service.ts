@@ -37,6 +37,8 @@ export class CatalogSeedService {
           listInExpenses: a.type !== LedgerAccountType.DIVIDENDS,
           listInIncomes: a.type !== LedgerAccountType.DIVIDENDS,
           listInTransfers: true,
+          // Dividendos: plata personal del socio, ya no disponible para el local → fuera de Saldos.
+          listInBalances: a.type !== LedgerAccountType.DIVIDENDS,
           active: true,
         }),
       );
@@ -50,12 +52,23 @@ export class CatalogSeedService {
     const byCode = await this.accounts.findOne({
       where: { shopId, code: 'DIVIDENDOS', active: true },
     });
-    if (byCode) return byCode;
-    const byType = await this.accounts.findOne({
-      where: { shopId, type: LedgerAccountType.DIVIDENDS, active: true },
-    });
-    if (byType) return byType;
-    throw new Error(`No se pudo asegurar la cuenta Dividendos del local ${shopId}`);
+    const row =
+      byCode ??
+      (await this.accounts.findOne({
+        where: { shopId, type: LedgerAccountType.DIVIDENDS, active: true },
+      }));
+    if (!row) {
+      throw new Error(`No se pudo asegurar la cuenta Dividendos del local ${shopId}`);
+    }
+    // Fuera de Saldos: esa plata ya no es del local.
+    if (Number(row.listInBalances ?? 1) !== 0) {
+      row.listInBalances = false;
+      row.hideFromCashWithdraw = true;
+      row.listInExpenses = false;
+      row.listInIncomes = false;
+      await this.accounts.save(row);
+    }
+    return row;
   }
 
   /** Catálogo completo al crear un local (sin vincular medios de pago). */
@@ -73,6 +86,8 @@ export class CatalogSeedService {
           listInExpenses: a.type !== LedgerAccountType.DIVIDENDS,
           listInIncomes: a.type !== LedgerAccountType.DIVIDENDS,
           listInTransfers: true,
+          // Dividendos: plata personal del socio, ya no disponible para el local → fuera de Saldos.
+          listInBalances: a.type !== LedgerAccountType.DIVIDENDS,
           active: true,
         }),
       );

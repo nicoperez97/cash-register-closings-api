@@ -71,6 +71,10 @@ class CreateAccountDto {
   @IsOptional()
   @IsBoolean()
   listInTransfers?: boolean;
+  @ApiPropertyOptional({ description: 'Si es false, no aparece en el panel de Saldos' })
+  @IsOptional()
+  @IsBoolean()
+  listInBalances?: boolean;
   @ApiPropertyOptional({ description: 'Saldo inicial. Se suma al saldo de movimientos.' })
   @IsOptional()
   openingBalance?: number;
@@ -128,6 +132,10 @@ class UpdateAccountDto {
   @IsOptional()
   @IsBoolean()
   listInTransfers?: boolean;
+  @ApiPropertyOptional({ description: 'Si es false, no aparece en el panel de Saldos' })
+  @IsOptional()
+  @IsBoolean()
+  listInBalances?: boolean;
   @ApiPropertyOptional({ description: 'Saldo inicial. Se suma al saldo de movimientos.' })
   @IsOptional()
   openingBalance?: number;

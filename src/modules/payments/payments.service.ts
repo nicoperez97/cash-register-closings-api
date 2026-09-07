@@ -29,6 +29,7 @@ import { resolveShopCalendarDate } from '../../common/business-date';
 import { deletePaymentUploads, deleteUploadIfExists, resolveUploadPath, saveUploadFile } from '../../common/uploads';
 import { ocrAndParseInvoice, ParsedInvoice } from './invoice-ocr.parser';
 import { GeminiDocumentService } from '../ai/gemini-document.service';
+import { formatMoney } from '../../common/format-money';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
@@ -146,6 +147,7 @@ export class PaymentsService implements OnModuleInit {
       `ALTER TABLE payments ADD COLUMN priority VARCHAR(16) NULL`,
       `ALTER TABLE payments ADD COLUMN conceptId CHAR(36) NULL`,
       `ALTER TABLE payments ADD COLUMN toAccountId CHAR(36) NULL`,
+      `ALTER TABLE payments ADD COLUMN isDividend TINYINT(1) NOT NULL DEFAULT 0`,
     ]) {
       try {
         await this.payments.query(sql);
@@ -224,6 +226,7 @@ export class PaymentsService implements OnModuleInit {
       accountName: p.account?.name ?? null,
       toAccountId: p.toAccountId ?? null,
       toAccountName: p.toAccount?.name ?? null,
+      isDividend: !!p.isDividend,
       paymentMethod: p.paymentMethod ?? null,
       supplierId: p.supplierId ?? null,
       supplierName: p.supplier?.name ?? null,
@@ -446,6 +449,11 @@ export class PaymentsService implements OnModuleInit {
       p.supplier?.name ? `Proveedor: ${p.supplier.name}` : null,
       p.service?.name ? `Servicio: ${p.service.name}` : null,
       p.employee?.fullName ? `Empleado: ${p.employee.fullName}` : null,
+      p.isDividend && p.toAccount?.name
+        ? `Dividendo · para ${p.toAccount.name}`
+        : p.toAccount?.name
+          ? `Socio: ${p.toAccount.name}`
+          : null,
     ]
       .filter(Boolean)
       .join(' · ');
@@ -495,6 +503,8 @@ export class PaymentsService implements OnModuleInit {
     const paidAt =
       this.toDateOnly(payment.paidAt) || (await this.shopTodayIso(shopId));
     const invoiced = !!(payment.invoiceNumber || payment.invoiceFilePath);
+    const isPartnerDest = !!payment.toAccountId;
+    const isDividendPay = !!payment.isDividend && isPartnerDest;
     const basePayload: {
       businessDate: string;
       fromAccountId: string;
@@ -506,10 +516,12 @@ export class PaymentsService implements OnModuleInit {
       invoiced: boolean;
       invoiceNumber: string | null;
       paymentMethod?: string | null;
+      isDividend?: boolean;
+      beneficiaryAccountId?: string | null;
     } = {
       businessDate: paidAt,
       fromAccountId: payment.accountId,
-      toAccountId: egreso.id,
+      toAccountId: isPartnerDest ? payment.toAccountId! : egreso.id,
       employeeId: payment.employeeId ?? null,
       amountUyu: n(payment.amount),
       description: this.paymentMovementDescription(payment),
@@ -517,6 +529,10 @@ export class PaymentsService implements OnModuleInit {
       invoiceNumber: payment.invoiceNumber ?? null,
       paymentMethod: payment.paymentMethod ?? null,
     };
+    if (isDividendPay) {
+      basePayload.isDividend = true;
+      basePayload.beneficiaryAccountId = payment.toAccountId;
+    }
     if (payment.conceptId) {
       basePayload.conceptId = payment.conceptId;
     }
@@ -1065,7 +1081,7 @@ export class PaymentsService implements OnModuleInit {
           shopId,
           type: NotificationType.PAYMENT_VALIDATE,
           title: 'Pago para validar',
-          body: `"${this.displayTitle(loaded)}" · $${n(loaded.amount).toLocaleString('es-AR')}${
+          body: `"${this.displayTitle(loaded)}" · ${formatMoney(loaded.amount)}${
             loaded.dueDate ? ` · vence ${loaded.dueDate}` : ''
           }`,
           paymentId: loaded.id,
@@ -1102,7 +1118,7 @@ export class PaymentsService implements OnModuleInit {
           shopId,
           type: NotificationType.PAYMENT_PAY,
           title: 'Pago para abonar',
-          body: `"${this.displayTitle(loaded)}" · $${n(loaded.amount).toLocaleString('es-AR')}${
+          body: `"${this.displayTitle(loaded)}" · ${formatMoney(loaded.amount)}${
             loaded.dueDate ? ` · vence ${loaded.dueDate}` : ''
           }`,
           paymentId: loaded.id,
@@ -1367,7 +1383,7 @@ export class PaymentsService implements OnModuleInit {
         shopId,
         type: NotificationType.PAYMENT_PAY,
         title: 'Pago para abonar',
-        body: `"${this.displayTitle(row)}" · $${n(row.amount).toLocaleString('es-AR')}${
+        body: `"${this.displayTitle(row)}" · ${formatMoney(row.amount)}${
           row.dueDate ? ` · vence ${row.dueDate}` : ''
         }`,
         paymentId: row.id,
@@ -1492,7 +1508,22 @@ export class PaymentsService implements OnModuleInit {
     }
 
     try {
-      const createPayload = {
+      const isDividendPay = !!row.isDividend && !!row.toAccountId;
+      const createPayload: {
+        businessDate: string;
+        fromAccountId: string;
+        toAccountId: string;
+        fromUserId: string | null;
+        employeeId: string | null;
+        description: string;
+        amountUyu: number;
+        conceptId: string | null;
+        invoiced: boolean;
+        invoiceNumber: string | null;
+        paymentMethod: string | null;
+        isDividend?: boolean;
+        beneficiaryAccountId?: string | null;
+      } = {
         businessDate: paidAt,
         fromAccountId: accountId,
         toAccountId: destAccountId,
@@ -1500,11 +1531,17 @@ export class PaymentsService implements OnModuleInit {
         employeeId: row.employeeId ?? null,
         description: [
           `Pago: ${this.displayTitle(row)}`,
-          isPartial ? `Parcial $${money(payAmount)} de $${money(totalAmount)}` : null,
+          isPartial ? `Parcial ${formatMoney(payAmount)} de ${formatMoney(totalAmount)}` : null,
           row.supplier?.name ? `Proveedor: ${row.supplier.name}` : null,
           row.service?.name ? `Servicio: ${row.service.name}` : null,
           row.employee?.fullName ? `Empleado: ${row.employee.fullName}` : null,
-          row.toAccount?.name ? `Socio: ${row.toAccount.name}` : null,
+          isDividendPay
+            ? row.toAccount?.name
+              ? `Dividendo · para ${row.toAccount.name}`
+              : 'Dividendo'
+            : row.toAccount?.name
+              ? `Socio: ${row.toAccount.name}`
+              : null,
         ]
           .filter(Boolean)
           .join(' · '),
@@ -1514,6 +1551,10 @@ export class PaymentsService implements OnModuleInit {
         invoiceNumber: row.invoiceNumber ?? null,
         paymentMethod: row.paymentMethod ?? null,
       };
+      if (isDividendPay) {
+        createPayload.isDividend = true;
+        createPayload.beneficiaryAccountId = row.toAccountId;
+      }
       let movement;
       try {
         movement = await this.movements.create(user, shopId, createPayload, {
@@ -1543,7 +1584,7 @@ export class PaymentsService implements OnModuleInit {
       if (isPartial) {
         const debtNotes = [
           row.notes?.trim() || null,
-          `Saldo pendiente · parcial de $${money(totalAmount)}`,
+          `Saldo pendiente · parcial de ${formatMoney(totalAmount)}`,
         ]
           .filter(Boolean)
           .join(' · ');
@@ -1559,6 +1600,7 @@ export class PaymentsService implements OnModuleInit {
             validatorUserId: row.validatorUserId ?? null,
             accountId: row.accountId ?? null,
             toAccountId: row.toAccountId ?? null,
+            isDividend: !!row.isDividend,
             conceptId: row.conceptId ?? null,
             paymentMethod: row.paymentMethod ?? null,
             supplierId: row.supplierId ?? null,
@@ -1609,7 +1651,7 @@ export class PaymentsService implements OnModuleInit {
     const body = [
       shopName,
       `"${this.displayTitle(payment)}"`,
-      `$${n(payment.amount).toLocaleString('es-AR')}`,
+      formatMoney(payment.amount),
       `por ${actor.fullName || actor.email}`,
     ].join(' · ');
     await this.notifications.createMany(
@@ -1656,7 +1698,7 @@ export class PaymentsService implements OnModuleInit {
     const body = [
       shopName,
       `"${this.displayTitle(payment)}"`,
-      `$${n(payment.amount).toLocaleString('es-AR')}`,
+      formatMoney(payment.amount),
       paidAt,
       `por ${actor.fullName || actor.email}`,
     ].join(' · ');
@@ -1756,7 +1798,7 @@ export class PaymentsService implements OnModuleInit {
         shopId,
         type: NotificationType.PAYMENT_VALIDATE,
         title: 'Pago para validar',
-        body: `"${this.displayTitle(row)}" · $${n(row.amount).toLocaleString('es-AR')}${
+        body: `"${this.displayTitle(row)}" · ${formatMoney(row.amount)}${
           row.dueDate ? ` · vence ${row.dueDate}` : ''
         }`,
         paymentId: row.id,
@@ -1777,7 +1819,7 @@ export class PaymentsService implements OnModuleInit {
       shopId,
       type: NotificationType.PAYMENT_PAY,
       title: 'Pago para abonar',
-      body: `"${this.displayTitle(row)}" · $${n(row.amount).toLocaleString('es-AR')}${
+      body: `"${this.displayTitle(row)}" · ${formatMoney(row.amount)}${
         row.dueDate ? ` · vence ${row.dueDate}` : ''
       }`,
       paymentId: row.id,

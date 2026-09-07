@@ -13,6 +13,7 @@ import { CashClosing } from '../../entities/cash-closing.entity';
 import { AuthUser } from '../../common/decorators';
 import { ShopsService } from '../shops/shops.service';
 import { isEntityActive } from '../../common/active.util';
+import { formatMoney } from '../../common/format-money';
 
 function n(v: unknown): number {
   const x = Number(v ?? 0);
@@ -229,7 +230,7 @@ export class TipsService implements OnModuleInit {
       const sum = round2(allocInputs.reduce((s, a) => s + Math.max(0, n(a.amount)), 0));
       if (Math.abs(sum - total) > 0.02) {
         throw new BadRequestException(
-          `La suma del reparto ($${sum.toFixed(2)}) debe igualar el total ($${total.toFixed(2)})`,
+          `La suma del reparto (${formatMoney(sum)}) debe igualar el total (${formatMoney(total)})`,
         );
       }
       const empIds = [...new Set(allocInputs.map((a) => a.employeeId))];
