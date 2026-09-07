@@ -34,6 +34,7 @@ import {
 import { isGlobalAdmin } from '../../common/guards';
 import { isEntityActive } from '../../common/active.util';
 import { closingDateKey, markDeletedUnique } from '../../common/soft-delete.util';
+import { formatMoney } from '../../common/format-money';
 import {
   findShopShift,
   normalizeShopShifts,
@@ -868,19 +869,18 @@ export class ClosingsService implements OnModuleInit {
     if (!recipientIds.size) return;
 
     const date = String(closing.businessDate || '').slice(0, 10);
-    const total = Number(closing.declaredTotal || 0).toLocaleString('es-AR');
     const title = 'Nuevo cierre de caja';
     const parts = [
       shopName,
       date,
-      `$${total}`,
+      formatMoney(closing.declaredTotal),
       `por ${actor.fullName || actor.email}`,
     ];
     const hasWho = !!(closing.cashWithdrawnByUserId || closing.cashWithdrawnByEmployeeId);
     const pendingAmount = Number(closing.cashPendingPickup || 0);
     if (!hasWho && pendingAmount > 0) {
       parts.push(
-        `Hay $${pendingAmount.toLocaleString('es-AR')} para retirar en A Retirar`,
+        `Hay ${formatMoney(pendingAmount)} para retirar en A Retirar`,
       );
     }
     const body = parts.join(' · ');

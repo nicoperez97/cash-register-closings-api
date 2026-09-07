@@ -19,7 +19,7 @@ export class PartnerSplitRun extends BaseEntity {
   @Column({ type: 'int', default: 0 })
   transferCount: number;
 
-  @Column({ type: 'decimal', precision: 14, scale: 2, default: 0 })
+  @Column({ type: 'decimal', precision: 20, scale: 2, default: 0 })
   distributedAmount: string;
 
   @Column({ type: 'json' })

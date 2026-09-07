@@ -153,6 +153,7 @@ export class ServicesService implements OnModuleInit {
         listInExpenses: false,
         listInIncomes: false,
         listInTransfers: false,
+        listInBalances: false,
         active: true,
       }),
     );

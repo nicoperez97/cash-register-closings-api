@@ -21,7 +21,7 @@ export class Payment extends BaseEntity {
   @Column({ type: 'varchar', length: 500, nullable: true })
   notes?: string | null;
 
-  @Column({ type: 'decimal', precision: 14, scale: 2, nullable: true })
+  @Column({ type: 'decimal', precision: 20, scale: 2, nullable: true })
   amount?: string | null;
 
   /** Fecha tentativa de pago. */
@@ -45,6 +45,13 @@ export class Payment extends BaseEntity {
   /** Cuenta que recibe (pagos a socios). */
   @Column({ type: 'varchar', nullable: true })
   toAccountId?: string | null;
+
+  /**
+   * Pago a socios que al abonar va a Dividendos (no al saldo del socio destino).
+   * toAccountId sigue siendo el socio beneficiario anotado.
+   */
+  @Column({ type: 'tinyint', default: 0 })
+  isDividend: boolean;
 
   /** Concepto del catálogo (opcional; el título se copia del nombre). */
   @Column({ type: 'varchar', nullable: true })

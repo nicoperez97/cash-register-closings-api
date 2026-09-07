@@ -49,6 +49,7 @@ export class UpsertAccountDto {
   listInExpenses?: boolean;
   listInIncomes?: boolean;
   listInTransfers?: boolean;
+  listInBalances?: boolean;
   /** Se suma al saldo de movimientos. */
   openingBalance?: number | string | null;
   /** Comisión % (0 = sin comisión). */
@@ -89,7 +90,12 @@ export class AccountsService implements OnModuleInit {
     } catch {
       // columna ya existe
     }
-    for (const col of ['listInExpenses', 'listInIncomes', 'listInTransfers'] as const) {
+    for (const col of [
+      'listInExpenses',
+      'listInIncomes',
+      'listInTransfers',
+      'listInBalances',
+    ] as const) {
       try {
         await this.accounts.query(`
           ALTER TABLE ledger_accounts
@@ -183,6 +189,7 @@ export class AccountsService implements OnModuleInit {
         listInExpenses: Number(a.listInExpenses ?? 1) !== 0,
         listInIncomes: Number(a.listInIncomes ?? 1) !== 0,
         listInTransfers: Number(a.listInTransfers ?? 1) !== 0,
+        listInBalances: Number(a.listInBalances ?? 1) !== 0,
         openingBalance: n(a.openingBalance),
         commissionPercent: parseCommissionPercent(a.commissionPercent),
         ownershipPercent:
@@ -260,6 +267,10 @@ export class AccountsService implements OnModuleInit {
           dto.type === LedgerAccountType.SUPPLIER || dto.type === LedgerAccountType.SERVICE
             ? false
             : dto.listInTransfers !== false,
+        listInBalances:
+          dto.type === LedgerAccountType.SUPPLIER || dto.type === LedgerAccountType.SERVICE
+            ? false
+            : dto.listInBalances !== false,
         openingBalance: money(parseOpening(dto.openingBalance)),
         commissionPercent: money(
           dto.type === LedgerAccountType.SYSTEM ? 0 : parseCommissionPercent(dto.commissionPercent),
@@ -315,17 +326,21 @@ export class AccountsService implements OnModuleInit {
     if (dto.listInExpenses !== undefined) row.listInExpenses = !!dto.listInExpenses;
     if (dto.listInIncomes !== undefined) row.listInIncomes = !!dto.listInIncomes;
     if (dto.listInTransfers !== undefined) row.listInTransfers = !!dto.listInTransfers;
+    if (dto.listInBalances !== undefined) row.listInBalances = !!dto.listInBalances;
     if (row.type === LedgerAccountType.SUPPLIER || row.type === LedgerAccountType.SERVICE) {
       row.hideFromCashWithdraw = true;
       row.listInExpenses = false;
       row.listInIncomes = false;
       row.listInTransfers = false;
+      row.listInBalances = false;
     }
     if (row.type === LedgerAccountType.DIVIDENDS) {
       row.hideFromCashWithdraw = true;
       row.listInExpenses = false;
       row.listInIncomes = false;
       row.listInTransfers = true;
+      // Dividendos = plata personal del socio; no disponible para el local → no en Saldos.
+      row.listInBalances = false;
       row.commissionPercent = money(0);
       row.ownershipPercent = money(0);
     }
