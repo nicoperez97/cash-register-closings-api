@@ -632,13 +632,21 @@ export function classifyBackupMovement(row: {
   fromAccountCode?: string | null;
   toAccountName?: string | null;
   toAccountCode?: string | null;
+  toAccountType?: string | null;
 }): BackupMovementSlice {
   const kind = String(row.conceptKind ?? '');
   const toName = String(row.toAccountName ?? '').toLowerCase();
   const toCode = String(row.toAccountCode ?? '').toUpperCase();
+  const toType = String(row.toAccountType ?? '').toUpperCase();
   const fromName = String(row.fromAccountName ?? '').toLowerCase();
   const fromCode = String(row.fromAccountCode ?? '').toUpperCase();
-  if (kind === 'EXPENSE' || toCode === 'EGRESO' || toName.includes('egreso')) {
+  if (
+    kind === 'EXPENSE' ||
+    toCode === 'EGRESO' ||
+    toName.includes('egreso') ||
+    toType === 'SUPPLIER' ||
+    toType === 'SERVICE'
+  ) {
     return 'expense';
   }
   if (kind === 'INCOME' || fromCode === 'INGRESO' || fromName.includes('ingreso')) {
