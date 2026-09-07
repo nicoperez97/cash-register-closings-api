@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { PartnerSplitConfig } from '../../entities/partner-split-config.entity';
 import { PartnerSplitRun } from '../../entities/partner-split-run.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
+import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
 import { Movement } from '../../entities/movement.entity';
 import { Payment } from '../../entities/payment.entity';
 import { ShopsModule } from '../shops/shops.module';
@@ -19,6 +20,7 @@ import { PartnerSplitsService } from './partner-splits.service';
       LedgerAccount,
       Movement,
       Payment,
+      LedgerAccountUser,
     ]),
     ShopsModule,
     MovementsModule,
