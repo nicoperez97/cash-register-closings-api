@@ -157,6 +157,93 @@ export class PaymentsService implements OnModuleInit {
         // ya aplicado
       }
     }
+    await this.backfillPartyExpenseDestinations();
+  }
+
+  /**
+   * Pagos abonados a proveedor/servicio históricamente iban a EGRESO;
+   * reubica el destino a la cuenta ledger del proveedor/servicio para que Saldos sume.
+   */
+  private async backfillPartyExpenseDestinations() {
+    for (const sql of [
+      `
+        UPDATE movements m
+        INNER JOIN payments p
+          ON p.movementId = m.id AND p.shopId = m.shopId
+          AND p.active = 1 AND p.status = 'PAID' AND p.supplierId IS NOT NULL
+        INNER JOIN suppliers s ON s.id = p.supplierId AND s.shopId = p.shopId
+        INNER JOIN ledger_accounts eg
+          ON eg.shopId = m.shopId AND UPPER(IFNULL(eg.code, '')) = 'EGRESO'
+        SET m.toAccountId = s.accountId
+        WHERE m.active = 1
+          AND m.toAccountId = eg.id
+          AND s.accountId IS NOT NULL
+          AND s.accountId <> ''
+      `,
+      `
+        UPDATE movements m
+        INNER JOIN payments p
+          ON p.movementId = m.id AND p.shopId = m.shopId
+          AND p.active = 1 AND p.status = 'PAID' AND p.serviceId IS NOT NULL
+        INNER JOIN services s ON s.id = p.serviceId AND s.shopId = p.shopId
+        INNER JOIN ledger_accounts eg
+          ON eg.shopId = m.shopId AND UPPER(IFNULL(eg.code, '')) = 'EGRESO'
+        SET m.toAccountId = s.accountId
+        WHERE m.active = 1
+          AND m.toAccountId = eg.id
+          AND s.accountId IS NOT NULL
+          AND s.accountId <> ''
+      `,
+    ]) {
+      try {
+        await this.payments.query(sql);
+      } catch {
+        // tablas aún no listas / ya migrado
+      }
+    }
+  }
+
+  /**
+   * Destino del egreso al abonar:
+   * socio (toAccountId) → proveedor/servicio (su cuenta) → EGRESO (empleados / genéricos).
+   */
+  private async resolvePaidDestinationAccountId(
+    shopId: string,
+    payment: Payment,
+  ): Promise<string> {
+    if (payment.toAccountId) {
+      await this.assertAccount(shopId, payment.toAccountId);
+      return payment.toAccountId;
+    }
+    if (payment.supplierId) {
+      const supplier =
+        payment.supplier ??
+        (await this.suppliers.findOne({
+          where: { id: payment.supplierId, shopId },
+        }));
+      if (supplier?.accountId) {
+        await this.assertAccount(shopId, supplier.accountId);
+        return supplier.accountId;
+      }
+    }
+    if (payment.serviceId) {
+      const service =
+        payment.service ??
+        (await this.shopServices.findOne({
+          where: { id: payment.serviceId, shopId },
+        }));
+      if (service?.accountId) {
+        await this.assertAccount(shopId, service.accountId);
+        return service.accountId;
+      }
+    }
+    const egreso = await this.accounts.findOne({
+      where: { shopId, code: 'EGRESO', active: true },
+    });
+    if (!egreso || !isEntityActive(egreso.active)) {
+      throw new BadRequestException('No hay cuenta EGRESO activa en el local');
+    }
+    return egreso.id;
   }
 
   private canManage(user: AuthUser, shopId: string) {
@@ -496,17 +583,12 @@ export class PaymentsService implements OnModuleInit {
     // Validar cuenta origen con el mismo criterio que el pago (mensaje claro).
     await this.assertAccount(shopId, payment.accountId);
 
-    const egreso = await this.accounts.findOne({
-      where: { shopId, code: 'EGRESO' },
-    });
-    if (!egreso || !isEntityActive(egreso.active)) {
-      throw new BadRequestException('No hay cuenta EGRESO activa en el local');
-    }
     const paidAt =
       this.toDateOnly(payment.paidAt) || (await this.shopTodayIso(shopId));
     const invoiced = !!(payment.invoiceNumber || payment.invoiceFilePath);
     const isPartnerDest = !!payment.toAccountId;
     const isDividendPay = !!payment.isDividend && isPartnerDest;
+    const destAccountId = await this.resolvePaidDestinationAccountId(shopId, payment);
     const basePayload: {
       businessDate: string;
       fromAccountId: string;
@@ -524,7 +606,7 @@ export class PaymentsService implements OnModuleInit {
     } = {
       businessDate: paidAt,
       fromAccountId: payment.accountId,
-      toAccountId: isPartnerDest ? payment.toAccountId! : egreso.id,
+      toAccountId: destAccountId,
       employeeId: payment.employeeId ?? null,
       amountUyu: n(payment.amount),
       description: this.paymentMovementDescription(payment),
@@ -1487,18 +1569,7 @@ export class PaymentsService implements OnModuleInit {
       throw new BadRequestException('Fecha de pago inválida');
     }
 
-    let destAccountId = row.toAccountId ?? null;
-    if (destAccountId) {
-      await this.assertAccount(shopId, destAccountId);
-    } else {
-      const egreso = await this.accounts.findOne({
-        where: { shopId, code: 'EGRESO', active: true },
-      });
-      if (!egreso) {
-        throw new BadRequestException('No hay cuenta EGRESO en el local');
-      }
-      destAccountId = egreso.id;
-    }
+    const destAccountId = await this.resolvePaidDestinationAccountId(shopId, row);
 
     // Claim atómico: evita doble egreso por doble clic / reintento.
     const claim = await this.payments

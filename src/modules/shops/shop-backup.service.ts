@@ -782,6 +782,7 @@ export class ShopBackupService {
             fromAccountCode: from?.code,
             toAccountName: to?.name,
             toAccountCode: to?.code,
+            toAccountType: to?.type,
           }),
         );
       });

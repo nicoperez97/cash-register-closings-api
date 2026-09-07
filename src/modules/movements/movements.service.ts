@@ -312,11 +312,18 @@ export class MovementsService implements OnModuleInit {
     conceptKind?: string | null;
     toAccountName?: string | null;
     toAccountCode?: string | null;
+    toAccountType?: string | null;
   }): boolean {
     if (r.conceptKind === ConceptKind.EXPENSE || r.conceptKind === 'EXPENSE') return true;
     const name = (r.toAccountName ?? '').toLowerCase();
     const code = (r.toAccountCode ?? '').toUpperCase();
-    return code === 'EGRESO' || name.includes('egreso');
+    const type = (r.toAccountType ?? '').toUpperCase();
+    return (
+      code === 'EGRESO' ||
+      name.includes('egreso') ||
+      type === LedgerAccountType.SUPPLIER ||
+      type === LedgerAccountType.SERVICE
+    );
   }
 
   private isIncomeRow(r: {
@@ -325,6 +332,7 @@ export class MovementsService implements OnModuleInit {
     fromAccountCode?: string | null;
     toAccountName?: string | null;
     toAccountCode?: string | null;
+    toAccountType?: string | null;
   }): boolean {
     if (this.isExpenseRow(r)) return false;
     if (r.conceptKind === ConceptKind.INCOME || r.conceptKind === 'INCOME') return true;
@@ -339,10 +347,41 @@ export class MovementsService implements OnModuleInit {
     fromAccountCode?: string | null;
     toAccountName?: string | null;
     toAccountCode?: string | null;
+    toAccountType?: string | null;
   }): MovementKindFilter {
     if (this.isExpenseRow(r)) return 'expense';
     if (this.isIncomeRow(r)) return 'income';
     return 'transfer';
+  }
+
+  /** Condición SQL: el destino cuenta como egreso (EGRESO o cuenta proveedor/servicio). */
+  private expenseDestinationSql(alias = 'toAccount') {
+    return `(
+      concept.kind = :expenseKind
+      OR LOWER(${alias}.name) LIKE :egresoName
+      OR UPPER(${alias}.code) = :egresoCode
+      OR ${alias}.type IN (:...partyExpenseTypes)
+    )`;
+  }
+
+  private expenseDestinationParams() {
+    return {
+      expenseKind: ConceptKind.EXPENSE,
+      egresoName: '%egreso%',
+      egresoCode: 'EGRESO',
+      partyExpenseTypes: [LedgerAccountType.SUPPLIER, LedgerAccountType.SERVICE],
+    };
+  }
+
+  private notExpenseDestinationSql(alias = 'toAccount') {
+    return `(
+      ${alias}.id IS NULL
+      OR (
+        LOWER(${alias}.name) NOT LIKE :egresoName
+        AND UPPER(COALESCE(${alias}.code, '')) <> :egresoCode
+        AND (${alias}.type IS NULL OR ${alias}.type NOT IN (:...partyExpenseTypes))
+      )
+    )`;
   }
 
   private async findSystemAccount(shopId: string, code: 'INGRESO' | 'EGRESO') {
@@ -458,29 +497,31 @@ export class MovementsService implements OnModuleInit {
     }
 
     if (filters.kind === 'expense') {
-      qb.andWhere(
-        `(concept.kind = :expenseKind OR LOWER(toAccount.name) LIKE :egresoName OR UPPER(toAccount.code) = :egresoCode)`,
-        { expenseKind: ConceptKind.EXPENSE, egresoName: '%egreso%', egresoCode: 'EGRESO' },
-      );
+      qb.andWhere(this.expenseDestinationSql(), this.expenseDestinationParams());
     } else if (filters.kind === 'income') {
       qb.andWhere(
         `(concept.kind = :incomeKind OR LOWER(fromAccount.name) LIKE :ingresoName OR UPPER(fromAccount.code) = :ingresoCode)`,
         { incomeKind: ConceptKind.INCOME, ingresoName: '%ingreso%', ingresoCode: 'INGRESO' },
       );
-      qb.andWhere(
-        `(concept.kind IS NULL OR concept.kind <> :expenseKind) AND (toAccount.id IS NULL OR (LOWER(toAccount.name) NOT LIKE :egresoName AND UPPER(COALESCE(toAccount.code, '')) <> :egresoCode))`,
-        { expenseKind: ConceptKind.EXPENSE, egresoName: '%egreso%', egresoCode: 'EGRESO' },
-      );
+      qb.andWhere(`(concept.kind IS NULL OR concept.kind <> :expenseKind)`, {
+        expenseKind: ConceptKind.EXPENSE,
+      });
+      qb.andWhere(this.notExpenseDestinationSql(), {
+        egresoName: '%egreso%',
+        egresoCode: 'EGRESO',
+        partyExpenseTypes: [LedgerAccountType.SUPPLIER, LedgerAccountType.SERVICE],
+      });
     } else if (filters.kind === 'transfer') {
       qb.andWhere(
         `(concept.kind IS NULL OR (concept.kind <> :expenseKind AND concept.kind <> :incomeKind))
-         AND (toAccount.id IS NULL OR (LOWER(toAccount.name) NOT LIKE :egresoName AND UPPER(COALESCE(toAccount.code, '')) <> :egresoCode))
+         AND ${this.notExpenseDestinationSql()}
          AND (fromAccount.id IS NULL OR (LOWER(fromAccount.name) NOT LIKE :ingresoName AND UPPER(COALESCE(fromAccount.code, '')) <> :ingresoCode))`,
         {
           expenseKind: ConceptKind.EXPENSE,
           incomeKind: ConceptKind.INCOME,
           egresoName: '%egreso%',
           egresoCode: 'EGRESO',
+          partyExpenseTypes: [LedgerAccountType.SUPPLIER, LedgerAccountType.SERVICE],
           ingresoName: '%ingreso%',
           ingresoCode: 'INGRESO',
         },
@@ -537,10 +578,7 @@ export class MovementsService implements OnModuleInit {
     if (filters.from) qb.andWhere('m.businessDate >= :from', { from: filters.from });
     if (filters.to) qb.andWhere('m.businessDate <= :to', { to: filters.to });
     if (filters.kind === 'expense') {
-      qb.andWhere(
-        `(concept.kind = :expenseKind OR LOWER(toAccount.name) LIKE :egresoName OR UPPER(toAccount.code) = :egresoCode)`,
-        { expenseKind: ConceptKind.EXPENSE, egresoName: '%egreso%', egresoCode: 'EGRESO' },
-      );
+      qb.andWhere(this.expenseDestinationSql(), this.expenseDestinationParams());
     } else if (filters.kind === 'income') {
       qb.andWhere(
         `(concept.kind = :incomeKind OR LOWER(fromAccount.name) LIKE :ingresoName OR UPPER(fromAccount.code) = :ingresoCode)`,
@@ -548,8 +586,15 @@ export class MovementsService implements OnModuleInit {
       );
     } else if (filters.kind === 'transfer') {
       qb.andWhere(
-        `(concept.kind IS NULL OR (concept.kind <> :expenseKind AND concept.kind <> :incomeKind))`,
-        { expenseKind: ConceptKind.EXPENSE, incomeKind: ConceptKind.INCOME },
+        `(concept.kind IS NULL OR (concept.kind <> :expenseKind AND concept.kind <> :incomeKind))
+         AND ${this.notExpenseDestinationSql()}`,
+        {
+          expenseKind: ConceptKind.EXPENSE,
+          incomeKind: ConceptKind.INCOME,
+          egresoName: '%egreso%',
+          egresoCode: 'EGRESO',
+          partyExpenseTypes: [LedgerAccountType.SUPPLIER, LedgerAccountType.SERVICE],
+        },
       );
     }
     qb.orderBy('m.businessDate', 'ASC');
@@ -938,6 +983,7 @@ export class MovementsService implements OnModuleInit {
       conceptKind: row.concept?.kind,
       toAccountName: row.toAccount?.name,
       toAccountCode: row.toAccount?.code,
+      toAccountType: row.toAccount?.type,
     });
     const asIncome = this.isIncomeRow({
       conceptKind: row.concept?.kind,
@@ -945,6 +991,7 @@ export class MovementsService implements OnModuleInit {
       fromAccountCode: row.fromAccount?.code,
       toAccountName: row.toAccount?.name,
       toAccountCode: row.toAccount?.code,
+      toAccountType: row.toAccount?.type,
     });
     if (!opts?.fromPayment) {
       if (asExpense) {
@@ -965,6 +1012,7 @@ export class MovementsService implements OnModuleInit {
           fromAccountCode: row.fromAccount?.code,
           toAccountName: row.toAccount?.name,
           toAccountCode: row.toAccount?.code,
+          toAccountType: row.toAccount?.type,
         }));
 
     let fromId =
@@ -1135,6 +1183,7 @@ export class MovementsService implements OnModuleInit {
       conceptKind: row.concept?.kind,
       toAccountName: row.toAccount?.name,
       toAccountCode: row.toAccount?.code,
+      toAccountType: row.toAccount?.type,
     });
     const asIncome = this.isIncomeRow({
       conceptKind: row.concept?.kind,
@@ -1142,6 +1191,7 @@ export class MovementsService implements OnModuleInit {
       fromAccountCode: row.fromAccount?.code,
       toAccountName: row.toAccount?.name,
       toAccountCode: row.toAccount?.code,
+      toAccountType: row.toAccount?.type,
     });
     if (!opts?.fromPayment) {
       if (asExpense) {
