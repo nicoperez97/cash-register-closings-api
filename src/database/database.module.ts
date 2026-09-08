@@ -15,12 +15,22 @@ async function ensureFkIndexesBeforeSync(ds: DataSource) {
     // payroll_lines: unique viejo (periodId, employeeId) → FKs necesitan índices propios
     `CREATE INDEX IDX_payroll_lines_periodId ON payroll_lines (periodId)`,
     `CREATE INDEX IDX_payroll_lines_employeeId ON payroll_lines (employeeId)`,
+    // notifications: índice custom idx_notifications_user puede ser el único soporte de la FK
+    `CREATE INDEX FK_692a909ee0fa9383e7859f9b406 ON notifications (userId)`,
   ];
   for (const sql of stmts) {
     try {
       await ds.query(sql);
     } catch {
       // ya existe o la tabla todavía no está
+    }
+  }
+
+  for (const name of ['idx_notifications_seen', 'idx_notifications_user', 'idx_notifications_read']) {
+    try {
+      await ds.query(`DROP INDEX \`${name}\` ON notifications`);
+    } catch {
+      // no existe o sigue en uso
     }
   }
 

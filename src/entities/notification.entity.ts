@@ -37,6 +37,13 @@ export class AppNotification extends BaseEntity {
   @Column({ type: 'datetime', precision: 6, nullable: true })
   readAt?: Date | null;
 
+  /**
+   * Visto en el panel (limpia el badge). Independiente de isRead:
+   * abrir la campana marca seen; el punto de no leída queda hasta click / marcar todas.
+   */
+  @Column({ type: 'datetime', precision: 6, nullable: true })
+  seenAt?: Date | null;
+
   @ManyToOne(() => User, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'userId' })
   user: User;

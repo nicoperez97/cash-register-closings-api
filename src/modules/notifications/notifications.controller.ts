@@ -34,6 +34,17 @@ export class NotificationsController {
     return this.notifications.unreadCountsByShop(user);
   }
 
+  /** Badge de la campana: avisos todavía no “vistos” (abrir el panel los marca). */
+  @Get('unseen-count')
+  unseenCount(@CurrentUser() user: AuthUser, @Query('shopId') shopId?: string) {
+    return this.notifications.unseenCount(user, shopId);
+  }
+
+  @Get('unseen-counts-by-shop')
+  unseenCountsByShop(@CurrentUser() user: AuthUser) {
+    return this.notifications.unseenCountsByShop(user);
+  }
+
   @Patch(':id/read')
   markRead(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.notifications.markRead(user, id);
@@ -42,5 +53,11 @@ export class NotificationsController {
   @Post('read-all')
   markAllRead(@CurrentUser() user: AuthUser, @Query('shopId') shopId?: string) {
     return this.notifications.markAllRead(user, shopId);
+  }
+
+  /** Abre la campana: limpia el badge sin marcar ítems como leídos. */
+  @Post('seen')
+  markSeen(@CurrentUser() user: AuthUser, @Query('shopId') shopId?: string) {
+    return this.notifications.markSeen(user, shopId);
   }
 }

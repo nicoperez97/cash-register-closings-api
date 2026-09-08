@@ -35,10 +35,12 @@ CREATE TABLE IF NOT EXISTS notifications (
   paymentId CHAR(36) NULL,
   isRead TINYINT(1) NOT NULL DEFAULT 0,
   readAt DATETIME(6) NULL,
+  seenAt DATETIME(6) NULL,
   createdAt DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   updatedAt DATETIME(6) NULL,
   deletedAt DATETIME(6) NULL,
   active TINYINT(1) NOT NULL DEFAULT 1,
   INDEX idx_notifications_user (userId),
-  INDEX idx_notifications_read (isRead)
+  INDEX idx_notifications_read (isRead),
+  INDEX idx_notifications_seen_at (seenAt)
 );
