@@ -999,7 +999,17 @@ export class ShopsService implements OnModuleInit {
     if (dto.takeawayEnabled !== undefined) shop.takeawayEnabled = !!dto.takeawayEnabled;
     if (dto.deliveryEnabled !== undefined) shop.deliveryEnabled = !!dto.deliveryEnabled;
     if (dto.orderingPayments !== undefined) {
-      shop.orderingPayments = normalizeOrderingPayments(dto.orderingPayments);
+      const prev = normalizeOrderingPayments(shop.orderingPayments);
+      const incoming = dto.orderingPayments ?? {};
+      shop.orderingPayments = normalizeOrderingPayments({
+        methods: incoming.methods ?? prev?.methods,
+        transferInstructions:
+          incoming.transferInstructions !== undefined
+            ? incoming.transferInstructions
+            : (prev?.transferInstructions ?? null),
+        whatsapp:
+          incoming.whatsapp !== undefined ? incoming.whatsapp : (prev?.whatsapp ?? null),
+      });
     }
     if (dto.orderingExtras !== undefined) {
       shop.orderingExtras = normalizeOrderingExtras(dto.orderingExtras);
