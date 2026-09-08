@@ -126,7 +126,6 @@ export class NotificationsService implements OnModuleInit {
           updatedAt DATETIME(6) NULL,
           deletedAt DATETIME(6) NULL,
           active TINYINT(1) NOT NULL DEFAULT 1,
-          INDEX idx_notifications_user (userId),
           INDEX idx_notifications_read (isRead)
         )
       `);
@@ -187,6 +186,78 @@ export class NotificationsService implements OnModuleInit {
     } catch {
       // ya actualizado
     }
+    try {
+      await this.notifications.query(`
+        ALTER TABLE notifications
+          ADD COLUMN seenAt DATETIME(6) NULL
+      `);
+      // Solo al crear la columna: no inundar el badge con historial.
+      await this.notifications.query(`
+        UPDATE notifications
+           SET seenAt = COALESCE(readAt, createdAt, CURRENT_TIMESTAMP(6))
+         WHERE seenAt IS NULL
+      `);
+    } catch {
+      // ya existe
+    }
+    try {
+      await this.notifications.query(`
+        CREATE INDEX idx_notifications_seen_at ON notifications (seenAt)
+      `);
+    } catch {
+      // ya existe
+    }
+    // Una sola vez: la lógica vieja marcaba todo leído al abrir la campana.
+    // Restauramos no leídas de los últimos 14 días para el modelo badge≠leído.
+    try {
+      await this.notifications.query(`
+        CREATE TABLE IF NOT EXISTS app_meta (
+          metaKey VARCHAR(64) NOT NULL PRIMARY KEY,
+          metaValue VARCHAR(255) NULL,
+          updatedAt DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
+        )
+      `);
+      const rows = await this.notifications.query(
+        `SELECT metaValue FROM app_meta WHERE metaKey = ? LIMIT 1`,
+        ['notif_unread_restore_v1'],
+      );
+      if (!Array.isArray(rows) || !rows.length) {
+        await this.notifications.query(`
+          UPDATE notifications
+             SET isRead = 0,
+                 readAt = NULL
+           WHERE active = 1
+             AND isRead = 1
+             AND createdAt >= (NOW() - INTERVAL 14 DAY)
+        `);
+        await this.notifications.query(
+          `INSERT INTO app_meta (metaKey, metaValue) VALUES (?, ?)`,
+          ['notif_unread_restore_v1', '1'],
+        );
+      }
+    } catch {
+      // ignore
+    }
+    // v2: no inundar el badge; historial queda “visto” pero puede seguir no leído.
+    try {
+      const rows = await this.notifications.query(
+        `SELECT metaValue FROM app_meta WHERE metaKey = ? LIMIT 1`,
+        ['notif_seen_backfill_v2'],
+      );
+      if (!Array.isArray(rows) || !rows.length) {
+        await this.notifications.query(`
+          UPDATE notifications
+             SET seenAt = COALESCE(seenAt, readAt, createdAt, CURRENT_TIMESTAMP(6))
+           WHERE seenAt IS NULL
+        `);
+        await this.notifications.query(
+          `INSERT INTO app_meta (metaKey, metaValue) VALUES (?, ?)`,
+          ['notif_seen_backfill_v2', '1'],
+        );
+      }
+    } catch {
+      // ignore
+    }
   }
 
   async create(input: {
@@ -221,7 +292,7 @@ export class NotificationsService implements OnModuleInit {
         }),
       );
       dto = this.toDto(row);
-      const unreadCount = await this.countUnreadForUser(input.userId);
+      const unreadCount = await this.countUnseenForUser(input.userId);
       void this.push
         .sendToUsers([input.userId], {
           title: this.pushTitle(input.title, branding.name),
@@ -324,7 +395,7 @@ export class NotificationsService implements OnModuleInit {
           logoUrl: null,
           pushIconUrl: null,
         };
-        const unreadCount = await this.countUnreadForUser(userId);
+        const unreadCount = await this.countUnseenForUser(userId);
         await this.push
           .sendToUsers([userId], {
             title: this.pushTitle(row.title, branding.name),
@@ -446,11 +517,47 @@ export class NotificationsService implements OnModuleInit {
     return { counts };
   }
 
+  /** Badge: avisos aún no abiertos en el panel. */
+  async unseenCount(user: AuthUser, shopId?: string) {
+    const qb = this.notifications
+      .createQueryBuilder('n')
+      .where('n.userId = :userId', { userId: user.id })
+      .andWhere('n.active = true')
+      .andWhere('n.seenAt IS NULL');
+    if (shopId) {
+      qb.andWhere('(n.shopId = :shopId OR n.shopId IS NULL)', { shopId });
+    }
+    const count = await qb.getCount();
+    return { count };
+  }
+
+  async unseenCountsByShop(user: AuthUser) {
+    const rows = await this.notifications
+      .createQueryBuilder('n')
+      .select('n.shopId', 'shopId')
+      .addSelect('COUNT(*)', 'count')
+      .where('n.userId = :userId', { userId: user.id })
+      .andWhere('n.active = true')
+      .andWhere('n.seenAt IS NULL')
+      .andWhere('n.shopId IS NOT NULL')
+      .groupBy('n.shopId')
+      .getRawMany<{ shopId: string; count: string }>();
+
+    const counts: Record<string, number> = {};
+    for (const row of rows) {
+      if (!row.shopId) continue;
+      counts[row.shopId] = Math.max(0, Number(row.count) || 0);
+    }
+    return { counts };
+  }
+
   async markRead(user: AuthUser, id: string) {
     const row = await this.notifications.findOne({ where: { id, userId: user.id } });
     if (!row) return { ok: false };
+    const now = new Date();
     row.isRead = true;
-    row.readAt = new Date();
+    row.readAt = now;
+    if (!row.seenAt) row.seenAt = now;
     await this.notifications.save(row);
     return { ok: true };
   }
@@ -459,7 +566,11 @@ export class NotificationsService implements OnModuleInit {
     const qb = this.notifications
       .createQueryBuilder()
       .update(AppNotification)
-      .set({ isRead: true, readAt: () => 'CURRENT_TIMESTAMP(6)' })
+      .set({
+        isRead: true,
+        readAt: () => 'CURRENT_TIMESTAMP(6)',
+        seenAt: () => 'COALESCE(seenAt, CURRENT_TIMESTAMP(6))',
+      })
       .where('userId = :userId', { userId: user.id })
       .andWhere('isRead = false')
       .andWhere('active = true');
@@ -470,10 +581,29 @@ export class NotificationsService implements OnModuleInit {
     return { ok: true };
   }
 
-  private async countUnreadForUser(userId: string): Promise<number> {
-    return this.notifications.count({
-      where: { userId, active: true, isRead: false },
-    });
+  /** Abre el panel: limpia badge; no toca isRead. */
+  async markSeen(user: AuthUser, shopId?: string) {
+    const qb = this.notifications
+      .createQueryBuilder()
+      .update(AppNotification)
+      .set({ seenAt: () => 'CURRENT_TIMESTAMP(6)' })
+      .where('userId = :userId', { userId: user.id })
+      .andWhere('seenAt IS NULL')
+      .andWhere('active = true');
+    if (shopId) {
+      qb.andWhere('(shopId = :shopId OR shopId IS NULL)', { shopId });
+    }
+    await qb.execute();
+    return { ok: true };
+  }
+
+  private async countUnseenForUser(userId: string): Promise<number> {
+    return this.notifications
+      .createQueryBuilder('n')
+      .where('n.userId = :userId', { userId })
+      .andWhere('n.active = true')
+      .andWhere('n.seenAt IS NULL')
+      .getCount();
   }
 
   private pushTitle(title: string, shopName: string | null): string {
@@ -579,6 +709,8 @@ export class NotificationsService implements OnModuleInit {
       targetId: n.targetId ?? null,
       read: !!n.isRead,
       readAt: n.readAt ?? null,
+      seen: !!n.seenAt,
+      seenAt: n.seenAt ?? null,
       createdAt: n.createdAt,
     };
   }
