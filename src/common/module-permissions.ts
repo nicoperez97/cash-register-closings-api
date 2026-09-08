@@ -27,6 +27,7 @@ export type ModuleKey =
   | 'beverageStock'
   | 'shortages'
   | 'orders'
+  | 'customerOrders'
   | 'tips'
   | 'reimbursements'
   | 'vacations'
@@ -268,6 +269,15 @@ export const MODULE_DEFS: ModuleDef[] = [
     ],
   },
   {
+    key: 'customerOrders',
+    label: 'Pedidos online',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
     key: 'tips',
     label: 'Propinas',
     levels: [
@@ -418,6 +428,7 @@ export function expandModulePermissions(
   pair('beverageStock', 'beverageStock.read', 'beverageStock.manage');
   pair('shortages', 'shortages.read', 'shortages.manage');
   pair('orders', 'orders.read', 'orders.manage');
+  pair('customerOrders', 'customerOrders.read', 'customerOrders.manage');
   switch (modules.tips) {
     case 'read':
       add(set, 'tips.read');
@@ -522,6 +533,7 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
     beverageStock: level('beverageStock.read', 'beverageStock.manage'),
     shortages: level('shortages.read', 'shortages.manage'),
     orders: level('orders.read', 'orders.manage'),
+    customerOrders: level('customerOrders.read', 'customerOrders.manage'),
     tips: (() => {
       if (has('tips.manage')) return 'manage';
       if (has('tips.create')) return 'create';
