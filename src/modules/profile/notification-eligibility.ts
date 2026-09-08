@@ -1,8 +1,4 @@
 import { GlobalRole, NotificationType, NOTIFICATION_TYPE_LABELS } from '../../common/enums';
-import {
-  deriveModulesFromRole,
-  expandModulePermissions,
-} from '../../common/module-permissions';
 import { UserShop } from '../../entities/user-shop.entity';
 
 const SHOP_ADMIN_ROLES = new Set([GlobalRole.OWNER, GlobalRole.ADMIN]);
@@ -42,16 +38,14 @@ const SHORTAGE_TYPES: NotificationType[] = [
 
 const RESERVATION_TYPES: NotificationType[] = [NotificationType.RESERVATION_REQUEST];
 
-function hasCustomerOrdersAccess(
+function hasCustomerOrdersAdmin(
   link: UserShop | null | undefined,
   globalRole: GlobalRole,
 ): boolean {
   if (globalRole === GlobalRole.OWNER || globalRole === GlobalRole.ADMIN) return true;
   const shopRole = (link?.shopRole ?? globalRole) as GlobalRole;
-  const modules =
-    link?.modulePermissions ?? deriveModulesFromRole(shopRole);
-  const level = String(modules.customerOrders ?? 'none');
-  return level === 'read' || level === 'manage';
+  if (SHOP_ADMIN_ROLES.has(shopRole)) return true;
+  return !!link?.isCustomerOrdersAdmin;
 }
 
 export function eligibleNotificationTypes(opts: {
@@ -66,7 +60,7 @@ export function eligibleNotificationTypes(opts: {
   if (globalRole === GlobalRole.OWNER || SHOP_ADMIN_ROLES.has(shopRole)) {
     for (const t of ADMIN_RECIPIENT_TYPES) set.add(t);
   }
-  if (hasCustomerOrdersAccess(link, globalRole)) {
+  if (hasCustomerOrdersAdmin(link, globalRole)) {
     set.add(NotificationType.CUSTOMER_ORDER_CREATED);
   }
   if (link?.isStockAdmin) {
@@ -149,9 +143,7 @@ export function userShopCanReceiveCustomerOrders(
 ): boolean {
   const role = (globalRole ?? link.shopRole ?? GlobalRole.CASHIER) as GlobalRole;
   if (role === GlobalRole.OWNER || role === GlobalRole.ADMIN) return true;
-  const modules = link.modulePermissions ?? deriveModulesFromRole((link.shopRole ?? role) as GlobalRole);
-  const perms = expandModulePermissions(modules);
-  return (
-    perms.includes('customerOrders.read') || perms.includes('customerOrders.manage')
-  );
+  const shopRole = (link.shopRole ?? role) as GlobalRole;
+  if (SHOP_ADMIN_ROLES.has(shopRole)) return true;
+  return !!link.isCustomerOrdersAdmin;
 }

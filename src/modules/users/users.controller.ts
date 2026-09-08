@@ -95,6 +95,12 @@ class CreateUserDto {
   @IsBoolean()
   isReservationAdmin?: boolean;
   @ApiPropertyOptional({
+    description: 'Si es true, recibe notificaciones de pedidos online',
+  })
+  @IsOptional()
+  @IsBoolean()
+  isCustomerOrdersAdmin?: boolean;
+  @ApiPropertyOptional({
     description: 'Si es true, puede editar y borrar gastos (solo lo asigna un super admin)',
   })
   @IsOptional()
@@ -177,6 +183,12 @@ class UpdateUserDto {
   @IsOptional()
   @IsBoolean()
   isReservationAdmin?: boolean;
+  @ApiPropertyOptional({
+    description: 'Si es true, recibe notificaciones de pedidos online',
+  })
+  @IsOptional()
+  @IsBoolean()
+  isCustomerOrdersAdmin?: boolean;
   @ApiPropertyOptional({
     description: 'Si es true, puede editar y borrar gastos (solo lo asigna un super admin)',
   })

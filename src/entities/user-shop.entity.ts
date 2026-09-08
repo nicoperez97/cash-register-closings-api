@@ -63,6 +63,10 @@ export class UserShop {
   @Column({ default: false })
   isReservationAdmin: boolean;
 
+  /** Recibe notificaciones (campana/push/mail) de pedidos online. */
+  @Column({ default: false })
+  isCustomerOrdersAdmin: boolean;
+
   /** Super admin le habilitó editar y borrar gastos de este local. */
   @Column({ default: false })
   canEditExpenses: boolean;

@@ -63,6 +63,8 @@ export class CreateUserBody {
   isShortageAdmin?: boolean;
   /** Administrador de reservas: recibe notificaciones y mails de solicitudes. */
   isReservationAdmin?: boolean;
+  /** Administrador de pedidos online: recibe notificaciones de pedidos. */
+  isCustomerOrdersAdmin?: boolean;
   canEditExpenses?: boolean;
   canEditPayments?: boolean;
   /** En el cierre, si hay monto hay que adjuntar archivo. */
@@ -95,6 +97,8 @@ export class UpdateUserBody {
   isShortageAdmin?: boolean;
   /** Administrador de reservas: recibe notificaciones y mails de solicitudes. */
   isReservationAdmin?: boolean;
+  /** Administrador de pedidos online: recibe notificaciones de pedidos. */
+  isCustomerOrdersAdmin?: boolean;
   canEditExpenses?: boolean;
   canEditPayments?: boolean;
   requireClosingFiles?: boolean;
@@ -175,6 +179,14 @@ export class UsersService implements OnModuleInit {
       await this.userShops.query(`
         ALTER TABLE user_shops
           ADD COLUMN isReservationAdmin TINYINT(1) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.userShops.query(`
+        ALTER TABLE user_shops
+          ADD COLUMN isCustomerOrdersAdmin TINYINT(1) NOT NULL DEFAULT 0
       `);
     } catch {
       // columna ya existe
@@ -370,6 +382,7 @@ export class UsersService implements OnModuleInit {
         isBeverageStockAdmin: !!link?.isBeverageStockAdmin,
         isShortageAdmin: !!link?.isShortageAdmin,
         isReservationAdmin: !!link?.isReservationAdmin,
+        isCustomerOrdersAdmin: !!link?.isCustomerOrdersAdmin,
         canEditExpenses: !!link?.canEditExpenses,
         canEditPayments: !!link?.canEditPayments,
         requireClosingFiles: !!link?.requireClosingFiles,
@@ -438,6 +451,8 @@ export class UsersService implements OnModuleInit {
             defaultShopId === shopId ? !!dto.isBeverageStockAdmin : false,
           isShortageAdmin: defaultShopId === shopId ? !!dto.isShortageAdmin : false,
           isReservationAdmin: defaultShopId === shopId ? !!dto.isReservationAdmin : false,
+          isCustomerOrdersAdmin:
+            defaultShopId === shopId ? !!dto.isCustomerOrdersAdmin : false,
           canEditExpenses:
             defaultShopId === shopId && isSuperAdmin(actor.globalRole as GlobalRole)
               ? !!dto.canEditExpenses
@@ -573,6 +588,7 @@ export class UsersService implements OnModuleInit {
                   shopId === sid ? !!dto.isBeverageStockAdmin : false,
                 isShortageAdmin: shopId === sid ? !!dto.isShortageAdmin : false,
                 isReservationAdmin: shopId === sid ? !!dto.isReservationAdmin : false,
+                isCustomerOrdersAdmin: shopId === sid ? !!dto.isCustomerOrdersAdmin : false,
                 requireClosingFiles: shopId === sid ? !!dto.requireClosingFiles : false,
                 ...this.editFlagsFromDto(actor, dto, undefined, shopId === sid),
               }),
@@ -601,6 +617,9 @@ export class UsersService implements OnModuleInit {
             if (shopId === sid && dto.isReservationAdmin !== undefined) {
               exists.isReservationAdmin = !!dto.isReservationAdmin;
             }
+            if (shopId === sid && dto.isCustomerOrdersAdmin !== undefined) {
+              exists.isCustomerOrdersAdmin = !!dto.isCustomerOrdersAdmin;
+            }
             if (shopId === sid && dto.requireClosingFiles !== undefined) {
               exists.requireClosingFiles = !!dto.requireClosingFiles;
             }
@@ -624,6 +643,9 @@ export class UsersService implements OnModuleInit {
         );
         const prevReservationAdmin = new Map(
           links.map((l) => [l.shopId, !!l.isReservationAdmin]),
+        );
+        const prevCustomerOrdersAdmin = new Map(
+          links.map((l) => [l.shopId, !!l.isCustomerOrdersAdmin]),
         );
         const prevEditExpenses = new Map(links.map((l) => [l.shopId, !!l.canEditExpenses]));
         const prevEditPayments = new Map(links.map((l) => [l.shopId, !!l.canEditPayments]));
@@ -655,6 +677,10 @@ export class UsersService implements OnModuleInit {
             shopId === sid && dto.isReservationAdmin !== undefined
               ? !!dto.isReservationAdmin
               : (prevReservationAdmin.get(sid) ?? false);
+          const customerOrdersAdmin =
+            shopId === sid && dto.isCustomerOrdersAdmin !== undefined
+              ? !!dto.isCustomerOrdersAdmin
+              : (prevCustomerOrdersAdmin.get(sid) ?? false);
           const requireClosingFiles =
             shopId === sid && dto.requireClosingFiles !== undefined
               ? !!dto.requireClosingFiles
@@ -685,6 +711,7 @@ export class UsersService implements OnModuleInit {
               isBeverageStockAdmin: beverageStockAdmin,
               isShortageAdmin: shortageAdmin,
               isReservationAdmin: reservationAdmin,
+              isCustomerOrdersAdmin: customerOrdersAdmin,
               requireClosingFiles,
               canEditExpenses: editFlags.canEditExpenses,
               canEditPayments: editFlags.canEditPayments,
@@ -701,6 +728,7 @@ export class UsersService implements OnModuleInit {
         dto.isBeverageStockAdmin !== undefined ||
         dto.isShortageAdmin !== undefined ||
         dto.isReservationAdmin !== undefined ||
+        dto.isCustomerOrdersAdmin !== undefined ||
         dto.requireClosingFiles !== undefined ||
         dto.canEditExpenses !== undefined ||
         dto.canEditPayments !== undefined)
@@ -730,6 +758,9 @@ export class UsersService implements OnModuleInit {
         if (dto.isReservationAdmin !== undefined) {
           link.isReservationAdmin = !!dto.isReservationAdmin;
         }
+        if (dto.isCustomerOrdersAdmin !== undefined) {
+          link.isCustomerOrdersAdmin = !!dto.isCustomerOrdersAdmin;
+        }
         if (dto.requireClosingFiles !== undefined) {
           link.requireClosingFiles = !!dto.requireClosingFiles;
         }
@@ -757,6 +788,7 @@ export class UsersService implements OnModuleInit {
             isBeverageStockAdmin: !!dto.isBeverageStockAdmin,
             isShortageAdmin: !!dto.isShortageAdmin,
             isReservationAdmin: !!dto.isReservationAdmin,
+            isCustomerOrdersAdmin: !!dto.isCustomerOrdersAdmin,
             requireClosingFiles: !!dto.requireClosingFiles,
             ...this.editFlagsFromDto(actor, dto, undefined, true),
           }),
@@ -832,6 +864,7 @@ export class UsersService implements OnModuleInit {
       isBeverageStockAdmin: !!link?.isBeverageStockAdmin,
       isShortageAdmin: !!link?.isShortageAdmin,
       isReservationAdmin: !!link?.isReservationAdmin,
+      isCustomerOrdersAdmin: !!link?.isCustomerOrdersAdmin,
       canEditExpenses: !!link?.canEditExpenses,
       canEditPayments: !!link?.canEditPayments,
       requireClosingFiles: !!link?.requireClosingFiles,

@@ -59,6 +59,14 @@ export class CustomerOrder extends BaseEntity {
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
   deliveryFee: string;
 
+  /** Descuento aplicado sobre el subtotal (solo mostrador / staff). */
+  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
+  discountAmount: string;
+
+  /** Etiqueta del descuento, ej. "10%" o "Monto". */
+  @Column({ type: 'varchar', length: 40, nullable: true })
+  discountLabel?: string | null;
+
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
   total: string;
 
