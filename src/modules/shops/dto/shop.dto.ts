@@ -23,6 +23,7 @@ import { Type } from 'class-transformer';
 import { PosnetType } from '../../../common/posnet';
 import { ConceptCategory } from '../../../common/enums';
 import { DEFAULT_PAYMENT_CONCEPT_CATEGORIES } from '../../../common/concept-categories';
+import { ShopMode } from '../../../common/shop-ordering';
 
 export class PaymentConceptCategoriesDto {
   @ApiPropertyOptional({ enum: ConceptCategory, isArray: true })
@@ -239,6 +240,66 @@ export class CreateShopDto {
   @IsOptional()
   @IsBoolean()
   menuEnabled?: boolean;
+
+  @ApiPropertyOptional({ enum: ShopMode, description: 'Al paso o restaurante' })
+  @IsOptional()
+  @IsEnum(ShopMode)
+  shopMode?: ShopMode;
+
+  @ApiPropertyOptional({ description: 'Pedidos online (take away / delivery)' })
+  @IsOptional()
+  @IsBoolean()
+  onlineOrderingEnabled?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  takeawayEnabled?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  deliveryEnabled?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Horarios take away / delivery por día (0–6 → { open, close } | null)',
+  })
+  @IsOptional()
+  @IsObject()
+  orderingHours?: {
+    takeaway?: Record<string, { open: string; close: string } | null> | null;
+    delivery?: Record<string, { open: string; close: string } | null> | null;
+  } | null;
+
+  @ApiPropertyOptional({
+    description: 'Medios de pago online: CASH / TRANSFER + instrucciones de transferencia',
+  })
+  @IsOptional()
+  @IsObject()
+  orderingPayments?: {
+    methods?: Array<'CASH' | 'TRANSFER'>;
+    transferInstructions?: string | null;
+  } | null;
+
+  @ApiPropertyOptional({
+    description: 'Zonas de delivery { id, name, fee, note? }',
+  })
+  @IsOptional()
+  @IsArray()
+  deliveryZones?: Array<{
+    id?: string;
+    name: string;
+    fee: number;
+    note?: string | null;
+  }> | null;
+
+  @ApiPropertyOptional({ description: 'Textos ETA de la landing pública' })
+  @IsOptional()
+  @IsObject()
+  orderingEta?: {
+    takeaway?: string | null;
+    delivery?: string | null;
+  } | null;
 
   @ApiPropertyOptional()
   @IsOptional()

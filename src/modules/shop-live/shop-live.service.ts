@@ -1,7 +1,12 @@
 import { Injectable, MessageEvent } from '@nestjs/common';
 import { Observable, Subject } from 'rxjs';
 
-export type ShopLiveDomain = 'reservations' | 'waiting' | 'attendance' | 'inbox';
+export type ShopLiveDomain =
+  | 'reservations'
+  | 'waiting'
+  | 'attendance'
+  | 'inbox'
+  | 'customer-orders';
 
 /**
  * Bus SSE por local.
