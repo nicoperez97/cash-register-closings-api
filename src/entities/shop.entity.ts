@@ -5,9 +5,18 @@ import { CashClosing } from './cash-closing.entity';
 import { SalesSystem } from './sales-system.entity';
 import { ShopPosnet } from '../common/posnet';
 import { ShopShift } from '../common/shop-shifts';
+import {
+  DeliveryZone,
+  ShopMode,
+  ShopOrderingEta,
+  ShopOrderingHours,
+  ShopOrderingPayments,
+} from '../common/shop-ordering';
 
 /** Mapa código POS → campo de cierre (cash|card|mercadoPago|delivery|transfer|accountDni|other). */
 export type PosPaymentMap = Record<string, string>;
+
+export { ShopMode };
 
 @Entity({ name: 'shops' })
 export class Shop extends BaseEntity {
@@ -129,6 +138,36 @@ export class Shop extends BaseEntity {
   @Column({ type: 'tinyint', default: 0 })
   menuEnabled: boolean;
 
+  /** Al paso (sin mesas) vs restaurante (mesas vía reservas). */
+  @Column({ type: 'varchar', length: 20, default: ShopMode.RESTAURANTE })
+  shopMode: ShopMode;
+
+  /** Pedidos online (take away / delivery) habilitados. */
+  @Column({ type: 'tinyint', default: 0 })
+  onlineOrderingEnabled: boolean;
+
+  @Column({ type: 'tinyint', default: 1 })
+  takeawayEnabled: boolean;
+
+  @Column({ type: 'tinyint', default: 0 })
+  deliveryEnabled: boolean;
+
+  /** Horarios de take away / delivery por día. */
+  @Column({ type: 'simple-json', nullable: true })
+  orderingHours?: ShopOrderingHours | null;
+
+  /** Medios de pago del pedido online. */
+  @Column({ type: 'simple-json', nullable: true })
+  orderingPayments?: ShopOrderingPayments | null;
+
+  /** Zonas de delivery con costo. */
+  @Column({ type: 'simple-json', nullable: true })
+  deliveryZones?: DeliveryZone[] | null;
+
+  /** Textos ETA mostrados en la landing pública. */
+  @Column({ type: 'simple-json', nullable: true })
+  orderingEta?: ShopOrderingEta | null;
+
   /** Cartas publicadas (una o varias: menú, vinos, etc.). */
   @Column({ type: 'simple-json', nullable: true })
   menu?: {
@@ -140,10 +179,12 @@ export class Shop extends BaseEntity {
       sections?: Array<{
         name: string;
         items: Array<{
+          id?: string;
           name: string;
           description?: string | null;
           price?: number | null;
           priceLabel?: string | null;
+          available?: boolean;
         }>;
       }>;
     }>;
@@ -153,10 +194,12 @@ export class Shop extends BaseEntity {
     sections?: Array<{
       name: string;
       items: Array<{
+        id?: string;
         name: string;
         description?: string | null;
         price?: number | null;
         priceLabel?: string | null;
+        available?: boolean;
       }>;
     }>;
   } | null;

@@ -4,10 +4,12 @@ import * as path from 'path';
 import { recognize } from 'tesseract.js';
 
 export type ShopMenuItem = {
+  id?: string;
   name: string;
   description?: string | null;
   price?: number | null;
   priceLabel?: string | null;
+  available?: boolean;
 };
 
 export type ShopMenuSection = {
@@ -192,6 +194,45 @@ function newMenuId(): string {
   return `m_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function newMenuItemId(): string {
+  return `i_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function normalizeShopMenu(raw?: ShopMenu | null): ShopMenu {
+  const title = String(raw?.title ?? '').trim().slice(0, 80) || null;
+  const note = String(raw?.note ?? '').trim().slice(0, 500) || null;
+  const sourceFile = String(raw?.sourceFile ?? '').trim().replace(/\\/g, '/').slice(0, 200) || null;
+  const sourceFileName = String(raw?.sourceFileName ?? '').trim().slice(0, 120) || null;
+  const sourceMime = String(raw?.sourceMime ?? '').trim().slice(0, 80) || null;
+  const sections: ShopMenuSection[] = [];
+  const usedItemIds = new Set<string>();
+  for (const sec of raw?.sections ?? []) {
+    const name = String(sec?.name ?? '').trim().slice(0, 60);
+    if (!name) continue;
+    const items: ShopMenuItem[] = [];
+    for (const it of sec.items ?? []) {
+      const itemName = String(it?.name ?? '').trim().slice(0, 120);
+      if (!itemName) continue;
+      const price = it?.price == null || it.price === ('' as unknown) ? null : Number(it.price);
+      let id = String(it?.id ?? '').trim().slice(0, 40);
+      if (!id || usedItemIds.has(id)) id = newMenuItemId();
+      usedItemIds.add(id);
+      const available =
+        it?.available === undefined || it?.available === null ? true : !!it.available;
+      items.push({
+        id,
+        name: itemName,
+        description: String(it?.description ?? '').trim().slice(0, 400) || null,
+        price: Number.isFinite(price) && price != null && price >= 0 ? price : null,
+        priceLabel: String(it?.priceLabel ?? '').trim().slice(0, 48) || null,
+        available,
+      });
+    }
+    sections.push({ name, items });
+  }
+  return { title, note, sourceFile, sourceFileName, sourceMime, sections };
+}
+
 export function menuParseScore(menu: ShopMenu): number {
   let n = 0;
   for (const sec of menu.sections ?? []) {
@@ -208,33 +249,6 @@ export function menuParseScore(menu: ShopMenu): number {
 
 export function menuHasItems(menu?: ShopMenu | null): boolean {
   return !!menu?.sections?.some((s) => (s.items ?? []).some((it) => String(it?.name ?? '').trim()));
-}
-
-export function normalizeShopMenu(raw?: ShopMenu | null): ShopMenu {
-  const title = String(raw?.title ?? '').trim().slice(0, 80) || null;
-  const note = String(raw?.note ?? '').trim().slice(0, 500) || null;
-  const sourceFile = String(raw?.sourceFile ?? '').trim().replace(/\\/g, '/').slice(0, 200) || null;
-  const sourceFileName = String(raw?.sourceFileName ?? '').trim().slice(0, 120) || null;
-  const sourceMime = String(raw?.sourceMime ?? '').trim().slice(0, 80) || null;
-  const sections: ShopMenuSection[] = [];
-  for (const sec of raw?.sections ?? []) {
-    const name = String(sec?.name ?? '').trim().slice(0, 60);
-    if (!name) continue;
-    const items: ShopMenuItem[] = [];
-    for (const it of sec.items ?? []) {
-      const itemName = String(it?.name ?? '').trim().slice(0, 120);
-      if (!itemName) continue;
-      const price = it?.price == null || it.price === ('' as unknown) ? null : Number(it.price);
-      items.push({
-        name: itemName,
-        description: String(it?.description ?? '').trim().slice(0, 400) || null,
-        price: Number.isFinite(price) && price != null && price >= 0 ? price : null,
-        priceLabel: String(it?.priceLabel ?? '').trim().slice(0, 48) || null,
-      });
-    }
-    sections.push({ name, items });
-  }
-  return { title, note, sourceFile, sourceFileName, sourceMime, sections };
 }
 
 const MAX_MENUS = 8;

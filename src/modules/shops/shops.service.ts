@@ -25,6 +25,14 @@ import { shiftWindowFallback } from '../../common/employee-shift.util';
 import { CreateShopDto, UpdateShopDto } from './dto/shop.dto';
 import { PosnetType, ShopPosnet } from '../../common/posnet';
 import {
+  normalizeDeliveryZones,
+  normalizeOrderingEta,
+  normalizeOrderingPayments,
+  normalizeShopMode,
+  normalizeShopOrderingHours,
+  ShopMode,
+} from '../../common/shop-ordering';
+import {
   earliestShiftOpening,
   normalizeShopShifts,
   type ShopShift,
@@ -361,6 +369,70 @@ export class ShopsService implements OnModuleInit {
     } catch {
       // columna ya existe
     }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN shopMode VARCHAR(20) NOT NULL DEFAULT 'RESTAURANTE'
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN onlineOrderingEnabled TINYINT(1) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN takeawayEnabled TINYINT(1) NOT NULL DEFAULT 1
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN deliveryEnabled TINYINT(1) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN orderingHours JSON NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN orderingPayments JSON NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN deliveryZones JSON NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN orderingEta JSON NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
     await this.ensureDefaultShifts();
   }
 
@@ -617,6 +689,14 @@ export class ShopsService implements OnModuleInit {
             : 1,
         ),
         menuEnabled: dto.menuEnabled ?? false,
+        shopMode: normalizeShopMode(dto.shopMode),
+        onlineOrderingEnabled: dto.onlineOrderingEnabled ?? false,
+        takeawayEnabled: dto.takeawayEnabled ?? true,
+        deliveryEnabled: dto.deliveryEnabled ?? false,
+        orderingHours: normalizeShopOrderingHours(dto.orderingHours),
+        orderingPayments: normalizeOrderingPayments(dto.orderingPayments),
+        deliveryZones: normalizeDeliveryZones(dto.deliveryZones),
+        orderingEta: normalizeOrderingEta(dto.orderingEta),
         defaultChangeAmount: String(dto.defaultChangeAmount ?? 0),
         productionDefaultHours: String(
           dto.productionDefaultHours !== undefined && dto.productionDefaultHours !== null
@@ -722,6 +802,30 @@ export class ShopsService implements OnModuleInit {
     }
     if (dto.menuEnabled !== undefined) {
       shop.menuEnabled = dto.menuEnabled;
+    }
+    if (dto.shopMode !== undefined) {
+      shop.shopMode = normalizeShopMode(dto.shopMode);
+    }
+    if (dto.onlineOrderingEnabled !== undefined) {
+      shop.onlineOrderingEnabled = !!dto.onlineOrderingEnabled;
+    }
+    if (dto.takeawayEnabled !== undefined) {
+      shop.takeawayEnabled = !!dto.takeawayEnabled;
+    }
+    if (dto.deliveryEnabled !== undefined) {
+      shop.deliveryEnabled = !!dto.deliveryEnabled;
+    }
+    if (dto.orderingHours !== undefined) {
+      shop.orderingHours = normalizeShopOrderingHours(dto.orderingHours);
+    }
+    if (dto.orderingPayments !== undefined) {
+      shop.orderingPayments = normalizeOrderingPayments(dto.orderingPayments);
+    }
+    if (dto.deliveryZones !== undefined) {
+      shop.deliveryZones = normalizeDeliveryZones(dto.deliveryZones);
+    }
+    if (dto.orderingEta !== undefined) {
+      shop.orderingEta = normalizeOrderingEta(dto.orderingEta);
     }
     if (dto.timezone !== undefined) shop.timezone = dto.timezone;
     if (dto.shifts !== undefined) {
@@ -1136,6 +1240,17 @@ export class ShopsService implements OnModuleInit {
           : !!s.serviceAttendanceWithHours,
       holidayPayMultiplier: Number(s.holidayPayMultiplier ?? 1) || 1,
       menuEnabled: !!s.menuEnabled,
+      shopMode: normalizeShopMode(s.shopMode),
+      onlineOrderingEnabled: !!s.onlineOrderingEnabled,
+      takeawayEnabled:
+        s.takeawayEnabled === undefined || s.takeawayEnabled === null
+          ? true
+          : !!s.takeawayEnabled,
+      deliveryEnabled: !!s.deliveryEnabled,
+      orderingHours: normalizeShopOrderingHours(s.orderingHours),
+      orderingPayments: normalizeOrderingPayments(s.orderingPayments),
+      deliveryZones: normalizeDeliveryZones(s.deliveryZones),
+      orderingEta: normalizeOrderingEta(s.orderingEta),
       defaultChangeAmount: Number(s.defaultChangeAmount),
       productionDefaultHours: Number(s.productionDefaultHours ?? 8) || 8,
       logoUrl: s.logoUrl ?? null,

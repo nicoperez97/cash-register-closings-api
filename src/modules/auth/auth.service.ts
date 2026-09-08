@@ -34,6 +34,14 @@ import { Permission } from '../../common/enums';
 import { isEntityActive } from '../../common/active.util';
 import { closingDateKey } from '../../common/soft-delete.util';
 import { saveUploadFile } from '../../common/uploads';
+import {
+  normalizeDeliveryZones,
+  normalizeOrderingEta,
+  normalizeOrderingPayments,
+  normalizeShopMode,
+  normalizeShopOrderingHours,
+  ShopMode,
+} from '../../common/shop-ordering';
 
 const IDS = {
   panino: '11111111-1111-1111-1111-111111111111',
@@ -91,6 +99,10 @@ export class AuthService implements OnModuleInit {
           slug: 'al-panino',
           unitsLabel: 'paninos',
           coversEnabled: false,
+          shopMode: ShopMode.AL_PASO,
+          onlineOrderingEnabled: false,
+          takeawayEnabled: true,
+          deliveryEnabled: false,
           defaultChangeAmount: '15000.00',
           accentColor: '#E65100',
           accentSecondary: '#FFB300',
@@ -656,6 +668,17 @@ export class AuthService implements OnModuleInit {
             ? true
             : !!s.serviceAttendanceWithHours,
         menuEnabled: !!s.menuEnabled,
+        shopMode: normalizeShopMode(s.shopMode),
+        onlineOrderingEnabled: !!s.onlineOrderingEnabled,
+        takeawayEnabled:
+          s.takeawayEnabled === undefined || s.takeawayEnabled === null
+            ? true
+            : !!s.takeawayEnabled,
+        deliveryEnabled: !!s.deliveryEnabled,
+        orderingHours: normalizeShopOrderingHours(s.orderingHours),
+        orderingPayments: normalizeOrderingPayments(s.orderingPayments),
+        deliveryZones: normalizeDeliveryZones(s.deliveryZones),
+        orderingEta: normalizeOrderingEta(s.orderingEta),
         defaultChangeAmount: Number(s.defaultChangeAmount),
         productionDefaultHours: Number(s.productionDefaultHours ?? 8) || 8,
         currency: s.currency,
