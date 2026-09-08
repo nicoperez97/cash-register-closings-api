@@ -262,13 +262,20 @@ export class CreateShopDto {
   deliveryEnabled?: boolean;
 
   @ApiPropertyOptional({
-    description: 'Horarios take away / delivery por día (0–6 → { open, close } | null)',
+    description:
+      'Horarios take away / delivery por día (0–6 → [{ open, close }, …] | null). Legacy: un solo { open, close }.',
   })
   @IsOptional()
   @IsObject()
   orderingHours?: {
-    takeaway?: Record<string, { open: string; close: string } | null> | null;
-    delivery?: Record<string, { open: string; close: string } | null> | null;
+    takeaway?: Record<
+      string,
+      { open: string; close: string } | Array<{ open: string; close: string }> | null
+    > | null;
+    delivery?: Record<
+      string,
+      { open: string; close: string } | Array<{ open: string; close: string }> | null
+    > | null;
   } | null;
 
   @ApiPropertyOptional({

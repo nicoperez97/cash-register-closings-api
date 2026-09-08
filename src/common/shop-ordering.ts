@@ -4,10 +4,16 @@ export enum ShopMode {
   RESTAURANTE = 'RESTAURANTE',
 }
 
-export type OrderingDayWindow = { open: string; close: string } | null;
+export type OrderingTimeWindow = { open: string; close: string };
 
-/** "0"…"6" → ventana HH:mm o null = cerrado ese día. */
-export type OrderingHoursByWeekday = Record<string, OrderingDayWindow>;
+/**
+ * Ventanas del día (puede haber más de una) o null = cerrado.
+ * Legacy: un solo `{ open, close }` se normaliza a `[{ open, close }]`.
+ */
+export type OrderingDayWindows = OrderingTimeWindow[] | null;
+
+/** "0"…"6" → ventanas HH:mm o null = cerrado ese día. */
+export type OrderingHoursByWeekday = Record<string, OrderingDayWindows>;
 
 export type ShopOrderingHours = {
   takeaway?: OrderingHoursByWeekday | null;
@@ -89,13 +95,32 @@ function parseHhMm(raw: string): number | null {
   return h * 60 + mi;
 }
 
-function normalizeDayWindow(raw: unknown): OrderingDayWindow {
+function normalizeTimeWindow(raw: unknown): OrderingTimeWindow | null {
   if (!raw || typeof raw !== 'object') return null;
   const o = raw as { open?: unknown; close?: unknown };
   const open = String(o.open ?? '').trim();
   const close = String(o.close ?? '').trim();
   if (!HHMM.test(open) || !HHMM.test(close)) return null;
   return { open, close };
+}
+
+/** Acepta legacy `{ open, close }` o lista de ventanas. */
+export function normalizeDayWindows(raw: unknown): OrderingDayWindows {
+  if (raw === null) return null;
+  const list = Array.isArray(raw) ? raw : [raw];
+  const wins: OrderingTimeWindow[] = [];
+  const seen = new Set<string>();
+  for (const row of list.slice(0, 8)) {
+    const win = normalizeTimeWindow(row);
+    if (!win) continue;
+    const key = `${win.open}-${win.close}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    wins.push(win);
+  }
+  if (!wins.length) return null;
+  wins.sort((a, b) => (parseHhMm(a.open) ?? 0) - (parseHhMm(b.open) ?? 0));
+  return wins;
 }
 
 export function normalizeOrderingHoursByWeekday(
@@ -106,14 +131,18 @@ export function normalizeOrderingHoursByWeekday(
   let any = false;
   for (let d = 0; d <= 6; d++) {
     const key = String(d);
-    const win = normalizeDayWindow((raw as Record<string, unknown>)[key]);
-    if (win) {
-      out[key] = win;
+    if (!Object.prototype.hasOwnProperty.call(raw, key)) continue;
+    const val = (raw as Record<string, unknown>)[key];
+    if (val === null) {
+      out[key] = null;
       any = true;
-    } else if (
-      Object.prototype.hasOwnProperty.call(raw, key) &&
-      (raw as Record<string, unknown>)[key] === null
-    ) {
+      continue;
+    }
+    const wins = normalizeDayWindows(val);
+    if (wins) {
+      out[key] = wins;
+      any = true;
+    } else {
       out[key] = null;
       any = true;
     }
@@ -188,11 +217,29 @@ export function normalizeShopMode(raw: unknown): ShopMode {
   return v === ShopMode.AL_PASO ? ShopMode.AL_PASO : ShopMode.RESTAURANTE;
 }
 
+function isNowInWindow(cur: number, open: number, close: number): boolean {
+  if (open === close) return true; // 24 h
+  if (close > open) return cur >= open && cur < close;
+  return cur >= open || cur < close;
+}
+
+function dayWindowsOpenAt(wins: OrderingDayWindows, cur: number): boolean {
+  if (!wins?.length) return false;
+  for (const win of wins) {
+    const open = parseHhMm(win.open);
+    const close = parseHhMm(win.close);
+    if (open == null || close == null) continue;
+    if (isNowInWindow(cur, open, close)) return true;
+  }
+  return false;
+}
+
 /**
  * ¿El canal está abierto ahora?
  * - Sin horarios configurados → abierto (si el canal está enabled).
  * - Día con null o ausente → cerrado.
- * - Ventana que cruza medianoche (close < open) se soporta.
+ * - Cualquier ventana del día que contenga la hora actual → abierto.
+ * - Ventana que cruza medianoche (close < open) se soporta; open===close = 24 h.
  */
 export function isOrderingChannelOpenNow(
   hours: OrderingHoursByWeekday | null | undefined,
@@ -223,28 +270,18 @@ export function isOrderingChannelOpenNow(
         Sat: 6,
       };
       const day = dayMap[wd] ?? now.getDay();
-      const win = hours[String(day)];
-      if (win === undefined || win === null) return false;
-      const cur = hour * 60 + minute;
-      const open = parseHhMm(win.open);
-      const close = parseHhMm(win.close);
-      if (open == null || close == null) return false;
-      if (close > open) return cur >= open && cur < close;
-      // cruza medianoche
-      return cur >= open || cur < close;
+      const wins = hours[String(day)];
+      if (wins === undefined || wins === null) return false;
+      return dayWindowsOpenAt(wins, hour * 60 + minute);
     } catch {
       local = now;
     }
   }
   const day = local.getDay();
-  const win = hours[String(day)];
-  if (win === undefined || win === null) return false;
+  const wins = hours[String(day)];
+  if (wins === undefined || wins === null) return false;
   const cur = local.getHours() * 60 + local.getMinutes();
-  const open = parseHhMm(win.open);
-  const close = parseHhMm(win.close);
-  if (open == null || close == null) return false;
-  if (close > open) return cur >= open && cur < close;
-  return cur >= open || cur < close;
+  return dayWindowsOpenAt(wins, cur);
 }
 
 export function formatOrderingHoursSummary(
@@ -254,9 +291,54 @@ export function formatOrderingHoursSummary(
   const labels = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
   const lines: string[] = [];
   for (let d = 0; d <= 6; d++) {
-    const win = hours[String(d)];
-    if (!win) continue;
-    lines.push(`${labels[d]} ${win.open} a ${win.close}hs`);
+    const wins = hours[String(d)];
+    if (!wins?.length) continue;
+    const ranges = wins.map((w) => `${w.open} a ${w.close}hs`).join(', ');
+    lines.push(`${labels[d]} ${ranges}`);
   }
   return lines;
+}
+
+type ShiftLike = {
+  opensAt?: string;
+  closesAt?: string;
+  weekdays?: number[] | null;
+};
+
+/**
+ * Arma horarios de pedidos a partir de los turnos de caja del local
+ * (varios turnos el mismo día → varias franjas).
+ */
+export function orderingHoursFromShifts(
+  shifts: ShiftLike[] | null | undefined,
+): OrderingHoursByWeekday | null {
+  if (!Array.isArray(shifts) || !shifts.length) return null;
+  const out: OrderingHoursByWeekday = {};
+  let anyOpen = false;
+  for (let d = 0; d <= 6; d++) {
+    const wins: OrderingTimeWindow[] = [];
+    const seen = new Set<string>();
+    for (const s of shifts) {
+      const days =
+        Array.isArray(s.weekdays) && s.weekdays.length
+          ? s.weekdays.map(Number).filter((n) => n >= 0 && n <= 6)
+          : [0, 1, 2, 3, 4, 5, 6];
+      if (!days.includes(d)) continue;
+      const open = String(s.opensAt ?? '').trim();
+      const close = String(s.closesAt ?? '').trim();
+      if (!HHMM.test(open) || !HHMM.test(close)) continue;
+      const key = `${open}-${close}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      wins.push({ open, close });
+    }
+    if (wins.length) {
+      wins.sort((a, b) => (parseHhMm(a.open) ?? 0) - (parseHhMm(b.open) ?? 0));
+      out[String(d)] = wins;
+      anyOpen = true;
+    } else {
+      out[String(d)] = null;
+    }
+  }
+  return anyOpen ? out : null;
 }
