@@ -24,7 +24,7 @@ import type { Response } from 'express';
 import { ShopLiveService } from '../shop-live/shop-live.service';
 import { ShopsService } from './shops.service';
 import { ShopBackupService } from './shop-backup.service';
-import { CurrentUser, AuthUser, RequirePermissions, Public } from '../../common/decorators';
+import { CurrentUser, AuthUser, RequirePermissions, RequireAnyPermissions, Public } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { CreateShopDto, UpdateShopDto } from './dto/shop.dto';
 
@@ -122,7 +122,7 @@ export class ShopsController {
   }
 
   @Get(':id')
-  @RequirePermissions('closings.read')
+  @RequireAnyPermissions('closings.read', 'orderingCatalog.manage', 'shops.manage')
   findOne(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.shops.findOne(user, id);
   }
@@ -131,6 +131,34 @@ export class ShopsController {
   @RequirePermissions('shops.manage')
   create(@CurrentUser() user: AuthUser, @Body() dto: CreateShopDto) {
     return this.shops.create(user, dto);
+  }
+
+  @Patch(':id/ordering-catalog')
+  @RequireAnyPermissions('shops.manage', 'orderingCatalog.manage')
+  updateOrderingCatalog(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body()
+    body: {
+      takeawayEnabled?: boolean;
+      deliveryEnabled?: boolean;
+      orderingPayments?: {
+        methods?: Array<'CASH' | 'TRANSFER'>;
+        transferInstructions?: string | null;
+        whatsapp?: string | null;
+      } | null;
+      orderingExtras?: Array<{
+        id?: string;
+        name: string;
+        price: number;
+        available?: boolean;
+        menuItemIds?: string[];
+      }> | null;
+      menuItemAvailability?: Array<{ id: string; available: boolean }> | null;
+      orderingExtraAvailability?: Array<{ id: string; available: boolean }> | null;
+    },
+  ) {
+    return this.shops.updateOrderingCatalog(user, id, body);
   }
 
   @Patch(':id')

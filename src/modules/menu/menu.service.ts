@@ -44,6 +44,16 @@ export class MenuService {
     return path;
   }
 
+  private sanitizeItemImage(raw: string | null | undefined, shopId: string): string | null {
+    const path = String(raw ?? '')
+      .trim()
+      .replace(/\\/g, '/');
+    if (!path || path.includes('..')) return null;
+    if (!path.startsWith(`menus/${shopId}/items/`)) return null;
+    if (!resolveUploadPath(path)) return null;
+    return path;
+  }
+
   private withSafeSource(menu: ShopMenuDoc, shopId: string): ShopMenuDoc {
     const sourceFile = this.sanitizeSourceFile(menu.sourceFile, shopId);
     return {
@@ -51,7 +61,26 @@ export class MenuService {
       sourceFile,
       sourceFileName: sourceFile ? menu.sourceFileName ?? null : null,
       sourceMime: sourceFile ? menu.sourceMime ?? null : null,
+      sections: (menu.sections ?? []).map((sec) => ({
+        ...sec,
+        items: (sec.items ?? []).map((it) => ({
+          ...it,
+          imageUrl: this.sanitizeItemImage(it.imageUrl, shopId),
+        })),
+      })),
     };
+  }
+
+  private collectItemImages(menus: ShopMenuDoc[]): Set<string> {
+    const out = new Set<string>();
+    for (const m of menus) {
+      for (const sec of m.sections ?? []) {
+        for (const it of sec.items ?? []) {
+          if (it.imageUrl) out.add(it.imageUrl);
+        }
+      }
+    }
+    return out;
   }
 
   private sourceKind(mime?: string | null, fileName?: string | null): 'pdf' | 'image' | 'other' {
@@ -79,7 +108,7 @@ export class MenuService {
   }
 
   async getAdmin(user: AuthUser, shopId: string) {
-    this.shops.assertShopManage(user, shopId);
+    this.shops.assertOrderingCatalogManage(user, shopId);
     const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
     if (!shop) throw new NotFoundException('Local no encontrado');
     return {
@@ -90,13 +119,14 @@ export class MenuService {
   }
 
   async saveAdmin(user: AuthUser, shopId: string, body: { menus?: ShopMenu[] } | ShopMenu) {
-    this.shops.assertShopManage(user, shopId);
+    this.shops.assertOrderingCatalogManage(user, shopId);
     const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
     if (!shop) throw new NotFoundException('Local no encontrado');
     const previous = this.readMenus(shop);
     const previousFiles = new Set(
       previous.map((m) => m.sourceFile).filter((p): p is string => !!p),
     );
+    const previousImages = this.collectItemImages(previous);
     const menus = normalizeShopMenus(
       body && typeof body === 'object' && Array.isArray((body as { menus?: ShopMenu[] }).menus)
         ? body
@@ -108,11 +138,15 @@ export class MenuService {
     for (const file of previousFiles) {
       if (!keepFiles.has(file)) deleteUploadIfExists(file);
     }
+    const keepImages = this.collectItemImages(menus);
+    for (const file of previousImages) {
+      if (!keepImages.has(file)) deleteUploadIfExists(file);
+    }
     return { enabled: !!shop.menuEnabled, slug: shop.slug, menus };
   }
 
   async parseUpload(user: AuthUser, shopId: string, file?: Express.Multer.File) {
-    this.shops.assertShopManage(user, shopId);
+    this.shops.assertOrderingCatalogManage(user, shopId);
     let buffer = file?.buffer;
     if (!buffer?.length && (file as Express.Multer.File & { path?: string })?.path) {
       buffer = readFileSync((file as Express.Multer.File & { path: string }).path);
@@ -164,7 +198,7 @@ export class MenuService {
   }
 
   async attachSourceFile(user: AuthUser, shopId: string, menuId: string, file?: Express.Multer.File) {
-    this.shops.assertShopManage(user, shopId);
+    this.shops.assertOrderingCatalogManage(user, shopId);
     let buffer = file?.buffer;
     if (!buffer?.length && (file as Express.Multer.File & { path?: string })?.path) {
       buffer = readFileSync((file as Express.Multer.File & { path: string }).path);
@@ -207,7 +241,7 @@ export class MenuService {
   }
 
   async clearSourceFile(user: AuthUser, shopId: string, menuId: string) {
-    this.shops.assertShopManage(user, shopId);
+    this.shops.assertOrderingCatalogManage(user, shopId);
     const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
     if (!shop) throw new NotFoundException('Local no encontrado');
     const menus = this.readMenus(shop);
@@ -227,6 +261,125 @@ export class MenuService {
       slug: shop.slug,
       menus: menus.map((m) => this.withSafeSource(m, shopId)),
     };
+  }
+
+  async uploadItemImage(
+    user: AuthUser,
+    shopId: string,
+    itemId: string,
+    file?: Express.Multer.File,
+  ) {
+    this.shops.assertOrderingCatalogManage(user, shopId);
+    let buffer = file?.buffer;
+    if (!buffer?.length && (file as Express.Multer.File & { path?: string })?.path) {
+      buffer = readFileSync((file as Express.Multer.File & { path: string }).path);
+    }
+    if (!file || !buffer?.length) {
+      throw new BadRequestException('Subí una imagen del ítem (JPG, PNG o WebP)');
+    }
+    const mime = String(file.mimetype || '').toLowerCase();
+    if (!mime.startsWith('image/')) {
+      throw new BadRequestException('El archivo tiene que ser una imagen');
+    }
+    const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    const wanted = String(itemId ?? '').trim();
+    if (!wanted) throw new BadRequestException('Ítem inválido');
+    const menus = this.readMenus(shop);
+    let found: { menuIdx: number; secIdx: number; itemIdx: number } | null = null;
+    for (let mi = 0; mi < menus.length; mi++) {
+      const sections = menus[mi].sections ?? [];
+      for (let si = 0; si < sections.length; si++) {
+        const items = sections[si].items ?? [];
+        for (let ii = 0; ii < items.length; ii++) {
+          if (String(items[ii].id ?? '').trim() === wanted) {
+            found = { menuIdx: mi, secIdx: si, itemIdx: ii };
+            break;
+          }
+        }
+        if (found) break;
+      }
+      if (found) break;
+    }
+    if (!found) throw new NotFoundException('Ítem no encontrado. Guardá la carta primero.');
+    const current = menus[found.menuIdx].sections[found.secIdx].items[found.itemIdx];
+    if (current.imageUrl) deleteUploadIfExists(current.imageUrl);
+    const saved = saveUploadFile({
+      relativeDir: `menus/${shopId}/items`,
+      basename: wanted,
+      buffer,
+      originalName: file.originalname,
+      mime: file.mimetype,
+    });
+    menus[found.menuIdx].sections[found.secIdx].items[found.itemIdx] = {
+      ...current,
+      imageUrl: saved.relativePath,
+    };
+    shop.menu = { menus };
+    await this.shopsRepo.save(shop);
+    return {
+      enabled: !!shop.menuEnabled,
+      slug: shop.slug,
+      menus: menus.map((m) => this.withSafeSource(m, shopId)),
+      imageUrl: saved.relativePath,
+    };
+  }
+
+  async clearItemImage(user: AuthUser, shopId: string, itemId: string) {
+    this.shops.assertOrderingCatalogManage(user, shopId);
+    const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    const wanted = String(itemId ?? '').trim();
+    const menus = this.readMenus(shop);
+    let cleared = false;
+    for (const menu of menus) {
+      for (const sec of menu.sections ?? []) {
+        for (const it of sec.items ?? []) {
+          if (String(it.id ?? '').trim() !== wanted) continue;
+          if (it.imageUrl) deleteUploadIfExists(it.imageUrl);
+          it.imageUrl = null;
+          cleared = true;
+        }
+      }
+    }
+    if (!cleared) throw new NotFoundException('Ítem no encontrado');
+    shop.menu = { menus };
+    await this.shopsRepo.save(shop);
+    return {
+      enabled: !!shop.menuEnabled,
+      slug: shop.slug,
+      menus: menus.map((m) => this.withSafeSource(m, shopId)),
+    };
+  }
+
+  async publicItemImage(slug: string, itemId: string) {
+    const shop = await this.shops.findActiveBySlug(String(slug ?? '').trim().toLowerCase());
+    if (!shop) throw new NotFoundException('Imagen no encontrada');
+    const wanted = String(itemId ?? '').trim();
+    for (const menu of this.readMenus(shop)) {
+      for (const sec of menu.sections ?? []) {
+        for (const it of sec.items ?? []) {
+          if (String(it.id ?? '').trim() !== wanted) continue;
+          const path = this.sanitizeItemImage(it.imageUrl, shop.id);
+          const abs = resolveUploadPath(path);
+          if (!abs) throw new NotFoundException('Imagen no encontrada');
+          const mime =
+            extname(abs).toLowerCase() === '.png'
+              ? 'image/png'
+              : extname(abs).toLowerCase() === '.webp'
+                ? 'image/webp'
+                : extname(abs).toLowerCase() === '.gif'
+                  ? 'image/gif'
+                  : 'image/jpeg';
+          return {
+            stream: new StreamableFile(createReadStream(abs)),
+            mime,
+            fileName: `item${extname(abs) || '.jpg'}`,
+          };
+        }
+      }
+    }
+    throw new NotFoundException('Imagen no encontrada');
   }
 
   private publicShop(shop: Shop) {

@@ -14,7 +14,7 @@ import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
 import { ShopClosingSource } from '../../entities/shop-closing-source.entity';
 import { AuthUser } from '../../common/decorators';
-import { ClosingSourceKind, GlobalRole, LedgerAccountType } from '../../common/enums';
+import { ClosingSourceKind, GlobalRole, LedgerAccountType, Permission } from '../../common/enums';
 import { isGlobalAdmin, isSuperAdmin } from '../../common/guards';
 import { normalizeLogoUrl } from '../../common/drive-url';
 import { isEntityActive } from '../../common/active.util';
@@ -27,11 +27,14 @@ import { PosnetType, ShopPosnet } from '../../common/posnet';
 import {
   normalizeDeliveryZones,
   normalizeOrderingEta,
+  normalizeOrderingExtras,
   normalizeOrderingPayments,
   normalizeShopMode,
   normalizeShopOrderingHours,
   ShopMode,
+  type ShopOrderingPayments,
 } from '../../common/shop-ordering';
+import { normalizeShopMenus } from '../menu/menu-parse.util';
 import {
   earliestShiftOpening,
   normalizeShopShifts,
@@ -433,6 +436,14 @@ export class ShopsService implements OnModuleInit {
     } catch {
       // columna ya existe
     }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN orderingExtras JSON NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
     await this.ensureDefaultShifts();
   }
 
@@ -502,6 +513,17 @@ export class ShopsService implements OnModuleInit {
       return;
     }
     throw new ForbiddenException('No podés administrar este local');
+  }
+
+  /** Alta/baja de canales, pagos, ítems y extras del pedido online. */
+  assertOrderingCatalogManage(user: AuthUser, shopId: string) {
+    this.assertShopAccess(user, shopId);
+    if (isGlobalAdmin(user.globalRole as GlobalRole)) return;
+    const perms: Permission[] = user.shopPermissions?.[shopId] ?? user.permissions ?? [];
+    if (perms.includes('shops.manage') || perms.includes('orderingCatalog.manage')) {
+      return;
+    }
+    throw new ForbiddenException('Sin permiso para el catálogo de pedidos online');
   }
 
   async mine(user: AuthUser) {
@@ -697,6 +719,7 @@ export class ShopsService implements OnModuleInit {
         orderingPayments: normalizeOrderingPayments(dto.orderingPayments),
         deliveryZones: normalizeDeliveryZones(dto.deliveryZones),
         orderingEta: normalizeOrderingEta(dto.orderingEta),
+        orderingExtras: normalizeOrderingExtras(dto.orderingExtras),
         defaultChangeAmount: String(dto.defaultChangeAmount ?? 0),
         productionDefaultHours: String(
           dto.productionDefaultHours !== undefined && dto.productionDefaultHours !== null
@@ -827,6 +850,9 @@ export class ShopsService implements OnModuleInit {
     if (dto.orderingEta !== undefined) {
       shop.orderingEta = normalizeOrderingEta(dto.orderingEta);
     }
+    if (dto.orderingExtras !== undefined) {
+      shop.orderingExtras = normalizeOrderingExtras(dto.orderingExtras);
+    }
     if (dto.timezone !== undefined) shop.timezone = dto.timezone;
     if (dto.shifts !== undefined) {
       shop.shifts = this.normalizeShifts(dto.shifts, dto.openingTime ?? shop.openingTime);
@@ -946,6 +972,69 @@ export class ShopsService implements OnModuleInit {
     return this.toDto(await this.shops.findOneOrFail({ where: { id } }), {
       emailSmtpConfigured: await this.hasSmtpPassword(id),
     });
+  }
+
+  /** Alta/baja canales, pagos, ítems online y extras (permiso catálogo o shops.manage). */
+  async updateOrderingCatalog(
+    user: AuthUser,
+    id: string,
+    dto: {
+      takeawayEnabled?: boolean;
+      deliveryEnabled?: boolean;
+      orderingPayments?: ShopOrderingPayments | null;
+      orderingExtras?: Array<{
+        id?: string;
+        name: string;
+        price: number;
+        available?: boolean;
+        menuItemIds?: string[];
+      }> | null;
+      menuItemAvailability?: Array<{ id: string; available: boolean }> | null;
+      orderingExtraAvailability?: Array<{ id: string; available: boolean }> | null;
+    },
+  ) {
+    this.assertOrderingCatalogManage(user, id);
+    const shop = await this.shops.findOne({ where: { id } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    if (dto.takeawayEnabled !== undefined) shop.takeawayEnabled = !!dto.takeawayEnabled;
+    if (dto.deliveryEnabled !== undefined) shop.deliveryEnabled = !!dto.deliveryEnabled;
+    if (dto.orderingPayments !== undefined) {
+      shop.orderingPayments = normalizeOrderingPayments(dto.orderingPayments);
+    }
+    if (dto.orderingExtras !== undefined) {
+      shop.orderingExtras = normalizeOrderingExtras(dto.orderingExtras);
+    }
+    if (dto.orderingExtraAvailability?.length) {
+      const map = new Map(
+        dto.orderingExtraAvailability
+          .map((row) => [String(row?.id ?? '').trim(), !!row?.available] as const)
+          .filter(([extraId]) => !!extraId),
+      );
+      const extras = normalizeOrderingExtras(shop.orderingExtras);
+      for (const extra of extras) {
+        if (map.has(extra.id)) extra.available = map.get(extra.id)!;
+      }
+      shop.orderingExtras = extras;
+    }
+    if (dto.menuItemAvailability?.length) {
+      const map = new Map(
+        dto.menuItemAvailability
+          .map((row) => [String(row?.id ?? '').trim(), !!row?.available] as const)
+          .filter(([itemId]) => !!itemId),
+      );
+      const menus = normalizeShopMenus(shop.menu);
+      for (const menu of menus) {
+        for (const sec of menu.sections ?? []) {
+          for (const it of sec.items ?? []) {
+            const itemId = String(it.id ?? '').trim();
+            if (itemId && map.has(itemId)) it.available = map.get(itemId)!;
+          }
+        }
+      }
+      shop.menu = { menus };
+    }
+    await this.shops.save(shop);
+    return this.toDto(shop, { emailSmtpConfigured: await this.hasSmtpPassword(id) });
   }
 
   /** Mirror legacy columns from the primary shift window (no longer user-editable). */
@@ -1251,6 +1340,7 @@ export class ShopsService implements OnModuleInit {
       orderingPayments: normalizeOrderingPayments(s.orderingPayments),
       deliveryZones: normalizeDeliveryZones(s.deliveryZones),
       orderingEta: normalizeOrderingEta(s.orderingEta),
+      orderingExtras: normalizeOrderingExtras(s.orderingExtras),
       defaultChangeAmount: Number(s.defaultChangeAmount),
       productionDefaultHours: Number(s.productionDefaultHours ?? 8) || 8,
       logoUrl: s.logoUrl ?? null,

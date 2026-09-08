@@ -10,6 +10,8 @@ export type ShopMenuItem = {
   price?: number | null;
   priceLabel?: string | null;
   available?: boolean;
+  /** Path relativo bajo uploads/ de la foto del ítem. */
+  imageUrl?: string | null;
 };
 
 export type ShopMenuSection = {
@@ -219,6 +221,10 @@ export function normalizeShopMenu(raw?: ShopMenu | null): ShopMenu {
       usedItemIds.add(id);
       const available =
         it?.available === undefined || it?.available === null ? true : !!it.available;
+      const imageUrl = String(it?.imageUrl ?? '')
+        .trim()
+        .replace(/\\/g, '/')
+        .slice(0, 220) || null;
       items.push({
         id,
         name: itemName,
@@ -226,6 +232,7 @@ export function normalizeShopMenu(raw?: ShopMenu | null): ShopMenu {
         price: Number.isFinite(price) && price != null && price >= 0 ? price : null,
         priceLabel: String(it?.priceLabel ?? '').trim().slice(0, 48) || null,
         available,
+        imageUrl,
       });
     }
     sections.push({ name, items });
