@@ -75,6 +75,12 @@ export class CustomerOrdersController {
     return this.service.listStaff(user, shopId, { status: statuses });
   }
 
+  @Get('pending-count')
+  @RequirePermissions('customerOrders.read')
+  pendingCount(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
+    return this.service.pendingCount(user, shopId);
+  }
+
   @Get(':id')
   @RequirePermissions('customerOrders.read')
   get(

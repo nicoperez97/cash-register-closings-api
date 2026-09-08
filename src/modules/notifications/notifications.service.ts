@@ -70,6 +70,9 @@ function deepLinkFor(
   if (type === NotificationType.RESERVATION_REQUEST) {
     return `/reservations${queryString({ shop, request: opts.targetId })}`;
   }
+  if (type === NotificationType.CUSTOMER_ORDER_CREATED) {
+    return `/customer-orders${queryString({ shop, order: opts.targetId })}`;
+  }
   if (type === NotificationType.MOVEMENT_DELETED) {
     return `/expenses${queryString({ shop })}`;
   }
@@ -167,6 +170,7 @@ export class NotificationsService implements OnModuleInit {
             'SHORTAGE_LEVEL_LOW',
             'SHORTAGE_RESOLVED',
             'RESERVATION_REQUEST',
+            'CUSTOMER_ORDER_CREATED',
             'MOVEMENT_CREATED',
             'MOVEMENT_UPDATED',
             'MOVEMENT_DELETED',

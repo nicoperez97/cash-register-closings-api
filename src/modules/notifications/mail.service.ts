@@ -211,6 +211,9 @@ export class MailService {
     if (type === NotificationType.RESERVATION_REQUEST) {
       return { path: '/reservations', label: 'Ver solicitudes' };
     }
+    if (type === NotificationType.CUSTOMER_ORDER_CREATED) {
+      return { path: '/customer-orders', label: 'Ver pedidos online' };
+    }
     if (String(type).startsWith('MOVEMENT_')) {
       return { path: '/movements', label: 'Ver gastos' };
     }

@@ -150,6 +150,12 @@ const TYPE_META: Record<string, TypeMeta> = {
     toneSoft: '#f3e5f5',
     hint: 'Hay una solicitud de reserva para aceptar o rechazar.',
   },
+  [NotificationType.CUSTOMER_ORDER_CREATED]: {
+    label: 'Pedidos online',
+    tone: '#2e7d32',
+    toneSoft: '#e8f5e9',
+    hint: 'Entró un pedido take away o delivery. Abrí Pedidos online para avanzar.',
+  },
   RESERVATION_ACCEPTED: {
     label: 'Reserva confirmada',
     tone: '#2e7d32',
