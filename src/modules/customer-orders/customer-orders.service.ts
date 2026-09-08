@@ -72,6 +72,8 @@ export class CustomerOrdersService implements OnModuleInit {
           items JSON NOT NULL,
           subtotal DECIMAL(12,2) NOT NULL DEFAULT 0,
           deliveryFee DECIMAL(12,2) NOT NULL DEFAULT 0,
+          discountAmount DECIMAL(12,2) NOT NULL DEFAULT 0,
+          discountLabel VARCHAR(40) NULL,
           total DECIMAL(12,2) NOT NULL DEFAULT 0,
           firstName VARCHAR(80) NOT NULL,
           lastName VARCHAR(80) NOT NULL,
@@ -96,6 +98,20 @@ export class CustomerOrdersService implements OnModuleInit {
       `);
     } catch {
       // tabla ya existe / dialecto distinto
+    }
+    try {
+      await this.orders.query(
+        `ALTER TABLE customer_orders ADD COLUMN discountAmount DECIMAL(12,2) NOT NULL DEFAULT 0`,
+      );
+    } catch {
+      /* already exists */
+    }
+    try {
+      await this.orders.query(
+        `ALTER TABLE customer_orders ADD COLUMN discountLabel VARCHAR(40) NULL`,
+      );
+    } catch {
+      /* already exists */
     }
   }
 
@@ -148,6 +164,8 @@ export class CustomerOrdersService implements OnModuleInit {
       items: o.items ?? [],
       subtotal: Number(o.subtotal),
       deliveryFee: Number(o.deliveryFee),
+      discountAmount: Number(o.discountAmount ?? 0),
+      discountLabel: o.discountLabel ?? null,
       total: Number(o.total),
       firstName: o.firstName,
       lastName: o.lastName,
@@ -192,6 +210,8 @@ export class CustomerOrdersService implements OnModuleInit {
       items: full.items,
       subtotal: full.subtotal,
       deliveryFee: full.deliveryFee,
+      discountAmount: full.discountAmount,
+      discountLabel: full.discountLabel,
       total: full.total,
       firstName: full.firstName,
       lastName: full.lastName,
@@ -298,7 +318,31 @@ export class CustomerOrdersService implements OnModuleInit {
     if (!shop || !shop.onlineOrderingEnabled) {
       throw new NotFoundException('Pedidos online no disponibles');
     }
+    return this.createOrderForShop(shop, dto, {
+      bypassHours: false,
+      response: 'public',
+      allowDiscount: false,
+    });
+  }
 
+  async createStaff(user: AuthUser, shopId: string, dto: CreateCustomerOrderDto) {
+    this.assertShopAccess(user, shopId);
+    const shop = await this.shops.findOne({ where: { id: shopId, active: true as any } });
+    if (!shop || !shop.onlineOrderingEnabled) {
+      throw new NotFoundException('Pedidos online no disponibles');
+    }
+    return this.createOrderForShop(shop, dto, {
+      bypassHours: true,
+      response: 'staff',
+      allowDiscount: true,
+    });
+  }
+
+  private async createOrderForShop(
+    shop: Shop,
+    dto: CreateCustomerOrderDto,
+    opts: { bypassHours: boolean; response: 'public' | 'staff'; allowDiscount: boolean },
+  ) {
     const takeawayEnabled = shop.takeawayEnabled !== false;
     const deliveryEnabled = !!shop.deliveryEnabled;
     const hours = normalizeShopOrderingHours(shop.orderingHours);
@@ -306,12 +350,18 @@ export class CustomerOrdersService implements OnModuleInit {
 
     if (dto.fulfillment === CustomerOrderFulfillment.TAKEAWAY) {
       if (!takeawayEnabled) throw new BadRequestException('Take away no disponible');
-      if (!isOrderingChannelOpenNow(hours?.takeaway, now, shop.timezone)) {
+      if (
+        !opts.bypassHours &&
+        !isOrderingChannelOpenNow(hours?.takeaway, now, shop.timezone)
+      ) {
         throw new BadRequestException('Take away cerrado en este momento');
       }
     } else if (dto.fulfillment === CustomerOrderFulfillment.DELIVERY) {
       if (!deliveryEnabled) throw new BadRequestException('Delivery no disponible');
-      if (!isOrderingChannelOpenNow(hours?.delivery, now, shop.timezone)) {
+      if (
+        !opts.bypassHours &&
+        !isOrderingChannelOpenNow(hours?.delivery, now, shop.timezone)
+      ) {
         throw new BadRequestException('Delivery cerrado en este momento');
       }
     } else {
@@ -403,9 +453,32 @@ export class CustomerOrdersService implements OnModuleInit {
       address = addr.slice(0, 300);
     }
 
+    let discountAmount = 0;
+    let discountLabel: string | null = null;
+    if (opts.allowDiscount) {
+      const pct = Number(dto.discountPercent);
+      const fixed = Number(dto.discountFixed);
+      const hasPct = Number.isFinite(pct) && pct > 0;
+      const hasFixed = Number.isFinite(fixed) && fixed > 0;
+      if (hasPct && hasFixed) {
+        throw new BadRequestException('Usá descuento en % o en monto, no ambos');
+      }
+      if (hasPct) {
+        const p = Math.min(100, pct);
+        discountAmount = Math.round(subtotal * (p / 100) * 100) / 100;
+        discountLabel = `${p % 1 === 0 ? String(p) : p.toFixed(1)}%`;
+      } else if (hasFixed) {
+        discountAmount = Math.min(subtotal, Math.round(fixed * 100) / 100);
+        discountLabel = 'Monto';
+      }
+      if (discountAmount > subtotal) discountAmount = subtotal;
+    }
+
+    const total = Math.max(0, Math.round((subtotal - discountAmount + deliveryFee) * 100) / 100);
+
     if (dto.paymentMethod === CustomerOrderPaymentMethod.CASH) {
       const cash = Number(dto.cashAmount);
-      if (!Number.isFinite(cash) || cash < subtotal + deliveryFee) {
+      if (!Number.isFinite(cash) || cash < total) {
         throw new BadRequestException('Indicá con cuánto abonás (debe cubrir el total)');
       }
     }
@@ -414,7 +487,6 @@ export class CustomerOrdersService implements OnModuleInit {
     if (phone.length < 6) throw new BadRequestException('Celular inválido');
 
     const code = await this.genCode(shop.id);
-    const total = subtotal + deliveryFee;
     const order = await this.orders.save(
       this.orders.create({
         shopId: shop.id,
@@ -424,6 +496,8 @@ export class CustomerOrdersService implements OnModuleInit {
         items: lines,
         subtotal: subtotal.toFixed(2),
         deliveryFee: deliveryFee.toFixed(2),
+        discountAmount: discountAmount.toFixed(2),
+        discountLabel,
         total: total.toFixed(2),
         firstName: String(dto.firstName).trim().slice(0, 80),
         lastName: String(dto.lastName).trim().slice(0, 80),
@@ -442,7 +516,7 @@ export class CustomerOrdersService implements OnModuleInit {
 
     this.live.tick(shop.id, 'customer-orders');
     void this.notifyStaffNewOrder(shop, order);
-    return this.publicDto(order, shop);
+    return opts.response === 'staff' ? this.toDto(order) : this.publicDto(order, shop);
   }
 
   async pendingCount(user: AuthUser, shopId: string) {

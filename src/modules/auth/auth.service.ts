@@ -713,6 +713,7 @@ export class AuthService implements OnModuleInit {
         isBeverageStockAdmin: !!link?.isBeverageStockAdmin,
         isShortageAdmin: !!link?.isShortageAdmin,
         isReservationAdmin: !!link?.isReservationAdmin,
+        isCustomerOrdersAdmin: !!link?.isCustomerOrdersAdmin,
         canEditExpenses: !!link?.canEditExpenses,
         canEditPayments: !!link?.canEditPayments,
         requireClosingFiles: !!link?.requireClosingFiles,

@@ -59,6 +59,16 @@ export class PublicCustomerOrdersController {
 export class CustomerOrdersController {
   constructor(private readonly service: CustomerOrdersService) {}
 
+  @Post()
+  @RequirePermissions('customerOrders.manage')
+  create(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: CreateCustomerOrderDto,
+  ) {
+    return this.service.createStaff(user, shopId, dto);
+  }
+
   @Get()
   @RequirePermissions('customerOrders.read')
   list(

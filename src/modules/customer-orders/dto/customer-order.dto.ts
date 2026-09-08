@@ -130,6 +130,23 @@ export class CreateCustomerOrderDto {
   @IsString()
   @MaxLength(500)
   customerNotes?: string | null;
+
+  /** Solo staff/mostrador: descuento en % sobre el subtotal (0–100). */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  discountPercent?: number | null;
+
+  /** Solo staff/mostrador: descuento en monto fijo (no combinar con %). */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  discountFixed?: number | null;
 }
 
 export class UpdateCustomerOrderStatusDto {
