@@ -83,6 +83,8 @@ export enum NotificationType {
   SHORTAGE_RESOLVED = 'SHORTAGE_RESOLVED',
   /** Solicitud de reserva pública pendiente. */
   RESERVATION_REQUEST = 'RESERVATION_REQUEST',
+  /** Pedido online (take away / delivery) nuevo. */
+  CUSTOMER_ORDER_CREATED = 'CUSTOMER_ORDER_CREATED',
   /** Movimiento o gasto rápido creado a mano. */
   MOVEMENT_CREATED = 'MOVEMENT_CREATED',
   /** Gasto editado a mano. */
@@ -114,6 +116,7 @@ export const NOTIFICATION_TYPE_LABELS: Record<NotificationType, string> = {
   [NotificationType.SHORTAGE_LEVEL_LOW]: 'Faltantes · bajó a crítico',
   [NotificationType.SHORTAGE_RESOLVED]: 'Faltantes · resuelto',
   [NotificationType.RESERVATION_REQUEST]: 'Reservas · solicitud nueva',
+  [NotificationType.CUSTOMER_ORDER_CREATED]: 'Pedidos online · pedido nuevo',
   [NotificationType.MOVEMENT_CREATED]: 'Movimientos y gastos rápidos',
   [NotificationType.MOVEMENT_UPDATED]: 'Gastos · editados',
   [NotificationType.MOVEMENT_DELETED]: 'Gastos · eliminados',

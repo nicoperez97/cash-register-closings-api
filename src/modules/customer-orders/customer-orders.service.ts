@@ -14,7 +14,11 @@ import {
   CustomerOrderStatus,
 } from '../../entities/customer-order.entity';
 import { Shop } from '../../entities/shop.entity';
+import { User } from '../../entities/user.entity';
+import { UserShop } from '../../entities/user-shop.entity';
 import { AuthUser } from '../../common/decorators';
+import { GlobalRole, NotificationType } from '../../common/enums';
+import { isEntityActive } from '../../common/active.util';
 import { isGlobalAdmin } from '../../common/guards';
 import {
   formatOrderingHoursSummary,
@@ -26,7 +30,9 @@ import {
   normalizeShopOrderingHours,
 } from '../../common/shop-ordering';
 import { normalizeShopMenus, ShopMenuItem } from '../menu/menu-parse.util';
+import { NotificationsService } from '../notifications/notifications.service';
 import { ShopLiveService } from '../shop-live/shop-live.service';
+import { userShopCanReceiveCustomerOrders } from '../profile/notification-eligibility';
 import {
   CreateCustomerOrderDto,
   UpdateCustomerOrderStatusDto,
@@ -41,7 +47,12 @@ export class CustomerOrdersService implements OnModuleInit {
     private readonly orders: Repository<CustomerOrder>,
     @InjectRepository(Shop)
     private readonly shops: Repository<Shop>,
+    @InjectRepository(UserShop)
+    private readonly userShops: Repository<UserShop>,
+    @InjectRepository(User)
+    private readonly users: Repository<User>,
     private readonly live: ShopLiveService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async onModuleInit() {
@@ -365,7 +376,16 @@ export class CustomerOrdersService implements OnModuleInit {
     );
 
     this.live.tick(shop.id, 'customer-orders');
+    void this.notifyStaffNewOrder(shop, order);
     return this.publicDto(order);
+  }
+
+  async pendingCount(user: AuthUser, shopId: string) {
+    this.assertShopAccess(user, shopId);
+    const count = await this.orders.count({
+      where: { shopId, status: CustomerOrderStatus.PENDING },
+    });
+    return { count };
   }
 
   async lookupPublic(slug: string, phone: string, code: string) {
@@ -440,5 +460,57 @@ export class CustomerOrdersService implements OnModuleInit {
     await this.orders.save(order);
     this.live.tick(shopId, 'customer-orders');
     return this.toDto(order);
+  }
+
+  private async notifyStaffNewOrder(shop: Shop, order: CustomerOrder) {
+    try {
+      const links = await this.userShops.find({ where: { shopId: shop.id } });
+      const userIds = [...new Set(links.map((l) => l.userId))];
+      const users = userIds.length
+        ? await this.users.find({
+            where: { id: In(userIds) },
+            select: ['id', 'active', 'globalRole'],
+          })
+        : [];
+      const userById = new Map(users.map((u) => [u.id, u]));
+      const recipientIds = new Set<string>();
+      for (const link of links) {
+        const u = userById.get(link.userId);
+        if (!u || !isEntityActive(u.active)) continue;
+        if (userShopCanReceiveCustomerOrders(link, u.globalRole as GlobalRole)) {
+          recipientIds.add(u.id);
+        }
+      }
+      const globalOwners = await this.users.find({
+        where: { globalRole: GlobalRole.OWNER },
+        select: ['id', 'active'],
+      });
+      for (const u of globalOwners) {
+        if (isEntityActive(u.active)) recipientIds.add(u.id);
+      }
+      if (!recipientIds.size) return;
+
+      const channel =
+        order.fulfillment === CustomerOrderFulfillment.DELIVERY ? 'Delivery' : 'Take away';
+      const guest = `${order.firstName} ${order.lastName}`.trim();
+      const total = Number(order.total).toLocaleString('es-AR', {
+        style: 'currency',
+        currency: shop.currency || 'ARS',
+        maximumFractionDigits: 0,
+      });
+      const shopName = shop.name?.trim() || 'Local';
+      await this.notifications.createMany(
+        [...recipientIds].map((userId) => ({
+          userId,
+          shopId: shop.id,
+          type: NotificationType.CUSTOMER_ORDER_CREATED,
+          title: `Pedido ${order.code}`,
+          body: `${shopName}: ${channel} · ${guest} · ${total}`,
+          targetId: order.id,
+        })),
+      );
+    } catch {
+      // no bloquear el pedido público si falla el aviso
+    }
   }
 }
