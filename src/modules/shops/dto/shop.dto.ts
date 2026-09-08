@@ -279,6 +279,7 @@ export class CreateShopDto {
   orderingPayments?: {
     methods?: Array<'CASH' | 'TRANSFER'>;
     transferInstructions?: string | null;
+    whatsapp?: string | null;
   } | null;
 
   @ApiPropertyOptional({
@@ -300,6 +301,19 @@ export class CreateShopDto {
     takeaway?: string | null;
     delivery?: string | null;
   } | null;
+
+  @ApiPropertyOptional({
+    description: 'Extras del pedido online: { id?, name, price, available?, menuItemIds? }',
+  })
+  @IsOptional()
+  @IsArray()
+  orderingExtras?: Array<{
+    id?: string;
+    name: string;
+    price: number;
+    available?: boolean;
+    menuItemIds?: string[];
+  }> | null;
 
   @ApiPropertyOptional()
   @IsOptional()

@@ -28,6 +28,9 @@ export type CustomerOrderLine = {
   unitPrice: number;
   qty: number;
   notes?: string | null;
+  kind?: 'ITEM' | 'EXTRA';
+  extraId?: string | null;
+  attachedToMenuItemId?: string | null;
 };
 
 @Entity({ name: 'customer_orders' })

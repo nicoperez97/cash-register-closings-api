@@ -19,6 +19,8 @@ export type OrderingPaymentMethod = 'CASH' | 'TRANSFER';
 export type ShopOrderingPayments = {
   methods?: OrderingPaymentMethod[];
   transferInstructions?: string | null;
+  /** WhatsApp para comprobantes de transferencia. Si vacío, se usa el teléfono del local. */
+  whatsapp?: string | null;
 };
 
 export type DeliveryZone = {
@@ -32,6 +34,47 @@ export type ShopOrderingEta = {
   takeaway?: string | null;
   delivery?: string | null;
 };
+
+/** Extra opcional del pedido online (adherido a ítems de la carta). */
+export type OrderingExtra = {
+  id: string;
+  name: string;
+  price: number;
+  available?: boolean;
+  /** Ítems de carta a los que aplica; vacío = todos. */
+  menuItemIds?: string[];
+};
+
+function newExtraId(): string {
+  return `e_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+export function normalizeOrderingExtras(raw: unknown): OrderingExtra[] {
+  if (!Array.isArray(raw)) return [];
+  const used = new Set<string>();
+  const out: OrderingExtra[] = [];
+  for (const row of raw.slice(0, 80)) {
+    if (!row || typeof row !== 'object') continue;
+    const r = row as OrderingExtra;
+    const name = String(r.name ?? '').trim().slice(0, 120);
+    if (!name) continue;
+    let id = String(r.id ?? '').trim().slice(0, 40);
+    if (!id || used.has(id)) id = newExtraId();
+    used.add(id);
+    const price = Number(r.price);
+    const menuItemIds = Array.isArray(r.menuItemIds)
+      ? [...new Set(r.menuItemIds.map((x) => String(x ?? '').trim()).filter(Boolean))].slice(0, 120)
+      : [];
+    out.push({
+      id,
+      name,
+      price: Number.isFinite(price) && price >= 0 ? price : 0,
+      available: r.available === undefined || r.available === null ? true : !!r.available,
+      menuItemIds,
+    });
+  }
+  return out;
+}
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
@@ -99,10 +142,12 @@ export function normalizeOrderingPayments(raw: unknown): ShopOrderingPayments | 
     String(o.transferInstructions ?? '')
       .trim()
       .slice(0, 500) || null;
-  if (!methods.length && !transferInstructions) return null;
+  const whatsapp = String(o.whatsapp ?? '').trim().slice(0, 40) || null;
+  if (!methods.length && !transferInstructions && !whatsapp) return null;
   return {
     methods: methods.length ? methods : (['CASH', 'TRANSFER'] as OrderingPaymentMethod[]),
     transferInstructions,
+    whatsapp,
   };
 }
 

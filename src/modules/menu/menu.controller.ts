@@ -16,7 +16,12 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
 import { memoryStorage } from 'multer';
-import { AuthUser, CurrentUser, Public, RequirePermissions } from '../../common/decorators';
+import {
+  AuthUser,
+  CurrentUser,
+  Public,
+  RequireAnyPermissions,
+} from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { MenuService } from './menu.service';
 import { ShopMenu } from './menu-parse.util';
@@ -24,6 +29,11 @@ import { ShopMenu } from './menu-parse.util';
 const menuUpload = FileInterceptor('file', {
   storage: memoryStorage(),
   limits: { fileSize: 15 * 1024 * 1024 },
+});
+
+const itemImageUpload = FileInterceptor('file', {
+  storage: memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
 });
 
 @ApiTags('menu')
@@ -34,13 +44,13 @@ export class MenuController {
   constructor(private readonly menus: MenuService) {}
 
   @Get()
-  @RequirePermissions('shops.manage')
+  @RequireAnyPermissions('shops.manage', 'orderingCatalog.manage')
   get(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
     return this.menus.getAdmin(user, shopId);
   }
 
   @Put()
-  @RequirePermissions('shops.manage')
+  @RequireAnyPermissions('shops.manage', 'orderingCatalog.manage')
   save(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -50,7 +60,7 @@ export class MenuController {
   }
 
   @Post('parse')
-  @RequirePermissions('shops.manage')
+  @RequireAnyPermissions('shops.manage', 'orderingCatalog.manage')
   @ApiConsumes('multipart/form-data')
   @ApiBody({ schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } } })
   @UseInterceptors(menuUpload)
@@ -62,8 +72,32 @@ export class MenuController {
     return this.menus.parseUpload(user, shopId, file);
   }
 
+  @Post('items/:itemId/image')
+  @RequireAnyPermissions('shops.manage', 'orderingCatalog.manage')
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({ schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } } })
+  @UseInterceptors(itemImageUpload)
+  uploadItemImage(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('itemId') itemId: string,
+    @UploadedFile() file?: Express.Multer.File,
+  ) {
+    return this.menus.uploadItemImage(user, shopId, itemId, file);
+  }
+
+  @Delete('items/:itemId/image')
+  @RequireAnyPermissions('shops.manage', 'orderingCatalog.manage')
+  clearItemImage(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('itemId') itemId: string,
+  ) {
+    return this.menus.clearItemImage(user, shopId, itemId);
+  }
+
   @Post(':menuId/source')
-  @RequirePermissions('shops.manage')
+  @RequireAnyPermissions('shops.manage', 'orderingCatalog.manage')
   @ApiConsumes('multipart/form-data')
   @ApiBody({ schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } } })
   @UseInterceptors(menuUpload)
@@ -77,7 +111,7 @@ export class MenuController {
   }
 
   @Delete(':menuId/source')
-  @RequirePermissions('shops.manage')
+  @RequireAnyPermissions('shops.manage', 'orderingCatalog.manage')
   clearSource(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -100,6 +134,20 @@ export class PublicMenuController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const { stream, fileName, mime } = await this.menus.publicMenuFile(slug, menuSlug);
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(fileName)}"`);
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    return stream;
+  }
+
+  @Public()
+  @Get(':slug/menu-items/:itemId/image')
+  async publicItemImage(
+    @Param('slug') slug: string,
+    @Param('itemId') itemId: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { stream, fileName, mime } = await this.menus.publicItemImage(slug, itemId);
     res.setHeader('Content-Type', mime);
     res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(fileName)}"`);
     res.setHeader('Cache-Control', 'public, max-age=300');

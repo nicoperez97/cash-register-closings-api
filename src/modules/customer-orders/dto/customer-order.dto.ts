@@ -42,6 +42,27 @@ export class CreateCustomerOrderItemDto {
   notes?: string | null;
 }
 
+export class CreateCustomerOrderExtraDto {
+  @ApiProperty()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  extraId: string;
+
+  @ApiProperty({ example: 1 })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(99)
+  qty: number;
+
+  @ApiPropertyOptional({ description: 'Ítem de carta al que se adhiere el extra' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  attachedToMenuItemId?: string | null;
+}
+
 export class CreateCustomerOrderDto {
   @ApiProperty({ enum: CustomerOrderFulfillment })
   @IsEnum(CustomerOrderFulfillment)
@@ -54,6 +75,14 @@ export class CreateCustomerOrderDto {
   @ValidateNested({ each: true })
   @Type(() => CreateCustomerOrderItemDto)
   items: CreateCustomerOrderItemDto[];
+
+  @ApiPropertyOptional({ type: [CreateCustomerOrderExtraDto] })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(40)
+  @ValidateNested({ each: true })
+  @Type(() => CreateCustomerOrderExtraDto)
+  extras?: CreateCustomerOrderExtraDto[];
 
   @ApiProperty()
   @IsString()

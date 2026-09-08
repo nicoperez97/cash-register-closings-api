@@ -7,6 +7,7 @@ import { ShopPosnet } from '../common/posnet';
 import { ShopShift } from '../common/shop-shifts';
 import {
   DeliveryZone,
+  OrderingExtra,
   ShopMode,
   ShopOrderingEta,
   ShopOrderingHours,
@@ -168,6 +169,10 @@ export class Shop extends BaseEntity {
   @Column({ type: 'simple-json', nullable: true })
   orderingEta?: ShopOrderingEta | null;
 
+  /** Extras opcionales del pedido online (precio + ítems adheridos). */
+  @Column({ type: 'simple-json', nullable: true })
+  orderingExtras?: OrderingExtra[] | null;
+
   /** Cartas publicadas (una o varias: menú, vinos, etc.). */
   @Column({ type: 'simple-json', nullable: true })
   menu?: {
@@ -185,6 +190,7 @@ export class Shop extends BaseEntity {
           price?: number | null;
           priceLabel?: string | null;
           available?: boolean;
+          imageUrl?: string | null;
         }>;
       }>;
     }>;

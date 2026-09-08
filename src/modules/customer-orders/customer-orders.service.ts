@@ -25,6 +25,7 @@ import {
   isOrderingChannelOpenNow,
   normalizeDeliveryZones,
   normalizeOrderingEta,
+  normalizeOrderingExtras,
   normalizeOrderingPayments,
   normalizeShopMode,
   normalizeShopOrderingHours,
@@ -168,8 +169,22 @@ export class CustomerOrdersService implements OnModuleInit {
     };
   }
 
-  private publicDto(o: CustomerOrder) {
+  private resolveReceiptWhatsapp(shop: Shop): string | null {
+    const payments = normalizeOrderingPayments(shop.orderingPayments);
+    for (const raw of [payments?.whatsapp, shop.phone]) {
+      const digits = String(raw ?? '').replace(/\D/g, '');
+      if (digits.length >= 8) return digits;
+    }
+    return null;
+  }
+
+  private publicDto(o: CustomerOrder, shop?: Shop | null) {
     const full = this.toDto(o);
+    const isTransfer = full.paymentMethod === CustomerOrderPaymentMethod.TRANSFER;
+    const payments = shop ? normalizeOrderingPayments(shop.orderingPayments) : null;
+    const receiptWhatsapp = isTransfer && shop ? this.resolveReceiptWhatsapp(shop) : null;
+    const transferInstructions =
+      isTransfer ? payments?.transferInstructions ?? null : null;
     return {
       code: full.code,
       status: full.status,
@@ -190,6 +205,8 @@ export class CustomerOrdersService implements OnModuleInit {
       outForDeliveryAt: full.outForDeliveryAt,
       completedAt: full.completedAt,
       cancelledAt: full.cancelledAt,
+      receiptWhatsapp,
+      transferInstructions,
     };
   }
 
@@ -213,6 +230,7 @@ export class CustomerOrdersService implements OnModuleInit {
     const payments = normalizeOrderingPayments(shop.orderingPayments) ?? {
       methods: ['CASH', 'TRANSFER'] as CustomerOrderPaymentMethod[],
       transferInstructions: null,
+      whatsapp: null,
     };
     const zones = normalizeDeliveryZones(shop.deliveryZones);
     const eta = normalizeOrderingEta(shop.orderingEta);
@@ -243,6 +261,14 @@ export class CustomerOrdersService implements OnModuleInit {
       payments,
       deliveryZones: zones,
       eta,
+      extras: normalizeOrderingExtras(shop.orderingExtras)
+        .filter((e) => e.available !== false)
+        .map((e) => ({
+          id: e.id,
+          name: e.name,
+          price: e.price,
+          menuItemIds: e.menuItemIds ?? [],
+        })),
       menus: menus.map((m) => ({
         id: m.id,
         slug: m.slug,
@@ -258,6 +284,9 @@ export class CustomerOrdersService implements OnModuleInit {
               description: it.description ?? null,
               price: it.price,
               priceLabel: it.priceLabel ?? null,
+              imageUrl: it.imageUrl
+                ? `/public/shops/${shop.slug}/menu-items/${encodeURIComponent(String(it.id))}/image`
+                : null,
             })),
         })),
       })),
@@ -292,6 +321,7 @@ export class CustomerOrdersService implements OnModuleInit {
     const payments = normalizeOrderingPayments(shop.orderingPayments) ?? {
       methods: ['CASH', 'TRANSFER'] as CustomerOrderPaymentMethod[],
       transferInstructions: null,
+      whatsapp: null,
     };
     if (!payments.methods?.includes(dto.paymentMethod)) {
       throw new BadRequestException('Medio de pago no disponible');
@@ -314,8 +344,43 @@ export class CustomerOrdersService implements OnModuleInit {
         unitPrice,
         qty,
         notes: String(row.notes ?? '').trim().slice(0, 300) || null,
+        kind: 'ITEM',
       });
     }
+
+    const extrasCatalog = new Map(
+      normalizeOrderingExtras(shop.orderingExtras)
+        .filter((e) => e.available !== false)
+        .map((e) => [e.id, e]),
+    );
+    const orderedItemIds = new Set(lines.map((l) => l.menuItemId));
+    for (const row of dto.extras ?? []) {
+      const extra = extrasCatalog.get(String(row.extraId ?? '').trim());
+      if (!extra) throw new BadRequestException(`Extra no disponible: ${row.extraId}`);
+      const attached = String(row.attachedToMenuItemId ?? '').trim() || null;
+      const allowed = extra.menuItemIds ?? [];
+      if (allowed.length) {
+        if (!attached || !allowed.includes(attached)) {
+          throw new BadRequestException(`Extra "${extra.name}" no aplica a ese ítem`);
+        }
+        if (!orderedItemIds.has(attached)) {
+          throw new BadRequestException(`Extra "${extra.name}" requiere el ítem en el pedido`);
+        }
+      }
+      const qty = Math.max(1, Math.min(99, Number(row.qty) || 1));
+      subtotal += extra.price * qty;
+      lines.push({
+        menuItemId: attached || extra.id,
+        name: extra.name,
+        unitPrice: extra.price,
+        qty,
+        notes: null,
+        kind: 'EXTRA',
+        extraId: extra.id,
+        attachedToMenuItemId: attached,
+      });
+    }
+
     if (!lines.length) throw new BadRequestException('El pedido no tiene ítems');
 
     let deliveryFee = 0;
@@ -377,7 +442,7 @@ export class CustomerOrdersService implements OnModuleInit {
 
     this.live.tick(shop.id, 'customer-orders');
     void this.notifyStaffNewOrder(shop, order);
-    return this.publicDto(order);
+    return this.publicDto(order, shop);
   }
 
   async pendingCount(user: AuthUser, shopId: string) {
@@ -403,7 +468,7 @@ export class CustomerOrdersService implements OnModuleInit {
       order: { createdAt: 'DESC' },
     });
     if (!order) throw new NotFoundException('No encontramos ese pedido');
-    return this.publicDto(order);
+    return this.publicDto(order, shop);
   }
 
   async listStaff(
