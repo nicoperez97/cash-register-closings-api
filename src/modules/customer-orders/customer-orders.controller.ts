@@ -91,6 +91,16 @@ export class CustomerOrdersController {
     return this.service.pendingCount(user, shopId);
   }
 
+  @Get('closing-summary')
+  @RequirePermissions('customerOrders.read')
+  closingSummary(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Query('businessDate') businessDate?: string,
+  ) {
+    return this.service.closingSummary(user, shopId, businessDate);
+  }
+
   @Get(':id')
   @RequirePermissions('customerOrders.read')
   get(

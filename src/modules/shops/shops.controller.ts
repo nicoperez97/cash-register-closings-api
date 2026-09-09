@@ -140,8 +140,22 @@ export class ShopsController {
     @Param('id') id: string,
     @Body()
     body: {
+      shopMode?: 'AL_PASO' | 'RESTAURANTE';
+      onlineOrderingEnabled?: boolean;
+      orderingForceClosed?: boolean;
       takeawayEnabled?: boolean;
       deliveryEnabled?: boolean;
+      orderingHours?: {
+        takeaway?: Record<string, unknown> | null;
+        delivery?: Record<string, unknown> | null;
+      } | null;
+      orderingEta?: { takeaway?: string | null; delivery?: string | null } | null;
+      deliveryZones?: Array<{
+        id?: string;
+        name: string;
+        fee: number;
+        note?: string | null;
+      }> | null;
       orderingPayments?: {
         methods?: Array<'CASH' | 'TRANSFER'>;
         transferInstructions?: string | null;
@@ -158,7 +172,7 @@ export class ShopsController {
       orderingExtraAvailability?: Array<{ id: string; available: boolean }> | null;
     },
   ) {
-    return this.shops.updateOrderingCatalog(user, id, body);
+    return this.shops.updateOrderingCatalog(user, id, body as any);
   }
 
   @Patch(':id')

@@ -251,6 +251,13 @@ export class CreateShopDto {
   @IsBoolean()
   onlineOrderingEnabled?: boolean;
 
+  @ApiPropertyOptional({
+    description: 'Cierra la página pública aunque el horario diga abierto',
+  })
+  @IsOptional()
+  @IsBoolean()
+  orderingForceClosed?: boolean;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsBoolean()

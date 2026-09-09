@@ -5,7 +5,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, Not, Between, Repository } from 'typeorm';
 import {
   CustomerOrder,
   CustomerOrderFulfillment,
@@ -21,6 +21,10 @@ import { GlobalRole, NotificationType } from '../../common/enums';
 import { isEntityActive } from '../../common/active.util';
 import { isGlobalAdmin } from '../../common/guards';
 import {
+  resolveShopBusinessDate,
+  shopBusinessDayRangeUtc,
+} from '../../common/business-date';
+import {
   formatOrderingHoursSummary,
   isOrderingChannelOpenNow,
   normalizeDeliveryZones,
@@ -30,7 +34,7 @@ import {
   normalizeShopMode,
   normalizeShopOrderingHours,
 } from '../../common/shop-ordering';
-import { normalizeShopMenus, ShopMenuItem } from '../menu/menu-parse.util';
+import { normalizeRemovableIngredients, normalizeShopMenus, ShopMenuItem } from '../menu/menu-parse.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { ShopLiveService } from '../shop-live/shop-live.service';
 import { userShopCanReceiveCustomerOrders } from '../profile/notification-eligibility';
@@ -241,12 +245,17 @@ export class CustomerOrdersService implements OnModuleInit {
     const takeawayHours = hours?.takeaway ?? null;
     const deliveryHours = hours?.delivery ?? null;
     const now = new Date();
+    const forceClosed = !!shop.orderingForceClosed;
     const takeawayEnabled = shop.takeawayEnabled !== false;
     const deliveryEnabled = !!shop.deliveryEnabled;
     const takeawayOpen =
-      takeawayEnabled && isOrderingChannelOpenNow(takeawayHours, now, shop.timezone);
+      !forceClosed &&
+      takeawayEnabled &&
+      isOrderingChannelOpenNow(takeawayHours, now, shop.timezone);
     const deliveryOpen =
-      deliveryEnabled && isOrderingChannelOpenNow(deliveryHours, now, shop.timezone);
+      !forceClosed &&
+      deliveryEnabled &&
+      isOrderingChannelOpenNow(deliveryHours, now, shop.timezone);
     const payments = normalizeOrderingPayments(shop.orderingPayments) ?? {
       methods: ['CASH', 'TRANSFER'] as CustomerOrderPaymentMethod[],
       transferInstructions: null,
@@ -272,6 +281,7 @@ export class CustomerOrdersService implements OnModuleInit {
       },
       takeawayEnabled,
       deliveryEnabled,
+      orderingForceClosed: forceClosed,
       takeawayOpen,
       deliveryOpen,
       anyChannelOpen: takeawayOpen || deliveryOpen,
@@ -304,6 +314,7 @@ export class CustomerOrdersService implements OnModuleInit {
               description: it.description ?? null,
               price: it.price,
               priceLabel: it.priceLabel ?? null,
+              removableIngredients: it.removableIngredients ?? [],
               imageUrl: it.imageUrl
                 ? `/public/shops/${shop.slug}/menu-items/${encodeURIComponent(String(it.id))}/image`
                 : null,
@@ -318,6 +329,9 @@ export class CustomerOrdersService implements OnModuleInit {
     if (!shop || !shop.onlineOrderingEnabled) {
       throw new NotFoundException('Pedidos online no disponibles');
     }
+    if (shop.orderingForceClosed) {
+      throw new BadRequestException('El local está cerrado para pedidos online');
+    }
     return this.createOrderForShop(shop, dto, {
       bypassHours: false,
       response: 'public',
@@ -331,11 +345,15 @@ export class CustomerOrdersService implements OnModuleInit {
     if (!shop || !shop.onlineOrderingEnabled) {
       throw new NotFoundException('Pedidos online no disponibles');
     }
-    return this.createOrderForShop(shop, dto, {
-      bypassHours: true,
-      response: 'staff',
-      allowDiscount: true,
-    });
+    return this.createOrderForShop(
+      shop,
+      { ...dto, fulfillment: CustomerOrderFulfillment.COUNTER },
+      {
+        bypassHours: true,
+        response: 'staff',
+        allowDiscount: true,
+      },
+    );
   }
 
   private async createOrderForShop(
@@ -348,7 +366,11 @@ export class CustomerOrdersService implements OnModuleInit {
     const hours = normalizeShopOrderingHours(shop.orderingHours);
     const now = new Date();
 
-    if (dto.fulfillment === CustomerOrderFulfillment.TAKEAWAY) {
+    if (dto.fulfillment === CustomerOrderFulfillment.COUNTER) {
+      if (opts.response !== 'staff') {
+        throw new BadRequestException('Tipo de entrega inválido');
+      }
+    } else if (dto.fulfillment === CustomerOrderFulfillment.TAKEAWAY) {
       if (!takeawayEnabled) throw new BadRequestException('Take away no disponible');
       if (
         !opts.bypassHours &&
@@ -388,6 +410,12 @@ export class CustomerOrdersService implements OnModuleInit {
       const qty = Math.max(1, Math.min(99, Number(row.qty) || 1));
       const unitPrice = found.unitPrice;
       subtotal += unitPrice * qty;
+      const allowedRemoved = new Set(
+        (found.removableIngredients ?? []).map((x) => x.toLowerCase()),
+      );
+      const removedIngredients = normalizeRemovableIngredients(row.removedIngredients).filter(
+        (name) => allowedRemoved.has(name.toLowerCase()),
+      );
       lines.push({
         menuItemId: String(found.id),
         name: found.name,
@@ -395,6 +423,7 @@ export class CustomerOrdersService implements OnModuleInit {
         qty,
         notes: String(row.notes ?? '').trim().slice(0, 300) || null,
         kind: 'ITEM',
+        removedIngredients: removedIngredients.length ? removedIngredients : undefined,
       });
     }
 
@@ -487,11 +516,15 @@ export class CustomerOrdersService implements OnModuleInit {
     if (phone.length < 6) throw new BadRequestException('Celular inválido');
 
     const code = await this.genCode(shop.id);
+    const isCounter = dto.fulfillment === CustomerOrderFulfillment.COUNTER;
+    const initialStatus = isCounter
+      ? CustomerOrderStatus.PREPARING
+      : CustomerOrderStatus.PENDING;
     const order = await this.orders.save(
       this.orders.create({
         shopId: shop.id,
         code,
-        status: CustomerOrderStatus.PENDING,
+        status: initialStatus,
         fulfillment: dto.fulfillment,
         items: lines,
         subtotal: subtotal.toFixed(2),
@@ -511,6 +544,8 @@ export class CustomerOrdersService implements OnModuleInit {
             ? Number(dto.cashAmount).toFixed(2)
             : null,
         customerNotes: String(dto.customerNotes ?? '').trim().slice(0, 500) || null,
+        acceptedAt: isCounter ? now : null,
+        preparingAt: isCounter ? now : null,
       }),
     );
 
@@ -561,6 +596,78 @@ export class CustomerOrdersService implements OnModuleInit {
       take: 200,
     });
     return rows.map((r) => this.toDto(r));
+  }
+
+  /**
+   * Totales de pedidos del día laboral (para precargar un cierre de caja).
+   * Incluye todos menos cancelados, por createdAt en la ventana del día.
+   */
+  async closingSummary(
+    user: AuthUser,
+    shopId: string,
+    businessDate?: string,
+  ) {
+    this.assertShopAccess(user, shopId);
+    const shop = await this.shops.findOne({ where: { id: shopId } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+
+    const date =
+      businessDate && /^\d{4}-\d{2}-\d{2}$/.test(businessDate)
+        ? businessDate
+        : resolveShopBusinessDate(new Date(), {
+            timezone: shop.timezone,
+            openingTime: shop.openingTime,
+          });
+    const { from, to } = shopBusinessDayRangeUtc(date, {
+      timezone: shop.timezone,
+      openingTime: shop.openingTime,
+    });
+
+    const rows = await this.orders.find({
+      where: {
+        shopId,
+        status: Not(CustomerOrderStatus.CANCELLED),
+        createdAt: Between(from, to),
+      },
+      order: { createdAt: 'ASC' },
+      take: 2000,
+    });
+
+    let cashTotal = 0;
+    let transferTotal = 0;
+    let unitsSold = 0;
+    let openCount = 0;
+    const orderIds: string[] = [];
+
+    for (const row of rows) {
+      orderIds.push(row.id);
+      const total = Number(row.total) || 0;
+      if (row.paymentMethod === CustomerOrderPaymentMethod.TRANSFER) {
+        transferTotal += total;
+      } else {
+        cashTotal += total;
+      }
+      for (const line of row.items ?? []) {
+        unitsSold += Math.max(0, Number(line.qty) || 0);
+      }
+      if (row.status !== CustomerOrderStatus.COMPLETED) openCount += 1;
+    }
+
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    return {
+      businessDate: date,
+      from: from.toISOString(),
+      to: to.toISOString(),
+      orderCount: rows.length,
+      openCount,
+      completedCount: rows.length - openCount,
+      cashTotal: round2(cashTotal),
+      transferTotal: round2(transferTotal),
+      total: round2(cashTotal + transferTotal),
+      unitsSold,
+      orderIds,
+      orderingForceClosed: !!shop.orderingForceClosed,
+    };
   }
 
   async getStaff(user: AuthUser, shopId: string, id: string) {
@@ -630,7 +737,11 @@ export class CustomerOrdersService implements OnModuleInit {
       if (!recipientIds.size) return;
 
       const channel =
-        order.fulfillment === CustomerOrderFulfillment.DELIVERY ? 'Delivery' : 'Take away';
+        order.fulfillment === CustomerOrderFulfillment.DELIVERY
+          ? 'Delivery'
+          : order.fulfillment === CustomerOrderFulfillment.COUNTER
+            ? 'Mostrador'
+            : 'Take away';
       const guest = `${order.firstName} ${order.lastName}`.trim();
       const total = Number(order.total).toLocaleString('es-AR', {
         style: 'currency',
