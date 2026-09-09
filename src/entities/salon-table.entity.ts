@@ -1,6 +1,7 @@
 import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 import { BaseEntity } from './base.entity';
 import { Shop } from './shop.entity';
+import { SalonSector } from './salon-sector.entity';
 
 export enum SalonArea {
   INSIDE = 'INSIDE',
@@ -9,10 +10,16 @@ export enum SalonArea {
 
 @Entity({ name: 'salon_tables' })
 @Index('idx_salon_tables_shop', ['shopId'])
+@Index('idx_salon_tables_sector', ['sectorId'])
 export class SalonTable extends BaseEntity {
   @Column()
   shopId: string;
 
+  /** Sector de comanda (Mesas / mozos). */
+  @Column({ type: 'char', length: 36, nullable: true })
+  sectorId?: string | null;
+
+  /** Adentro/Afuera solo para diagrama y reglas de reservas. */
   @Column({ type: 'varchar', length: 16, default: SalonArea.INSIDE })
   area: SalonArea;
 
@@ -26,7 +33,18 @@ export class SalonTable extends BaseEntity {
   @Column({ type: 'int', default: 0 })
   sortOrder: number;
 
+  /**
+   * true = comanda / Mesas / mozo.
+   * false = inventario de Diagrama (reservas); no se edita en Mesas.
+   */
+  @Column({ type: 'tinyint', default: 1 })
+  forWaiter: boolean;
+
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })
   shop: Shop;
+
+  @ManyToOne(() => SalonSector, { nullable: true })
+  @JoinColumn({ name: 'sectorId' })
+  sector?: SalonSector | null;
 }

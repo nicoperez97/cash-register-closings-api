@@ -142,6 +142,7 @@ export class ShopsController {
     body: {
       shopMode?: 'AL_PASO' | 'RESTAURANTE';
       onlineOrderingEnabled?: boolean;
+      waiterOrderingEnabled?: boolean;
       orderingForceClosed?: boolean;
       takeawayEnabled?: boolean;
       deliveryEnabled?: boolean;

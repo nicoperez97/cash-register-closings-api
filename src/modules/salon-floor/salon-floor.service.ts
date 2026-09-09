@@ -4,6 +4,7 @@ import { In, Repository } from 'typeorm';
 import { AuthUser } from '../../common/decorators';
 import { isEntityActive } from '../../common/active.util';
 import { SalonAreaRule } from '../../entities/salon-area-rule.entity';
+import { SalonSector } from '../../entities/salon-sector.entity';
 import { SalonArea, SalonTable } from '../../entities/salon-table.entity';
 import { Reservation, ReservationStatus } from '../../entities/reservation.entity';
 import { ShopLiveService } from '../shop-live/shop-live.service';
@@ -13,15 +14,32 @@ const CREATE_TABLES_SQL = `
   CREATE TABLE IF NOT EXISTS salon_tables (
     id CHAR(36) NOT NULL PRIMARY KEY,
     shopId CHAR(36) NOT NULL,
+    sectorId CHAR(36) NULL,
     area VARCHAR(16) NOT NULL DEFAULT 'INSIDE',
     label VARCHAR(40) NOT NULL DEFAULT '',
     seats INT NOT NULL DEFAULT 2,
+    sortOrder INT NOT NULL DEFAULT 0,
+    forWaiter TINYINT(1) NOT NULL DEFAULT 1,
+    createdAt DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updatedAt DATETIME(6) NULL,
+    deletedAt DATETIME(6) NULL,
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    INDEX idx_salon_tables_shop (shopId),
+    INDEX idx_salon_tables_sector (sectorId)
+  )
+`;
+
+const CREATE_SECTORS_SQL = `
+  CREATE TABLE IF NOT EXISTS salon_sectors (
+    id CHAR(36) NOT NULL PRIMARY KEY,
+    shopId CHAR(36) NOT NULL,
+    name VARCHAR(60) NOT NULL DEFAULT '',
     sortOrder INT NOT NULL DEFAULT 0,
     createdAt DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updatedAt DATETIME(6) NULL,
     deletedAt DATETIME(6) NULL,
     active TINYINT(1) NOT NULL DEFAULT 1,
-    INDEX idx_salon_tables_shop (shopId)
+    INDEX idx_salon_sectors_shop (shopId)
   )
 `;
 
@@ -45,6 +63,8 @@ export class SalonFloorService implements OnModuleInit {
   constructor(
     @InjectRepository(SalonTable)
     private readonly tables: Repository<SalonTable>,
+    @InjectRepository(SalonSector)
+    private readonly sectors: Repository<SalonSector>,
     @InjectRepository(SalonAreaRule)
     private readonly rules: Repository<SalonAreaRule>,
     @InjectRepository(Reservation)
@@ -55,7 +75,33 @@ export class SalonFloorService implements OnModuleInit {
 
   async onModuleInit() {
     try {
+      await this.tables.query(CREATE_SECTORS_SQL);
+    } catch {
+      // ya existe
+    }
+    try {
       await this.tables.query(CREATE_TABLES_SQL);
+    } catch {
+      // ya existe
+    }
+    try {
+      await this.tables.query(
+        `ALTER TABLE salon_tables ADD COLUMN sectorId CHAR(36) NULL`,
+      );
+    } catch {
+      // ya existe
+    }
+    try {
+      await this.tables.query(
+        `ALTER TABLE salon_tables ADD COLUMN forWaiter TINYINT(1) NOT NULL DEFAULT 1`,
+      );
+    } catch {
+      // ya existe
+    }
+    try {
+      await this.tables.query(
+        `CREATE INDEX idx_salon_tables_sector ON salon_tables (sectorId)`,
+      );
     } catch {
       // ya existe
     }
@@ -63,6 +109,49 @@ export class SalonFloorService implements OnModuleInit {
       await this.rules.query(CREATE_RULES_SQL);
     } catch {
       // ya existe
+    }
+    await this.migrateLegacyTablesToSectors();
+  }
+
+  /** Mesas viejas (solo area) → sectores Adentro/Afuera. */
+  private async migrateLegacyTablesToSectors() {
+    const orphans = await this.tables
+      .createQueryBuilder('t')
+      .where('(t.sectorId IS NULL OR t.sectorId = :empty)', { empty: '' })
+      .andWhere('(t.active = 1 OR t.active IS NULL)')
+      .getMany();
+    if (!orphans.length) return;
+
+    const byShop = new Map<string, SalonTable[]>();
+    for (const t of orphans) {
+      const list = byShop.get(t.shopId) ?? [];
+      list.push(t);
+      byShop.set(t.shopId, list);
+    }
+
+    for (const [shopId, rows] of byShop) {
+      const existingSectors = (await this.sectors.find({ where: { shopId } })).filter((s) =>
+        isEntityActive(s.active),
+      );
+      const ensure = async (area: SalonArea, name: string, sortOrder: number) => {
+        let sector = existingSectors.find(
+          (s) => s.name.trim().toLowerCase() === name.toLowerCase(),
+        );
+        if (!sector) {
+          sector = await this.sectors.save(
+            this.sectors.create({ shopId, name, sortOrder, active: true }),
+          );
+          existingSectors.push(sector);
+        }
+        return sector;
+      };
+      const inside = await ensure(SalonArea.INSIDE, 'Adentro', 1);
+      const outside = await ensure(SalonArea.OUTSIDE, 'Afuera', 2);
+      for (const row of rows) {
+        row.sectorId =
+          this.normalizeArea(row.area) === SalonArea.OUTSIDE ? outside.id : inside.id;
+        await this.tables.save(row);
+      }
     }
   }
 
@@ -79,14 +168,31 @@ export class SalonFloorService implements OnModuleInit {
     return n;
   }
 
+  private normalizeSectorName(raw: string): string {
+    const name = String(raw ?? '').trim().slice(0, 60);
+    if (!name) throw new BadRequestException('Indicá un nombre de sector');
+    return name;
+  }
+
+  private toSectorDto(row: SalonSector) {
+    return {
+      id: row.id,
+      shopId: row.shopId,
+      name: (row.name ?? '').trim(),
+      sortOrder: row.sortOrder,
+    };
+  }
+
   private toTableDto(row: SalonTable) {
     return {
       id: row.id,
       shopId: row.shopId,
+      sectorId: row.sectorId ?? null,
       area: this.normalizeArea(row.area),
       label: (row.label ?? '').trim(),
       seats: row.seats,
       sortOrder: row.sortOrder,
+      forWaiter: row.forWaiter !== false && Number(row.forWaiter) !== 0,
     };
   }
 
@@ -100,38 +206,143 @@ export class SalonFloorService implements OnModuleInit {
     };
   }
 
+  private async listActiveSectors(shopId: string) {
+    return (await this.sectors.find({ where: { shopId } }))
+      .filter((r) => isEntityActive(r.active))
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, 'es'));
+  }
+
+  private async requireSector(shopId: string, sectorId: string) {
+    const sector = await this.sectors.findOne({ where: { id: sectorId, shopId } });
+    if (!sector || !isEntityActive(sector.active)) {
+      throw new NotFoundException('Sector no encontrado');
+    }
+    return sector;
+  }
+
   async getFloor(user: AuthUser, shopId: string) {
     this.shops.assertShopAccess(user, shopId);
-    const [tableRows, ruleRows] = await Promise.all([
+    await this.migrateLegacyTablesToSectors();
+    const [sectorRows, tableRows, ruleRows] = await Promise.all([
+      this.listActiveSectors(shopId),
       this.tables.find({ where: { shopId }, order: { sortOrder: 'ASC', createdAt: 'ASC' } }),
       this.rules.find({ where: { shopId }, order: { area: 'ASC', partySize: 'ASC' } }),
     ]);
     return {
+      sectors: sectorRows.map((r) => this.toSectorDto(r)),
       tables: tableRows.filter((r) => isEntityActive(r.active)).map((r) => this.toTableDto(r)),
       rules: ruleRows.filter((r) => isEntityActive(r.active)).map((r) => this.toRuleDto(r)),
     };
   }
 
+  async createSector(user: AuthUser, shopId: string, dto: { name: string }) {
+    this.shops.assertShopAccess(user, shopId);
+    const name = this.normalizeSectorName(dto.name);
+    const existing = await this.listActiveSectors(shopId);
+    if (existing.some((s) => s.name.toLowerCase() === name.toLowerCase())) {
+      throw new BadRequestException('Ya hay un sector con ese nombre');
+    }
+    const sortOrder = existing.reduce((max, r) => Math.max(max, r.sortOrder), 0) + 1;
+    const row = await this.sectors.save(
+      this.sectors.create({ shopId, name, sortOrder, active: true }),
+    );
+    this.live.tick(shopId, 'reservations');
+    return this.toSectorDto(row);
+  }
+
+  async updateSector(
+    user: AuthUser,
+    shopId: string,
+    id: string,
+    dto: { name?: string; sortOrder?: number },
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    const row = await this.requireSector(shopId, id);
+    if (dto.name !== undefined) {
+      const name = this.normalizeSectorName(dto.name);
+      const siblings = await this.listActiveSectors(shopId);
+      if (siblings.some((s) => s.id !== id && s.name.toLowerCase() === name.toLowerCase())) {
+        throw new BadRequestException('Ya hay un sector con ese nombre');
+      }
+      row.name = name;
+    }
+    if (dto.sortOrder !== undefined) {
+      const n = Math.round(Number(dto.sortOrder));
+      if (!Number.isFinite(n) || n < 0 || n > 9999) {
+        throw new BadRequestException('Orden inválido');
+      }
+      row.sortOrder = n;
+    }
+    await this.sectors.save(row);
+    this.live.tick(shopId, 'reservations');
+    return this.toSectorDto(row);
+  }
+
+  async removeSector(user: AuthUser, shopId: string, id: string) {
+    this.shops.assertShopAccess(user, shopId);
+    const row = await this.requireSector(shopId, id);
+    const tables = (await this.tables.find({ where: { shopId, sectorId: id } })).filter((t) =>
+      isEntityActive(t.active),
+    );
+    for (const table of tables) {
+      table.active = false;
+      await this.tables.save(table);
+    }
+    row.active = false;
+    await this.sectors.save(row);
+    this.live.tick(shopId, 'reservations');
+    return { ok: true, removedTables: tables.length };
+  }
+
   async createTable(
     user: AuthUser,
     shopId: string,
-    dto: { area?: string; label?: string; seats?: number },
+    dto: {
+      sectorId?: string;
+      area?: string;
+      label?: string;
+      seats?: number;
+      /** false = inventario Diagrama/reservas; true = comanda. */
+      forWaiter?: boolean;
+    },
   ) {
     this.shops.assertShopAccess(user, shopId);
-    const area = this.normalizeArea(dto.area);
     const seats = this.normalizeSeats(dto.seats ?? 2);
+    const forWaiter = dto.forWaiter !== false;
+    let sectorId: string | null = String(dto.sectorId ?? '').trim() || null;
+    let area = this.normalizeArea(dto.area);
+
+    if (forWaiter) {
+      if (!sectorId) {
+        throw new BadRequestException('Indicá el sector de la mesa');
+      }
+      await this.requireSector(shopId, sectorId);
+    } else {
+      // Inventario de diagrama: solo Adentro/Afuera, sin sector de comanda.
+      sectorId = null;
+      area = this.normalizeArea(dto.area);
+    }
+
     const existing = (await this.tables.find({ where: { shopId } })).filter((r) =>
       isEntityActive(r.active),
     );
-    const inArea = existing.filter((r) => this.normalizeArea(r.area) === area);
-    const nextOrder = inArea.reduce((max, r) => Math.max(max, r.sortOrder), 0) + 1;
-    const label = (dto.label ?? '').trim() || String(inArea.length + 1);
+    const peers = forWaiter
+      ? existing.filter((r) => r.forWaiter !== false && r.sectorId === sectorId)
+      : existing.filter(
+          (r) =>
+            (r.forWaiter === false || Number(r.forWaiter) === 0) &&
+            this.normalizeArea(r.area) === area,
+        );
+    const nextOrder = peers.reduce((max, r) => Math.max(max, r.sortOrder), 0) + 1;
+    const label = (dto.label ?? '').trim() || String(peers.length + 1);
     const row = this.tables.create({
       shopId,
+      sectorId,
       area,
       label,
       seats,
       sortOrder: nextOrder,
+      forWaiter,
       active: true,
     });
     await this.tables.save(row);
@@ -139,11 +350,61 @@ export class SalonFloorService implements OnModuleInit {
     return this.toTableDto(row);
   }
 
+  async createTablesBulk(
+    user: AuthUser,
+    shopId: string,
+    dto: { from: number; to: number; sectorId: string; seats?: number },
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    const from = Math.round(Number(dto.from));
+    const to = Math.round(Number(dto.to));
+    if (!Number.isFinite(from) || !Number.isFinite(to) || from < 1 || to < from) {
+      throw new BadRequestException('Indicá un rango válido (de ≤ a, desde 1)');
+    }
+    if (to - from > 99) {
+      throw new BadRequestException('Podés generar hasta 100 mesas por vez');
+    }
+    const sectorId = String(dto.sectorId ?? '').trim();
+    if (!sectorId) throw new BadRequestException('Indicá el sector');
+    await this.requireSector(shopId, sectorId);
+    const seats = this.normalizeSeats(dto.seats ?? 2);
+    const existing = (await this.tables.find({ where: { shopId } })).filter(
+      (r) => isEntityActive(r.active) && r.forWaiter !== false && Number(r.forWaiter) !== 0,
+    );
+    const inSector = existing.filter((r) => r.sectorId === sectorId);
+    const existingLabels = new Set(inSector.map((r) => r.label.trim().toLowerCase()));
+    let nextOrder = inSector.reduce((max, r) => Math.max(max, r.sortOrder), 0) + 1;
+    const created: ReturnType<SalonFloorService['toTableDto']>[] = [];
+    const skipped: string[] = [];
+    for (let n = from; n <= to; n++) {
+      const label = String(n);
+      if (existingLabels.has(label.toLowerCase())) {
+        skipped.push(label);
+        continue;
+      }
+      const row = this.tables.create({
+        shopId,
+        sectorId,
+        area: SalonArea.INSIDE,
+        label,
+        seats,
+        sortOrder: nextOrder++,
+        forWaiter: true,
+        active: true,
+      });
+      await this.tables.save(row);
+      existingLabels.add(label.toLowerCase());
+      created.push(this.toTableDto(row));
+    }
+    if (created.length) this.live.tick(shopId, 'reservations');
+    return { created, skipped, createdCount: created.length, skippedCount: skipped.length };
+  }
+
   async updateTable(
     user: AuthUser,
     shopId: string,
     id: string,
-    dto: { label?: string; seats?: number },
+    dto: { label?: string; seats?: number; sectorId?: string },
   ) {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.tables.findOne({ where: { id, shopId } });
@@ -157,6 +418,11 @@ export class SalonFloorService implements OnModuleInit {
     }
     if (dto.seats !== undefined) {
       row.seats = this.normalizeSeats(dto.seats);
+    }
+    if (dto.sectorId !== undefined) {
+      const sectorId = String(dto.sectorId).trim();
+      await this.requireSector(shopId, sectorId);
+      row.sectorId = sectorId;
     }
     await this.tables.save(row);
     this.live.tick(shopId, 'reservations');
@@ -243,7 +509,7 @@ export class SalonFloorService implements OnModuleInit {
   ) {
     this.shops.assertShopAccess(user, shopId);
     const current = await this.getFloor(user, shopId);
-    const hasTables = (current.tables ?? []).length > 0;
+    const hasTables = (current.tables ?? []).some((t) => !t.forWaiter);
     const hasRules = (current.rules ?? []).some((r) => r.maxCount > 0);
     if (opts?.onlyIfEmpty && (hasTables || hasRules)) {
       return { ...current, applied: false as const };
@@ -331,15 +597,18 @@ export class SalonFloorService implements OnModuleInit {
         await this.replaceRules(user, shopId, { area, slots });
       }
       const existing = (await this.tables.find({ where: { shopId } })).filter(
-        (r) => isEntityActive(r.active) && this.normalizeArea(r.area) === area,
+        (r) =>
+          isEntityActive(r.active) &&
+          (r.forWaiter === false || Number(r.forWaiter) === 0) &&
+          this.normalizeArea(r.area) === area,
       );
       const haveTwo = existing.filter((t) => t.seats <= 2).length;
       const haveThree = existing.filter((t) => t.seats >= 3).length;
       for (let i = haveTwo; i < peakTwo; i++) {
-        await this.createTable(user, shopId, { area, seats: 2 });
+        await this.createTable(user, shopId, { area, seats: 2, forWaiter: false });
       }
       for (let i = haveThree; i < peakThree; i++) {
-        await this.createTable(user, shopId, { area, seats: 3 });
+        await this.createTable(user, shopId, { area, seats: 3, forWaiter: false });
       }
     }
     const floor = await this.getFloor(user, shopId);

@@ -147,6 +147,10 @@ export class Shop extends BaseEntity {
   @Column({ type: 'tinyint', default: 0 })
   onlineOrderingEnabled: boolean;
 
+  /** Comanda de mozos (página pública /mozo/:slug). */
+  @Column({ type: 'tinyint', default: 0 })
+  waiterOrderingEnabled: boolean;
+
   /**
    * Cierre manual de la página pública (fuera de horario).
    * true = clientes ven cerrado aunque el horario diga abierto.
