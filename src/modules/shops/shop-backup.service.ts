@@ -378,6 +378,9 @@ export class ShopBackupService {
       case 'salon_tables':
         await run(`DELETE FROM salon_tables WHERE shopId = ?`);
         return;
+      case 'salon_map_objects':
+        await run(`DELETE FROM salon_map_objects WHERE shopId = ?`);
+        return;
       case 'salon_sectors':
         await run(`DELETE FROM salon_sectors WHERE shopId = ?`);
         return;
@@ -1537,6 +1540,7 @@ export class ShopBackupService {
     if (sheetSet.has('waiting_list_entries')) put('waiting_list_entries', await dump('waiting_list_entries'));
     if (sheetSet.has('salon_sectors')) put('salon_sectors', await dump('salon_sectors'));
     if (sheetSet.has('salon_tables')) put('salon_tables', await dump('salon_tables'));
+    if (sheetSet.has('salon_map_objects')) put('salon_map_objects', await dump('salon_map_objects'));
     if (sheetSet.has('salon_area_rules')) put('salon_area_rules', await dump('salon_area_rules'));
     if (sheetSet.has('stock_categories') || sheetSet.has('stock_products')) {
       const kinds: string[] = [];
@@ -1625,6 +1629,7 @@ export class ShopBackupService {
       'partner_split_configs',
       'salon_sectors',
       'salon_tables',
+      'salon_map_objects',
       'salon_area_rules',
       'reservations',
       'reservation_day_notices',

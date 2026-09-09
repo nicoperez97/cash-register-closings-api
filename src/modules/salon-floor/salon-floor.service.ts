@@ -4,11 +4,31 @@ import { In, Repository } from 'typeorm';
 import { AuthUser } from '../../common/decorators';
 import { isEntityActive } from '../../common/active.util';
 import { SalonAreaRule } from '../../entities/salon-area-rule.entity';
+import { SalonMapObject } from '../../entities/salon-map-object.entity';
 import { SalonSector } from '../../entities/salon-sector.entity';
 import { SalonArea, SalonTable } from '../../entities/salon-table.entity';
 import { Reservation, ReservationStatus } from '../../entities/reservation.entity';
 import { ShopLiveService } from '../shop-live/shop-live.service';
 import { ShopsService } from '../shops/shops.service';
+
+const CREATE_MAP_OBJECTS_SQL = `
+  CREATE TABLE IF NOT EXISTS salon_map_objects (
+    id CHAR(36) NOT NULL PRIMARY KEY,
+    shopId CHAR(36) NOT NULL,
+    sectorId CHAR(36) NOT NULL,
+    kind VARCHAR(24) NOT NULL DEFAULT 'otro',
+    name VARCHAR(60) NOT NULL DEFAULT '',
+    mapX DOUBLE NOT NULL DEFAULT 50,
+    mapY DOUBLE NOT NULL DEFAULT 50,
+    sortOrder INT NOT NULL DEFAULT 0,
+    createdAt DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updatedAt DATETIME(6) NULL,
+    deletedAt DATETIME(6) NULL,
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    INDEX idx_salon_map_objects_shop (shopId),
+    INDEX idx_salon_map_objects_sector (sectorId)
+  )
+`;
 
 const CREATE_TABLES_SQL = `
   CREATE TABLE IF NOT EXISTS salon_tables (
@@ -20,6 +40,8 @@ const CREATE_TABLES_SQL = `
     seats INT NOT NULL DEFAULT 2,
     sortOrder INT NOT NULL DEFAULT 0,
     forWaiter TINYINT(1) NOT NULL DEFAULT 1,
+    mapX DOUBLE NULL,
+    mapY DOUBLE NULL,
     createdAt DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updatedAt DATETIME(6) NULL,
     deletedAt DATETIME(6) NULL,
@@ -65,6 +87,8 @@ export class SalonFloorService implements OnModuleInit {
     private readonly tables: Repository<SalonTable>,
     @InjectRepository(SalonSector)
     private readonly sectors: Repository<SalonSector>,
+    @InjectRepository(SalonMapObject)
+    private readonly mapObjects: Repository<SalonMapObject>,
     @InjectRepository(SalonAreaRule)
     private readonly rules: Repository<SalonAreaRule>,
     @InjectRepository(Reservation)
@@ -85,6 +109,11 @@ export class SalonFloorService implements OnModuleInit {
       // ya existe
     }
     try {
+      await this.mapObjects.query(CREATE_MAP_OBJECTS_SQL);
+    } catch {
+      // ya existe
+    }
+    try {
       await this.tables.query(
         `ALTER TABLE salon_tables ADD COLUMN sectorId CHAR(36) NULL`,
       );
@@ -95,6 +124,16 @@ export class SalonFloorService implements OnModuleInit {
       await this.tables.query(
         `ALTER TABLE salon_tables ADD COLUMN forWaiter TINYINT(1) NOT NULL DEFAULT 1`,
       );
+    } catch {
+      // ya existe
+    }
+    try {
+      await this.tables.query(`ALTER TABLE salon_tables ADD COLUMN mapX DOUBLE NULL`);
+    } catch {
+      // ya existe
+    }
+    try {
+      await this.tables.query(`ALTER TABLE salon_tables ADD COLUMN mapY DOUBLE NULL`);
     } catch {
       // ya existe
     }
@@ -183,6 +222,16 @@ export class SalonFloorService implements OnModuleInit {
     };
   }
 
+  private isWaiterTable(row: Pick<SalonTable, 'forWaiter'>): boolean {
+    return row.forWaiter !== false && Number(row.forWaiter) !== 0;
+  }
+
+  private clampMapCoord(raw: number): number {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) throw new BadRequestException('Posición de mapa inválida');
+    return Math.min(100, Math.max(0, Math.round(n * 100) / 100));
+  }
+
   private toTableDto(row: SalonTable) {
     return {
       id: row.id,
@@ -192,7 +241,9 @@ export class SalonFloorService implements OnModuleInit {
       label: (row.label ?? '').trim(),
       seats: row.seats,
       sortOrder: row.sortOrder,
-      forWaiter: row.forWaiter !== false && Number(row.forWaiter) !== 0,
+      forWaiter: this.isWaiterTable(row),
+      mapX: row.mapX == null ? null : Number(row.mapX),
+      mapY: row.mapY == null ? null : Number(row.mapY),
     };
   }
 
@@ -204,6 +255,30 @@ export class SalonFloorService implements OnModuleInit {
       partySize: row.partySize,
       maxCount: row.maxCount,
     };
+  }
+
+  private toMapObjectDto(row: SalonMapObject) {
+    return {
+      id: row.id,
+      shopId: row.shopId,
+      sectorId: row.sectorId,
+      kind: this.normalizeMapKind(row.kind),
+      name: (row.name ?? '').trim(),
+      mapX: Number(row.mapX),
+      mapY: Number(row.mapY),
+      sortOrder: row.sortOrder,
+    };
+  }
+
+  private normalizeMapKind(raw?: string | null): string {
+    const k = String(raw ?? 'otro')
+      .trim()
+      .toLowerCase()
+      .slice(0, 24);
+    if (k === 'barra' || k === 'bar') return 'barra';
+    if (k === 'arbol' || k === 'árbol' || k === 'tree') return 'arbol';
+    if (k === 'otro' || k === 'other') return 'otro';
+    return k || 'otro';
   }
 
   private async listActiveSectors(shopId: string) {
@@ -223,15 +298,19 @@ export class SalonFloorService implements OnModuleInit {
   async getFloor(user: AuthUser, shopId: string) {
     this.shops.assertShopAccess(user, shopId);
     await this.migrateLegacyTablesToSectors();
-    const [sectorRows, tableRows, ruleRows] = await Promise.all([
+    const [sectorRows, tableRows, ruleRows, objectRows] = await Promise.all([
       this.listActiveSectors(shopId),
       this.tables.find({ where: { shopId }, order: { sortOrder: 'ASC', createdAt: 'ASC' } }),
       this.rules.find({ where: { shopId }, order: { area: 'ASC', partySize: 'ASC' } }),
+      this.mapObjects.find({ where: { shopId }, order: { sortOrder: 'ASC', createdAt: 'ASC' } }),
     ]);
     return {
       sectors: sectorRows.map((r) => this.toSectorDto(r)),
       tables: tableRows.filter((r) => isEntityActive(r.active)).map((r) => this.toTableDto(r)),
       rules: ruleRows.filter((r) => isEntityActive(r.active)).map((r) => this.toRuleDto(r)),
+      mapObjects: objectRows
+        .filter((r) => isEntityActive(r.active))
+        .map((r) => this.toMapObjectDto(r)),
     };
   }
 
@@ -288,10 +367,108 @@ export class SalonFloorService implements OnModuleInit {
       table.active = false;
       await this.tables.save(table);
     }
+    const objects = (await this.mapObjects.find({ where: { shopId, sectorId: id } })).filter((o) =>
+      isEntityActive(o.active),
+    );
+    for (const obj of objects) {
+      obj.active = false;
+      await this.mapObjects.save(obj);
+    }
     row.active = false;
     await this.sectors.save(row);
     this.live.tick(shopId, 'reservations');
-    return { ok: true, removedTables: tables.length };
+    return { ok: true, removedTables: tables.length, removedObjects: objects.length };
+  }
+
+  /** Guarda posiciones de mesas + objetos del mapa de un sector (modo editar → guardar). */
+  async saveSectorMap(
+    user: AuthUser,
+    shopId: string,
+    sectorId: string,
+    dto: {
+      tables?: Array<{ id: string; mapX: number; mapY: number }>;
+      objects?: Array<{
+        id?: string | null;
+        kind: string;
+        name: string;
+        mapX: number;
+        mapY: number;
+      }>;
+      removedObjectIds?: string[];
+    },
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    await this.requireSector(shopId, sectorId);
+
+    for (const t of dto.tables ?? []) {
+      const row = await this.tables.findOne({ where: { id: t.id, shopId } });
+      if (!row || !isEntityActive(row.active) || !this.isWaiterTable(row)) continue;
+      if (row.sectorId !== sectorId) continue;
+      row.mapX = this.clampMapCoord(t.mapX);
+      row.mapY = this.clampMapCoord(t.mapY);
+      await this.tables.save(row);
+    }
+
+    for (const id of dto.removedObjectIds ?? []) {
+      const row = await this.mapObjects.findOne({ where: { id, shopId, sectorId } });
+      if (!row || !isEntityActive(row.active)) continue;
+      row.active = false;
+      await this.mapObjects.save(row);
+    }
+
+    const savedObjects: ReturnType<SalonFloorService['toMapObjectDto']>[] = [];
+    let nextOrder =
+      (await this.mapObjects.find({ where: { shopId, sectorId } }))
+        .filter((o) => isEntityActive(o.active))
+        .reduce((max, o) => Math.max(max, o.sortOrder), 0) + 1;
+
+    for (const obj of dto.objects ?? []) {
+      const kind = this.normalizeMapKind(obj.kind);
+      const name = String(obj.name ?? '').trim().slice(0, 60) || this.defaultObjectName(kind);
+      const mapX = this.clampMapCoord(obj.mapX);
+      const mapY = this.clampMapCoord(obj.mapY);
+      const existingId = String(obj.id ?? '').trim();
+      if (existingId) {
+        const row = await this.mapObjects.findOne({
+          where: { id: existingId, shopId, sectorId },
+        });
+        if (!row || !isEntityActive(row.active)) continue;
+        row.kind = kind;
+        row.name = name;
+        row.mapX = mapX;
+        row.mapY = mapY;
+        await this.mapObjects.save(row);
+        savedObjects.push(this.toMapObjectDto(row));
+      } else {
+        const row = await this.mapObjects.save(
+          this.mapObjects.create({
+            shopId,
+            sectorId,
+            kind,
+            name,
+            mapX,
+            mapY,
+            sortOrder: nextOrder++,
+            active: true,
+          }),
+        );
+        savedObjects.push(this.toMapObjectDto(row));
+      }
+    }
+
+    this.live.tick(shopId, 'reservations');
+    const floor = await this.getFloor(user, shopId);
+    return {
+      ...floor,
+      mapObjects: floor.mapObjects,
+      savedObjectCount: savedObjects.length,
+    };
+  }
+
+  private defaultObjectName(kind: string): string {
+    if (kind === 'barra') return 'Barra';
+    if (kind === 'arbol') return 'Árbol';
+    return 'Objeto';
   }
 
   async createTable(
@@ -404,12 +581,21 @@ export class SalonFloorService implements OnModuleInit {
     user: AuthUser,
     shopId: string,
     id: string,
-    dto: { label?: string; seats?: number; sectorId?: string },
+    dto: {
+      label?: string;
+      seats?: number;
+      sectorId?: string;
+      mapX?: number | null;
+      mapY?: number | null;
+    },
   ) {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.tables.findOne({ where: { id, shopId } });
     if (!row || !isEntityActive(row.active)) {
       throw new NotFoundException('Mesa no encontrada');
+    }
+    if (!this.isWaiterTable(row) && (dto.mapX !== undefined || dto.mapY !== undefined)) {
+      throw new BadRequestException('El mapa de comanda no aplica a mesas de diagrama');
     }
     if (dto.label !== undefined) {
       const label = dto.label.trim();
@@ -423,6 +609,12 @@ export class SalonFloorService implements OnModuleInit {
       const sectorId = String(dto.sectorId).trim();
       await this.requireSector(shopId, sectorId);
       row.sectorId = sectorId;
+    }
+    if (dto.mapX !== undefined) {
+      row.mapX = dto.mapX == null ? null : this.clampMapCoord(dto.mapX);
+    }
+    if (dto.mapY !== undefined) {
+      row.mapY = dto.mapY == null ? null : this.clampMapCoord(dto.mapY);
     }
     await this.tables.save(row);
     this.live.tick(shopId, 'reservations');
