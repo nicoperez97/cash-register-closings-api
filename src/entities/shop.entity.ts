@@ -147,6 +147,13 @@ export class Shop extends BaseEntity {
   @Column({ type: 'tinyint', default: 0 })
   onlineOrderingEnabled: boolean;
 
+  /**
+   * Cierre manual de la página pública (fuera de horario).
+   * true = clientes ven cerrado aunque el horario diga abierto.
+   */
+  @Column({ type: 'tinyint', default: 0 })
+  orderingForceClosed: boolean;
+
   @Column({ type: 'tinyint', default: 1 })
   takeawayEnabled: boolean;
 

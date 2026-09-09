@@ -40,6 +40,14 @@ export class CreateCustomerOrderItemDto {
   @IsString()
   @MaxLength(300)
   notes?: string | null;
+
+  @ApiPropertyOptional({ type: [String], description: 'Ingredientes a retirar' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(24)
+  @IsString({ each: true })
+  @MaxLength(40, { each: true })
+  removedIngredients?: string[];
 }
 
 export class CreateCustomerOrderExtraDto {

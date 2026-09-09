@@ -112,3 +112,41 @@ export function formatBusinessDayHint(
   const [y2, m2, d2] = next.split('-');
   return `Día laboral hasta las ${open} del ${Number(d2)}/${Number(m2)}/${y2} (desde ${open} del ${Number(d1)}/${Number(m1)}/${y1})`;
 }
+
+/**
+ * Convierte fecha+hora local del shop a Instant UTC (aprox. con 2–3 iteraciones de offset).
+ * `localIso` = `YYYY-MM-DDTHH:mm` o `YYYY-MM-DDTHH:mm:ss`.
+ */
+export function zonedLocalToUtc(localIso: string, timeZone?: string | null): Date {
+  const [datePart, timePart = '00:00:00'] = String(localIso).split('T');
+  const [y, m, d] = datePart.split('-').map(Number);
+  const [hh, mm, ss] = timePart.split(':').map((x) => Number(x) || 0);
+  let utcMs = Date.UTC(y, m - 1, d, hh, mm, ss);
+  for (let i = 0; i < 3; i++) {
+    const parts = zonedDateParts(new Date(utcMs), timeZone);
+    const asLocalMs = Date.UTC(
+      parts.year,
+      parts.month - 1,
+      parts.day,
+      parts.hour,
+      parts.minute,
+      0,
+    );
+    const wantMs = Date.UTC(y, m - 1, d, hh, mm, 0);
+    utcMs += wantMs - asLocalMs;
+  }
+  return new Date(utcMs);
+}
+
+/** Ventana UTC del día laboral [apertura, apertura del día siguiente). */
+export function shopBusinessDayRangeUtc(
+  businessDate: string,
+  opts: { timezone?: string | null; openingTime?: string | null } = {},
+): { from: Date; to: Date; businessDate: string } {
+  const date = String(businessDate).slice(0, 10);
+  const open = normalizeOpeningTime(opts.openingTime);
+  const next = nextCalendarDate(date);
+  const from = zonedLocalToUtc(`${date}T${open}:00`, opts.timezone);
+  const to = zonedLocalToUtc(`${next}T${open}:00`, opts.timezone);
+  return { from, to, businessDate: date };
+}

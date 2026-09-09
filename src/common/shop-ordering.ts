@@ -83,24 +83,35 @@ export function normalizeOrderingExtras(raw: unknown): OrderingExtra[] {
 }
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+/** Safari/iOS a veces manda HH:mm:ss en inputs time. */
+const HHMM_LOOSE = /^([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?$/;
 
 function newZoneId(): string {
   return `z_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
-function parseHhMm(raw: string): number | null {
-  const m = String(raw ?? '').trim().match(HHMM);
+/** Normaliza a HH:mm (acepta HH:mm:ss). */
+export function coerceOrderingHhMm(raw: unknown): string | null {
+  const m = String(raw ?? '')
+    .trim()
+    .match(HHMM_LOOSE);
   if (!m) return null;
-  const [h, mi] = m[0].split(':').map(Number);
+  return `${m[1].padStart(2, '0')}:${m[2]}`;
+}
+
+function parseHhMm(raw: string): number | null {
+  const hhmm = coerceOrderingHhMm(raw);
+  if (!hhmm || !HHMM.test(hhmm)) return null;
+  const [h, mi] = hhmm.split(':').map(Number);
   return h * 60 + mi;
 }
 
 function normalizeTimeWindow(raw: unknown): OrderingTimeWindow | null {
   if (!raw || typeof raw !== 'object') return null;
   const o = raw as { open?: unknown; close?: unknown };
-  const open = String(o.open ?? '').trim();
-  const close = String(o.close ?? '').trim();
-  if (!HHMM.test(open) || !HHMM.test(close)) return null;
+  const open = coerceOrderingHhMm(o.open);
+  const close = coerceOrderingHhMm(o.close);
+  if (!open || !close) return null;
   return { open, close };
 }
 

@@ -670,6 +670,7 @@ export class AuthService implements OnModuleInit {
         menuEnabled: !!s.menuEnabled,
         shopMode: normalizeShopMode(s.shopMode),
         onlineOrderingEnabled: !!s.onlineOrderingEnabled,
+        orderingForceClosed: !!s.orderingForceClosed,
         takeawayEnabled:
           s.takeawayEnabled === undefined || s.takeawayEnabled === null
             ? true

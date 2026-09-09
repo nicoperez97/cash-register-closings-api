@@ -32,6 +32,9 @@ import {
   normalizeShopMode,
   normalizeShopOrderingHours,
   ShopMode,
+  type DeliveryZone,
+  type ShopOrderingEta,
+  type ShopOrderingHours,
   type ShopOrderingPayments,
 } from '../../common/shop-ordering';
 import { normalizeShopMenus } from '../menu/menu-parse.util';
@@ -391,6 +394,14 @@ export class ShopsService implements OnModuleInit {
     try {
       await this.shops.query(`
         ALTER TABLE shops
+          ADD COLUMN orderingForceClosed TINYINT(1) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
           ADD COLUMN takeawayEnabled TINYINT(1) NOT NULL DEFAULT 1
       `);
     } catch {
@@ -713,6 +724,7 @@ export class ShopsService implements OnModuleInit {
         menuEnabled: dto.menuEnabled ?? false,
         shopMode: normalizeShopMode(dto.shopMode),
         onlineOrderingEnabled: dto.onlineOrderingEnabled ?? false,
+        orderingForceClosed: false,
         takeawayEnabled: dto.takeawayEnabled ?? true,
         deliveryEnabled: dto.deliveryEnabled ?? false,
         orderingHours: normalizeShopOrderingHours(dto.orderingHours),
@@ -831,6 +843,9 @@ export class ShopsService implements OnModuleInit {
     }
     if (dto.onlineOrderingEnabled !== undefined) {
       shop.onlineOrderingEnabled = !!dto.onlineOrderingEnabled;
+    }
+    if (dto.orderingForceClosed !== undefined) {
+      shop.orderingForceClosed = !!dto.orderingForceClosed;
     }
     if (dto.takeawayEnabled !== undefined) {
       shop.takeawayEnabled = !!dto.takeawayEnabled;
@@ -979,8 +994,14 @@ export class ShopsService implements OnModuleInit {
     user: AuthUser,
     id: string,
     dto: {
+      shopMode?: string;
+      onlineOrderingEnabled?: boolean;
+      orderingForceClosed?: boolean;
       takeawayEnabled?: boolean;
       deliveryEnabled?: boolean;
+      orderingHours?: ShopOrderingHours | null;
+      orderingEta?: ShopOrderingEta | null;
+      deliveryZones?: DeliveryZone[] | null;
       orderingPayments?: ShopOrderingPayments | null;
       orderingExtras?: Array<{
         id?: string;
@@ -996,8 +1017,24 @@ export class ShopsService implements OnModuleInit {
     this.assertOrderingCatalogManage(user, id);
     const shop = await this.shops.findOne({ where: { id } });
     if (!shop) throw new NotFoundException('Local no encontrado');
+    if (dto.shopMode !== undefined) shop.shopMode = normalizeShopMode(dto.shopMode);
+    if (dto.onlineOrderingEnabled !== undefined) {
+      shop.onlineOrderingEnabled = !!dto.onlineOrderingEnabled;
+    }
+    if (dto.orderingForceClosed !== undefined) {
+      shop.orderingForceClosed = !!dto.orderingForceClosed;
+    }
     if (dto.takeawayEnabled !== undefined) shop.takeawayEnabled = !!dto.takeawayEnabled;
     if (dto.deliveryEnabled !== undefined) shop.deliveryEnabled = !!dto.deliveryEnabled;
+    if (dto.orderingHours !== undefined) {
+      shop.orderingHours = normalizeShopOrderingHours(dto.orderingHours);
+    }
+    if (dto.orderingEta !== undefined) {
+      shop.orderingEta = normalizeOrderingEta(dto.orderingEta);
+    }
+    if (dto.deliveryZones !== undefined) {
+      shop.deliveryZones = normalizeDeliveryZones(dto.deliveryZones);
+    }
     if (dto.orderingPayments !== undefined) {
       const prev = normalizeOrderingPayments(shop.orderingPayments);
       const incoming = dto.orderingPayments ?? {};
@@ -1341,6 +1378,7 @@ export class ShopsService implements OnModuleInit {
       menuEnabled: !!s.menuEnabled,
       shopMode: normalizeShopMode(s.shopMode),
       onlineOrderingEnabled: !!s.onlineOrderingEnabled,
+      orderingForceClosed: !!s.orderingForceClosed,
       takeawayEnabled:
         s.takeawayEnabled === undefined || s.takeawayEnabled === null
           ? true

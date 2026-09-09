@@ -12,6 +12,8 @@ export type ShopMenuItem = {
   available?: boolean;
   /** Path relativo bajo uploads/ de la foto del ítem. */
   imageUrl?: string | null;
+  /** Ingredientes que el cliente puede pedir sin (ej. cebolla, tomate). */
+  removableIngredients?: string[];
 };
 
 export type ShopMenuSection = {
@@ -42,6 +44,28 @@ const SECTION_HINTS =
 
 const PRICE_TAIL =
   /(?:\$|ars)?\s*(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{2})?)\s*(?:\.|-|—|–)?\s*$/i;
+
+/** Lista de ingredientes quitables (array o texto separado por comas). */
+export function normalizeRemovableIngredients(raw: unknown): string[] {
+  const parts: string[] = [];
+  if (Array.isArray(raw)) {
+    for (const x of raw) parts.push(String(x ?? '').trim());
+  } else if (typeof raw === 'string') {
+    for (const p of raw.split(/[,;\n|]/)) parts.push(p.trim());
+  }
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const part of parts) {
+    const name = part.slice(0, 40);
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(name);
+    if (out.length >= 24) break;
+  }
+  return out;
+}
 
 function ensureDomPolyfills() {
   const g = globalThis as Record<string, unknown>;
@@ -233,6 +257,9 @@ export function normalizeShopMenu(raw?: ShopMenu | null): ShopMenu {
         priceLabel: String(it?.priceLabel ?? '').trim().slice(0, 48) || null,
         available,
         imageUrl,
+        removableIngredients: normalizeRemovableIngredients(
+          (it as { removableIngredients?: unknown })?.removableIngredients,
+        ),
       });
     }
     sections.push({ name, items });

@@ -15,6 +15,8 @@ export enum CustomerOrderStatus {
 export enum CustomerOrderFulfillment {
   TAKEAWAY = 'TAKEAWAY',
   DELIVERY = 'DELIVERY',
+  /** Pedido de mostrador (staff); no usa la página pública. */
+  COUNTER = 'COUNTER',
 }
 
 export enum CustomerOrderPaymentMethod {
@@ -31,6 +33,8 @@ export type CustomerOrderLine = {
   kind?: 'ITEM' | 'EXTRA';
   extraId?: string | null;
   attachedToMenuItemId?: string | null;
+  /** Ingredientes pedidos sin (subset de removableIngredients del ítem). */
+  removedIngredients?: string[];
 };
 
 @Entity({ name: 'customer_orders' })
