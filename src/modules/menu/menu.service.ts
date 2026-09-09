@@ -16,6 +16,7 @@ import { GeminiDocumentService } from '../ai/gemini-document.service';
 import {
   emptyShopMenu,
   menuHasItems,
+  normalizeRemovableIngredients,
   normalizeShopMenus,
   parseMenuFile,
   ShopMenu,
@@ -184,17 +185,61 @@ export class MenuService {
       }
 
       const menu = emptyShopMenu(menuPayload);
+      const ingredientsCount = (menu.sections ?? []).reduce(
+        (n, s) =>
+          n +
+          (s.items ?? []).filter((it) => (it.removableIngredients?.length ?? 0) > 0).length,
+        0,
+      );
       return {
         menu,
         rawText,
         fileName: file.originalname,
         engine,
         geminiWarning,
+        ingredientsCount,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'No se pudo leer el archivo';
       throw new BadRequestException(msg);
     }
+  }
+
+  async analyzeIngredients(
+    user: AuthUser,
+    shopId: string,
+    body?: {
+      items?: Array<{ id?: string; name?: string; description?: string | null }>;
+    },
+  ) {
+    this.shops.assertOrderingCatalogManage(user, shopId);
+    if (!this.gemini.isEnabled()) {
+      throw new BadRequestException('Gemini no está configurado (falta GEMINI_API_KEY).');
+    }
+    const items = (body?.items ?? [])
+      .map((it) => ({
+        id: String(it?.id ?? '').trim(),
+        name: String(it?.name ?? '').trim(),
+        description: String(it?.description ?? '').trim() || null,
+      }))
+      .filter((it) => it.id && it.name);
+    if (!items.length) {
+      throw new BadRequestException('No hay ítems para analizar');
+    }
+    const ai = await this.gemini.suggestRemovableIngredients(items);
+    if (!ai.ok) {
+      throw new BadRequestException(ai.message || 'No se pudieron detectar ingredientes');
+    }
+    const suggestions = ai.data.map((row) => ({
+      id: row.id,
+      removableIngredients: normalizeRemovableIngredients(row.removableIngredients),
+    }));
+    const withIngredients = suggestions.filter((s) => s.removableIngredients.length > 0).length;
+    return {
+      items: suggestions,
+      analyzed: suggestions.length,
+      withIngredients,
+    };
   }
 
   async attachSourceFile(user: AuthUser, shopId: string, menuId: string, file?: Express.Multer.File) {

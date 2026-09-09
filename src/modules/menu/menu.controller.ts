@@ -72,6 +72,37 @@ export class MenuController {
     return this.menus.parseUpload(user, shopId, file);
   }
 
+  @Post('analyze-ingredients')
+  @RequireAnyPermissions('shops.manage', 'orderingCatalog.manage')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        items: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              name: { type: 'string' },
+              description: { type: 'string', nullable: true },
+            },
+          },
+        },
+      },
+    },
+  })
+  analyzeIngredients(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body()
+    body: {
+      items?: Array<{ id?: string; name?: string; description?: string | null }>;
+    },
+  ) {
+    return this.menus.analyzeIngredients(user, shopId, body);
+  }
+
   @Post('items/:itemId/image')
   @RequireAnyPermissions('shops.manage', 'orderingCatalog.manage')
   @ApiConsumes('multipart/form-data')
