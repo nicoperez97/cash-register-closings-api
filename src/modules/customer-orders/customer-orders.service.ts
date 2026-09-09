@@ -47,6 +47,7 @@ import {
 } from '../../common/shop-ordering';
 import { normalizeRemovableIngredients, normalizeShopMenus, ShopMenuItem } from '../menu/menu-parse.util';
 import { NotificationsService } from '../notifications/notifications.service';
+import { PrintAgentService } from '../print-agent/print-agent.service';
 import { ShopLiveService } from '../shop-live/shop-live.service';
 import { userShopCanReceiveCustomerOrders } from '../profile/notification-eligibility';
 import {
@@ -69,6 +70,7 @@ export class CustomerOrdersService implements OnModuleInit {
     private readonly users: Repository<User>,
     private readonly live: ShopLiveService,
     private readonly notifications: NotificationsService,
+    private readonly printAgent: PrintAgentService,
   ) {}
 
   async onModuleInit() {
@@ -136,7 +138,7 @@ export class CustomerOrdersService implements OnModuleInit {
     if (!ok) throw new NotFoundException('Local no encontrado');
   }
 
-  private normalizePhone(raw: string): string {
+  private normalizePhone(raw?: string | null): string {
     return String(raw ?? '').replace(/\D/g, '').slice(0, 40);
   }
 
@@ -523,11 +525,16 @@ export class CustomerOrdersService implements OnModuleInit {
       }
     }
 
+    const isCounter = dto.fulfillment === CustomerOrderFulfillment.COUNTER;
     const phone = this.normalizePhone(dto.phone);
-    if (phone.length < 6) throw new BadRequestException('Celular inválido');
+    if (!isCounter && phone.length < 6) {
+      throw new BadRequestException('Celular inválido');
+    }
+    if (isCounter && phone.length > 0 && phone.length < 6) {
+      throw new BadRequestException('Celular inválido');
+    }
 
     const code = await this.genCode(shop.id);
-    const isCounter = dto.fulfillment === CustomerOrderFulfillment.COUNTER;
     const initialStatus = isCounter
       ? CustomerOrderStatus.PREPARING
       : CustomerOrderStatus.PENDING;
@@ -562,6 +569,13 @@ export class CustomerOrdersService implements OnModuleInit {
 
     this.live.tick(shop.id, 'customer-orders');
     void this.notifyStaffNewOrder(shop, order);
+    if (isCounter) {
+      void this.printAgent
+        .enqueueCustomerOrder(shop, order, 'COUNTER', {
+          printCustomerTicket: dto.printCustomerTicket !== false,
+        })
+        .catch(() => undefined);
+    }
     return opts.response === 'staff' ? this.toDto(order) : this.publicDto(order, shop);
   }
 
@@ -835,6 +849,14 @@ export class CustomerOrdersService implements OnModuleInit {
 
     await this.orders.save(order);
     this.live.tick(shopId, 'customer-orders');
+    if (next === CustomerOrderStatus.ACCEPTED && prev !== CustomerOrderStatus.ACCEPTED) {
+      const shop = await this.shops.findOne({ where: { id: shopId } });
+      if (shop) {
+        void this.printAgent
+          .enqueueCustomerOrder(shop, order, 'ACCEPTED', { printCustomerTicket: false })
+          .catch(() => undefined);
+      }
+    }
     return this.toDto(order);
   }
 
