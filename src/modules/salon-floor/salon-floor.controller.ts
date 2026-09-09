@@ -6,6 +6,7 @@ import {
   IsBoolean,
   IsEnum,
   IsInt,
+  IsNumber,
   IsOptional,
   IsString,
   IsUUID,
@@ -120,6 +121,22 @@ class UpdateSalonTableDto {
   @IsOptional()
   @IsUUID()
   sectorId?: string;
+
+  @ApiPropertyOptional({ description: 'Posición X en el mapa (0–100 %)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  mapX?: number | null;
+
+  @ApiPropertyOptional({ description: 'Posición Y en el mapa (0–100 %)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  mapY?: number | null;
 }
 
 class SalonRuleSlotDto {
@@ -156,6 +173,80 @@ class ApplyFromReservationsDto {
   @Transform(({ value }) => value === true || value === 'true')
   @IsBoolean()
   onlyIfEmpty?: boolean;
+}
+
+class SaveMapTableDto {
+  @ApiProperty()
+  @IsUUID()
+  id: string;
+
+  @ApiProperty()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  mapX: number;
+
+  @ApiProperty()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  mapY: number;
+}
+
+class SaveMapObjectDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsUUID()
+  id?: string | null;
+
+  @ApiProperty({ example: 'barra' })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(24)
+  kind: string;
+
+  @ApiProperty({ example: 'Barra principal' })
+  @IsString()
+  @MaxLength(60)
+  name: string;
+
+  @ApiProperty()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  mapX: number;
+
+  @ApiProperty()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  mapY: number;
+}
+
+class SaveSectorMapDto {
+  @ApiPropertyOptional({ type: [SaveMapTableDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => SaveMapTableDto)
+  tables?: SaveMapTableDto[];
+
+  @ApiPropertyOptional({ type: [SaveMapObjectDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => SaveMapObjectDto)
+  objects?: SaveMapObjectDto[];
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('4', { each: true })
+  removedObjectIds?: string[];
 }
 
 @ApiTags('salon-floor')
@@ -200,6 +291,17 @@ export class SalonFloorController {
     @Param('id') id: string,
   ) {
     return this.salon.removeSector(user, shopId, id);
+  }
+
+  @Put('sectors/:id/map')
+  @RequirePermissions('reservations.manage')
+  saveSectorMap(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+    @Body() dto: SaveSectorMapDto,
+  ) {
+    return this.salon.saveSectorMap(user, shopId, id, dto);
   }
 
   @Post('tables')

@@ -205,6 +205,8 @@ export class WaiterService implements OnModuleInit {
         label: t.label,
         seats: t.seats,
         sortOrder: t.sortOrder,
+        mapX: t.mapX == null ? null : Number(t.mapX),
+        mapY: t.mapY == null ? null : Number(t.mapY),
         openSession: occupied && session
           ? {
               id: session.id,

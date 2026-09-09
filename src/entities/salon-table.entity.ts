@@ -40,6 +40,13 @@ export class SalonTable extends BaseEntity {
   @Column({ type: 'tinyint', default: 1 })
   forWaiter: boolean;
 
+  /** Posición en el mapa de comanda (0–100 % del lienzo). */
+  @Column({ type: 'double', nullable: true })
+  mapX?: number | null;
+
+  @Column({ type: 'double', nullable: true })
+  mapY?: number | null;
+
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })
   shop: Shop;

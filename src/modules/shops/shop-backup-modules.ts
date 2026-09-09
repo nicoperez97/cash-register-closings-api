@@ -75,6 +75,7 @@ export type BackupSheetName =
   | 'waiting_list_entries'
   | 'salon_sectors'
   | 'salon_tables'
+  | 'salon_map_objects'
   | 'salon_area_rules'
   | 'stock_categories'
   | 'stock_products'
@@ -108,6 +109,7 @@ export type BackupPurgeStep =
   | 'reservation_day_notices'
   | 'salon_tables'
   | 'salon_sectors'
+  | 'salon_map_objects'
   | 'salon_area_rules'
   | 'service_rules'
   | 'service_rule_categories'
@@ -315,8 +317,8 @@ export const BACKUP_MODULES: BackupModuleDef[] = [
     id: 'salon',
     label: 'Salón',
     group: 'salon',
-    sheets: ['salon_sectors', 'salon_tables', 'salon_area_rules'],
-    purgeSteps: ['salon_tables', 'salon_sectors', 'salon_area_rules'],
+    sheets: ['salon_sectors', 'salon_tables', 'salon_map_objects', 'salon_area_rules'],
+    purgeSteps: ['salon_map_objects', 'salon_tables', 'salon_sectors', 'salon_area_rules'],
     alsoClears: [],
   },
   {
@@ -492,6 +494,7 @@ export const PURGE_STEP_ORDER: BackupPurgeStep[] = [
   'reservations',
   'reservation_day_notices',
   'salon_tables',
+  'salon_map_objects',
   'salon_sectors',
   'salon_area_rules',
   'service_rules',
