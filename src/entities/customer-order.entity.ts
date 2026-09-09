@@ -17,6 +17,8 @@ export enum CustomerOrderFulfillment {
   DELIVERY = 'DELIVERY',
   /** Pedido de mostrador (staff); no usa la página pública. */
   COUNTER = 'COUNTER',
+  /** Comanda de mesa (mozo); hijo de una table_session. */
+  TABLE = 'TABLE',
 }
 
 export enum CustomerOrderPaymentMethod {
@@ -100,6 +102,15 @@ export class CustomerOrder extends BaseEntity {
 
   @Column({ type: 'varchar', length: 500, nullable: true })
   customerNotes?: string | null;
+
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  salonTableId?: string | null;
+
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  tableSessionId?: string | null;
+
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  waiterEmployeeId?: string | null;
 
   @Column({ type: 'datetime', precision: 6, nullable: true })
   acceptedAt?: Date | null;

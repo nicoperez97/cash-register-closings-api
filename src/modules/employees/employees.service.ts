@@ -7,6 +7,7 @@ import {
   forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { createHash } from 'crypto';
 import { Not, Repository } from 'typeorm';
 import { Employee, EmployeeType } from '../../entities/employee.entity';
 import { SalaryHistorySource } from '../../entities/employee-salary-history.entity';
@@ -28,6 +29,19 @@ import { SalariesService } from '../payroll/salaries.service';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
+
+function hashWaiterPin(pin: string): string {
+  return createHash('sha256').update(pin.trim()).digest('hex');
+}
+
+function normalizeWaiterPinInput(raw: string | null): string | null {
+  if (raw === null || raw === '') return null;
+  const pin = String(raw).trim();
+  if (!/^\d{4,6}$/.test(pin)) {
+    throw new BadRequestException('El código mozo debe tener 4 a 6 dígitos');
+  }
+  return pin;
+}
 
 @Injectable()
 export class EmployeesService implements OnModuleInit {
@@ -122,6 +136,22 @@ export class EmployeesService implements OnModuleInit {
     } catch {
       // ya existe
     }
+    try {
+      await this.employees.query(`
+        ALTER TABLE employees
+          ADD COLUMN waiterPinHash VARCHAR(64) NULL
+      `);
+    } catch {
+      // ya existe
+    }
+    try {
+      await this.employees.query(`
+        ALTER TABLE employees
+          ADD COLUMN waiterPinPrefix VARCHAR(4) NULL
+      `);
+    } catch {
+      // ya existe
+    }
   }
 
   private async assertShiftAssignments(
@@ -174,8 +204,22 @@ export class EmployeesService implements OnModuleInit {
           : n(e.holidayPayMultiplier),
       serviceCheckIn: e.serviceCheckIn ?? null,
       serviceCheckOut: e.serviceCheckOut ?? null,
+      hasWaiterPin: !!e.waiterPinHash,
+      waiterPinPrefix: e.waiterPinPrefix ?? null,
       active: isEntityActive(e.active),
     };
+  }
+
+  private applyWaiterPin(row: Employee, waiterPin: string | null | undefined) {
+    if (waiterPin === undefined) return;
+    const pin = normalizeWaiterPinInput(waiterPin);
+    if (pin === null) {
+      row.waiterPinHash = null;
+      row.waiterPinPrefix = null;
+      return;
+    }
+    row.waiterPinHash = hashWaiterPin(pin);
+    row.waiterPinPrefix = pin.slice(-2);
   }
 
   async list(user: AuthUser, shopId: string, includeInactive = false) {
@@ -272,6 +316,7 @@ export class EmployeesService implements OnModuleInit {
       holidayPayMultiplier?: number | null;
       serviceCheckIn?: string | null;
       serviceCheckOut?: string | null;
+      waiterPin?: string | null;
       active?: boolean;
     },
   ) {
@@ -290,40 +335,40 @@ export class EmployeesService implements OnModuleInit {
       }
       holidayPayMultiplier = Number(dto.holidayPayMultiplier).toFixed(2);
     }
-    const row = await this.employees.save(
-      this.employees.create({
-        shopId,
-        fullName: dto.fullName.trim(),
-        baseSalary: money(n(dto.baseSalary)),
-        userId: dto.userId ?? null,
-        hireDate: dto.hireDate ?? null,
-        notes: dto.notes ?? null,
-        type,
-        shiftAssignments: shiftAssignments.length ? shiftAssignments : null,
-        countsForAttendanceBonus:
-          dto.countsForAttendanceBonus === undefined ? true : !!dto.countsForAttendanceBonus,
-        producesFood,
-        supervisorEmployeeId: producesFood ? (dto.supervisorEmployeeId ?? null) : null,
-        bankAlias: dto.bankAlias?.trim() || null,
-        overtimeHourRate: money(n(dto.overtimeHourRate)),
-        holidayPayMultiplier,
-        serviceCheckIn: parseHhMm(dto.serviceCheckIn),
-        serviceCheckOut: parseHhMm(dto.serviceCheckOut),
-        active: dto.active ?? true,
-      }),
-    );
+    const row = this.employees.create({
+      shopId,
+      fullName: dto.fullName.trim(),
+      baseSalary: money(n(dto.baseSalary)),
+      userId: dto.userId ?? null,
+      hireDate: dto.hireDate ?? null,
+      notes: dto.notes ?? null,
+      type,
+      shiftAssignments: shiftAssignments.length ? shiftAssignments : null,
+      countsForAttendanceBonus:
+        dto.countsForAttendanceBonus === undefined ? true : !!dto.countsForAttendanceBonus,
+      producesFood,
+      supervisorEmployeeId: producesFood ? (dto.supervisorEmployeeId ?? null) : null,
+      bankAlias: dto.bankAlias?.trim() || null,
+      overtimeHourRate: money(n(dto.overtimeHourRate)),
+      holidayPayMultiplier,
+      serviceCheckIn: parseHhMm(dto.serviceCheckIn),
+      serviceCheckOut: parseHhMm(dto.serviceCheckOut),
+      active: dto.active ?? true,
+    });
+    this.applyWaiterPin(row, dto.waiterPin);
+    const saved = await this.employees.save(row);
     await this.salaries.recordHistory({
       shopId,
-      employeeId: row.id,
-      baseSalary: row.baseSalary,
-      overtimeHourRate: row.overtimeHourRate,
-      holidayPayMultiplier: row.holidayPayMultiplier ?? null,
+      employeeId: saved.id,
+      baseSalary: saved.baseSalary,
+      overtimeHourRate: saved.overtimeHourRate,
+      holidayPayMultiplier: saved.holidayPayMultiplier ?? null,
       note: 'Alta de empleado',
       source: SalaryHistorySource.CREATE,
       createdByUserId: user.id,
     });
     this.live.tick(shopId, 'attendance');
-    return this.toDto(row);
+    return this.toDto(saved);
   }
 
   async update(
@@ -351,6 +396,7 @@ export class EmployeesService implements OnModuleInit {
       holidayPayMultiplier?: number | null;
       serviceCheckIn?: string | null;
       serviceCheckOut?: string | null;
+      waiterPin?: string | null;
       active?: boolean;
     },
   ) {
@@ -388,6 +434,7 @@ export class EmployeesService implements OnModuleInit {
     if (dto.serviceCheckIn !== undefined) row.serviceCheckIn = parseHhMm(dto.serviceCheckIn);
     if (dto.serviceCheckOut !== undefined) row.serviceCheckOut = parseHhMm(dto.serviceCheckOut);
     if (dto.active !== undefined) row.active = dto.active;
+    this.applyWaiterPin(row, dto.waiterPin);
 
     const producesFood = !!row.producesFood;
     if (dto.supervisorEmployeeId !== undefined) {

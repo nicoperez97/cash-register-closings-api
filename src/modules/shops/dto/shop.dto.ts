@@ -251,6 +251,11 @@ export class CreateShopDto {
   @IsBoolean()
   onlineOrderingEnabled?: boolean;
 
+  @ApiPropertyOptional({ description: 'Comanda de mozos (/mozo/:slug)' })
+  @IsOptional()
+  @IsBoolean()
+  waiterOrderingEnabled?: boolean;
+
   @ApiPropertyOptional({
     description: 'Cierra la página pública aunque el horario diga abierto',
   })

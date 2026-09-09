@@ -394,6 +394,14 @@ export class ShopsService implements OnModuleInit {
     try {
       await this.shops.query(`
         ALTER TABLE shops
+          ADD COLUMN waiterOrderingEnabled TINYINT(1) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
           ADD COLUMN orderingForceClosed TINYINT(1) NOT NULL DEFAULT 0
       `);
     } catch {
@@ -724,6 +732,7 @@ export class ShopsService implements OnModuleInit {
         menuEnabled: dto.menuEnabled ?? false,
         shopMode: normalizeShopMode(dto.shopMode),
         onlineOrderingEnabled: dto.onlineOrderingEnabled ?? false,
+        waiterOrderingEnabled: dto.waiterOrderingEnabled ?? false,
         orderingForceClosed: false,
         takeawayEnabled: dto.takeawayEnabled ?? true,
         deliveryEnabled: dto.deliveryEnabled ?? false,
@@ -843,6 +852,9 @@ export class ShopsService implements OnModuleInit {
     }
     if (dto.onlineOrderingEnabled !== undefined) {
       shop.onlineOrderingEnabled = !!dto.onlineOrderingEnabled;
+    }
+    if (dto.waiterOrderingEnabled !== undefined) {
+      shop.waiterOrderingEnabled = !!dto.waiterOrderingEnabled;
     }
     if (dto.orderingForceClosed !== undefined) {
       shop.orderingForceClosed = !!dto.orderingForceClosed;
@@ -996,6 +1008,7 @@ export class ShopsService implements OnModuleInit {
     dto: {
       shopMode?: string;
       onlineOrderingEnabled?: boolean;
+      waiterOrderingEnabled?: boolean;
       orderingForceClosed?: boolean;
       takeawayEnabled?: boolean;
       deliveryEnabled?: boolean;
@@ -1020,6 +1033,9 @@ export class ShopsService implements OnModuleInit {
     if (dto.shopMode !== undefined) shop.shopMode = normalizeShopMode(dto.shopMode);
     if (dto.onlineOrderingEnabled !== undefined) {
       shop.onlineOrderingEnabled = !!dto.onlineOrderingEnabled;
+    }
+    if (dto.waiterOrderingEnabled !== undefined) {
+      shop.waiterOrderingEnabled = !!dto.waiterOrderingEnabled;
     }
     if (dto.orderingForceClosed !== undefined) {
       shop.orderingForceClosed = !!dto.orderingForceClosed;
@@ -1378,6 +1394,7 @@ export class ShopsService implements OnModuleInit {
       menuEnabled: !!s.menuEnabled,
       shopMode: normalizeShopMode(s.shopMode),
       onlineOrderingEnabled: !!s.onlineOrderingEnabled,
+      waiterOrderingEnabled: !!s.waiterOrderingEnabled,
       orderingForceClosed: !!s.orderingForceClosed,
       takeawayEnabled:
         s.takeawayEnabled === undefined || s.takeawayEnabled === null

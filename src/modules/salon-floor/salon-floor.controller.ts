@@ -8,6 +8,7 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  IsUUID,
   Max,
   MaxLength,
   Min,
@@ -20,7 +21,37 @@ import { PermissionsGuard } from '../../common/guards';
 import { SalonArea } from '../../entities/salon-table.entity';
 import { SalonFloorService } from './salon-floor.service';
 
+class CreateSalonSectorDto {
+  @ApiProperty({ example: 'Terraza' })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(60)
+  name: string;
+}
+
+class UpdateSalonSectorDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(60)
+  name?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(9999)
+  sortOrder?: number;
+}
+
 class CreateSalonTableDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsUUID()
+  sectorId?: string;
+
   @ApiPropertyOptional({ enum: SalonArea, default: SalonArea.INSIDE })
   @IsOptional()
   @IsEnum(SalonArea)
@@ -31,6 +62,34 @@ class CreateSalonTableDto {
   @IsString()
   @MaxLength(40)
   label?: string;
+
+  @ApiPropertyOptional({ example: 2 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(3)
+  seats?: number;
+}
+
+class CreateSalonTablesBulkDto {
+  @ApiProperty({ example: 1 })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(999)
+  from: number;
+
+  @ApiProperty({ example: 30 })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(999)
+  to: number;
+
+  @ApiProperty()
+  @IsUUID()
+  sectorId: string;
 
   @ApiPropertyOptional({ example: 2 })
   @IsOptional()
@@ -56,6 +115,11 @@ class UpdateSalonTableDto {
   @Min(1)
   @Max(3)
   seats?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsUUID()
+  sectorId?: string;
 }
 
 class SalonRuleSlotDto {
@@ -107,6 +171,37 @@ export class SalonFloorController {
     return this.salon.getFloor(user, shopId);
   }
 
+  @Post('sectors')
+  @RequirePermissions('reservations.manage')
+  createSector(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: CreateSalonSectorDto,
+  ) {
+    return this.salon.createSector(user, shopId, dto);
+  }
+
+  @Patch('sectors/:id')
+  @RequirePermissions('reservations.manage')
+  updateSector(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+    @Body() dto: UpdateSalonSectorDto,
+  ) {
+    return this.salon.updateSector(user, shopId, id, dto);
+  }
+
+  @Delete('sectors/:id')
+  @RequirePermissions('reservations.manage')
+  removeSector(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+  ) {
+    return this.salon.removeSector(user, shopId, id);
+  }
+
   @Post('tables')
   @RequirePermissions('reservations.manage')
   createTable(
@@ -115,6 +210,16 @@ export class SalonFloorController {
     @Body() dto: CreateSalonTableDto,
   ) {
     return this.salon.createTable(user, shopId, dto);
+  }
+
+  @Post('tables/bulk')
+  @RequirePermissions('reservations.manage')
+  createTablesBulk(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: CreateSalonTablesBulkDto,
+  ) {
+    return this.salon.createTablesBulk(user, shopId, dto);
   }
 
   @Patch('tables/:id')

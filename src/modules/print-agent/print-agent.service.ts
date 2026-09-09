@@ -231,17 +231,26 @@ export class PrintAgentService implements OnModuleInit {
   async enqueueCustomerOrder(
     shop: Shop,
     order: CustomerOrder,
-    reason: 'ACCEPTED' | 'COUNTER',
-    opts?: { printCustomerTicket?: boolean },
+    reason: 'ACCEPTED' | 'COUNTER' | 'TABLE',
+    opts?: {
+      printCustomerTicket?: boolean;
+      printKitchen?: boolean;
+      tableLabel?: string | null;
+      waiterName?: string | null;
+      /** Sufijo para reimprimir ticket cliente (ej. close). */
+      customerSourceSuffix?: string;
+    },
   ) {
     if (!shop.printAgentTokenHash) return null;
     const fulfillment = String(order.fulfillment || '');
     const channelLabel =
       fulfillment === CustomerOrderFulfillment.COUNTER
         ? 'MOSTRADOR'
-        : fulfillment === CustomerOrderFulfillment.DELIVERY
-          ? 'DELIVERY'
-          : 'TAKE AWAY';
+        : fulfillment === CustomerOrderFulfillment.TABLE
+          ? 'MESA'
+          : fulfillment === CustomerOrderFulfillment.DELIVERY
+            ? 'DELIVERY'
+            : 'TAKE AWAY';
     const payment =
       order.paymentMethod === CustomerOrderPaymentMethod.TRANSFER ? 'Transferencia' : 'Efectivo';
     const items = (order.items ?? []).map((it) => ({
@@ -257,6 +266,8 @@ export class PrintAgentService implements OnModuleInit {
     const phoneDigits = String(order.phone ?? '').replace(/\D/g, '');
     const phoneOk =
       phoneDigits.length >= 6 && !/^1+$/.test(phoneDigits) && phoneDigits !== '0000000000';
+    const tableLabel = opts?.tableLabel?.trim() || null;
+    const waiterName = opts?.waiterName?.trim() || null;
     const base = {
       kind: 'CUSTOMER_ORDER' as const,
       shopName: shop.name,
@@ -277,35 +288,51 @@ export class PrintAgentService implements OnModuleInit {
       items,
       createdAt: order.createdAt,
       acceptedAt: order.acceptedAt ?? null,
+      tableLabel,
+      waiterName,
+      salonTableId: order.salonTableId ?? null,
+      tableSessionId: order.tableSessionId ?? null,
     };
 
-    const kitchen = await this.enqueue({
-      shopId: shop.id,
-      kind: 'CUSTOMER_ORDER',
-      sourceId: `co_${order.id}_${reason}_kitchen`,
-      copies: 1,
-      payload: {
-        ...base,
-        ticketType: 'KITCHEN',
-        subtitle: `COCINA · ${channelLabel}`,
-      },
-    });
+    const printKitchen = opts?.printKitchen !== false;
+    let kitchen: PrintJob | null = null;
+    if (printKitchen) {
+      kitchen = await this.enqueue({
+        shopId: shop.id,
+        kind: 'CUSTOMER_ORDER',
+        sourceId: `co_${order.id}_${reason}_kitchen`,
+        copies: 1,
+        payload: {
+          ...base,
+          ticketType: 'KITCHEN',
+          subtitle: tableLabel
+            ? `COCINA · ${channelLabel} ${tableLabel}`
+            : `COCINA · ${channelLabel}`,
+        },
+      });
+    }
 
     const wantCustomer =
-      reason === 'COUNTER' &&
-      fulfillment === CustomerOrderFulfillment.COUNTER &&
-      opts?.printCustomerTicket !== false;
+      (reason === 'COUNTER' &&
+        fulfillment === CustomerOrderFulfillment.COUNTER &&
+        opts?.printCustomerTicket !== false) ||
+      (reason === 'TABLE' &&
+        fulfillment === CustomerOrderFulfillment.TABLE &&
+        !!opts?.printCustomerTicket);
     if (!wantCustomer) return kitchen;
 
+    const customerSuffix = opts?.customerSourceSuffix
+      ? `_${opts.customerSourceSuffix}`
+      : '';
     await this.enqueue({
       shopId: shop.id,
       kind: 'CUSTOMER_ORDER',
-      sourceId: `co_${order.id}_${reason}_customer`,
+      sourceId: `co_${order.id}_${reason}_customer${customerSuffix}`,
       copies: 1,
       payload: {
         ...base,
         ticketType: 'CUSTOMER',
-        subtitle: channelLabel,
+        subtitle: tableLabel ? `${channelLabel} ${tableLabel}` : channelLabel,
       },
     });
     return kitchen;

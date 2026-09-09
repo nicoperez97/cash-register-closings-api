@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
   OnModuleInit,
@@ -130,6 +131,27 @@ export class CustomerOrdersService implements OnModuleInit {
     } catch {
       /* already exists */
     }
+    try {
+      await this.orders.query(
+        `ALTER TABLE customer_orders ADD COLUMN salonTableId CHAR(36) NULL`,
+      );
+    } catch {
+      /* already exists */
+    }
+    try {
+      await this.orders.query(
+        `ALTER TABLE customer_orders ADD COLUMN tableSessionId CHAR(36) NULL`,
+      );
+    } catch {
+      /* already exists */
+    }
+    try {
+      await this.orders.query(
+        `ALTER TABLE customer_orders ADD COLUMN waiterEmployeeId CHAR(36) NULL`,
+      );
+    } catch {
+      /* already exists */
+    }
   }
 
   private assertShopAccess(user: AuthUser, shopId: string) {
@@ -193,6 +215,9 @@ export class CustomerOrdersService implements OnModuleInit {
       paymentMethod: o.paymentMethod,
       cashAmount: o.cashAmount == null ? null : Number(o.cashAmount),
       customerNotes: o.customerNotes ?? null,
+      salonTableId: o.salonTableId ?? null,
+      tableSessionId: o.tableSessionId ?? null,
+      waiterEmployeeId: o.waiterEmployeeId ?? null,
       acceptedAt: o.acceptedAt ?? null,
       preparingAt: o.preparingAt ?? null,
       readyAt: o.readyAt ?? null,
@@ -352,6 +377,115 @@ export class CustomerOrdersService implements OnModuleInit {
     });
   }
 
+  async getWaiterOrderingConfig(slug: string) {
+    const shop = await this.shops.findOne({ where: { slug, active: true as any } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    if (!shop.waiterOrderingEnabled) {
+      throw new ForbiddenException(
+        'Comanda de mozos no disponible. Activála en Configuración → Pedidos y guardá.',
+      );
+    }
+    const menus = normalizeShopMenus(shop.menu);
+    return {
+      enabled: true,
+      shop: {
+        id: shop.id,
+        name: shop.name,
+        slug: shop.slug,
+        logoUrl: shop.logoUrl ?? null,
+        accentColor: shop.accentColor ?? null,
+        accentSecondary: shop.accentSecondary ?? null,
+        currency: shop.currency || 'ARS',
+      },
+      extras: normalizeOrderingExtras(shop.orderingExtras)
+        .filter((e) => e.available !== false)
+        .map((e) => ({
+          id: e.id,
+          name: e.name,
+          price: e.price,
+          menuItemIds: e.menuItemIds ?? [],
+        })),
+      menus: menus.map((m) => ({
+        id: m.id,
+        slug: m.slug,
+        title: m.title,
+        note: m.note,
+        sections: (m.sections ?? []).map((sec) => ({
+          name: sec.name,
+          items: (sec.items ?? [])
+            .filter((it) => it.available !== false && it.price != null)
+            .map((it) => ({
+              id: it.id,
+              name: it.name,
+              description: it.description ?? null,
+              price: Number(it.price),
+              removableIngredients: it.removableIngredients ?? [],
+              imageUrl: it.imageUrl ?? null,
+            })),
+        })),
+      })),
+    };
+  }
+
+  async createTableOrder(
+    shop: Shop,
+    input: {
+      items: Array<{
+        menuItemId: string;
+        qty: number;
+        notes?: string | null;
+        removedIngredients?: string[];
+      }>;
+      extras?: Array<{
+        extraId: string;
+        qty: number;
+        attachedToMenuItemId?: string | null;
+      }>;
+      customerNotes?: string | null;
+      salonTableId: string;
+      tableSessionId: string;
+      waiterEmployeeId: string;
+      tableLabel: string;
+      waiterName: string;
+      printKitchen?: boolean;
+      printCustomerTicket?: boolean;
+    },
+  ) {
+    return this.createOrderForShop(
+      shop,
+      {
+        fulfillment: CustomerOrderFulfillment.TABLE,
+        items: input.items,
+        extras: input.extras,
+        firstName: 'Mesa',
+        lastName: String(input.tableLabel || '').trim().slice(0, 80) || '—',
+        phone: '',
+        paymentMethod: CustomerOrderPaymentMethod.CASH,
+        cashAmount: 0,
+        customerNotes: input.customerNotes,
+        printCustomerTicket: !!input.printCustomerTicket,
+        printKitchen: input.printKitchen !== false,
+        salonTableId: input.salonTableId,
+        tableSessionId: input.tableSessionId,
+        waiterEmployeeId: input.waiterEmployeeId,
+        tableLabel: input.tableLabel,
+        waiterName: input.waiterName,
+      } as CreateCustomerOrderDto & {
+        printKitchen?: boolean;
+        salonTableId?: string;
+        tableSessionId?: string;
+        waiterEmployeeId?: string;
+        tableLabel?: string;
+        waiterName?: string;
+      },
+      {
+        bypassHours: true,
+        response: 'waiter',
+        allowDiscount: false,
+      },
+    );
+  }
+
   async createStaff(user: AuthUser, shopId: string, dto: CreateCustomerOrderDto) {
     this.assertShopAccess(user, shopId);
     const shop = await this.shops.findOne({ where: { id: shopId, active: true as any } });
@@ -371,8 +505,19 @@ export class CustomerOrdersService implements OnModuleInit {
 
   private async createOrderForShop(
     shop: Shop,
-    dto: CreateCustomerOrderDto,
-    opts: { bypassHours: boolean; response: 'public' | 'staff'; allowDiscount: boolean },
+    dto: CreateCustomerOrderDto & {
+      printKitchen?: boolean;
+      salonTableId?: string;
+      tableSessionId?: string;
+      waiterEmployeeId?: string;
+      tableLabel?: string;
+      waiterName?: string;
+    },
+    opts: {
+      bypassHours: boolean;
+      response: 'public' | 'staff' | 'waiter';
+      allowDiscount: boolean;
+    },
   ) {
     const takeawayEnabled = shop.takeawayEnabled !== false;
     const deliveryEnabled = !!shop.deliveryEnabled;
@@ -381,6 +526,10 @@ export class CustomerOrdersService implements OnModuleInit {
 
     if (dto.fulfillment === CustomerOrderFulfillment.COUNTER) {
       if (opts.response !== 'staff') {
+        throw new BadRequestException('Tipo de entrega inválido');
+      }
+    } else if (dto.fulfillment === CustomerOrderFulfillment.TABLE) {
+      if (opts.response !== 'waiter') {
         throw new BadRequestException('Tipo de entrega inválido');
       }
     } else if (dto.fulfillment === CustomerOrderFulfillment.TAKEAWAY) {
@@ -403,12 +552,13 @@ export class CustomerOrdersService implements OnModuleInit {
       throw new BadRequestException('Tipo de entrega inválido');
     }
 
+    const isTable = dto.fulfillment === CustomerOrderFulfillment.TABLE;
     const payments = normalizeOrderingPayments(shop.orderingPayments) ?? {
       methods: ['CASH', 'TRANSFER'] as CustomerOrderPaymentMethod[],
       transferInstructions: null,
       whatsapp: null,
     };
-    if (!payments.methods?.includes(dto.paymentMethod)) {
+    if (!isTable && !payments.methods?.includes(dto.paymentMethod)) {
       throw new BadRequestException('Medio de pago no disponible');
     }
 
@@ -518,7 +668,7 @@ export class CustomerOrdersService implements OnModuleInit {
 
     const total = Math.max(0, Math.round((subtotal - discountAmount + deliveryFee) * 100) / 100);
 
-    if (dto.paymentMethod === CustomerOrderPaymentMethod.CASH) {
+    if (!isTable && dto.paymentMethod === CustomerOrderPaymentMethod.CASH) {
       const cash = Number(dto.cashAmount);
       if (!Number.isFinite(cash) || cash < total) {
         throw new BadRequestException('Indicá con cuánto abonás (debe cubrir el total)');
@@ -527,15 +677,16 @@ export class CustomerOrdersService implements OnModuleInit {
 
     const isCounter = dto.fulfillment === CustomerOrderFulfillment.COUNTER;
     const phone = this.normalizePhone(dto.phone);
-    if (!isCounter && phone.length < 6) {
+    if (!isCounter && !isTable && phone.length < 6) {
       throw new BadRequestException('Celular inválido');
     }
-    if (isCounter && phone.length > 0 && phone.length < 6) {
+    if ((isCounter || isTable) && phone.length > 0 && phone.length < 6) {
       throw new BadRequestException('Celular inválido');
     }
 
     const code = await this.genCode(shop.id);
-    const initialStatus = isCounter
+    const autoPrep = isCounter || isTable;
+    const initialStatus = autoPrep
       ? CustomerOrderStatus.PREPARING
       : CustomerOrderStatus.PENDING;
     const order = await this.orders.save(
@@ -556,27 +707,49 @@ export class CustomerOrdersService implements OnModuleInit {
         address,
         deliveryZoneId,
         deliveryZoneName,
-        paymentMethod: dto.paymentMethod,
-        cashAmount:
-          dto.paymentMethod === CustomerOrderPaymentMethod.CASH
+        paymentMethod: isTable ? CustomerOrderPaymentMethod.CASH : dto.paymentMethod,
+        cashAmount: isTable
+          ? total.toFixed(2)
+          : dto.paymentMethod === CustomerOrderPaymentMethod.CASH
             ? Number(dto.cashAmount).toFixed(2)
             : null,
         customerNotes: String(dto.customerNotes ?? '').trim().slice(0, 500) || null,
-        acceptedAt: isCounter ? now : null,
-        preparingAt: isCounter ? now : null,
+        salonTableId: isTable ? dto.salonTableId ?? null : null,
+        tableSessionId: isTable ? dto.tableSessionId ?? null : null,
+        waiterEmployeeId: isTable ? dto.waiterEmployeeId ?? null : null,
+        acceptedAt: autoPrep ? now : null,
+        preparingAt: autoPrep ? now : null,
       }),
     );
 
     this.live.tick(shop.id, 'customer-orders');
-    void this.notifyStaffNewOrder(shop, order);
+    if (!isTable) {
+      void this.notifyStaffNewOrder(shop, order);
+    }
     if (isCounter) {
       void this.printAgent
         .enqueueCustomerOrder(shop, order, 'COUNTER', {
           printCustomerTicket: dto.printCustomerTicket !== false,
         })
         .catch(() => undefined);
+    } else if (isTable) {
+      const printKitchen = dto.printKitchen !== false;
+      const printCustomerTicket = !!dto.printCustomerTicket;
+      if (printKitchen || printCustomerTicket) {
+        void this.printAgent
+          .enqueueCustomerOrder(shop, order, 'TABLE', {
+            printKitchen,
+            printCustomerTicket,
+            tableLabel: dto.tableLabel ?? null,
+            waiterName: dto.waiterName ?? null,
+          })
+          .catch(() => undefined);
+      }
     }
-    return opts.response === 'staff' ? this.toDto(order) : this.publicDto(order, shop);
+    if (opts.response === 'staff' || opts.response === 'waiter') {
+      return this.toDto(order);
+    }
+    return this.publicDto(order, shop);
   }
 
   async pendingCount(user: AuthUser, shopId: string) {

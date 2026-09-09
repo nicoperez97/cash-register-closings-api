@@ -81,6 +81,14 @@ export class Employee extends BaseEntity {
   @Column({ type: 'varchar', length: 5, nullable: true })
   serviceCheckOut?: string | null;
 
+  /** Hash SHA-256 del PIN de mozo (comanda pública). */
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  waiterPinHash?: string | null;
+
+  /** Últimos dígitos del PIN (solo para admin). */
+  @Column({ type: 'varchar', length: 4, nullable: true })
+  waiterPinPrefix?: string | null;
+
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })
   shop: Shop;
