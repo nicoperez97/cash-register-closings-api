@@ -337,6 +337,14 @@ export class Shop extends BaseEntity {
     custom?: Array<{ id: string; label: string; icon: string; route: string }>;
   } | null;
 
+  /** Hash SHA-256 del token del print agent (Comandas.exe). */
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  printAgentTokenHash?: string | null;
+
+  /** Prefijo visible del token (pa_xxxx…). */
+  @Column({ type: 'varchar', length: 24, nullable: true })
+  printAgentTokenPrefix?: string | null;
+
   @ManyToOne(() => SalesSystem, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'salesSystemId' })
   salesSystem?: SalesSystem | null;

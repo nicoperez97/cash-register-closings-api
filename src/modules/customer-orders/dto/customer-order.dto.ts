@@ -2,6 +2,7 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsEnum,
   IsInt,
   IsNumber,
@@ -11,6 +12,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -104,11 +106,19 @@ export class CreateCustomerOrderDto {
   @MaxLength(80)
   lastName: string;
 
-  @ApiProperty({ example: '11 2345 6789' })
+  @ApiPropertyOptional({ example: '11 2345 6789' })
+  @ValidateIf((o: CreateCustomerOrderDto) => o.fulfillment !== CustomerOrderFulfillment.COUNTER)
   @IsString()
   @MinLength(6)
   @MaxLength(40)
-  phone: string;
+  phone?: string;
+
+  @ApiPropertyOptional({
+    description: 'Solo mostrador: imprimir ticket del cliente (default true)',
+  })
+  @IsOptional()
+  @IsBoolean()
+  printCustomerTicket?: boolean;
 
   @ApiPropertyOptional()
   @IsOptional()

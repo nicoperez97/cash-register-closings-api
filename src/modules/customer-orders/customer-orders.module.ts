@@ -5,6 +5,7 @@ import { Shop } from '../../entities/shop.entity';
 import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { PrintAgentModule } from '../print-agent/print-agent.module';
 import { ShopLiveModule } from '../shop-live/shop-live.module';
 import { ShopsModule } from '../shops/shops.module';
 import {
@@ -19,6 +20,7 @@ import { CustomerOrdersService } from './customer-orders.service';
     ShopsModule,
     ShopLiveModule,
     NotificationsModule,
+    PrintAgentModule,
   ],
   controllers: [PublicCustomerOrdersController, CustomerOrdersController],
   providers: [CustomerOrdersService],

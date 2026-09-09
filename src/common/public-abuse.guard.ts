@@ -57,6 +57,12 @@ export class PublicAbuseGuard implements CanActivate {
     const path = String(req.originalUrl ?? req.url ?? '').split('?')[0];
     if (path.startsWith('/api/docs') || path.startsWith('/ipad') || path.startsWith('/legacy')) return true;
     if (path.endsWith('/live')) return true;
+    // Print agent poll (~cada 3s): bucket propio, no el genérico @Public.
+    if (path.includes('/print-agent/')) {
+      this.hit(`print-agent:${this.clientIp(req)}`, 120, 60_000, 'Demasiadas consultas del agente.');
+      this.maybeSweep();
+      return true;
+    }
 
     const ip = this.clientIp(req);
     const mutating = method !== 'GET';
