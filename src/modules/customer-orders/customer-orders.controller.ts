@@ -97,8 +97,9 @@ export class CustomerOrdersController {
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
     @Query('businessDate') businessDate?: string,
+    @Query('shiftId') shiftId?: string,
   ) {
-    return this.service.closingSummary(user, shopId, businessDate);
+    return this.service.closingSummary(user, shopId, { businessDate, shiftId });
   }
 
   @Get(':id')

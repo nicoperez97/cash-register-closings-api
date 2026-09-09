@@ -1,6 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { ShopMenu } from '../menu/menu-parse.util';
+import {
+  normalizeRemovableIngredients,
+  ShopMenu,
+} from '../menu/menu-parse.util';
 import { ParsedCv } from '../candidates/cv-ocr.parser';
 import { ParsedInvoice } from '../payments/invoice-ocr.parser';
 
@@ -154,14 +157,16 @@ export class GeminiDocumentService {
     const part = this.filePart(file);
     if (!part) return this.fail('empty', 'No se pudo leer el archivo para Gemini.');
     const system = `Sos un extractor de cartas de restaurante. Devolvé SOLO JSON con esta forma:
-{"title":"string|null","note":"string|null","sections":[{"name":"string","items":[{"name":"string","description":"string|null","price":number|null,"priceLabel":"string|null"}]}]}
+{"title":"string|null","note":"string|null","sections":[{"name":"string","items":[{"name":"string","description":"string|null","price":number|null,"priceLabel":"string|null","removableIngredients":["string"]}]}]}
 Reglas:
 - Separá bien cada plato (nunca metas varios platos en description).
 - Secciones con nombres legibles (ej. "La pasta", "Le pizze", "Dolci", "Aperitivi e birre").
 - priceLabel con el precio tal cual si hay dos precios (panino/combo) usá "\$11.000 / \$13.500".
 - price numérico en ARS sin puntos de miles (11500) o null.
+- removableIngredients: ingredientes o toppings que el cliente podría pedir sin (cebolla, tomate, mayo, queso, etc.). Solo si se deducen del nombre o descripción. Máx. 8 por ítem. Si no hay, [].
+- No inventes ingredientes que no se vean en el texto.
 - Ignorá pies legales y logos.
-- Idioma de nombres: el del documento.`;
+- Idioma de nombres e ingredientes: el del documento.`;
     const data = await this.generateJson<{
       title?: string | null;
       note?: string | null;
@@ -172,6 +177,7 @@ Reglas:
           description?: string | null;
           price?: number | null;
           priceLabel?: string | null;
+          removableIngredients?: unknown;
         }>;
       }>;
     }>(
@@ -199,6 +205,7 @@ Reglas:
                 ? null
                 : Number(it.price),
             priceLabel: String(it?.priceLabel ?? '').trim().slice(0, 48) || null,
+            removableIngredients: normalizeRemovableIngredients(it?.removableIngredients),
           }))
           .filter((it) => it.name),
       }))
@@ -216,6 +223,74 @@ Reglas:
       .join('\n')
       .slice(0, 12000);
     return { ok: true, data: { menu, rawText } };
+  }
+
+  /**
+   * Sugiere ingredientes quitables a partir de nombre/descripción de ítems ya cargados.
+   */
+  async suggestRemovableIngredients(
+    items: Array<{ id: string; name: string; description?: string | null }>,
+  ): Promise<GeminiResult<Array<{ id: string; removableIngredients: string[] }>>> {
+    if (!this.isEnabled()) {
+      return this.fail('disabled', 'Gemini no está configurado (falta GEMINI_API_KEY).');
+    }
+    const cleaned = items
+      .map((it) => ({
+        id: String(it?.id ?? '').trim().slice(0, 40),
+        name: String(it?.name ?? '').trim().slice(0, 120),
+        description: String(it?.description ?? '').trim().slice(0, 400) || null,
+      }))
+      .filter((it) => it.id && it.name)
+      .slice(0, 120);
+    if (!cleaned.length) {
+      return this.fail('empty', 'No hay ítems para analizar.');
+    }
+
+    const system = `Sos un ayudante de carta gastronómica. Devolvé SOLO JSON:
+{"items":[{"id":"string","removableIngredients":["string"]}]}
+Reglas:
+- Para cada ítem del input, devolvé el mismo id.
+- removableIngredients: ingredientes o toppings que el cliente podría pedir sin (cebolla, tomate, lechuga, mayo, queso, jamón, huevo, etc.).
+- Solo si se deducen del nombre o descripción. Máx. 8 por ítem. Si no hay, [].
+- No inventes. Idioma: el de los nombres (español/italiano/etc.).
+- Incluí todos los ids del input.`;
+
+    const out: Array<{ id: string; removableIngredients: string[] }> = [];
+    const chunkSize = 40;
+    for (let i = 0; i < cleaned.length; i += chunkSize) {
+      const chunk = cleaned.slice(i, i + chunkSize);
+      const data = await this.generateJson<{
+        items?: Array<{ id?: string; removableIngredients?: unknown }>;
+      }>(
+        [
+          {
+            text: `Analizá estos ítems y sugerí removableIngredients:\n${JSON.stringify({ items: chunk })}`,
+          },
+        ],
+        system,
+        60_000,
+      );
+      if (!data.ok) {
+        if (!out.length) return data;
+        break;
+      }
+      const byId = new Map(
+        (data.data.items ?? [])
+          .map((row) => {
+            const id = String(row?.id ?? '').trim();
+            if (!id) return null;
+            return [id, normalizeRemovableIngredients(row?.removableIngredients)] as const;
+          })
+          .filter((x): x is readonly [string, string[]] => !!x),
+      );
+      for (const it of chunk) {
+        out.push({
+          id: it.id,
+          removableIngredients: byId.get(it.id) ?? [],
+        });
+      }
+    }
+    return { ok: true, data: out };
   }
 
   async parseCv(files: Express.Multer.File[]): Promise<GeminiResult<ParsedCv>> {

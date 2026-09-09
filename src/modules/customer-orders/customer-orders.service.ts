@@ -5,7 +5,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Not, Between, Repository } from 'typeorm';
+import { And, In, Not, MoreThanOrEqual, LessThan, Repository } from 'typeorm';
 import {
   CustomerOrder,
   CustomerOrderFulfillment,
@@ -21,9 +21,20 @@ import { GlobalRole, NotificationType } from '../../common/enums';
 import { isEntityActive } from '../../common/active.util';
 import { isGlobalAdmin } from '../../common/guards';
 import {
+  nextCalendarDate,
+  normalizeOpeningTime,
   resolveShopBusinessDate,
   shopBusinessDayRangeUtc,
 } from '../../common/business-date';
+import {
+  normalizeShopShifts,
+  previousShiftBusinessDate,
+  previousShiftOf,
+  resolveCurrentShift,
+  shopShiftOwnershipRangeUtc,
+  weekdayFromIsoDate,
+  type ShopShift,
+} from '../../common/shop-shifts';
 import {
   formatOrderingHoursSummary,
   isOrderingChannelOpenNow,
@@ -599,39 +610,132 @@ export class CustomerOrdersService implements OnModuleInit {
   }
 
   /**
-   * Totales de pedidos del día laboral (para precargar un cierre de caja).
-   * Incluye todos menos cancelados, por createdAt en la ventana del día.
+   * Totales de pedidos del turno para precargar un cierre de caja.
+   * Usa la ventana de propiedad (abre → abre el siguiente). Si el turno vigente
+   * no tiene pedidos (p.ej. recién empezó), cae al turno anterior.
    */
   async closingSummary(
     user: AuthUser,
     shopId: string,
-    businessDate?: string,
+    opts?: { businessDate?: string; shiftId?: string },
   ) {
     this.assertShopAccess(user, shopId);
     const shop = await this.shops.findOne({ where: { id: shopId } });
     if (!shop) throw new NotFoundException('Local no encontrado');
 
-    const date =
-      businessDate && /^\d{4}-\d{2}-\d{2}$/.test(businessDate)
-        ? businessDate
+    const shifts = normalizeShopShifts(shop.shifts as ShopShift[] | null, shop.openingTime);
+    const pinnedShiftId = String(opts?.shiftId ?? '').trim();
+    let date =
+      opts?.businessDate && /^\d{4}-\d{2}-\d{2}$/.test(opts.businessDate)
+        ? opts.businessDate
         : resolveShopBusinessDate(new Date(), {
             timezone: shop.timezone,
             openingTime: shop.openingTime,
           });
-    const { from, to } = shopBusinessDayRangeUtc(date, {
-      timezone: shop.timezone,
-      openingTime: shop.openingTime,
-    });
 
-    const rows = await this.orders.find({
-      where: {
-        shopId,
-        status: Not(CustomerOrderStatus.CANCELLED),
-        createdAt: Between(from, to),
-      },
-      order: { createdAt: 'ASC' },
-      take: 2000,
+    let shift =
+      (pinnedShiftId ? shifts.find((s) => s.id === pinnedShiftId) : null) ??
+      resolveCurrentShift(shifts, new Date(), shop.timezone);
+
+    const loadRows = async (businessDate: string, s: ShopShift) => {
+      const ownership = shopShiftOwnershipRangeUtc(businessDate, s, shifts, {
+        timezone: shop.timezone,
+      });
+      const found = await this.orders.find({
+        where: {
+          shopId,
+          status: Not(CustomerOrderStatus.CANCELLED),
+          createdAt: And(MoreThanOrEqual(ownership.from), LessThan(ownership.to)),
+        },
+        order: { createdAt: 'ASC' },
+        take: 2000,
+      });
+      return { rows: found, range: ownership };
+    };
+
+    let { rows, range } = await loadRows(date, shift);
+
+    // Si el turno pedido/vigente no tiene ventas, probar el anterior aunque viniera shiftId
+    // (al generar cierre suele ser el caso: Mañana recién abrió y las ventas son de la mañana).
+    if (!rows.length) {
+      const weekday = weekdayFromIsoDate(date) ?? 1;
+      const prev = previousShiftOf(shift, shifts, weekday);
+      const prevDate = previousShiftBusinessDate(date, shift, prev, shifts);
+      const prevLoad = await loadRows(prevDate, prev);
+      if (prevLoad.rows.length) {
+        rows = prevLoad.rows;
+        range = prevLoad.range;
+        shift = prev;
+        date = prevDate;
+      } else {
+        // Día laboral completo actual, luego el anterior.
+        const day = shopBusinessDayRangeUtc(date, {
+          timezone: shop.timezone,
+          openingTime: shop.openingTime,
+        });
+        const dayRows = await this.orders.find({
+          where: {
+            shopId,
+            status: Not(CustomerOrderStatus.CANCELLED),
+            createdAt: And(MoreThanOrEqual(day.from), LessThan(day.to)),
+          },
+          order: { createdAt: 'ASC' },
+          take: 2000,
+        });
+        if (dayRows.length) {
+          rows = dayRows;
+          range = {
+            from: day.from,
+            to: day.to,
+            untilOpensAt: normalizeOpeningTime(shop.openingTime),
+            untilDate: nextCalendarDate(date),
+          };
+        } else {
+          const prevDayDate = previousShiftBusinessDate(date, shift, prev, shifts);
+          const prevDay = shopBusinessDayRangeUtc(prevDayDate, {
+            timezone: shop.timezone,
+            openingTime: shop.openingTime,
+          });
+          const prevDayRows = await this.orders.find({
+            where: {
+              shopId,
+              status: Not(CustomerOrderStatus.CANCELLED),
+              createdAt: And(MoreThanOrEqual(prevDay.from), LessThan(prevDay.to)),
+            },
+            order: { createdAt: 'ASC' },
+            take: 2000,
+          });
+          if (prevDayRows.length) {
+            rows = prevDayRows;
+            range = {
+              from: prevDay.from,
+              to: prevDay.to,
+              untilOpensAt: normalizeOpeningTime(shop.openingTime),
+              untilDate: nextCalendarDate(prevDayDate),
+            };
+            date = prevDayDate;
+          }
+        }
+      }
+    }
+
+    type Bucket = {
+      cashTotal: number;
+      transferTotal: number;
+      orderCount: number;
+      unitsSold: number;
+    };
+    const emptyBucket = (): Bucket => ({
+      cashTotal: 0,
+      transferTotal: 0,
+      orderCount: 0,
+      unitsSold: 0,
     });
+    const byFulfillment: Record<string, Bucket> = {
+      TAKEAWAY: emptyBucket(),
+      DELIVERY: emptyBucket(),
+      COUNTER: emptyBucket(),
+    };
 
     let cashTotal = 0;
     let transferTotal = 0;
@@ -639,25 +743,45 @@ export class CustomerOrdersService implements OnModuleInit {
     let openCount = 0;
     const orderIds: string[] = [];
 
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+
     for (const row of rows) {
       orderIds.push(row.id);
       const total = Number(row.total) || 0;
+      const fulfillment = String(row.fulfillment || 'TAKEAWAY');
+      const bucket = byFulfillment[fulfillment] ?? byFulfillment.TAKEAWAY;
+      bucket.orderCount += 1;
       if (row.paymentMethod === CustomerOrderPaymentMethod.TRANSFER) {
         transferTotal += total;
+        bucket.transferTotal += total;
       } else {
         cashTotal += total;
+        bucket.cashTotal += total;
       }
       for (const line of row.items ?? []) {
-        unitsSold += Math.max(0, Number(line.qty) || 0);
+        const qty = Math.max(0, Number(line.qty) || 0);
+        unitsSold += qty;
+        bucket.unitsSold += qty;
       }
       if (row.status !== CustomerOrderStatus.COMPLETED) openCount += 1;
     }
 
-    const round2 = (n: number) => Math.round(n * 100) / 100;
+    const mapBucket = (b: Bucket) => ({
+      cashTotal: round2(b.cashTotal),
+      transferTotal: round2(b.transferTotal),
+      total: round2(b.cashTotal + b.transferTotal),
+      orderCount: b.orderCount,
+      unitsSold: b.unitsSold,
+    });
+
     return {
       businessDate: date,
-      from: from.toISOString(),
-      to: to.toISOString(),
+      shiftId: shift.id,
+      shiftName: shift.name,
+      opensAt: shift.opensAt,
+      closesAt: shift.closesAt,
+      from: range.from.toISOString(),
+      to: range.to.toISOString(),
       orderCount: rows.length,
       openCount,
       completedCount: rows.length - openCount,
@@ -665,8 +789,14 @@ export class CustomerOrdersService implements OnModuleInit {
       transferTotal: round2(transferTotal),
       total: round2(cashTotal + transferTotal),
       unitsSold,
+      byFulfillment: {
+        TAKEAWAY: mapBucket(byFulfillment.TAKEAWAY),
+        DELIVERY: mapBucket(byFulfillment.DELIVERY),
+        COUNTER: mapBucket(byFulfillment.COUNTER),
+      },
       orderIds,
       orderingForceClosed: !!shop.orderingForceClosed,
+      defaultChangeAmount: Number(shop.defaultChangeAmount) || 0,
     };
   }
 
