@@ -45,7 +45,6 @@ import {
   normalizeOrderingPayments,
   normalizeShopMode,
   normalizeShopOrderingHours,
-  ShopMode,
 } from '../../common/shop-ordering';
 import { normalizeRemovableIngredients, normalizeShopMenus, ShopMenuItem } from '../menu/menu-parse.util';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -153,6 +152,13 @@ export class CustomerOrdersService implements OnModuleInit {
     } catch {
       /* already exists */
     }
+    try {
+      await this.orders.query(
+        `ALTER TABLE customer_orders ADD COLUMN paymentAccreditedAt DATETIME(6) NULL`,
+      );
+    } catch {
+      /* already exists */
+    }
   }
 
   private assertShopAccess(user: AuthUser, shopId: string) {
@@ -215,6 +221,7 @@ export class CustomerOrdersService implements OnModuleInit {
       deliveryZoneName: o.deliveryZoneName ?? null,
       paymentMethod: o.paymentMethod,
       cashAmount: o.cashAmount == null ? null : Number(o.cashAmount),
+      paymentAccreditedAt: o.paymentAccreditedAt ?? null,
       customerNotes: o.customerNotes ?? null,
       salonTableId: o.salonTableId ?? null,
       tableSessionId: o.tableSessionId ?? null,
@@ -304,9 +311,8 @@ export class CustomerOrdersService implements OnModuleInit {
     const eta = normalizeOrderingEta(shop.orderingEta);
     const menus = normalizeShopMenus(shop.menu);
 
-    const isRestaurant = normalizeShopMode(shop.shopMode) === ShopMode.RESTAURANTE;
-    const tableOrderingEnabled = isRestaurant;
-    const tableOrderingOpen = isRestaurant && !forceClosed;
+    const tableOrderingEnabled = false;
+    const tableOrderingOpen = false;
 
     return {
       enabled: true,
@@ -329,7 +335,7 @@ export class CustomerOrdersService implements OnModuleInit {
       takeawayOpen,
       deliveryOpen,
       tableOrderingOpen,
-      anyChannelOpen: takeawayOpen || deliveryOpen || tableOrderingOpen,
+      anyChannelOpen: takeawayOpen || deliveryOpen,
       takeawayHoursSummary: formatOrderingHoursSummary(takeawayHours),
       deliveryHoursSummary: formatOrderingHoursSummary(deliveryHours),
       orderingHours: hours,
@@ -1014,23 +1020,79 @@ export class CustomerOrdersService implements OnModuleInit {
 
     const next = dto.status;
     const prev = order.status;
-    if (prev === CustomerOrderStatus.CANCELLED || prev === CustomerOrderStatus.COMPLETED) {
-      throw new BadRequestException('El pedido ya está cerrado');
+    if (prev === CustomerOrderStatus.CANCELLED) {
+      throw new BadRequestException('El pedido está cancelado');
     }
     if (next === prev) return this.toDto(order);
 
+    if (next === CustomerOrderStatus.COMPLETED && !order.paymentAccreditedAt) {
+      throw new BadRequestException(
+        'Acreditá el pago antes de completar el pedido',
+      );
+    }
+
+    const flow: CustomerOrderStatus[] = [
+      CustomerOrderStatus.PENDING,
+      CustomerOrderStatus.ACCEPTED,
+      CustomerOrderStatus.PREPARING,
+      CustomerOrderStatus.READY,
+      CustomerOrderStatus.OUT_FOR_DELIVERY,
+      CustomerOrderStatus.COMPLETED,
+    ];
+    const prevRank = flow.indexOf(prev);
+    const nextRank = flow.indexOf(next);
+    const advancing =
+      next === CustomerOrderStatus.CANCELLED ||
+      (prevRank >= 0 && nextRank >= 0 && nextRank > prevRank);
+
     const now = new Date();
     order.status = next;
-    if (next === CustomerOrderStatus.ACCEPTED) order.acceptedAt = now;
-    if (next === CustomerOrderStatus.PREPARING) order.preparingAt = now;
-    if (next === CustomerOrderStatus.READY) order.readyAt = now;
-    if (next === CustomerOrderStatus.OUT_FOR_DELIVERY) order.outForDeliveryAt = now;
-    if (next === CustomerOrderStatus.COMPLETED) order.completedAt = now;
-    if (next === CustomerOrderStatus.CANCELLED) order.cancelledAt = now;
+    if (next === CustomerOrderStatus.ACCEPTED) {
+      order.acceptedAt = order.acceptedAt ?? now;
+    }
+    if (next === CustomerOrderStatus.PREPARING) {
+      order.preparingAt = order.preparingAt ?? now;
+    }
+    if (next === CustomerOrderStatus.READY) {
+      order.readyAt = order.readyAt ?? now;
+    }
+    if (next === CustomerOrderStatus.OUT_FOR_DELIVERY) {
+      order.outForDeliveryAt = order.outForDeliveryAt ?? now;
+    }
+    if (next === CustomerOrderStatus.COMPLETED) {
+      order.completedAt = now;
+    }
+    if (next === CustomerOrderStatus.CANCELLED) {
+      order.cancelledAt = now;
+    }
+
+    // Al volver atrás, limpia marcas de etapas posteriores.
+    if (next !== CustomerOrderStatus.CANCELLED && nextRank >= 0) {
+      if (nextRank < flow.indexOf(CustomerOrderStatus.COMPLETED)) {
+        order.completedAt = null;
+      }
+      if (nextRank < flow.indexOf(CustomerOrderStatus.OUT_FOR_DELIVERY)) {
+        order.outForDeliveryAt = null;
+      }
+      if (nextRank < flow.indexOf(CustomerOrderStatus.READY)) {
+        order.readyAt = null;
+      }
+      if (nextRank < flow.indexOf(CustomerOrderStatus.PREPARING)) {
+        order.preparingAt = null;
+      }
+      if (nextRank < flow.indexOf(CustomerOrderStatus.ACCEPTED)) {
+        order.acceptedAt = null;
+      }
+      order.cancelledAt = null;
+    }
 
     await this.orders.save(order);
     this.live.tick(shopId, 'customer-orders');
-    if (next === CustomerOrderStatus.ACCEPTED && prev !== CustomerOrderStatus.ACCEPTED) {
+    if (
+      advancing &&
+      next === CustomerOrderStatus.ACCEPTED &&
+      prev === CustomerOrderStatus.PENDING
+    ) {
       const shop = await this.shops.findOne({ where: { id: shopId } });
       if (shop) {
         void this.printAgent
@@ -1038,6 +1100,43 @@ export class CustomerOrdersService implements OnModuleInit {
           .catch(() => undefined);
       }
     }
+    return this.toDto(order);
+  }
+
+  async acreditPayment(user: AuthUser, shopId: string, id: string) {
+    this.assertShopAccess(user, shopId);
+    const order = await this.orders.findOne({ where: { id, shopId } });
+    if (!order) throw new NotFoundException('Pedido no encontrado');
+    if (order.status === CustomerOrderStatus.CANCELLED) {
+      throw new BadRequestException('El pedido está cancelado');
+    }
+    if (order.paymentAccreditedAt) {
+      return this.toDto(order);
+    }
+    order.paymentAccreditedAt = new Date();
+    await this.orders.save(order);
+    this.live.tick(shopId, 'customer-orders');
+    return this.toDto(order);
+  }
+
+  async desacreditPayment(user: AuthUser, shopId: string, id: string) {
+    this.assertShopAccess(user, shopId);
+    const order = await this.orders.findOne({ where: { id, shopId } });
+    if (!order) throw new NotFoundException('Pedido no encontrado');
+    if (order.status === CustomerOrderStatus.CANCELLED) {
+      throw new BadRequestException('El pedido está cancelado');
+    }
+    if (order.status === CustomerOrderStatus.COMPLETED) {
+      throw new BadRequestException(
+        'Reabrí el pedido antes de desacreditar el pago',
+      );
+    }
+    if (!order.paymentAccreditedAt) {
+      return this.toDto(order);
+    }
+    order.paymentAccreditedAt = null;
+    await this.orders.save(order);
+    this.live.tick(shopId, 'customer-orders');
     return this.toDto(order);
   }
 

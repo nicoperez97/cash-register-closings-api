@@ -100,6 +100,10 @@ export class CustomerOrder extends BaseEntity {
   @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
   cashAmount?: string | null;
 
+  /** Cuándo se acreditó el cobro (efectivo o transferencia recibida). */
+  @Column({ type: 'datetime', precision: 6, nullable: true })
+  paymentAccreditedAt?: Date | null;
+
   @Column({ type: 'varchar', length: 500, nullable: true })
   customerNotes?: string | null;
 
