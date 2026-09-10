@@ -13,6 +13,7 @@ import { CashClosing } from '../../entities/cash-closing.entity';
 import { AuthUser } from '../../common/decorators';
 import { ShopsService } from '../shops/shops.service';
 import { isEntityActive } from '../../common/active.util';
+import { detachRelations } from '../../common/detach-relations';
 import { formatMoney } from '../../common/format-money';
 
 function n(v: unknown): number {
@@ -443,6 +444,7 @@ export class TipsService implements OnModuleInit {
     row.delivered = !!delivered;
     row.deliveredAt = delivered ? new Date() : null;
     row.deliveredByUserId = delivered ? user.id : null;
+    detachRelations(row, ['deliveredBy']);
     await this.allocations.save(row);
     return this.toAllocationDto(row);
   }
@@ -469,6 +471,7 @@ export class TipsService implements OnModuleInit {
       row.delivered = next;
       row.deliveredAt = next ? new Date() : null;
       row.deliveredByUserId = next ? user.id : null;
+      detachRelations(row, ['deliveredBy']);
     }
     if (rows.length) await this.allocations.save(rows);
     return rows.map((row) => this.toAllocationDto(row));

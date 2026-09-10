@@ -1503,7 +1503,18 @@ export class PaymentsService implements OnModuleInit {
     if (reason?.trim()) {
       row.notes = [row.notes, `Rechazo: ${reason.trim()}`].filter(Boolean).join(' · ');
     }
-    await this.payments.save(row);
+    // QueryBuilder: load() trae ManyToOne y save() puede pisar FKs (accountId, etc.).
+    await this.payments
+      .createQueryBuilder()
+      .update(Payment)
+      .set({
+        status: row.status,
+        validatedAt: row.validatedAt,
+        validatedByUserId: row.validatedByUserId,
+        notes: row.notes ?? null,
+      })
+      .where('id = :id AND shopId = :shopId', { id, shopId })
+      .execute();
 
     const notifyIds = new Set(
       [row.payerUserId, row.createdByUserId].filter(Boolean) as string[],
@@ -1924,7 +1935,12 @@ export class PaymentsService implements OnModuleInit {
       throw new BadRequestException('No se puede cancelar un pago ya abonado');
     }
     row.status = PaymentStatus.CANCELLED;
-    await this.payments.save(row);
+    await this.payments
+      .createQueryBuilder()
+      .update(Payment)
+      .set({ status: PaymentStatus.CANCELLED })
+      .where('id = :id AND shopId = :shopId', { id, shopId })
+      .execute();
     return this.toDto(await this.load(shopId, id));
   }
 
@@ -1954,15 +1970,22 @@ export class PaymentsService implements OnModuleInit {
     deleteUploadIfExists(row.invoiceFilePath);
     deleteUploadIfExists(row.receiptFilePath);
     deletePaymentUploads(shopId, id);
-    row.invoiceFilePath = null;
-    row.invoiceFileName = null;
-    row.invoiceFileMime = null;
-    row.receiptFilePath = null;
-    row.receiptFileName = null;
-    row.receiptFileMime = null;
-    row.active = false;
-    await this.payments.save(row);
-    await this.payments.softRemove(row);
+    await this.payments
+      .createQueryBuilder()
+      .update(Payment)
+      .set({
+        invoiceFilePath: null,
+        invoiceFileName: null,
+        invoiceFileMime: null,
+        receiptFilePath: null,
+        receiptFileName: null,
+        receiptFileMime: null,
+        active: false,
+      })
+      .where('id = :id AND shopId = :shopId', { id, shopId })
+      .execute();
+    const fresh = await this.payments.findOne({ where: { id, shopId } });
+    if (fresh) await this.payments.softRemove(fresh);
     return { ok: true };
   }
 

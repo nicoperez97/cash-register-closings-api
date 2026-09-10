@@ -394,6 +394,8 @@ export class StockService implements OnModuleInit {
     if (dto.newCategory?.name?.trim() || dto.categoryId !== undefined) {
       category = await this.resolveCategory(shopId, kind, dto);
       row.categoryId = category.id;
+      // Evita que save() restaure categoryId desde la relación vieja.
+      row.category = category;
     }
     if (dto.name !== undefined) {
       const name = dto.name.trim();
