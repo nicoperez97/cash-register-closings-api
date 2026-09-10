@@ -1135,6 +1135,12 @@ export class MovementsService implements OnModuleInit {
       row.paymentMethod = paymentMethod;
     }
 
+    // Si las relaciones ManyToOne siguen hidratadas, TypeORM save() puede
+    // pisar fromAccountId/toAccountId/conceptId con el id de la entidad vieja.
+    delete (row as any).fromAccount;
+    delete (row as any).toAccount;
+    delete (row as any).concept;
+
     await this.movements.save(row);
     if (!opts?.fromPayment) {
       await this.syncLinkedPayment(shopId, row);
