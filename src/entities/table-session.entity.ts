@@ -19,8 +19,9 @@ export class TableSession extends BaseEntity {
   @Column({ type: 'varchar', length: 36 })
   salonTableId: string;
 
-  @Column({ type: 'varchar', length: 36 })
-  waiterEmployeeId: string;
+  /** Null cuando el cliente abre la mesa desde /pedir (sin mozo). */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  waiterEmployeeId?: string | null;
 
   @Column({ type: 'varchar', length: 16, default: TableSessionStatus.OPEN })
   status: TableSessionStatus;
@@ -44,7 +45,7 @@ export class TableSession extends BaseEntity {
   @JoinColumn({ name: 'salonTableId' })
   salonTable: SalonTable;
 
-  @ManyToOne(() => Employee)
+  @ManyToOne(() => Employee, { nullable: true })
   @JoinColumn({ name: 'waiterEmployeeId' })
-  waiter: Employee;
+  waiter?: Employee | null;
 }

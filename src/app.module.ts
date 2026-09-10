@@ -36,6 +36,7 @@ import { MenuModule } from './modules/menu/menu.module';
 import { CustomerOrdersModule } from './modules/customer-orders/customer-orders.module';
 import { PrintAgentModule } from './modules/print-agent/print-agent.module';
 import { WaiterModule } from './modules/waiter/waiter.module';
+import { DineInModule } from './modules/dine-in/dine-in.module';
 import { ServiceRulesModule } from './modules/service-rules/service-rules.module';
 import { AiModule } from './modules/ai/ai.module';
 import { ProfileModule } from './modules/profile/profile.module';
@@ -83,6 +84,7 @@ import { PublicAbuseGuard } from './common/public-abuse.guard';
     CustomerOrdersModule,
     PrintAgentModule,
     WaiterModule,
+    DineInModule,
     ServiceRulesModule,
     ProfileModule,
     PartnerSplitsModule,

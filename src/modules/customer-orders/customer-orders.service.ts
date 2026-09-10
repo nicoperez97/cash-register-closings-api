@@ -45,6 +45,7 @@ import {
   normalizeOrderingPayments,
   normalizeShopMode,
   normalizeShopOrderingHours,
+  ShopMode,
 } from '../../common/shop-ordering';
 import { normalizeRemovableIngredients, normalizeShopMenus, ShopMenuItem } from '../menu/menu-parse.util';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -303,6 +304,10 @@ export class CustomerOrdersService implements OnModuleInit {
     const eta = normalizeOrderingEta(shop.orderingEta);
     const menus = normalizeShopMenus(shop.menu);
 
+    const isRestaurant = normalizeShopMode(shop.shopMode) === ShopMode.RESTAURANTE;
+    const tableOrderingEnabled = isRestaurant;
+    const tableOrderingOpen = isRestaurant && !forceClosed;
+
     return {
       enabled: true,
       shop: {
@@ -319,10 +324,12 @@ export class CustomerOrdersService implements OnModuleInit {
       },
       takeawayEnabled,
       deliveryEnabled,
+      tableOrderingEnabled,
       orderingForceClosed: forceClosed,
       takeawayOpen,
       deliveryOpen,
-      anyChannelOpen: takeawayOpen || deliveryOpen,
+      tableOrderingOpen,
+      anyChannelOpen: takeawayOpen || deliveryOpen || tableOrderingOpen,
       takeawayHoursSummary: formatOrderingHoursSummary(takeawayHours),
       deliveryHoursSummary: formatOrderingHoursSummary(deliveryHours),
       orderingHours: hours,
@@ -444,11 +451,12 @@ export class CustomerOrdersService implements OnModuleInit {
       customerNotes?: string | null;
       salonTableId: string;
       tableSessionId: string;
-      waiterEmployeeId: string;
+      waiterEmployeeId?: string | null;
       tableLabel: string;
       waiterName: string;
       printKitchen?: boolean;
       printCustomerTicket?: boolean;
+      response?: 'waiter' | 'guest';
     },
   ) {
     return this.createOrderForShop(
@@ -467,20 +475,20 @@ export class CustomerOrdersService implements OnModuleInit {
         printKitchen: input.printKitchen !== false,
         salonTableId: input.salonTableId,
         tableSessionId: input.tableSessionId,
-        waiterEmployeeId: input.waiterEmployeeId,
+        waiterEmployeeId: input.waiterEmployeeId ?? null,
         tableLabel: input.tableLabel,
         waiterName: input.waiterName,
       } as CreateCustomerOrderDto & {
         printKitchen?: boolean;
         salonTableId?: string;
         tableSessionId?: string;
-        waiterEmployeeId?: string;
+        waiterEmployeeId?: string | null;
         tableLabel?: string;
         waiterName?: string;
       },
       {
         bypassHours: true,
-        response: 'waiter',
+        response: input.response === 'guest' ? 'guest' : 'waiter',
         allowDiscount: false,
       },
     );
@@ -509,13 +517,13 @@ export class CustomerOrdersService implements OnModuleInit {
       printKitchen?: boolean;
       salonTableId?: string;
       tableSessionId?: string;
-      waiterEmployeeId?: string;
+      waiterEmployeeId?: string | null;
       tableLabel?: string;
       waiterName?: string;
     },
     opts: {
       bypassHours: boolean;
-      response: 'public' | 'staff' | 'waiter';
+      response: 'public' | 'staff' | 'waiter' | 'guest';
       allowDiscount: boolean;
     },
   ) {
@@ -529,7 +537,7 @@ export class CustomerOrdersService implements OnModuleInit {
         throw new BadRequestException('Tipo de entrega inválido');
       }
     } else if (dto.fulfillment === CustomerOrderFulfillment.TABLE) {
-      if (opts.response !== 'waiter') {
+      if (opts.response !== 'waiter' && opts.response !== 'guest') {
         throw new BadRequestException('Tipo de entrega inválido');
       }
     } else if (dto.fulfillment === CustomerOrderFulfillment.TAKEAWAY) {
@@ -746,7 +754,7 @@ export class CustomerOrdersService implements OnModuleInit {
           .catch(() => undefined);
       }
     }
-    if (opts.response === 'staff' || opts.response === 'waiter') {
+    if (opts.response === 'staff' || opts.response === 'waiter' || opts.response === 'guest') {
       return this.toDto(order);
     }
     return this.publicDto(order, shop);

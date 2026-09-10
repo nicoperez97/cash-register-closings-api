@@ -13,6 +13,7 @@ import { In, Repository } from 'typeorm';
 import { isEntityActive } from '../../common/active.util';
 import { CustomerOrder } from '../../entities/customer-order.entity';
 import { Employee } from '../../entities/employee.entity';
+import { SalonMapObject } from '../../entities/salon-map-object.entity';
 import { SalonSector } from '../../entities/salon-sector.entity';
 import { SalonTable } from '../../entities/salon-table.entity';
 import { Shop } from '../../entities/shop.entity';
@@ -36,6 +37,8 @@ export class WaiterService implements OnModuleInit {
     @InjectRepository(Employee) private readonly employees: Repository<Employee>,
     @InjectRepository(SalonTable) private readonly tables: Repository<SalonTable>,
     @InjectRepository(SalonSector) private readonly sectors: Repository<SalonSector>,
+    @InjectRepository(SalonMapObject)
+    private readonly mapObjects: Repository<SalonMapObject>,
     @InjectRepository(TableSession) private readonly sessions: Repository<TableSession>,
     @InjectRepository(CustomerOrder) private readonly orders: Repository<CustomerOrder>,
     private readonly jwt: JwtService,
@@ -77,6 +80,13 @@ export class WaiterService implements OnModuleInit {
     }
     try {
       await this.sessions.query(
+        `ALTER TABLE table_sessions MODIFY waiterEmployeeId CHAR(36) NULL`,
+      );
+    } catch {
+      /* already nullable / dialect */
+    }
+    try {
+      await this.sessions.query(
         `ALTER TABLE table_sessions ADD COLUMN customerTicketPrinted TINYINT(1) NOT NULL DEFAULT 0`,
       );
     } catch {
@@ -95,6 +105,20 @@ export class WaiterService implements OnModuleInit {
       );
     }
     return shop;
+  }
+
+  /** Info pública del local para la pantalla de login (sin PIN). */
+  async bootstrap(slug: string) {
+    const shop = await this.requireShop(slug);
+    return {
+      shop: {
+        id: shop.id,
+        name: shop.name,
+        slug: shop.slug,
+        logoUrl: shop.logoUrl ?? null,
+        accentColor: shop.accentColor ?? null,
+      },
+    };
   }
 
   async login(slug: string, pinRaw: string) {
@@ -185,13 +209,23 @@ export class WaiterService implements OnModuleInit {
       }
     }
     const byTable = new Map(openSessions.map((s) => [s.salonTableId, s]));
-    const sectorIds = [...new Set(tables.map((t) => t.sectorId).filter(Boolean))] as string[];
+    const objectRows = (await this.mapObjects.find({ where: { shopId: shop.id } })).filter(
+      (o) => isEntityActive(o.active),
+    );
+    const sectorIds = [
+      ...new Set(
+        [
+          ...tables.map((t) => t.sectorId).filter(Boolean),
+          ...objectRows.map((o) => o.sectorId).filter(Boolean),
+        ] as string[],
+      ),
+    ];
     const sectorRows = sectorIds.length
       ? await this.sectors.find({ where: { id: In(sectorIds) } })
       : [];
     const sectorName = new Map(sectorRows.map((s) => [s.id, (s.name ?? '').trim() || 'Sector']));
 
-    return tables.map((t) => {
+    const tableDtos = tables.map((t) => {
       const session = byTable.get(t.id);
       const orderCount = session ? orderCounts.get(session.id) ?? 0 : 0;
       // Solo ocupa si ya hubo al menos un envío.
@@ -219,6 +253,21 @@ export class WaiterService implements OnModuleInit {
           : null,
       };
     });
+
+    return {
+      tables: tableDtos,
+      mapObjects: objectRows
+        .slice()
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((o) => ({
+          id: o.id,
+          sectorId: o.sectorId,
+          kind: o.kind,
+          name: (o.name ?? '').trim() || o.kind,
+          mapX: Number(o.mapX),
+          mapY: Number(o.mapY),
+        })),
+    };
   }
 
   async openSession(
@@ -463,9 +512,11 @@ export class WaiterService implements OnModuleInit {
     const table = await this.tables.findOne({
       where: { id: session.salonTableId, shopId: shop.id },
     });
-    const waiterEmp = await this.employees.findOne({
-      where: { id: session.waiterEmployeeId, shopId: shop.id },
-    });
+    const waiterEmp = session.waiterEmployeeId
+      ? await this.employees.findOne({
+          where: { id: session.waiterEmployeeId, shopId: shop.id },
+        })
+      : null;
     const orders = await this.orders.find({
       where: { shopId: shop.id, tableSessionId: session.id },
       order: { createdAt: 'ASC' },
@@ -488,7 +539,9 @@ export class WaiterService implements OnModuleInit {
         : null,
       waiter: waiterEmp
         ? { id: waiterEmp.id, fullName: waiterEmp.fullName }
-        : { id: session.waiterEmployeeId, fullName: '—' },
+        : session.waiterEmployeeId
+          ? { id: session.waiterEmployeeId, fullName: '—' }
+          : { id: '', fullName: 'Cliente' },
       orders: orders.map((o) => ({
         id: o.id,
         code: o.code,
