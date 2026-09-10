@@ -10,7 +10,6 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { isEntityActive } from '../../common/active.util';
-import { ShopMode, normalizeShopMode } from '../../common/shop-ordering';
 import { CustomerOrder } from '../../entities/customer-order.entity';
 import { SalonMapObject } from '../../entities/salon-map-object.entity';
 import { SalonSector } from '../../entities/salon-sector.entity';
@@ -55,18 +54,9 @@ export class DineInService implements OnModuleInit {
   private async requireShop(slug: string): Promise<Shop> {
     const shop = await this.shops.findOne({ where: { slug, active: true as any } });
     if (!shop) throw new NotFoundException('Local no encontrado');
-    if (!shop.onlineOrderingEnabled) {
-      throw new ForbiddenException('Pedidos online no disponibles');
-    }
-    if (normalizeShopMode(shop.shopMode) !== ShopMode.RESTAURANTE) {
-      throw new ForbiddenException(
-        'Pedido en mesa solo está disponible en locales tipo restaurante',
-      );
-    }
-    if (shop.orderingForceClosed) {
-      throw new ForbiddenException('El local está cerrado para pedidos online');
-    }
-    return shop;
+    throw new ForbiddenException(
+      'El pedido en mesa del cliente no está disponible. Usá Operación → Comanda o /mozo.',
+    );
   }
 
   private async issueToken(shop: Shop, session: TableSession): Promise<string> {

@@ -122,4 +122,24 @@ export class CustomerOrdersController {
   ) {
     return this.service.updateStatus(user, shopId, id, dto);
   }
+
+  @Post(':id/acredit')
+  @RequirePermissions('customerOrders.manage')
+  acreditPayment(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+  ) {
+    return this.service.acreditPayment(user, shopId, id);
+  }
+
+  @Post(':id/desacredit')
+  @RequirePermissions('customerOrders.manage')
+  desacreditPayment(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+  ) {
+    return this.service.desacreditPayment(user, shopId, id);
+  }
 }

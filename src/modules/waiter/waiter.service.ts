@@ -21,10 +21,16 @@ import {
   TableSession,
   TableSessionStatus,
 } from '../../entities/table-session.entity';
+import { AuthUser } from '../../common/decorators';
 import { CustomerOrdersService } from '../customer-orders/customer-orders.service';
 import { PrintAgentService } from '../print-agent/print-agent.service';
 import { ShopLiveService } from '../shop-live/shop-live.service';
-import { assertWaiterShopSlug, WaiterAuthPayload } from './waiter-auth';
+import { ShopsService } from '../shops/shops.service';
+import {
+  assertWaiterShopSlug,
+  waiterEmployeeIdOrNull,
+  WaiterAuthPayload,
+} from './waiter-auth';
 
 function hashPin(pin: string): string {
   return createHash('sha256').update(String(pin).trim()).digest('hex');
@@ -45,6 +51,7 @@ export class WaiterService implements OnModuleInit {
     private readonly customerOrders: CustomerOrdersService,
     private readonly printAgent: PrintAgentService,
     private readonly live: ShopLiveService,
+    private readonly shopsSvc: ShopsService,
   ) {}
 
   async onModuleInit() {
@@ -157,10 +164,87 @@ export class WaiterService implements OnModuleInit {
     };
   }
 
+  /**
+   * Backoffice (Operación → Comanda): emite el mismo token de mapa/comanda
+   * sin PIN, usando el usuario logueado.
+   */
+  async staffEnter(user: AuthUser, shopId: string) {
+    this.shopsSvc.assertShopAccess(user, shopId);
+    const shop = await this.shops.findOne({ where: { id: shopId, active: true as any } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    if (!shop.waiterOrderingEnabled) {
+      throw new ForbiddenException(
+        'Comanda no disponible. Activála en Configuración → Pedidos y guardá.',
+      );
+    }
+
+    const linked = (
+      await this.employees.find({ where: { shopId: shop.id, userId: user.id } })
+    ).filter((e) => isEntityActive(e.active));
+    const employee =
+      linked.find((e) => !!e.waiterPinHash) ?? linked[0] ?? null;
+
+    const payload: WaiterAuthPayload = {
+      typ: 'waiter_staff',
+      shopId: shop.id,
+      employeeId: employee?.id ?? '',
+      slug: shop.slug,
+      name: employee?.fullName ?? user.fullName ?? user.email,
+    };
+    const token = await this.jwt.signAsync(payload, { expiresIn: '12h' });
+    return {
+      token,
+      waiter: {
+        id: employee?.id ?? 'staff',
+        fullName: payload.name,
+      },
+      shop: {
+        id: shop.id,
+        name: shop.name,
+        slug: shop.slug,
+        logoUrl: shop.logoUrl ?? null,
+        accentColor: shop.accentColor ?? null,
+      },
+    };
+  }
+
   async me(slug: string, waiter: WaiterAuthPayload) {
     assertWaiterShopSlug(waiter, slug);
     const shop = await this.requireShop(slug);
     if (shop.id !== waiter.shopId) throw new UnauthorizedException();
+
+    if (waiter.typ === 'waiter_staff') {
+      const empId = waiterEmployeeIdOrNull(waiter);
+      if (empId) {
+        const employee = await this.employees.findOne({
+          where: { id: empId, shopId: shop.id },
+        });
+        if (!employee || !isEntityActive(employee.active)) {
+          throw new UnauthorizedException('Sesión inválida');
+        }
+        return {
+          waiter: { id: employee.id, fullName: employee.fullName },
+          shop: {
+            id: shop.id,
+            name: shop.name,
+            slug: shop.slug,
+            logoUrl: shop.logoUrl ?? null,
+            accentColor: shop.accentColor ?? null,
+          },
+        };
+      }
+      return {
+        waiter: { id: 'staff', fullName: waiter.name },
+        shop: {
+          id: shop.id,
+          name: shop.name,
+          slug: shop.slug,
+          logoUrl: shop.logoUrl ?? null,
+          accentColor: shop.accentColor ?? null,
+        },
+      };
+    }
+
     const employee = await this.employees.findOne({
       where: { id: waiter.employeeId, shopId: shop.id },
     });
@@ -303,7 +387,7 @@ export class WaiterService implements OnModuleInit {
         return this.sessionDetail(shop, existing);
       }
       existing.covers = covers;
-      existing.waiterEmployeeId = waiter.employeeId;
+      existing.waiterEmployeeId = waiterEmployeeIdOrNull(waiter);
       await this.sessions.save(existing);
       return this.sessionDetail(shop, existing);
     }
@@ -311,7 +395,7 @@ export class WaiterService implements OnModuleInit {
       this.sessions.create({
         shopId: shop.id,
         salonTableId: table.id,
-        waiterEmployeeId: waiter.employeeId,
+        waiterEmployeeId: waiterEmployeeIdOrNull(waiter),
         status: TableSessionStatus.OPEN,
         covers,
         customerTicketPrinted: false,
@@ -401,7 +485,7 @@ export class WaiterService implements OnModuleInit {
       customerNotes: dto.customerNotes,
       salonTableId: table.id,
       tableSessionId: session.id,
-      waiterEmployeeId: waiter.employeeId,
+      waiterEmployeeId: waiterEmployeeIdOrNull(waiter),
       tableLabel: table.label,
       waiterName: waiter.name,
       printKitchen,

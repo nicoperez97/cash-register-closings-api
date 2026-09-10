@@ -11,6 +11,8 @@ import { AuthModule } from '../auth/auth.module';
 import { CustomerOrdersModule } from '../customer-orders/customer-orders.module';
 import { PrintAgentModule } from '../print-agent/print-agent.module';
 import { ShopLiveModule } from '../shop-live/shop-live.module';
+import { ShopsModule } from '../shops/shops.module';
+import { StaffComandaController } from './staff-comanda.controller';
 import { WaiterAuthGuard } from './waiter-auth';
 import { WaiterController } from './waiter.controller';
 import { WaiterService } from './waiter.service';
@@ -27,11 +29,12 @@ import { WaiterService } from './waiter.service';
       CustomerOrder,
     ]),
     AuthModule,
+    ShopsModule,
     CustomerOrdersModule,
     PrintAgentModule,
     ShopLiveModule,
   ],
-  controllers: [WaiterController],
+  controllers: [WaiterController, StaffComandaController],
   providers: [WaiterService, WaiterAuthGuard],
 })
 export class WaiterModule {}
