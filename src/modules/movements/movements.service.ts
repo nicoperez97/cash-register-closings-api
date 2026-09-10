@@ -24,6 +24,7 @@ import {
   Permission,
 } from '../../common/enums';
 import { canEditExpenses, isGlobalAdmin, resolveUserPermissions } from '../../common/guards';
+import { detachRelations } from '../../common/detach-relations';
 import { isEntityActive } from '../../common/active.util';
 import { ShopsService } from '../shops/shops.service';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
@@ -1137,9 +1138,7 @@ export class MovementsService implements OnModuleInit {
 
     // Si las relaciones ManyToOne siguen hidratadas, TypeORM save() puede
     // pisar fromAccountId/toAccountId/conceptId con el id de la entidad vieja.
-    delete (row as any).fromAccount;
-    delete (row as any).toAccount;
-    delete (row as any).concept;
+    detachRelations(row, ['fromAccount', 'toAccount', 'concept']);
 
     await this.movements.save(row);
     if (!opts?.fromPayment) {
