@@ -141,6 +141,12 @@ export class WaiterController {
   constructor(private readonly waiter: WaiterService) {}
 
   @Public()
+  @Get()
+  bootstrap(@Param('slug') slug: string) {
+    return this.waiter.bootstrap(slug);
+  }
+
+  @Public()
   @Post('login')
   login(@Param('slug') slug: string, @Body() dto: WaiterLoginDto) {
     return this.waiter.login(slug, dto.pin);

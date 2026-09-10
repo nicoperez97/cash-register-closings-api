@@ -1,4 +1,4 @@
-/** Modo operativo del local (impacta módulos sugeridos; no fuerza canales). */
+/** Modo operativo del local: al paso (take away/delivery) vs restaurante (mesas en /pedir y/o mozo). */
 export enum ShopMode {
   AL_PASO = 'AL_PASO',
   RESTAURANTE = 'RESTAURANTE',
