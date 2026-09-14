@@ -302,7 +302,7 @@ export class CreateShopDto {
   } | null;
 
   @ApiPropertyOptional({
-    description: 'Zonas de delivery { id, name, fee, note? }',
+    description: 'Zonas de delivery { id, name, fee, note?, polygon?, color? }',
   })
   @IsOptional()
   @IsArray()
@@ -311,6 +311,8 @@ export class CreateShopDto {
     name: string;
     fee: number;
     note?: string | null;
+    polygon?: Array<{ lat: number; lng: number }> | null;
+    color?: string | null;
   }> | null;
 
   @ApiPropertyOptional({ description: 'Textos ETA de la landing pública' })

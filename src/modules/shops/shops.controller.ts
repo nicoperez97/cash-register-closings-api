@@ -156,6 +156,8 @@ export class ShopsController {
         name: string;
         fee: number;
         note?: string | null;
+        polygon?: Array<{ lat: number; lng: number }> | null;
+        color?: string | null;
       }> | null;
       orderingPayments?: {
         methods?: Array<'CASH' | 'TRANSFER'>;

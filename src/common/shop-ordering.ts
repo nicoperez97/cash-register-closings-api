@@ -29,11 +29,17 @@ export type ShopOrderingPayments = {
   whatsapp?: string | null;
 };
 
+export type DeliveryZonePoint = { lat: number; lng: number };
+
 export type DeliveryZone = {
   id: string;
   name: string;
   fee: number;
   note?: string | null;
+  /** Polígono del área (mín. 3 puntos). Si falta, la zona solo se elige a mano. */
+  polygon?: DeliveryZonePoint[] | null;
+  /** Color del polígono en el mapa (#RRGGBB). */
+  color?: string | null;
 };
 
 export type ShopOrderingEta = {
@@ -204,14 +210,35 @@ export function normalizeDeliveryZones(raw: unknown): DeliveryZone[] {
     if (!id || used.has(id)) id = newZoneId();
     used.add(id);
     const fee = Number(r.fee);
+    const polygon = normalizeZonePolygon((r as { polygon?: unknown }).polygon);
+    const colorRaw = String((r as { color?: unknown }).color ?? '')
+      .trim()
+      .toUpperCase();
+    const color = /^#[0-9A-F]{6}$/.test(colorRaw) ? colorRaw : null;
     out.push({
       id,
       name,
       fee: Number.isFinite(fee) && fee >= 0 ? fee : 0,
       note: String(r.note ?? '').trim().slice(0, 200) || null,
+      polygon,
+      color,
     });
   }
   return out;
+}
+
+function normalizeZonePolygon(raw: unknown): DeliveryZonePoint[] | null {
+  if (!Array.isArray(raw)) return null;
+  const pts: DeliveryZonePoint[] = [];
+  for (const row of raw.slice(0, 80)) {
+    if (!row || typeof row !== 'object') continue;
+    const lat = Number((row as DeliveryZonePoint).lat);
+    const lng = Number((row as DeliveryZonePoint).lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) continue;
+    pts.push({ lat, lng });
+  }
+  return pts.length >= 3 ? pts : null;
 }
 
 export function normalizeOrderingEta(raw: unknown): ShopOrderingEta | null {
