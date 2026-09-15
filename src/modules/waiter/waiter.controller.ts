@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
 import {
   ArrayMaxSize,
@@ -6,6 +6,7 @@ import {
   IsArray,
   IsBoolean,
   IsInt,
+  IsNumber,
   IsOptional,
   IsString,
   IsUUID,
@@ -95,10 +96,57 @@ class OpenSessionDto {
 }
 
 class CloseSessionDto {
-  @ApiPropertyOptional({ description: 'Imprimir ticket cliente al cerrar' })
+  @ApiProperty({ description: 'Id del medio de pago de mesa configurado en el local' })
+  @IsString()
+  @MaxLength(40)
+  paymentMethodId: string;
+}
+
+class PrintCustomerTicketDto {
+  @ApiPropertyOptional({ enum: ['none', 'percent', 'fixed'] })
+  @IsOptional()
+  @IsString()
+  @MaxLength(16)
+  discountMode?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  discountValue?: number | null;
+}
+
+class PatchSessionLineDto {
+  @ApiProperty()
+  @IsUUID()
+  orderId: string;
+
+  @ApiProperty({ description: 'Índice de la línea en order.items' })
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(200)
+  lineIndex: number;
+
+  @ApiPropertyOptional({ description: 'Nueva cantidad (0 = quitar)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(99)
+  qty?: number | null;
+
+  @ApiPropertyOptional({ description: 'Nuevo precio unitario' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  unitPrice?: number | null;
+
+  @ApiPropertyOptional({ description: 'Quitar la línea (extra o ítem)' })
   @IsOptional()
   @IsBoolean()
-  printCustomerTicket?: boolean;
+  remove?: boolean;
 }
 
 class CreateSessionOrderDto {
@@ -220,13 +268,35 @@ export class WaiterController {
 
   @Public()
   @UseGuards(WaiterAuthGuard)
+  @Patch('sessions/:id/lines')
+  patchSessionLine(
+    @Param('slug') slug: string,
+    @CurrentWaiter() waiter: WaiterAuthPayload,
+    @Param('id') id: string,
+    @Body() dto: PatchSessionLineDto,
+  ) {
+    return this.waiter.patchSessionLine(slug, waiter, id, {
+      orderId: dto.orderId,
+      lineIndex: dto.lineIndex,
+      qty: dto.qty,
+      unitPrice: dto.unitPrice,
+      remove: dto.remove,
+    });
+  }
+
+  @Public()
+  @UseGuards(WaiterAuthGuard)
   @Post('sessions/:id/print-customer-ticket')
   printCustomerTicket(
     @Param('slug') slug: string,
     @CurrentWaiter() waiter: WaiterAuthPayload,
     @Param('id') id: string,
+    @Body() dto: PrintCustomerTicketDto,
   ) {
-    return this.waiter.printCustomerTicket(slug, waiter, id);
+    return this.waiter.printCustomerTicket(slug, waiter, id, {
+      discountMode: dto?.discountMode,
+      discountValue: dto?.discountValue,
+    });
   }
 
   @Public()
@@ -239,7 +309,7 @@ export class WaiterController {
     @Body() dto: CloseSessionDto,
   ) {
     return this.waiter.closeSession(slug, waiter, id, {
-      printCustomerTicket: !!dto?.printCustomerTicket,
+      paymentMethodId: dto?.paymentMethodId,
     });
   }
 }

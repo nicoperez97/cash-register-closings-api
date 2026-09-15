@@ -29,6 +29,54 @@ export type ShopOrderingPayments = {
   whatsapp?: string | null;
 };
 
+/** Medio de pago de mesa (comanda): nombre libre + cuenta opcional del local. */
+export type TablePaymentMethod = {
+  id: string;
+  name: string;
+  accountId?: string | null;
+  active?: boolean;
+};
+
+function newTablePayId(): string {
+  return `tp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+export function normalizeTablePaymentMethods(raw: unknown): TablePaymentMethod[] {
+  if (!Array.isArray(raw)) {
+    return [
+      { id: 'tp_cash', name: 'Efectivo', accountId: null, active: true },
+      { id: 'tp_card', name: 'Tarjeta', accountId: null, active: true },
+      { id: 'tp_transfer', name: 'Transferencia', accountId: null, active: true },
+    ];
+  }
+  const used = new Set<string>();
+  const out: TablePaymentMethod[] = [];
+  for (const row of raw.slice(0, 30)) {
+    if (!row || typeof row !== 'object') continue;
+    const r = row as TablePaymentMethod;
+    const name = String(r.name ?? '').trim().slice(0, 80);
+    if (!name) continue;
+    let id = String(r.id ?? '').trim().slice(0, 40);
+    if (!id || used.has(id)) id = newTablePayId();
+    used.add(id);
+    const accountId = String(r.accountId ?? '').trim().slice(0, 36) || null;
+    out.push({
+      id,
+      name,
+      accountId,
+      active: r.active !== false,
+    });
+  }
+  if (!out.length) {
+    return [
+      { id: 'tp_cash', name: 'Efectivo', accountId: null, active: true },
+      { id: 'tp_card', name: 'Tarjeta', accountId: null, active: true },
+      { id: 'tp_transfer', name: 'Transferencia', accountId: null, active: true },
+    ];
+  }
+  return out;
+}
+
 export type DeliveryZonePoint = { lat: number; lng: number };
 
 export type DeliveryZone = {

@@ -31,11 +31,13 @@ import {
   normalizeOrderingPayments,
   normalizeShopMode,
   normalizeShopOrderingHours,
+  normalizeTablePaymentMethods,
   ShopMode,
   type DeliveryZone,
   type ShopOrderingEta,
   type ShopOrderingHours,
   type ShopOrderingPayments,
+  type TablePaymentMethod,
 } from '../../common/shop-ordering';
 import { normalizeShopMenus } from '../menu/menu-parse.util';
 import {
@@ -452,6 +454,14 @@ export class ShopsService implements OnModuleInit {
     try {
       await this.shops.query(`
         ALTER TABLE shops
+          ADD COLUMN tablePaymentMethods JSON NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
           ADD COLUMN deliveryZones JSON NULL
       `);
     } catch {
@@ -753,6 +763,7 @@ export class ShopsService implements OnModuleInit {
         deliveryEnabled: dto.deliveryEnabled ?? false,
         orderingHours: normalizeShopOrderingHours(dto.orderingHours),
         orderingPayments: normalizeOrderingPayments(dto.orderingPayments),
+        tablePaymentMethods: normalizeTablePaymentMethods(dto.tablePaymentMethods),
         deliveryZones: normalizeDeliveryZones(dto.deliveryZones),
         orderingEta: normalizeOrderingEta(dto.orderingEta),
         orderingExtras: normalizeOrderingExtras(dto.orderingExtras),
@@ -888,6 +899,9 @@ export class ShopsService implements OnModuleInit {
     }
     if (dto.orderingPayments !== undefined) {
       shop.orderingPayments = normalizeOrderingPayments(dto.orderingPayments);
+    }
+    if (dto.tablePaymentMethods !== undefined) {
+      shop.tablePaymentMethods = normalizeTablePaymentMethods(dto.tablePaymentMethods);
     }
     if (dto.deliveryZones !== undefined) {
       shop.deliveryZones = normalizeDeliveryZones(dto.deliveryZones);
@@ -1034,6 +1048,7 @@ export class ShopsService implements OnModuleInit {
       orderingEta?: ShopOrderingEta | null;
       deliveryZones?: DeliveryZone[] | null;
       orderingPayments?: ShopOrderingPayments | null;
+      tablePaymentMethods?: TablePaymentMethod[] | null;
       orderingExtras?: Array<{
         id?: string;
         name: string;
@@ -1084,6 +1099,9 @@ export class ShopsService implements OnModuleInit {
         whatsapp:
           incoming.whatsapp !== undefined ? incoming.whatsapp : (prev?.whatsapp ?? null),
       });
+    }
+    if (dto.tablePaymentMethods !== undefined) {
+      shop.tablePaymentMethods = normalizeTablePaymentMethods(dto.tablePaymentMethods);
     }
     if (dto.orderingExtras !== undefined) {
       shop.orderingExtras = normalizeOrderingExtras(dto.orderingExtras);
@@ -1465,6 +1483,7 @@ export class ShopsService implements OnModuleInit {
       deliveryEnabled: !!s.deliveryEnabled,
       orderingHours: normalizeShopOrderingHours(s.orderingHours),
       orderingPayments: normalizeOrderingPayments(s.orderingPayments),
+      tablePaymentMethods: normalizeTablePaymentMethods(s.tablePaymentMethods),
       deliveryZones: normalizeDeliveryZones(s.deliveryZones),
       orderingEta: normalizeOrderingEta(s.orderingEta),
       orderingExtras: normalizeOrderingExtras(s.orderingExtras),
