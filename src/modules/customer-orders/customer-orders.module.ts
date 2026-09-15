@@ -1,17 +1,15 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CustomerOrder } from '../../entities/customer-order.entity';
 import { Shop } from '../../entities/shop.entity';
 import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
-import {
-  TableSession,
-  TableSessionStatus,
-} from '../../entities/table-session.entity';
+import { TableSession } from '../../entities/table-session.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PrintAgentModule } from '../print-agent/print-agent.module';
 import { ShopLiveModule } from '../shop-live/shop-live.module';
 import { ShopsModule } from '../shops/shops.module';
+import { IntegrationsModule } from '../integrations/integrations.module';
 import {
   CustomerOrdersController,
   PublicCustomerOrdersController,
@@ -25,6 +23,7 @@ import { CustomerOrdersService } from './customer-orders.service';
     ShopLiveModule,
     NotificationsModule,
     PrintAgentModule,
+    forwardRef(() => IntegrationsModule),
   ],
   controllers: [PublicCustomerOrdersController, CustomerOrdersController],
   providers: [CustomerOrdersService],

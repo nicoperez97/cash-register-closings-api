@@ -88,11 +88,34 @@ export class CustomerOrder extends BaseEntity {
   @Column({ type: 'varchar', length: 300, nullable: true })
   address?: string | null;
 
+  /** Coordenadas de entrega (requeridas para Deliverate). */
+  @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true })
+  deliveryLat?: string | null;
+
+  @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true })
+  deliveryLng?: string | null;
+
+  /** Altura / street_number para Deliverate. */
+  @Column({ type: 'varchar', length: 40, nullable: true })
+  deliveryStreetNumber?: string | null;
+
   @Column({ type: 'varchar', length: 40, nullable: true })
   deliveryZoneId?: string | null;
 
   @Column({ type: 'varchar', length: 80, nullable: true })
   deliveryZoneName?: string | null;
+
+  /** Origen externo (ej. deliverate). */
+  @Column({ type: 'varchar', length: 32, nullable: true })
+  externalSource?: string | null;
+
+  /** ID en el sistema externo (order_id Deliverate). */
+  @Column({ type: 'varchar', length: 80, nullable: true })
+  externalId?: string | null;
+
+  /** Meta del externo: state, dboy_id, delays, etc. */
+  @Column({ type: 'simple-json', nullable: true })
+  externalMeta?: Record<string, unknown> | null;
 
   @Column({ type: 'varchar', length: 16 })
   paymentMethod: CustomerOrderPaymentMethod;

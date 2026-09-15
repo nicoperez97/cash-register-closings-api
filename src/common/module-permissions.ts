@@ -29,6 +29,7 @@ export type ModuleKey =
   | 'orders'
   | 'customerOrders'
   | 'orderingCatalog'
+  | 'integrations'
   | 'tips'
   | 'reimbursements'
   | 'vacations'
@@ -287,6 +288,15 @@ export const MODULE_DEFS: ModuleDef[] = [
     ],
   },
   {
+    key: 'integrations',
+    label: 'Integraciones',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
     key: 'tips',
     label: 'Propinas',
     levels: [
@@ -438,6 +448,7 @@ export function expandModulePermissions(
   pair('shortages', 'shortages.read', 'shortages.manage');
   pair('orders', 'orders.read', 'orders.manage');
   pair('customerOrders', 'customerOrders.read', 'customerOrders.manage');
+  pair('integrations', 'integrations.read', 'integrations.manage');
   if (modules.orderingCatalog === 'manage') add(set, 'orderingCatalog.manage');
   switch (modules.tips) {
     case 'read':
@@ -545,6 +556,7 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
     orders: level('orders.read', 'orders.manage'),
     customerOrders: level('customerOrders.read', 'customerOrders.manage'),
     orderingCatalog: has('orderingCatalog.manage') ? 'manage' : 'none',
+    integrations: level('integrations.read', 'integrations.manage'),
     tips: (() => {
       if (has('tips.manage')) return 'manage';
       if (has('tips.create')) return 'create';
