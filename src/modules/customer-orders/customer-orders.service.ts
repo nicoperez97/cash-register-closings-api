@@ -32,6 +32,7 @@ import {
   previousShiftBusinessDate,
   previousShiftOf,
   resolveCurrentShift,
+  shiftClosedBetween,
   shopShiftOwnershipRangeUtc,
   weekdayFromIsoDate,
   type ShopShift,
@@ -287,21 +288,18 @@ export class CustomerOrdersService implements OnModuleInit {
       throw new NotFoundException('Pedidos online no disponibles');
     }
 
+    await this.maybeAutoCloseOrdering(shop);
+
     const hours = normalizeShopOrderingHours(shop.orderingHours);
     const takeawayHours = hours?.takeaway ?? null;
     const deliveryHours = hours?.delivery ?? null;
-    const now = new Date();
     const forceClosed = !!shop.orderingForceClosed;
     const takeawayEnabled = shop.takeawayEnabled !== false;
     const deliveryEnabled = !!shop.deliveryEnabled;
-    const takeawayOpen =
-      !forceClosed &&
-      takeawayEnabled &&
-      isOrderingChannelOpenNow(takeawayHours, now, shop.timezone);
-    const deliveryOpen =
-      !forceClosed &&
-      deliveryEnabled &&
-      isOrderingChannelOpenNow(deliveryHours, now, shop.timezone);
+    // Abierto/cerrado es manual: si no está forzado cerrado, los canales habilitados aceptan pedidos
+    // aunque el horario o el turno aún no hayan empezado.
+    const takeawayOpen = !forceClosed && takeawayEnabled;
+    const deliveryOpen = !forceClosed && deliveryEnabled;
     const payments = normalizeOrderingPayments(shop.orderingPayments) ?? {
       methods: ['CASH', 'TRANSFER'] as CustomerOrderPaymentMethod[],
       transferInstructions: null,
@@ -380,11 +378,12 @@ export class CustomerOrdersService implements OnModuleInit {
     if (!shop || !shop.onlineOrderingEnabled) {
       throw new NotFoundException('Pedidos online no disponibles');
     }
+    await this.maybeAutoCloseOrdering(shop);
     if (shop.orderingForceClosed) {
       throw new BadRequestException('El local está cerrado para pedidos online');
     }
     return this.createOrderForShop(shop, dto, {
-      bypassHours: false,
+      bypassHours: true,
       response: 'public',
       allowDiscount: false,
     });
@@ -395,7 +394,7 @@ export class CustomerOrdersService implements OnModuleInit {
     if (!shop) throw new NotFoundException('Local no encontrado');
     if (!shop.waiterOrderingEnabled) {
       throw new ForbiddenException(
-        'Comanda de mozos no disponible. Activála en Configuración → Pedidos y guardá.',
+        'Comanda de mozos no disponible. Activála en Configuración → Canales y guardá.',
       );
     }
     const menus = normalizeShopMenus(shop.menu);
@@ -1194,5 +1193,22 @@ export class CustomerOrdersService implements OnModuleInit {
     } catch {
       // no bloquear el pedido público si falla el aviso
     }
+  }
+
+  /** Cierra pedidos online si ya pasó el fin de un turno desde que se abrió a mano. */
+  private async maybeAutoCloseOrdering(shop: Shop): Promise<boolean> {
+    if (shop.orderingForceClosed) return false;
+    let openedAt = shop.orderingOpenedAt ? new Date(shop.orderingOpenedAt) : null;
+    if (!openedAt || Number.isNaN(openedAt.getTime())) {
+      shop.orderingOpenedAt = new Date();
+      await this.shops.save(shop);
+      return false;
+    }
+    const shifts = normalizeShopShifts(shop.shifts, shop.openingTime);
+    if (!shiftClosedBetween(openedAt, new Date(), shifts, shop.timezone)) return false;
+    shop.orderingForceClosed = true;
+    shop.orderingOpenedAt = null;
+    await this.shops.save(shop);
+    return true;
   }
 }

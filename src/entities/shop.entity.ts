@@ -152,11 +152,16 @@ export class Shop extends BaseEntity {
   waiterOrderingEnabled: boolean;
 
   /**
-   * Cierre manual de la página pública (fuera de horario).
-   * true = clientes ven cerrado aunque el horario diga abierto.
+   * Cierre manual de la página pública.
+   * true = clientes no pueden pedir (aunque el horario diga abierto).
+   * false = abierto: la página pública funciona aunque el turno aún no haya empezado.
    */
   @Column({ type: 'tinyint', default: 0 })
   orderingForceClosed: boolean;
+
+  /** Momento en que se abrió manualmente (para auto-cerrar al fin del turno). */
+  @Column({ type: 'datetime', nullable: true })
+  orderingOpenedAt?: Date | null;
 
   @Column({ type: 'tinyint', default: 1 })
   takeawayEnabled: boolean;
