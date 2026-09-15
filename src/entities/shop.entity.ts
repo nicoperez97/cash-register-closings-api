@@ -12,6 +12,7 @@ import {
   ShopOrderingEta,
   ShopOrderingHours,
   ShopOrderingPayments,
+  TablePaymentMethod,
 } from '../common/shop-ordering';
 
 /** Mapa código POS → campo de cierre (cash|card|mercadoPago|delivery|transfer|accountDni|other). */
@@ -176,6 +177,10 @@ export class Shop extends BaseEntity {
   /** Medios de pago del pedido online. */
   @Column({ type: 'simple-json', nullable: true })
   orderingPayments?: ShopOrderingPayments | null;
+
+  /** Medios de pago al cerrar mesa (comanda), con cuenta opcional. */
+  @Column({ type: 'simple-json', nullable: true })
+  tablePaymentMethods?: TablePaymentMethod[] | null;
 
   /** Zonas de delivery con costo. */
   @Column({ type: 'simple-json', nullable: true })

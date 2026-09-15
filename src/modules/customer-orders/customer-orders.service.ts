@@ -46,6 +46,7 @@ import {
   normalizeOrderingPayments,
   normalizeShopMode,
   normalizeShopOrderingHours,
+  normalizeTablePaymentMethods,
 } from '../../common/shop-ordering';
 import { normalizeRemovableIngredients, normalizeShopMenus, ShopMenuItem } from '../menu/menu-parse.util';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -417,6 +418,9 @@ export class CustomerOrdersService implements OnModuleInit {
           price: e.price,
           menuItemIds: e.menuItemIds ?? [],
         })),
+      tablePaymentMethods: normalizeTablePaymentMethods(shop.tablePaymentMethods).filter(
+        (m) => m.active !== false,
+      ),
       menus: menus.map((m) => ({
         id: m.id,
         slug: m.slug,

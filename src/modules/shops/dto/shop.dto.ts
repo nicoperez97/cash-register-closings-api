@@ -302,6 +302,18 @@ export class CreateShopDto {
   } | null;
 
   @ApiPropertyOptional({
+    description: 'Medios de pago de mesa (comanda): nombre + accountId opcional',
+  })
+  @IsOptional()
+  @IsArray()
+  tablePaymentMethods?: Array<{
+    id?: string;
+    name: string;
+    accountId?: string | null;
+    active?: boolean;
+  }> | null;
+
+  @ApiPropertyOptional({
     description: 'Zonas de delivery { id, name, fee, note?, polygon?, color? }',
   })
   @IsOptional()

@@ -11,7 +11,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
 import { In, Repository } from 'typeorm';
 import { isEntityActive } from '../../common/active.util';
-import { CustomerOrder } from '../../entities/customer-order.entity';
+import { CustomerOrder, CustomerOrderLine } from '../../entities/customer-order.entity';
 import { Employee } from '../../entities/employee.entity';
 import { SalonMapObject } from '../../entities/salon-map-object.entity';
 import { SalonSector } from '../../entities/salon-sector.entity';
@@ -31,9 +31,67 @@ import {
   waiterEmployeeIdOrNull,
   WaiterAuthPayload,
 } from './waiter-auth';
+import { normalizeTablePaymentMethods } from '../../common/shop-ordering';
 
 function hashPin(pin: string): string {
   return createHash('sha256').update(String(pin).trim()).digest('hex');
+}
+
+function calcTicketDiscount(
+  subtotal: number,
+  mode?: string | null,
+  value?: number | null,
+): { discountAmount: number; discountLabel: string | null } {
+  const sub = Math.max(0, Number(subtotal) || 0);
+  const m = String(mode || 'none').toLowerCase();
+  const v = Math.max(0, Number(value) || 0);
+  if (m === 'percent' && v > 0) {
+    const pct = Math.min(100, v);
+    const amount = Math.round(((sub * pct) / 100) * 100) / 100;
+    return { discountAmount: amount, discountLabel: `${pct}%` };
+  }
+  if (m === 'fixed' && v > 0) {
+    const amount = Math.min(sub, Math.round(v * 100) / 100);
+    return { discountAmount: amount, discountLabel: 'Desc.' };
+  }
+  return { discountAmount: 0, discountLabel: null };
+}
+
+function isExtraLine(line: CustomerOrderLine): boolean {
+  return String(line.kind || '').toUpperCase() === 'EXTRA';
+}
+
+/** Índices de extras agrupados bajo el ítem en `itemIdx` (mismo criterio que la UI). */
+function pairedExtraIndices(items: CustomerOrderLine[], itemIdx: number): number[] {
+  const target = items[itemIdx];
+  if (!target || isExtraLine(target)) return [];
+  const targetId = String(target.menuItemId || '').trim();
+  if (!targetId) return [];
+
+  const mains: number[] = [];
+  const extras: number[] = [];
+  items.forEach((l, i) => {
+    if (isExtraLine(l)) extras.push(i);
+    else mains.push(i);
+  });
+  const used = new Set<number>();
+  for (const mi of mains) {
+    const id = String(items[mi].menuItemId || '').trim();
+    const group: number[] = [];
+    for (const ei of extras) {
+      if (used.has(ei)) continue;
+      const parent = String(items[ei].attachedToMenuItemId || '').trim();
+      if (!parent || !id || parent !== id) continue;
+      used.add(ei);
+      group.push(ei);
+    }
+    if (mi === itemIdx) return group;
+  }
+  return [];
+}
+
+function money2(n: number): string {
+  return (Math.round((Number(n) || 0) * 100) / 100).toFixed(2);
 }
 
 @Injectable()
@@ -95,6 +153,48 @@ export class WaiterService implements OnModuleInit {
     try {
       await this.sessions.query(
         `ALTER TABLE table_sessions ADD COLUMN customerTicketPrinted TINYINT(1) NOT NULL DEFAULT 0`,
+      );
+    } catch {
+      /* already exists */
+    }
+    try {
+      await this.sessions.query(
+        `ALTER TABLE table_sessions ADD COLUMN ticketDiscountAmount DECIMAL(12,2) NOT NULL DEFAULT 0`,
+      );
+    } catch {
+      /* already exists */
+    }
+    try {
+      await this.sessions.query(
+        `ALTER TABLE table_sessions ADD COLUMN ticketDiscountLabel VARCHAR(80) NULL`,
+      );
+    } catch {
+      /* already exists */
+    }
+    try {
+      await this.sessions.query(
+        `ALTER TABLE table_sessions ADD COLUMN ticketTotal DECIMAL(12,2) NULL`,
+      );
+    } catch {
+      /* already exists */
+    }
+    try {
+      await this.sessions.query(
+        `ALTER TABLE table_sessions ADD COLUMN paymentMethodId VARCHAR(40) NULL`,
+      );
+    } catch {
+      /* already exists */
+    }
+    try {
+      await this.sessions.query(
+        `ALTER TABLE table_sessions ADD COLUMN paymentMethodName VARCHAR(80) NULL`,
+      );
+    } catch {
+      /* already exists */
+    }
+    try {
+      await this.sessions.query(
+        `ALTER TABLE table_sessions ADD COLUMN paymentAccountId CHAR(36) NULL`,
       );
     } catch {
       /* already exists */
@@ -500,11 +600,111 @@ export class WaiterService implements OnModuleInit {
     return order;
   }
 
+  /** Ajusta cantidad, precio o quita una línea del ticket (antes de imprimir/cerrar). */
+  async patchSessionLine(
+    slug: string,
+    waiter: WaiterAuthPayload,
+    sessionId: string,
+    dto: {
+      orderId: string;
+      lineIndex: number;
+      qty?: number | null;
+      unitPrice?: number | null;
+      remove?: boolean;
+    },
+  ) {
+    assertWaiterShopSlug(waiter, slug);
+    const shop = await this.requireShop(slug);
+    const session = await this.sessions.findOne({
+      where: { id: sessionId, shopId: shop.id },
+    });
+    if (!session) throw new NotFoundException('Sesión no encontrada');
+    if (session.status !== TableSessionStatus.OPEN) {
+      throw new BadRequestException('La mesa ya está cerrada');
+    }
+
+    const order = await this.orders.findOne({
+      where: { id: dto.orderId, shopId: shop.id, tableSessionId: session.id },
+    });
+    if (!order) throw new NotFoundException('Envío no encontrado');
+
+    const items = [...(order.items ?? [])];
+    const idx = Number(dto.lineIndex);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= items.length) {
+      throw new BadRequestException('Línea inválida');
+    }
+
+    const line = items[idx];
+    const remove = !!dto.remove || (dto.qty != null && Number(dto.qty) <= 0);
+    const hasQty = dto.qty != null && Number.isFinite(Number(dto.qty));
+    const hasPrice = dto.unitPrice != null && Number.isFinite(Number(dto.unitPrice));
+
+    if (!remove && !hasQty && !hasPrice) {
+      throw new BadRequestException('Nada para actualizar');
+    }
+
+    if (remove) {
+      const toRemove = new Set<number>([idx]);
+      if (!isExtraLine(line)) {
+        for (const ei of pairedExtraIndices(items, idx)) toRemove.add(ei);
+      }
+      const next = items.filter((_, i) => !toRemove.has(i));
+      if (!next.length) {
+        await this.orders.remove(order);
+      } else {
+        order.items = next;
+        this.recalcOrderTotals(order);
+        await this.orders.save(order);
+      }
+    } else {
+      if (hasPrice) {
+        line.unitPrice = Math.max(0, Math.round(Number(dto.unitPrice) * 100) / 100);
+      }
+      if (hasQty) {
+        const qty = Math.max(1, Math.min(99, Math.floor(Number(dto.qty))));
+        line.qty = qty;
+        if (!isExtraLine(line)) {
+          for (const ei of pairedExtraIndices(items, idx)) {
+            items[ei].qty = qty;
+          }
+        }
+      }
+      items[idx] = line;
+      order.items = items;
+      this.recalcOrderTotals(order);
+      await this.orders.save(order);
+    }
+
+    if (session.customerTicketPrinted) {
+      session.customerTicketPrinted = false;
+      session.ticketDiscountAmount = '0';
+      session.ticketDiscountLabel = null;
+      session.ticketTotal = null;
+      await this.sessions.save(session);
+    }
+
+    this.live.tick(shop.id, 'customer-orders');
+    return this.sessionDetail(shop, session);
+  }
+
+  private recalcOrderTotals(order: CustomerOrder): void {
+    const subtotal = (order.items ?? []).reduce(
+      (s, l) => s + (Number(l.unitPrice) || 0) * (Number(l.qty) || 0),
+      0,
+    );
+    const discount = Math.min(subtotal, Number(order.discountAmount ?? 0) || 0);
+    const fee = Number(order.deliveryFee ?? 0) || 0;
+    const total = Math.max(0, Math.round((subtotal - discount + fee) * 100) / 100);
+    order.subtotal = money2(subtotal);
+    order.discountAmount = money2(discount);
+    order.total = money2(total);
+  }
+
   async closeSession(
     slug: string,
     waiter: WaiterAuthPayload,
     sessionId: string,
-    opts?: { printCustomerTicket?: boolean },
+    opts?: { paymentMethodId?: string | null },
   ) {
     assertWaiterShopSlug(waiter, slug);
     const shop = await this.requireShop(slug);
@@ -527,23 +727,22 @@ export class WaiterService implements OnModuleInit {
       return this.sessionDetail(shop, session);
     }
 
-    if (opts?.printCustomerTicket) {
-      const last = orders[0];
-      const table = await this.tables.findOne({
-        where: { id: session.salonTableId, shopId: shop.id },
-      });
-      await this.printAgent
-        .enqueueCustomerOrder(shop, last, 'TABLE', {
-          printKitchen: false,
-          printCustomerTicket: true,
-          tableLabel: table?.label ?? null,
-          waiterName: waiter.name,
-          customerSourceSuffix: 'close',
-        })
-        .catch(() => undefined);
-      session.customerTicketPrinted = true;
+    if (!session.customerTicketPrinted) {
+      throw new BadRequestException('Primero imprimí el ticket del cliente');
     }
 
+    const methods = normalizeTablePaymentMethods(shop.tablePaymentMethods).filter(
+      (m) => m.active !== false,
+    );
+    const methodId = String(opts?.paymentMethodId ?? '').trim();
+    const method = methods.find((m) => m.id === methodId);
+    if (!method) {
+      throw new BadRequestException('Elegí la forma de pago');
+    }
+
+    session.paymentMethodId = method.id;
+    session.paymentMethodName = method.name;
+    session.paymentAccountId = method.accountId ?? null;
     session.status = TableSessionStatus.CLOSED;
     session.closedAt = new Date();
     await this.sessions.save(session);
@@ -551,11 +750,12 @@ export class WaiterService implements OnModuleInit {
     return this.sessionDetail(shop, session);
   }
 
-  /** Imprime ticket cliente sin cerrar la mesa. */
+  /** Imprime ticket cliente (todos los envíos) con descuento opcional, sin cerrar. */
   async printCustomerTicket(
     slug: string,
     waiter: WaiterAuthPayload,
     sessionId: string,
+    opts?: { discountMode?: string | null; discountValue?: number | null },
   ) {
     assertWaiterShopSlug(waiter, slug);
     const shop = await this.requireShop(slug);
@@ -568,25 +768,55 @@ export class WaiterService implements OnModuleInit {
     }
     const orders = await this.orders.find({
       where: { shopId: shop.id, tableSessionId: session.id },
-      order: { createdAt: 'DESC' },
+      order: { createdAt: 'ASC' },
     });
     if (!orders.length) {
       throw new BadRequestException('No hay envíos para imprimir');
     }
-    const last = orders[0];
     const table = await this.tables.findOne({
       where: { id: session.salonTableId, shopId: shop.id },
     });
+    const subtotal = orders.reduce((s, o) => s + (Number(o.total) || 0), 0);
+    const { discountAmount, discountLabel } = calcTicketDiscount(
+      subtotal,
+      opts?.discountMode,
+      opts?.discountValue,
+    );
+    const total = Math.max(0, Math.round((subtotal - discountAmount) * 100) / 100);
+    const items = orders.flatMap((o) =>
+      (o.items ?? []).map((it) => ({
+        menuItemId: it.menuItemId ?? null,
+        name: it.name,
+        qty: it.qty,
+        unitPrice: Number(it.unitPrice) || 0,
+        notes: it.notes ?? null,
+        kind: it.kind || 'ITEM',
+        removedIngredients: it.removedIngredients ?? [],
+        attachedToMenuItemId: it.attachedToMenuItemId ?? null,
+        extraId: it.extraId ?? null,
+      })),
+    );
+    const code = orders.map((o) => o.code).filter(Boolean).join('+') || session.id.slice(0, 6);
+
     await this.printAgent
-      .enqueueCustomerOrder(shop, last, 'TABLE', {
-        printKitchen: false,
-        printCustomerTicket: true,
+      .enqueueTableSessionTicket(shop, {
+        sessionId: session.id,
+        code,
+        items,
+        subtotal,
+        discountAmount,
+        discountLabel,
+        total,
         tableLabel: table?.label ?? null,
         waiterName: waiter.name,
-        customerSourceSuffix: 'ticket',
+        covers: Number(session.covers) || 2,
       })
       .catch(() => undefined);
+
     session.customerTicketPrinted = true;
+    session.ticketDiscountAmount = String(discountAmount);
+    session.ticketDiscountLabel = discountLabel;
+    session.ticketTotal = String(total);
     await this.sessions.save(session);
     this.live.tick(shop.id, 'customer-orders');
     return this.sessionDetail(shop, session);
@@ -605,11 +835,22 @@ export class WaiterService implements OnModuleInit {
       where: { shopId: shop.id, tableSessionId: session.id },
       order: { createdAt: 'ASC' },
     });
+    const subtotal = orders.reduce((s, o) => s + (Number(o.total) || 0), 0);
     return {
       id: session.id,
       status: session.status,
       covers: Number(session.covers) || 2,
       customerTicketPrinted: !!session.customerTicketPrinted,
+      ticketDiscountAmount: Number(session.ticketDiscountAmount ?? 0) || 0,
+      ticketDiscountLabel: session.ticketDiscountLabel ?? null,
+      ticketTotal:
+        session.ticketTotal == null ? null : Number(session.ticketTotal) || 0,
+      paymentMethodId: session.paymentMethodId ?? null,
+      paymentMethodName: session.paymentMethodName ?? null,
+      paymentMethods: normalizeTablePaymentMethods(shop.tablePaymentMethods).filter(
+        (m) => m.active !== false,
+      ),
+      sessionSubtotal: subtotal,
       orderCount: orders.length,
       openedAt: session.createdAt,
       closedAt: session.closedAt ?? null,

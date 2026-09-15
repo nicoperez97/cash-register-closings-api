@@ -338,6 +338,62 @@ export class PrintAgentService implements OnModuleInit {
     return kitchen;
   }
 
+  /** Ticket cliente de toda la sesión de mesa (varios envíos + descuento). */
+  async enqueueTableSessionTicket(
+    shop: Shop,
+    input: {
+      sessionId: string;
+      code: string;
+      items: Array<Record<string, unknown>>;
+      subtotal: number;
+      discountAmount: number;
+      discountLabel?: string | null;
+      total: number;
+      tableLabel?: string | null;
+      waiterName?: string | null;
+      covers?: number;
+    },
+  ) {
+    if (!shop.printAgentTokenHash) return null;
+    const tableLabel = input.tableLabel?.trim() || null;
+    const waiterName = input.waiterName?.trim() || null;
+    const suffix = Date.now().toString(36);
+    return this.enqueue({
+      shopId: shop.id,
+      kind: 'CUSTOMER_ORDER',
+      sourceId: `ts_${input.sessionId}_customer_${suffix}`,
+      copies: 1,
+      payload: {
+        kind: 'CUSTOMER_ORDER',
+        ticketType: 'CUSTOMER',
+        shopName: shop.name,
+        reason: 'TABLE',
+        orderId: input.sessionId,
+        code: input.code,
+        fulfillment: 'TABLE',
+        guestName: tableLabel ? `Mesa ${tableLabel}` : 'Mesa',
+        phone: null,
+        address: null,
+        deliveryZoneName: null,
+        paymentMethod: null,
+        cashAmount: null,
+        customerNotes:
+          input.covers && input.covers > 0 ? `${input.covers} comensales` : null,
+        discountLabel: input.discountLabel ?? null,
+        discountAmount: Number(input.discountAmount) || 0,
+        total: Number(input.total) || 0,
+        items: input.items,
+        createdAt: new Date().toISOString(),
+        acceptedAt: null,
+        tableLabel,
+        waiterName,
+        salonTableId: null,
+        tableSessionId: input.sessionId,
+        subtitle: tableLabel ? `MESA ${tableLabel}` : 'MESA',
+      },
+    });
+  }
+
   private async enqueue(input: {
     shopId: string;
     kind: PrintJobKind;

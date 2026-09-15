@@ -34,6 +34,29 @@ export class TableSession extends BaseEntity {
   @Column({ type: 'tinyint', default: 0 })
   customerTicketPrinted: boolean;
 
+  /** Descuento aplicado al ticket cliente (monto). */
+  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
+  ticketDiscountAmount: string;
+
+  /** Etiqueta del descuento (ej. "10%" o "Desc."). */
+  @Column({ type: 'varchar', length: 80, nullable: true })
+  ticketDiscountLabel?: string | null;
+
+  /** Total del ticket cliente (subtotal − descuento) al imprimir. */
+  @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  ticketTotal?: string | null;
+
+  /** Medio de pago elegido al cerrar (id de tablePaymentMethods). */
+  @Column({ type: 'varchar', length: 40, nullable: true })
+  paymentMethodId?: string | null;
+
+  @Column({ type: 'varchar', length: 80, nullable: true })
+  paymentMethodName?: string | null;
+
+  /** Cuenta del local vinculada al medio (snapshot al cerrar). */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  paymentAccountId?: string | null;
+
   @Column({ type: 'datetime', precision: 6, nullable: true })
   closedAt?: Date | null;
 
