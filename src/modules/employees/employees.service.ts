@@ -9,7 +9,12 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
 import { Not, Repository } from 'typeorm';
-import { Employee, EmployeeType } from '../../entities/employee.entity';
+import {
+  Employee,
+  EmployeeJobRole,
+  EmployeeType,
+  normalizeEmployeeJobRoles,
+} from '../../entities/employee.entity';
 import { SalaryHistorySource } from '../../entities/employee-salary-history.entity';
 import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
@@ -152,6 +157,25 @@ export class EmployeesService implements OnModuleInit {
     } catch {
       // ya existe
     }
+    try {
+      await this.employees.query(`
+        ALTER TABLE employees
+          ADD COLUMN jobRoles JSON NULL
+      `);
+    } catch {
+      // ya existe
+    }
+    // Backfill: productores legacy → rol PRODUCER
+    try {
+      await this.employees.query(`
+        UPDATE employees
+        SET jobRoles = JSON_ARRAY('PRODUCER')
+        WHERE producesFood = 1
+          AND (jobRoles IS NULL OR JSON_LENGTH(jobRoles) = 0)
+      `);
+    } catch {
+      // dialect / ya migrado
+    }
   }
 
   private async assertShiftAssignments(
@@ -190,6 +214,11 @@ export class EmployeesService implements OnModuleInit {
       notes: e.notes ?? null,
       type: deriveEmployeeType(shiftAssignments, e.type),
       shiftAssignments,
+      jobRoles: (() => {
+        const roles = normalizeEmployeeJobRoles(e.jobRoles);
+        if (roles.length) return roles;
+        return e.producesFood ? [EmployeeJobRole.PRODUCER] : [];
+      })(),
       countsForAttendanceBonus:
         e.countsForAttendanceBonus === undefined || e.countsForAttendanceBonus === null
           ? true
@@ -310,6 +339,7 @@ export class EmployeesService implements OnModuleInit {
       }> | null;
       countsForAttendanceBonus?: boolean;
       producesFood?: boolean;
+      jobRoles?: string[] | null;
       supervisorEmployeeId?: string | null;
       bankAlias?: string | null;
       overtimeHourRate?: number;
@@ -322,7 +352,17 @@ export class EmployeesService implements OnModuleInit {
   ) {
     this.shops.assertShopAccess(user, shopId);
     await this.assertUserLink(shopId, dto.userId);
-    const producesFood = !!dto.producesFood;
+    const jobRoles = normalizeEmployeeJobRoles(dto.jobRoles);
+    const producesFood =
+      dto.producesFood !== undefined
+        ? !!dto.producesFood
+        : jobRoles.includes(EmployeeJobRole.PRODUCER);
+    const roles =
+      producesFood && !jobRoles.includes(EmployeeJobRole.PRODUCER)
+        ? [...jobRoles, EmployeeJobRole.PRODUCER]
+        : !producesFood
+          ? jobRoles.filter((r) => r !== EmployeeJobRole.PRODUCER)
+          : jobRoles;
     await this.assertSupervisor(shopId, undefined, dto.supervisorEmployeeId, producesFood);
     const shiftAssignments = await this.assertShiftAssignments(shopId, dto.shiftAssignments);
     const type = shiftAssignments.length
@@ -344,6 +384,7 @@ export class EmployeesService implements OnModuleInit {
       notes: dto.notes ?? null,
       type,
       shiftAssignments: shiftAssignments.length ? shiftAssignments : null,
+      jobRoles: roles.length ? roles : null,
       countsForAttendanceBonus:
         dto.countsForAttendanceBonus === undefined ? true : !!dto.countsForAttendanceBonus,
       producesFood,
@@ -390,6 +431,7 @@ export class EmployeesService implements OnModuleInit {
       }> | null;
       countsForAttendanceBonus?: boolean;
       producesFood?: boolean;
+      jobRoles?: string[] | null;
       supervisorEmployeeId?: string | null;
       bankAlias?: string | null;
       overtimeHourRate?: number;
@@ -429,7 +471,24 @@ export class EmployeesService implements OnModuleInit {
     if (dto.countsForAttendanceBonus !== undefined) {
       row.countsForAttendanceBonus = !!dto.countsForAttendanceBonus;
     }
-    if (dto.producesFood !== undefined) row.producesFood = !!dto.producesFood;
+    if (dto.jobRoles !== undefined || dto.producesFood !== undefined) {
+      let roles =
+        dto.jobRoles !== undefined
+          ? normalizeEmployeeJobRoles(dto.jobRoles)
+          : normalizeEmployeeJobRoles(row.jobRoles);
+      let producesFood =
+        dto.producesFood !== undefined ? !!dto.producesFood : !!row.producesFood;
+      if (dto.jobRoles !== undefined && dto.producesFood === undefined) {
+        producesFood = roles.includes(EmployeeJobRole.PRODUCER);
+      }
+      if (producesFood && !roles.includes(EmployeeJobRole.PRODUCER)) {
+        roles = [...roles, EmployeeJobRole.PRODUCER];
+      } else if (!producesFood) {
+        roles = roles.filter((r) => r !== EmployeeJobRole.PRODUCER);
+      }
+      row.jobRoles = roles.length ? roles : null;
+      row.producesFood = producesFood;
+    }
     if (dto.bankAlias !== undefined) row.bankAlias = dto.bankAlias?.trim() || null;
     if (dto.serviceCheckIn !== undefined) row.serviceCheckIn = parseHhMm(dto.serviceCheckIn);
     if (dto.serviceCheckOut !== undefined) row.serviceCheckOut = parseHhMm(dto.serviceCheckOut);
@@ -440,7 +499,10 @@ export class EmployeesService implements OnModuleInit {
     if (dto.supervisorEmployeeId !== undefined) {
       await this.assertSupervisor(shopId, id, dto.supervisorEmployeeId, producesFood);
       row.supervisorEmployeeId = producesFood ? dto.supervisorEmployeeId : null;
-    } else if (dto.producesFood !== undefined && !producesFood) {
+    } else if (
+      (dto.producesFood !== undefined || dto.jobRoles !== undefined) &&
+      !producesFood
+    ) {
       row.supervisorEmployeeId = null;
     }
 

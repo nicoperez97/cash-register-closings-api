@@ -314,6 +314,17 @@ export class CreateShopDto {
   }> | null;
 
   @ApiPropertyOptional({
+    description:
+      'Capacidades de comanda: perfiles public (/mozo) y staff (Operación → Comanda)',
+  })
+  @IsOptional()
+  @IsObject()
+  waiterCapabilities?: {
+    public?: Record<string, boolean>;
+    staff?: Record<string, boolean>;
+  } | null;
+
+  @ApiPropertyOptional({
     description: 'Zonas de delivery { id, name, fee, note?, polygon?, color? }',
   })
   @IsOptional()

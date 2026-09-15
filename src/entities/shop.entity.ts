@@ -13,6 +13,7 @@ import {
   ShopOrderingHours,
   ShopOrderingPayments,
   TablePaymentMethod,
+  WaiterCapabilities,
 } from '../common/shop-ordering';
 
 /** Mapa código POS → campo de cierre (cash|card|mercadoPago|delivery|transfer|accountDni|other). */
@@ -181,6 +182,13 @@ export class Shop extends BaseEntity {
   /** Medios de pago al cerrar mesa (comanda), con cuenta opcional. */
   @Column({ type: 'simple-json', nullable: true })
   tablePaymentMethods?: TablePaymentMethod[] | null;
+
+  /**
+   * Qué puede hacer la comanda en /mozo vs Operación → Comanda
+   * (emitir, modificar, borrar + defaults de impresión).
+   */
+  @Column({ type: 'simple-json', nullable: true })
+  waiterCapabilities?: WaiterCapabilities | null;
 
   /** Zonas de delivery con costo. */
   @Column({ type: 'simple-json', nullable: true })

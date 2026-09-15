@@ -93,13 +93,58 @@ class OpenSessionDto {
   @Min(1)
   @Max(30)
   covers: number;
+
+  @ApiPropertyOptional({
+    description: 'Mozo a cargo (requerido en comanda admin / staff)',
+  })
+  @IsOptional()
+  @IsUUID()
+  waiterEmployeeId?: string | null;
 }
 
-class CloseSessionDto {
-  @ApiProperty({ description: 'Id del medio de pago de mesa configurado en el local' })
+class CloseSessionPaymentDto {
+  @ApiProperty()
   @IsString()
   @MaxLength(40)
   paymentMethodId: string;
+
+  @ApiProperty({ example: 1000 })
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0.01)
+  amount: number;
+}
+
+class CloseSessionDto {
+  @ApiPropertyOptional({
+    description: 'Compat: un solo medio (si no mandás payments)',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  paymentMethodId?: string;
+
+  @ApiPropertyOptional({ type: [CloseSessionPaymentDto] })
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(12)
+  @ValidateNested({ each: true })
+  @Type(() => CloseSessionPaymentDto)
+  payments?: CloseSessionPaymentDto[];
+
+  @ApiPropertyOptional({ enum: ['none', 'percent', 'fixed'] })
+  @IsOptional()
+  @IsString()
+  @MaxLength(16)
+  tipMode?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  tipValue?: number | null;
 }
 
 class PrintCustomerTicketDto {
@@ -223,13 +268,29 @@ export class WaiterController {
 
   @Public()
   @UseGuards(WaiterAuthGuard)
+  @Get('tips-summary')
+  tipsSummary(
+    @Param('slug') slug: string,
+    @CurrentWaiter() waiter: WaiterAuthPayload,
+  ) {
+    return this.waiter.shiftTipsSummary(slug, waiter);
+  }
+
+  @Public()
+  @UseGuards(WaiterAuthGuard)
   @Post('sessions')
   openSession(
     @Param('slug') slug: string,
     @CurrentWaiter() waiter: WaiterAuthPayload,
     @Body() dto: OpenSessionDto,
   ) {
-    return this.waiter.openSession(slug, waiter, dto.salonTableId, dto.covers);
+    return this.waiter.openSession(
+      slug,
+      waiter,
+      dto.salonTableId,
+      dto.covers,
+      dto.waiterEmployeeId,
+    );
   }
 
   @Public()
@@ -310,6 +371,9 @@ export class WaiterController {
   ) {
     return this.waiter.closeSession(slug, waiter, id, {
       paymentMethodId: dto?.paymentMethodId,
+      payments: dto?.payments,
+      tipMode: dto?.tipMode,
+      tipValue: dto?.tipValue,
     });
   }
 }
