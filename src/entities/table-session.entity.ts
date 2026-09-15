@@ -57,6 +57,26 @@ export class TableSession extends BaseEntity {
   @Column({ type: 'varchar', length: 36, nullable: true })
   paymentAccountId?: string | null;
 
+  /**
+   * Pagos al cerrar (puede ser más de uno).
+   * [{ paymentMethodId, paymentMethodName, paymentAccountId?, amount }]
+   */
+  @Column({ type: 'json', nullable: true })
+  payments?: Array<{
+    paymentMethodId: string;
+    paymentMethodName: string;
+    paymentAccountId?: string | null;
+    amount: number;
+  }> | null;
+
+  /** Propina al cerrar (monto final). */
+  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
+  tipAmount: string;
+
+  /** Etiqueta de propina (ej. "10%" o "Propina"). */
+  @Column({ type: 'varchar', length: 80, nullable: true })
+  tipLabel?: string | null;
+
   @Column({ type: 'datetime', precision: 6, nullable: true })
   closedAt?: Date | null;
 

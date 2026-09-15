@@ -9,6 +9,41 @@ export enum EmployeeType {
   ROTATING = 'ROTATING',
 }
 
+/** Rol operativo del empleado (puede tener varios). */
+export enum EmployeeJobRole {
+  CASHIER = 'CASHIER',
+  BARTENDER = 'BARTENDER',
+  COOK = 'COOK',
+  WAITER = 'WAITER',
+  PRODUCER = 'PRODUCER',
+}
+
+export const EMPLOYEE_JOB_ROLE_LABELS: Record<EmployeeJobRole, string> = {
+  [EmployeeJobRole.CASHIER]: 'Cajero',
+  [EmployeeJobRole.BARTENDER]: 'Barman',
+  [EmployeeJobRole.COOK]: 'Cocinero',
+  [EmployeeJobRole.WAITER]: 'Mozo',
+  [EmployeeJobRole.PRODUCER]: 'Productor',
+};
+
+export const EMPLOYEE_JOB_ROLES = Object.values(EmployeeJobRole);
+
+export function normalizeEmployeeJobRoles(raw: unknown): EmployeeJobRole[] {
+  if (!Array.isArray(raw)) return [];
+  const allowed = new Set<string>(EMPLOYEE_JOB_ROLES);
+  const out: EmployeeJobRole[] = [];
+  const seen = new Set<string>();
+  for (const row of raw) {
+    const v = String(row ?? '')
+      .trim()
+      .toUpperCase();
+    if (!allowed.has(v) || seen.has(v)) continue;
+    seen.add(v);
+    out.push(v as EmployeeJobRole);
+  }
+  return out;
+}
+
 @Entity({ name: 'employees' })
 export class Employee extends BaseEntity {
   @Column()
@@ -39,6 +74,12 @@ export class Employee extends BaseEntity {
 
   @Column({ type: 'enum', enum: EmployeeType, default: EmployeeType.FIXED })
   type: EmployeeType;
+
+  /**
+   * Roles operativos (multi): cajero, barman, cocinero, mozo, productor.
+   */
+  @Column({ type: 'json', nullable: true })
+  jobRoles?: EmployeeJobRole[] | null;
 
   /**
    * Tipo por turno de caja: en qué turnos trabaja y si es fijo/rotativo en cada uno.

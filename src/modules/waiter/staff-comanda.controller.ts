@@ -1,4 +1,4 @@
-import { Controller, Param, Post, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
@@ -26,5 +26,17 @@ export class StaffComandaController {
   )
   enter(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
     return this.waiter.staffEnter(user, shopId);
+  }
+
+  /** Mozos para asignar al abrir una mesa desde la web admin. */
+  @Get('waiters')
+  @RequireAnyPermissions(
+    'customerOrders.read',
+    'orderingCatalog.manage',
+    'reservations.read',
+    'shops.manage',
+  )
+  waiters(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
+    return this.waiter.listStaffWaiters(user, shopId);
   }
 }

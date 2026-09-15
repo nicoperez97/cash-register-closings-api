@@ -9,10 +9,10 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
-import { In, Repository } from 'typeorm';
+import { And, In, LessThan, MoreThanOrEqual, Repository } from 'typeorm';
 import { isEntityActive } from '../../common/active.util';
 import { CustomerOrder, CustomerOrderLine } from '../../entities/customer-order.entity';
-import { Employee } from '../../entities/employee.entity';
+import { Employee, EmployeeJobRole, normalizeEmployeeJobRoles } from '../../entities/employee.entity';
 import { SalonMapObject } from '../../entities/salon-map-object.entity';
 import { SalonSector } from '../../entities/salon-sector.entity';
 import { SalonTable } from '../../entities/salon-table.entity';
@@ -31,7 +31,18 @@ import {
   waiterEmployeeIdOrNull,
   WaiterAuthPayload,
 } from './waiter-auth';
-import { normalizeTablePaymentMethods } from '../../common/shop-ordering';
+import {
+  normalizeTablePaymentMethods,
+  resolveWaiterCapProfile,
+  type WaiterCapProfile,
+} from '../../common/shop-ordering';
+import {
+  normalizeShopShifts,
+  resolveCurrentShift,
+  shopShiftOwnershipRangeUtc,
+  type ShopShift,
+} from '../../common/shop-shifts';
+import { resolveShopBusinessDate } from '../../common/business-date';
 
 function hashPin(pin: string): string {
   return createHash('sha256').update(String(pin).trim()).digest('hex');
@@ -55,6 +66,30 @@ function calcTicketDiscount(
     return { discountAmount: amount, discountLabel: 'Desc.' };
   }
   return { discountAmount: 0, discountLabel: null };
+}
+
+function calcTip(
+  base: number,
+  mode?: string | null,
+  value?: number | null,
+): { tipAmount: number; tipLabel: string | null } {
+  const sub = Math.max(0, Number(base) || 0);
+  const m = String(mode || 'none').toLowerCase();
+  const v = Math.max(0, Number(value) || 0);
+  if (m === 'percent' && v > 0) {
+    const pct = Math.min(100, v);
+    const amount = Math.round(((sub * pct) / 100) * 100) / 100;
+    return { tipAmount: amount, tipLabel: `${pct}%` };
+  }
+  if ((m === 'fixed' || m === 'amount') && v > 0) {
+    const amount = Math.round(v * 100) / 100;
+    return { tipAmount: amount, tipLabel: 'Propina' };
+  }
+  return { tipAmount: 0, tipLabel: null };
+}
+
+function nearlyEqual(a: number, b: number, tol = 0.02): boolean {
+  return Math.abs(a - b) <= tol;
 }
 
 function isExtraLine(line: CustomerOrderLine): boolean {
@@ -199,6 +234,27 @@ export class WaiterService implements OnModuleInit {
     } catch {
       /* already exists */
     }
+    try {
+      await this.sessions.query(
+        `ALTER TABLE table_sessions ADD COLUMN payments JSON NULL`,
+      );
+    } catch {
+      /* already exists */
+    }
+    try {
+      await this.sessions.query(
+        `ALTER TABLE table_sessions ADD COLUMN tipAmount DECIMAL(12,2) NOT NULL DEFAULT 0`,
+      );
+    } catch {
+      /* already exists */
+    }
+    try {
+      await this.sessions.query(
+        `ALTER TABLE table_sessions ADD COLUMN tipLabel VARCHAR(80) NULL`,
+      );
+    } catch {
+      /* already exists */
+    }
   }
 
   private async requireShop(slug: string): Promise<Shop> {
@@ -261,6 +317,7 @@ export class WaiterService implements OnModuleInit {
         logoUrl: shop.logoUrl ?? null,
         accentColor: shop.accentColor ?? null,
       },
+      capabilities: resolveWaiterCapProfile(shop.waiterCapabilities, 'waiter'),
     };
   }
 
@@ -305,6 +362,7 @@ export class WaiterService implements OnModuleInit {
         logoUrl: shop.logoUrl ?? null,
         accentColor: shop.accentColor ?? null,
       },
+      capabilities: this.caps(shop, payload),
     };
   }
 
@@ -331,6 +389,7 @@ export class WaiterService implements OnModuleInit {
             logoUrl: shop.logoUrl ?? null,
             accentColor: shop.accentColor ?? null,
           },
+          capabilities: this.caps(shop, waiter),
         };
       }
       return {
@@ -342,6 +401,7 @@ export class WaiterService implements OnModuleInit {
           logoUrl: shop.logoUrl ?? null,
           accentColor: shop.accentColor ?? null,
         },
+        capabilities: this.caps(shop, waiter),
       };
     }
 
@@ -360,12 +420,18 @@ export class WaiterService implements OnModuleInit {
         logoUrl: shop.logoUrl ?? null,
         accentColor: shop.accentColor ?? null,
       },
+      capabilities: this.caps(shop, waiter),
     };
   }
 
   async catalog(slug: string, waiter: WaiterAuthPayload) {
     assertWaiterShopSlug(waiter, slug);
-    return this.customerOrders.getWaiterOrderingConfig(slug);
+    const shop = await this.requireShop(slug);
+    const cfg = await this.customerOrders.getWaiterOrderingConfig(slug);
+    return {
+      ...cfg,
+      capabilities: this.caps(shop, waiter),
+    };
   }
 
   async listTables(slug: string, waiter: WaiterAuthPayload) {
@@ -454,11 +520,43 @@ export class WaiterService implements OnModuleInit {
     };
   }
 
+  private caps(shop: Shop, waiter: WaiterAuthPayload): WaiterCapProfile {
+    return resolveWaiterCapProfile(shop.waiterCapabilities, waiter.typ);
+  }
+
+  private denyUnless(ok: boolean, message: string): void {
+    if (!ok) throw new ForbiddenException(message);
+  }
+
+  /**
+   * Mozos elegibles al abrir mesa desde Operación → Comanda.
+   * Prioriza rol Mozo o PIN; si no hay, lista activos.
+   */
+  async listStaffWaiters(user: AuthUser, shopId: string) {
+    this.shopsSvc.assertShopAccess(user, shopId);
+    const rows = (
+      await this.employees.find({
+        where: { shopId },
+        order: { fullName: 'ASC' },
+      })
+    ).filter((e) => isEntityActive(e.active));
+
+    const isWaiterLike = (e: Employee) => {
+      const roles = normalizeEmployeeJobRoles(e.jobRoles);
+      return roles.includes(EmployeeJobRole.WAITER) || !!e.waiterPinHash;
+    };
+
+    const preferred = rows.filter(isWaiterLike);
+    const list = preferred.length ? preferred : rows;
+    return list.map((e) => ({ id: e.id, fullName: e.fullName }));
+  }
+
   async openSession(
     slug: string,
     waiter: WaiterAuthPayload,
     salonTableId: string,
     coversRaw: number,
+    waiterEmployeeIdRaw?: string | null,
   ) {
     assertWaiterShopSlug(waiter, slug);
     const shop = await this.requireShop(slug);
@@ -472,6 +570,25 @@ export class WaiterService implements OnModuleInit {
     if (!table || !isEntityActive(table.active)) {
       throw new NotFoundException('Mesa no encontrada');
     }
+
+    let waiterEmployeeId = waiterEmployeeIdOrNull(waiter);
+    if (waiter.typ === 'waiter_staff') {
+      const caps = this.caps(shop, waiter);
+      const override = String(waiterEmployeeIdRaw ?? '').trim();
+      if (caps.requireWaiterOnOpen && !override) {
+        throw new BadRequestException('Elegí el mozo a cargo');
+      }
+      if (override) {
+        const emp = await this.employees.findOne({
+          where: { id: override, shopId: shop.id },
+        });
+        if (!emp || !isEntityActive(emp.active)) {
+          throw new BadRequestException('Mozo no válido');
+        }
+        waiterEmployeeId = emp.id;
+      }
+    }
+
     const existing = await this.sessions.findOne({
       where: {
         shopId: shop.id,
@@ -487,7 +604,7 @@ export class WaiterService implements OnModuleInit {
         return this.sessionDetail(shop, existing);
       }
       existing.covers = covers;
-      existing.waiterEmployeeId = waiterEmployeeIdOrNull(waiter);
+      existing.waiterEmployeeId = waiterEmployeeId;
       await this.sessions.save(existing);
       return this.sessionDetail(shop, existing);
     }
@@ -495,7 +612,7 @@ export class WaiterService implements OnModuleInit {
       this.sessions.create({
         shopId: shop.id,
         salonTableId: table.id,
-        waiterEmployeeId: waiterEmployeeIdOrNull(waiter),
+        waiterEmployeeId,
         status: TableSessionStatus.OPEN,
         covers,
         customerTicketPrinted: false,
@@ -520,6 +637,10 @@ export class WaiterService implements OnModuleInit {
   async discardSession(slug: string, waiter: WaiterAuthPayload, sessionId: string) {
     assertWaiterShopSlug(waiter, slug);
     const shop = await this.requireShop(slug);
+    this.denyUnless(
+      this.caps(shop, waiter).allowDiscardEmptySession,
+      'No está permitido descartar la mesa',
+    );
     const session = await this.sessions.findOne({
       where: { id: sessionId, shopId: shop.id },
     });
@@ -561,6 +682,8 @@ export class WaiterService implements OnModuleInit {
   ) {
     assertWaiterShopSlug(waiter, slug);
     const shop = await this.requireShop(slug);
+    const caps = this.caps(shop, waiter);
+    this.denyUnless(caps.allowSendOrder, 'No está permitido enviar comandas');
     const session = await this.sessions.findOne({
       where: { id: sessionId, shopId: shop.id },
     });
@@ -573,11 +696,32 @@ export class WaiterService implements OnModuleInit {
     });
     if (!table) throw new NotFoundException('Mesa no encontrada');
 
-    const printKitchen = dto.printKitchen !== false;
-    const printCustomerTicket = !!dto.printCustomerTicket;
-    if (!printKitchen && !printCustomerTicket) {
-      throw new BadRequestException('Elegí imprimir cocina y/o ticket cliente');
+    let printKitchen = !!dto.printKitchen;
+    let printCustomerTicket = !!dto.printCustomerTicket;
+    if (caps.lockPrintKitchen || dto.printKitchen === undefined) {
+      printKitchen = caps.allowPrintKitchen && caps.defaultPrintKitchen;
     }
+    if (caps.lockPrintCustomerTicket || dto.printCustomerTicket === undefined) {
+      printCustomerTicket =
+        caps.allowPrintCustomerTicket && caps.defaultPrintCustomerTicket;
+    }
+    if (!caps.allowPrintKitchen) printKitchen = false;
+    if (!caps.allowPrintCustomerTicket) printCustomerTicket = false;
+    if (!printKitchen && !printCustomerTicket) {
+      if (caps.allowPrintKitchen) printKitchen = true;
+      else if (caps.allowPrintCustomerTicket) printCustomerTicket = true;
+      else {
+        throw new BadRequestException('No hay impresiones habilitadas para enviar');
+      }
+    }
+
+    const sessionWaiterId = session.waiterEmployeeId ?? waiterEmployeeIdOrNull(waiter);
+    const sessionWaiter = sessionWaiterId
+      ? await this.employees.findOne({
+          where: { id: sessionWaiterId, shopId: shop.id },
+        })
+      : null;
+    const waiterName = sessionWaiter?.fullName?.trim() || waiter.name;
 
     const order = await this.customerOrders.createTableOrder(shop, {
       items: dto.items ?? [],
@@ -585,9 +729,9 @@ export class WaiterService implements OnModuleInit {
       customerNotes: dto.customerNotes,
       salonTableId: table.id,
       tableSessionId: session.id,
-      waiterEmployeeId: waiterEmployeeIdOrNull(waiter),
+      waiterEmployeeId: sessionWaiterId,
       tableLabel: table.label,
-      waiterName: waiter.name,
+      waiterName,
       printKitchen,
       printCustomerTicket,
     });
@@ -615,6 +759,7 @@ export class WaiterService implements OnModuleInit {
   ) {
     assertWaiterShopSlug(waiter, slug);
     const shop = await this.requireShop(slug);
+    const caps = this.caps(shop, waiter);
     const session = await this.sessions.findOne({
       where: { id: sessionId, shopId: shop.id },
     });
@@ -637,6 +782,11 @@ export class WaiterService implements OnModuleInit {
     const line = items[idx];
     const remove = !!dto.remove || (dto.qty != null && Number(dto.qty) <= 0);
     const hasQty = dto.qty != null && Number.isFinite(Number(dto.qty));
+    if (remove) {
+      this.denyUnless(caps.allowRemoveTicketLines, 'No está permitido quitar ítems del ticket');
+    } else {
+      this.denyUnless(caps.allowEditTicket, 'No está permitido modificar el ticket');
+    }
     const hasPrice = dto.unitPrice != null && Number.isFinite(Number(dto.unitPrice));
 
     if (!remove && !hasQty && !hasPrice) {
@@ -704,10 +854,17 @@ export class WaiterService implements OnModuleInit {
     slug: string,
     waiter: WaiterAuthPayload,
     sessionId: string,
-    opts?: { paymentMethodId?: string | null },
+    opts?: {
+      paymentMethodId?: string | null;
+      payments?: Array<{ paymentMethodId: string; amount: number }> | null;
+      tipMode?: string | null;
+      tipValue?: number | null;
+    },
   ) {
     assertWaiterShopSlug(waiter, slug);
     const shop = await this.requireShop(slug);
+    const caps = this.caps(shop, waiter);
+    this.denyUnless(caps.allowCloseTable, 'No está permitido cerrar mesas');
     const session = await this.sessions.findOne({
       where: { id: sessionId, shopId: shop.id },
     });
@@ -727,27 +884,233 @@ export class WaiterService implements OnModuleInit {
       return this.sessionDetail(shop, session);
     }
 
-    if (!session.customerTicketPrinted) {
+    if (caps.requireTicketBeforeClose && !session.customerTicketPrinted) {
       throw new BadRequestException('Primero imprimí el ticket del cliente');
     }
 
     const methods = normalizeTablePaymentMethods(shop.tablePaymentMethods).filter(
       (m) => m.active !== false,
     );
-    const methodId = String(opts?.paymentMethodId ?? '').trim();
-    const method = methods.find((m) => m.id === methodId);
-    if (!method) {
-      throw new BadRequestException('Elegí la forma de pago');
+    const methodById = new Map(methods.map((m) => [m.id, m]));
+
+    const due =
+      session.ticketTotal != null
+        ? Number(session.ticketTotal) || 0
+        : orders.reduce((s, o) => s + (Number(o.total) || 0), 0);
+    const tipMode = caps.allowTipOnClose ? opts?.tipMode : 'none';
+    const tipValue = caps.allowTipOnClose ? opts?.tipValue : null;
+    const { tipAmount, tipLabel } = calcTip(due, tipMode, tipValue);
+    const toCollect = Math.round((due + tipAmount) * 100) / 100;
+
+    let rawPayments = (opts?.payments ?? [])
+      .map((p) => ({
+        paymentMethodId: String(p.paymentMethodId ?? '').trim(),
+        amount: Math.round((Number(p.amount) || 0) * 100) / 100,
+      }))
+      .filter((p) => p.paymentMethodId && p.amount > 0);
+
+    // Compat: un solo medio sin montos.
+    if (!rawPayments.length && opts?.paymentMethodId) {
+      rawPayments = [
+        {
+          paymentMethodId: String(opts.paymentMethodId).trim(),
+          amount: toCollect,
+        },
+      ];
     }
 
-    session.paymentMethodId = method.id;
-    session.paymentMethodName = method.name;
-    session.paymentAccountId = method.accountId ?? null;
+    if (!rawPayments.length) {
+      throw new BadRequestException('Indicá al menos una forma de pago con monto');
+    }
+
+    const payments: Array<{
+      paymentMethodId: string;
+      paymentMethodName: string;
+      paymentAccountId: string | null;
+      amount: number;
+    }> = [];
+    for (const row of rawPayments) {
+      const method = methodById.get(row.paymentMethodId);
+      if (!method) {
+        throw new BadRequestException(`Medio de pago inválido: ${row.paymentMethodId}`);
+      }
+      payments.push({
+        paymentMethodId: method.id,
+        paymentMethodName: method.name,
+        paymentAccountId: method.accountId ?? null,
+        amount: row.amount,
+      });
+    }
+
+    const paid = Math.round(payments.reduce((s, p) => s + p.amount, 0) * 100) / 100;
+    if (!nearlyEqual(paid, toCollect)) {
+      throw new BadRequestException(
+        `La suma de pagos ($${paid.toFixed(2)}) debe ser $${toCollect.toFixed(2)}`,
+      );
+    }
+
+    const primary = [...payments].sort((a, b) => b.amount - a.amount)[0];
+    session.payments = payments;
+    session.paymentMethodId = primary.paymentMethodId;
+    session.paymentMethodName = primary.paymentMethodName;
+    session.paymentAccountId = primary.paymentAccountId;
+    session.tipAmount = money2(tipAmount);
+    session.tipLabel = tipLabel;
     session.status = TableSessionStatus.CLOSED;
     session.closedAt = new Date();
     await this.sessions.save(session);
     this.live.tick(shop.id, 'customer-orders');
     return this.sessionDetail(shop, session);
+  }
+
+  /** Propinas de mesas cerradas en el turno vigente. */
+  async shiftTipsSummary(slug: string, waiter: WaiterAuthPayload) {
+    assertWaiterShopSlug(waiter, slug);
+    const shop = await this.requireShop(slug);
+    this.denyUnless(this.caps(shop, waiter).allowHistory, 'Historial no disponible');
+    const shifts = normalizeShopShifts(shop.shifts as ShopShift[] | null, shop.openingTime);
+    const businessDate = resolveShopBusinessDate(new Date(), {
+      timezone: shop.timezone,
+      openingTime: shop.openingTime,
+    });
+    const shift = resolveCurrentShift(shifts, new Date(), shop.timezone);
+    const ownership = shopShiftOwnershipRangeUtc(businessDate, shift, shifts, {
+      timezone: shop.timezone,
+    });
+
+    const closed = await this.sessions.find({
+      where: {
+        shopId: shop.id,
+        status: TableSessionStatus.CLOSED,
+        closedAt: And(MoreThanOrEqual(ownership.from), LessThan(ownership.to)),
+      },
+      order: { closedAt: 'DESC' },
+      take: 500,
+    });
+
+    const tableIds = [...new Set(closed.map((s) => s.salonTableId))];
+    const tables = tableIds.length
+      ? await this.tables.find({ where: { shopId: shop.id, id: In(tableIds) } })
+      : [];
+    const tableLabel = new Map(tables.map((t) => [t.id, t.label]));
+
+    const sessionIds = closed.map((s) => s.id);
+    const orderSumBySession = new Map<string, number>();
+    if (sessionIds.length) {
+      const raw = await this.orders
+        .createQueryBuilder('o')
+        .select('o.tableSessionId', 'sid')
+        .addSelect('COALESCE(SUM(o.total), 0)', 'total')
+        .where('o.shopId = :shopId', { shopId: shop.id })
+        .andWhere('o.tableSessionId IN (:...ids)', { ids: sessionIds })
+        .groupBy('o.tableSessionId')
+        .getRawMany<{ sid: string; total: string }>();
+      for (const row of raw) {
+        orderSumBySession.set(String(row.sid), Number(row.total) || 0);
+      }
+    }
+
+    const parsePayments = (raw: unknown): Array<{
+      paymentMethodId: string;
+      paymentMethodName: string;
+      amount: number;
+    }> => {
+      let list = raw;
+      if (typeof list === 'string') {
+        try {
+          list = JSON.parse(list);
+        } catch {
+          return [];
+        }
+      }
+      if (!Array.isArray(list)) return [];
+      return list
+        .map((p) => {
+          const row = p as {
+            paymentMethodId?: string;
+            paymentMethodName?: string;
+            amount?: number;
+          };
+          return {
+            paymentMethodId: String(row.paymentMethodId ?? '').trim(),
+            paymentMethodName: String(row.paymentMethodName ?? 'Pago').trim() || 'Pago',
+            amount: Math.round((Number(row.amount) || 0) * 100) / 100,
+          };
+        })
+        .filter((p) => p.paymentMethodId && p.amount > 0);
+    };
+
+    const sessions = closed
+      .map((s) => {
+        const tipAmount = Math.round((Number(s.tipAmount) || 0) * 100) / 100;
+        let payments = parsePayments(s.payments);
+        if (!payments.length && s.paymentMethodId) {
+          const fromTicket = (Number(s.ticketTotal) || 0) + tipAmount;
+          const fromOrders = orderSumBySession.get(s.id) || 0;
+          const fallback = fromTicket > 0 ? fromTicket : fromOrders;
+          if (fallback > 0) {
+            payments = [
+              {
+                paymentMethodId: s.paymentMethodId,
+                paymentMethodName: s.paymentMethodName || 'Pago',
+                amount: Math.round(fallback * 100) / 100,
+              },
+            ];
+          }
+        }
+        const paidSum = payments.reduce((a, p) => a + p.amount, 0);
+        const fromOrders = orderSumBySession.get(s.id) || 0;
+        const storedTicket = Number(s.ticketTotal) || 0;
+        const fromPayments = Math.max(0, paidSum - tipAmount);
+        const ticketTotal =
+          Math.round(
+            (storedTicket > 0 ? storedTicket : fromPayments > 0 ? fromPayments : fromOrders) *
+              100,
+          ) / 100;
+        const hasActivity =
+          ticketTotal > 0 || tipAmount > 0 || payments.length > 0 || fromOrders > 0;
+        return {
+          sessionId: s.id,
+          tableLabel: tableLabel.get(s.salonTableId) ?? '—',
+          covers: Number(s.covers) || 0,
+          openedAt: s.createdAt,
+          closedAt: s.closedAt,
+          ticketTotal,
+          tipAmount,
+          tipLabel: s.tipLabel ?? null,
+          payments,
+          paymentLabel: payments.map((p) => p.paymentMethodName).join(' · '),
+          hasActivity,
+        };
+      })
+      .filter((s) => s.hasActivity);
+
+    const withTip = sessions.filter((s) => s.tipAmount > 0);
+    const tipTotal =
+      Math.round(withTip.reduce((a, s) => a + s.tipAmount, 0) * 100) / 100;
+    const ticketTotal =
+      Math.round(sessions.reduce((a, s) => a + s.ticketTotal, 0) * 100) / 100;
+    const coversTotal = sessions.reduce((a, s) => a + s.covers, 0);
+
+    return {
+      businessDate,
+      shift: { id: shift.id, name: shift.name },
+      from: ownership.from.toISOString(),
+      to: ownership.to.toISOString(),
+      tipTotal,
+      ticketTotal,
+      coversTotal,
+      tippedTables: withTip.length,
+      closedTables: sessions.length,
+      recent: withTip.slice(0, 20).map((s) => ({
+        sessionId: s.sessionId,
+        tableLabel: s.tableLabel,
+        tipAmount: s.tipAmount,
+        tipLabel: s.tipLabel,
+        closedAt: s.closedAt,
+      })),
+      sessions: sessions.map(({ hasActivity: _h, ...rest }) => rest),
+    };
   }
 
   /** Imprime ticket cliente (todos los envíos) con descuento opcional, sin cerrar. */
@@ -759,6 +1122,8 @@ export class WaiterService implements OnModuleInit {
   ) {
     assertWaiterShopSlug(waiter, slug);
     const shop = await this.requireShop(slug);
+    const caps = this.caps(shop, waiter);
+    this.denyUnless(caps.allowPrintCustomerTicket, 'No está permitido imprimir ticket cliente');
     const session = await this.sessions.findOne({
       where: { id: sessionId, shopId: shop.id },
     });
@@ -776,11 +1141,19 @@ export class WaiterService implements OnModuleInit {
     const table = await this.tables.findOne({
       where: { id: session.salonTableId, shopId: shop.id },
     });
+    const sessionWaiter = session.waiterEmployeeId
+      ? await this.employees.findOne({
+          where: { id: session.waiterEmployeeId, shopId: shop.id },
+        })
+      : null;
+    const waiterName = sessionWaiter?.fullName?.trim() || waiter.name;
     const subtotal = orders.reduce((s, o) => s + (Number(o.total) || 0), 0);
+    const discountMode = caps.allowTicketDiscount ? opts?.discountMode : 'none';
+    const discountValue = caps.allowTicketDiscount ? opts?.discountValue : null;
     const { discountAmount, discountLabel } = calcTicketDiscount(
       subtotal,
-      opts?.discountMode,
-      opts?.discountValue,
+      discountMode,
+      discountValue,
     );
     const total = Math.max(0, Math.round((subtotal - discountAmount) * 100) / 100);
     const items = orders.flatMap((o) =>
@@ -808,7 +1181,7 @@ export class WaiterService implements OnModuleInit {
         discountLabel,
         total,
         tableLabel: table?.label ?? null,
-        waiterName: waiter.name,
+        waiterName,
         covers: Number(session.covers) || 2,
       })
       .catch(() => undefined);
@@ -847,6 +1220,28 @@ export class WaiterService implements OnModuleInit {
         session.ticketTotal == null ? null : Number(session.ticketTotal) || 0,
       paymentMethodId: session.paymentMethodId ?? null,
       paymentMethodName: session.paymentMethodName ?? null,
+      payments: Array.isArray(session.payments)
+        ? session.payments.map((p) => ({
+            paymentMethodId: p.paymentMethodId,
+            paymentMethodName: p.paymentMethodName,
+            paymentAccountId: p.paymentAccountId ?? null,
+            amount: Number(p.amount) || 0,
+          }))
+        : session.paymentMethodId
+          ? [
+              {
+                paymentMethodId: session.paymentMethodId,
+                paymentMethodName: session.paymentMethodName ?? '',
+                paymentAccountId: session.paymentAccountId ?? null,
+                amount:
+                  session.ticketTotal == null
+                    ? subtotal
+                    : Number(session.ticketTotal) || 0,
+              },
+            ]
+          : [],
+      tipAmount: Number(session.tipAmount ?? 0) || 0,
+      tipLabel: session.tipLabel ?? null,
       paymentMethods: normalizeTablePaymentMethods(shop.tablePaymentMethods).filter(
         (m) => m.active !== false,
       ),

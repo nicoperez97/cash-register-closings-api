@@ -32,12 +32,14 @@ import {
   normalizeShopMode,
   normalizeShopOrderingHours,
   normalizeTablePaymentMethods,
+  normalizeWaiterCapabilities,
   ShopMode,
   type DeliveryZone,
   type ShopOrderingEta,
   type ShopOrderingHours,
   type ShopOrderingPayments,
   type TablePaymentMethod,
+  type WaiterCapabilities,
 } from '../../common/shop-ordering';
 import { normalizeShopMenus } from '../menu/menu-parse.util';
 import {
@@ -462,6 +464,14 @@ export class ShopsService implements OnModuleInit {
     try {
       await this.shops.query(`
         ALTER TABLE shops
+          ADD COLUMN waiterCapabilities JSON NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
           ADD COLUMN deliveryZones JSON NULL
       `);
     } catch {
@@ -764,6 +774,7 @@ export class ShopsService implements OnModuleInit {
         orderingHours: normalizeShopOrderingHours(dto.orderingHours),
         orderingPayments: normalizeOrderingPayments(dto.orderingPayments),
         tablePaymentMethods: normalizeTablePaymentMethods(dto.tablePaymentMethods),
+        waiterCapabilities: normalizeWaiterCapabilities(dto.waiterCapabilities),
         deliveryZones: normalizeDeliveryZones(dto.deliveryZones),
         orderingEta: normalizeOrderingEta(dto.orderingEta),
         orderingExtras: normalizeOrderingExtras(dto.orderingExtras),
@@ -902,6 +913,9 @@ export class ShopsService implements OnModuleInit {
     }
     if (dto.tablePaymentMethods !== undefined) {
       shop.tablePaymentMethods = normalizeTablePaymentMethods(dto.tablePaymentMethods);
+    }
+    if (dto.waiterCapabilities !== undefined) {
+      shop.waiterCapabilities = normalizeWaiterCapabilities(dto.waiterCapabilities);
     }
     if (dto.deliveryZones !== undefined) {
       shop.deliveryZones = normalizeDeliveryZones(dto.deliveryZones);
@@ -1049,6 +1063,7 @@ export class ShopsService implements OnModuleInit {
       deliveryZones?: DeliveryZone[] | null;
       orderingPayments?: ShopOrderingPayments | null;
       tablePaymentMethods?: TablePaymentMethod[] | null;
+      waiterCapabilities?: WaiterCapabilities | null;
       orderingExtras?: Array<{
         id?: string;
         name: string;
@@ -1102,6 +1117,9 @@ export class ShopsService implements OnModuleInit {
     }
     if (dto.tablePaymentMethods !== undefined) {
       shop.tablePaymentMethods = normalizeTablePaymentMethods(dto.tablePaymentMethods);
+    }
+    if (dto.waiterCapabilities !== undefined) {
+      shop.waiterCapabilities = normalizeWaiterCapabilities(dto.waiterCapabilities);
     }
     if (dto.orderingExtras !== undefined) {
       shop.orderingExtras = normalizeOrderingExtras(dto.orderingExtras);
@@ -1484,6 +1502,7 @@ export class ShopsService implements OnModuleInit {
       orderingHours: normalizeShopOrderingHours(s.orderingHours),
       orderingPayments: normalizeOrderingPayments(s.orderingPayments),
       tablePaymentMethods: normalizeTablePaymentMethods(s.tablePaymentMethods),
+      waiterCapabilities: normalizeWaiterCapabilities(s.waiterCapabilities),
       deliveryZones: normalizeDeliveryZones(s.deliveryZones),
       orderingEta: normalizeOrderingEta(s.orderingEta),
       orderingExtras: normalizeOrderingExtras(s.orderingExtras),

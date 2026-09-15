@@ -29,7 +29,7 @@ import {
 import { Type } from 'class-transformer';
 import { CurrentUser, AuthUser, RequirePermissions, RequireAnyPermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
-import { EmployeeType } from '../../entities/employee.entity';
+import { EmployeeJobRole, EmployeeType } from '../../entities/employee.entity';
 import { EmployeesService } from './employees.service';
 
 class ShiftAssignmentDto {
@@ -86,6 +86,15 @@ class CreateEmployeeDto {
   @IsOptional()
   @IsBoolean()
   producesFood?: boolean;
+  @ApiPropertyOptional({
+    enum: EmployeeJobRole,
+    isArray: true,
+    description: 'Roles operativos (multi): Cajero, Barman, Cocinero, Mozo, Productor',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsEnum(EmployeeJobRole, { each: true })
+  jobRoles?: EmployeeJobRole[] | null;
   @ApiPropertyOptional({
     description: 'Productor supervisor a cargo (solo si produce comida)',
   })
@@ -159,6 +168,15 @@ class UpdateEmployeeDto {
   @IsOptional()
   @IsBoolean()
   producesFood?: boolean;
+  @ApiPropertyOptional({
+    enum: EmployeeJobRole,
+    isArray: true,
+    description: 'Roles operativos (multi): Cajero, Barman, Cocinero, Mozo, Productor',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsEnum(EmployeeJobRole, { each: true })
+  jobRoles?: EmployeeJobRole[] | null;
   @ApiPropertyOptional({
     description: 'Productor supervisor a cargo (solo si produce comida)',
   })

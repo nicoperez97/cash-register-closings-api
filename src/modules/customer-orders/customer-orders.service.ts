@@ -17,6 +17,10 @@ import {
 import { Shop } from '../../entities/shop.entity';
 import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
+import {
+  TableSession,
+  TableSessionStatus,
+} from '../../entities/table-session.entity';
 import { AuthUser } from '../../common/decorators';
 import { GlobalRole, NotificationType } from '../../common/enums';
 import { isEntityActive } from '../../common/active.util';
@@ -60,6 +64,18 @@ import {
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
+/** Clasifica medios de mesa por id/nombre para el cierre de caja. */
+function classifyTablePaymentKind(
+  id: string,
+  name: string,
+): 'CASH' | 'TRANSFER' | 'CARD' {
+  const key = `${id} ${name}`.toLowerCase();
+  if (/transf|transfer|alias|cbu|cvu|mercado\s*pago|mp\b/.test(key)) return 'TRANSFER';
+  if (/tarjeta|card|d[eé]bito|cr[eé]dito|posnet|visa|master|amex/.test(key)) return 'CARD';
+  if (/efectivo|cash|contado|tp_cash/.test(key)) return 'CASH';
+  return 'CASH';
+}
+
 @Injectable()
 export class CustomerOrdersService implements OnModuleInit {
   constructor(
@@ -71,6 +87,8 @@ export class CustomerOrdersService implements OnModuleInit {
     private readonly userShops: Repository<UserShop>,
     @InjectRepository(User)
     private readonly users: Repository<User>,
+    @InjectRepository(TableSession)
+    private readonly tableSessions: Repository<TableSession>,
     private readonly live: ShopLiveService,
     private readonly notifications: NotificationsService,
     private readonly printAgent: PrintAgentService,
@@ -854,20 +872,30 @@ export class CustomerOrdersService implements OnModuleInit {
         order: { createdAt: 'ASC' },
         take: 2000,
       });
-      return { rows: found, range: ownership };
+      const sessions = await this.tableSessions.find({
+        where: {
+          shopId,
+          status: TableSessionStatus.CLOSED,
+          closedAt: And(MoreThanOrEqual(ownership.from), LessThan(ownership.to)),
+        },
+        order: { closedAt: 'ASC' },
+        take: 2000,
+      });
+      return { rows: found, sessions, range: ownership };
     };
 
-    let { rows, range } = await loadRows(date, shift);
+    let { rows, sessions, range } = await loadRows(date, shift);
 
     // Si el turno pedido/vigente no tiene ventas, probar el anterior aunque viniera shiftId
     // (al generar cierre suele ser el caso: Mañana recién abrió y las ventas son de la mañana).
-    if (!rows.length) {
+    if (!rows.length && !sessions.length) {
       const weekday = weekdayFromIsoDate(date) ?? 1;
       const prev = previousShiftOf(shift, shifts, weekday);
       const prevDate = previousShiftBusinessDate(date, shift, prev, shifts);
       const prevLoad = await loadRows(prevDate, prev);
-      if (prevLoad.rows.length) {
+      if (prevLoad.rows.length || prevLoad.sessions.length) {
         rows = prevLoad.rows;
+        sessions = prevLoad.sessions;
         range = prevLoad.range;
         shift = prev;
         date = prevDate;
@@ -886,8 +914,18 @@ export class CustomerOrdersService implements OnModuleInit {
           order: { createdAt: 'ASC' },
           take: 2000,
         });
-        if (dayRows.length) {
+        const daySessions = await this.tableSessions.find({
+          where: {
+            shopId,
+            status: TableSessionStatus.CLOSED,
+            closedAt: And(MoreThanOrEqual(day.from), LessThan(day.to)),
+          },
+          order: { closedAt: 'ASC' },
+          take: 2000,
+        });
+        if (dayRows.length || daySessions.length) {
           rows = dayRows;
+          sessions = daySessions;
           range = {
             from: day.from,
             to: day.to,
@@ -909,8 +947,18 @@ export class CustomerOrdersService implements OnModuleInit {
             order: { createdAt: 'ASC' },
             take: 2000,
           });
-          if (prevDayRows.length) {
+          const prevDaySessions = await this.tableSessions.find({
+            where: {
+              shopId,
+              status: TableSessionStatus.CLOSED,
+              closedAt: And(MoreThanOrEqual(prevDay.from), LessThan(prevDay.to)),
+            },
+            order: { closedAt: 'ASC' },
+            take: 2000,
+          });
+          if (prevDayRows.length || prevDaySessions.length) {
             rows = prevDayRows;
+            sessions = prevDaySessions;
             range = {
               from: prevDay.from,
               to: prevDay.to,
@@ -950,6 +998,8 @@ export class CustomerOrdersService implements OnModuleInit {
     const round2 = (n: number) => Math.round(n * 100) / 100;
 
     for (const row of rows) {
+      // Las mesas se agregan desde table_sessions (evita doble conteo).
+      if (row.fulfillment === CustomerOrderFulfillment.TABLE) continue;
       orderIds.push(row.id);
       const total = Number(row.total) || 0;
       const fulfillment = String(row.fulfillment || 'TAKEAWAY');
@@ -978,6 +1028,8 @@ export class CustomerOrdersService implements OnModuleInit {
       unitsSold: b.unitsSold,
     });
 
+    const tables = this.aggregateClosedTables(sessions);
+
     return {
       businessDate: date,
       shiftId: shift.id,
@@ -986,21 +1038,96 @@ export class CustomerOrdersService implements OnModuleInit {
       closesAt: shift.closesAt,
       from: range.from.toISOString(),
       to: range.to.toISOString(),
-      orderCount: rows.length,
+      orderCount: orderIds.length,
       openCount,
-      completedCount: rows.length - openCount,
+      completedCount: orderIds.length - openCount,
       cashTotal: round2(cashTotal),
       transferTotal: round2(transferTotal),
-      total: round2(cashTotal + transferTotal),
+      total: round2(cashTotal + transferTotal + tables.ticketTotal),
       unitsSold,
       byFulfillment: {
         TAKEAWAY: mapBucket(byFulfillment.TAKEAWAY),
         DELIVERY: mapBucket(byFulfillment.DELIVERY),
         COUNTER: mapBucket(byFulfillment.COUNTER),
       },
+      tables,
       orderIds,
       orderingForceClosed: !!shop.orderingForceClosed,
       defaultChangeAmount: Number(shop.defaultChangeAmount) || 0,
+    };
+  }
+
+  private aggregateClosedTables(sessions: TableSession[]) {
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    const byMethod = new Map<
+      string,
+      { paymentMethodId: string; paymentMethodName: string; amount: number; kind: string }
+    >();
+    let coversTotal = 0;
+    let ticketTotal = 0;
+    let tipTotal = 0;
+    let cashTotal = 0;
+    let transferTotal = 0;
+    let cardTotal = 0;
+
+    for (const s of sessions) {
+      coversTotal += Math.max(0, Number(s.covers) || 0);
+      const tip = Math.max(0, Number(s.tipAmount) || 0);
+      tipTotal += tip;
+      const paid = Array.isArray(s.payments)
+        ? s.payments
+        : s.paymentMethodId
+          ? [
+              {
+                paymentMethodId: s.paymentMethodId,
+                paymentMethodName: s.paymentMethodName || 'Pago',
+                amount: (Number(s.ticketTotal) || 0) + tip,
+              },
+            ]
+          : [];
+      const paidSum = paid.reduce((acc, p) => acc + (Number(p.amount) || 0), 0);
+      const ticket =
+        s.ticketTotal != null
+          ? Math.max(0, Number(s.ticketTotal) || 0)
+          : Math.max(0, paidSum - tip);
+      ticketTotal += ticket;
+      const scale = paidSum > 0 ? ticket / paidSum : 0;
+
+      for (const p of paid) {
+        const gross = Math.max(0, Number(p.amount) || 0);
+        if (gross <= 0) continue;
+        const net = round2(gross * scale);
+        if (net <= 0) continue;
+        const id = String(p.paymentMethodId || '').trim() || 'unknown';
+        const name = String(p.paymentMethodName || 'Pago').trim() || 'Pago';
+        const kind = classifyTablePaymentKind(id, name);
+        const prev = byMethod.get(id) ?? {
+          paymentMethodId: id,
+          paymentMethodName: name,
+          amount: 0,
+          kind,
+        };
+        prev.amount = round2(prev.amount + net);
+        byMethod.set(id, prev);
+        if (kind === 'TRANSFER') transferTotal += net;
+        else if (kind === 'CARD') cardTotal += net;
+        else cashTotal += net;
+      }
+    }
+
+    return {
+      closedCount: sessions.length,
+      coversTotal,
+      ticketTotal: round2(ticketTotal),
+      tipTotal: round2(tipTotal),
+      cashTotal: round2(cashTotal),
+      transferTotal: round2(transferTotal),
+      cardTotal: round2(cardTotal),
+      paymentsByMethod: [...byMethod.values()].map((m) => ({
+        ...m,
+        amount: round2(m.amount),
+      })),
+      sessionIds: sessions.map((s) => s.id),
     };
   }
 

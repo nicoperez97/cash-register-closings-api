@@ -170,6 +170,10 @@ export class ShopsController {
         accountId?: string | null;
         active?: boolean;
       }> | null;
+      waiterCapabilities?: {
+        public?: Record<string, boolean>;
+        staff?: Record<string, boolean>;
+      } | null;
       orderingExtras?: Array<{
         id?: string;
         name: string;
