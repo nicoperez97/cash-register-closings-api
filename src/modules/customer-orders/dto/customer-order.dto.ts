@@ -126,6 +126,24 @@ export class CreateCustomerOrderDto {
   @MaxLength(300)
   address?: string | null;
 
+  @ApiPropertyOptional({ description: 'Latitud de entrega (mapa)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  deliveryLat?: number | null;
+
+  @ApiPropertyOptional({ description: 'Longitud de entrega (mapa)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  deliveryLng?: number | null;
+
+  @ApiPropertyOptional({ description: 'Altura / número de calle' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  deliveryStreetNumber?: string | null;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()

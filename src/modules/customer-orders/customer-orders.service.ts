@@ -1,9 +1,11 @@
 import {
   BadRequestException,
   ForbiddenException,
+  Inject,
   Injectable,
   NotFoundException,
   OnModuleInit,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { And, In, Not, MoreThanOrEqual, LessThan, Repository } from 'typeorm';
@@ -57,6 +59,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { PrintAgentService } from '../print-agent/print-agent.service';
 import { ShopLiveService } from '../shop-live/shop-live.service';
 import { userShopCanReceiveCustomerOrders } from '../profile/notification-eligibility';
+import { IntegrationsService } from '../integrations/integrations.service';
 import {
   CreateCustomerOrderDto,
   UpdateCustomerOrderStatusDto,
@@ -92,6 +95,8 @@ export class CustomerOrdersService implements OnModuleInit {
     private readonly live: ShopLiveService,
     private readonly notifications: NotificationsService,
     private readonly printAgent: PrintAgentService,
+    @Inject(forwardRef(() => IntegrationsService))
+    private readonly integrations: IntegrationsService,
   ) {}
 
   async onModuleInit() {
@@ -179,6 +184,20 @@ export class CustomerOrdersService implements OnModuleInit {
     } catch {
       /* already exists */
     }
+    for (const sql of [
+      `ALTER TABLE customer_orders ADD COLUMN deliveryLat DECIMAL(10,7) NULL`,
+      `ALTER TABLE customer_orders ADD COLUMN deliveryLng DECIMAL(10,7) NULL`,
+      `ALTER TABLE customer_orders ADD COLUMN deliveryStreetNumber VARCHAR(40) NULL`,
+      `ALTER TABLE customer_orders ADD COLUMN externalSource VARCHAR(32) NULL`,
+      `ALTER TABLE customer_orders ADD COLUMN externalId VARCHAR(80) NULL`,
+      `ALTER TABLE customer_orders ADD COLUMN externalMeta TEXT NULL`,
+    ]) {
+      try {
+        await this.orders.query(sql);
+      } catch {
+        /* already exists */
+      }
+    }
   }
 
   private assertShopAccess(user: AuthUser, shopId: string) {
@@ -237,6 +256,9 @@ export class CustomerOrdersService implements OnModuleInit {
       lastName: o.lastName,
       phone: o.phone,
       address: o.address ?? null,
+      deliveryLat: o.deliveryLat == null ? null : Number(o.deliveryLat),
+      deliveryLng: o.deliveryLng == null ? null : Number(o.deliveryLng),
+      deliveryStreetNumber: o.deliveryStreetNumber ?? null,
       deliveryZoneId: o.deliveryZoneId ?? null,
       deliveryZoneName: o.deliveryZoneName ?? null,
       paymentMethod: o.paymentMethod,
@@ -246,6 +268,9 @@ export class CustomerOrdersService implements OnModuleInit {
       salonTableId: o.salonTableId ?? null,
       tableSessionId: o.tableSessionId ?? null,
       waiterEmployeeId: o.waiterEmployeeId ?? null,
+      externalSource: o.externalSource ?? null,
+      externalId: o.externalId ?? null,
+      externalMeta: o.externalMeta ?? null,
       acceptedAt: o.acceptedAt ?? null,
       preparingAt: o.preparingAt ?? null,
       readyAt: o.readyAt ?? null,
@@ -664,6 +689,9 @@ export class CustomerOrdersService implements OnModuleInit {
     let deliveryZoneId: string | null = null;
     let deliveryZoneName: string | null = null;
     let address: string | null = null;
+    let deliveryLat: string | null = null;
+    let deliveryLng: string | null = null;
+    let deliveryStreetNumber: string | null = null;
 
     if (dto.fulfillment === CustomerOrderFulfillment.DELIVERY) {
       const zones = normalizeDeliveryZones(shop.deliveryZones);
@@ -678,6 +706,14 @@ export class CustomerOrdersService implements OnModuleInit {
       deliveryZoneId = zone.id;
       deliveryZoneName = zone.name;
       address = addr.slice(0, 300);
+      const lat = Number(dto.deliveryLat);
+      const lng = Number(dto.deliveryLng);
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        deliveryLat = lat.toFixed(7);
+        deliveryLng = lng.toFixed(7);
+      }
+      const streetNo = String(dto.deliveryStreetNumber ?? '').trim();
+      deliveryStreetNumber = streetNo ? streetNo.slice(0, 40) : null;
     }
 
     let discountAmount = 0;
@@ -740,6 +776,9 @@ export class CustomerOrdersService implements OnModuleInit {
         lastName: String(dto.lastName).trim().slice(0, 80),
         phone,
         address,
+        deliveryLat,
+        deliveryLng,
+        deliveryStreetNumber,
         deliveryZoneId,
         deliveryZoneName,
         paymentMethod: isTable ? CustomerOrderPaymentMethod.CASH : dto.paymentMethod,
@@ -1218,6 +1257,9 @@ export class CustomerOrdersService implements OnModuleInit {
 
     await this.orders.save(order);
     this.live.tick(shopId, 'customer-orders');
+    if (next === CustomerOrderStatus.CANCELLED) {
+      void this.integrations.cancelDeliverateForOrder(order).catch(() => undefined);
+    }
     if (
       advancing &&
       next === CustomerOrderStatus.ACCEPTED &&

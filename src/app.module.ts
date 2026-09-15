@@ -42,6 +42,7 @@ import { AiModule } from './modules/ai/ai.module';
 import { ProfileModule } from './modules/profile/profile.module';
 import { PartnerSplitsModule } from './modules/partner-splits/partner-splits.module';
 import { UploadsModule } from './modules/uploads/uploads.module';
+import { IntegrationsModule } from './modules/integrations/integrations.module';
 import { JwtAuthGuard, PermissionsGuard } from './common/guards';
 import { PublicAbuseGuard } from './common/public-abuse.guard';
 
@@ -82,6 +83,7 @@ import { PublicAbuseGuard } from './common/public-abuse.guard';
     SalonFloorModule,
     MenuModule,
     CustomerOrdersModule,
+    IntegrationsModule,
     PrintAgentModule,
     WaiterModule,
     DineInModule,
