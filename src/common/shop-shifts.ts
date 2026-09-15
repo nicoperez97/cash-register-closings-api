@@ -150,6 +150,85 @@ export function findShopShift(
 }
 
 /**
+ * Turno activo ahora: ahora cae en [opensAt, closesAt) del día correspondiente
+ * (incluye tramo nocturno que empezó ayer).
+ */
+export function findActiveShift(
+  shifts: ShopShift[] | null | undefined,
+  when: Date = new Date(),
+  timezone?: string | null,
+): ShopShift | null {
+  const list = Array.isArray(shifts) && shifts.length ? shifts : [];
+  if (!list.length) return null;
+  const p = zonedDateParts(when, timezone);
+  const nowMins = p.hour * 60 + p.minute;
+  const todayWd = weekdayFromYmd(p.year, p.month, p.day);
+  const yest = new Date(Date.UTC(p.year, p.month - 1, p.day - 1, 12, 0, 0));
+  const yestWd = yest.getUTCDay();
+
+  for (const s of list) {
+    const opens = minutesOfHhMm(s.opensAt);
+    const closes = minutesOfHhMm(s.closesAt);
+    const overnight = opens > closes;
+    if (overnight && nowMins < closes) {
+      if (
+        shiftRunsOnWeekday(s, yestWd) &&
+        isTimeInShiftWindow(nowMins, s.opensAt, s.closesAt)
+      ) {
+        return s;
+      }
+      continue;
+    }
+    if (shiftRunsOnWeekday(s, todayWd) && isTimeInShiftWindow(nowMins, s.opensAt, s.closesAt)) {
+      return s;
+    }
+  }
+  return null;
+}
+
+/**
+ * ¿Algún turno cerró (llegó a closesAt) entre `openedAt` y `now`?
+ * Usado para auto-cerrar pedidos online al finalizar el turno.
+ * Turnos 24 h (opens === closes) no disparan auto-cierre.
+ */
+export function shiftClosedBetween(
+  openedAt: Date,
+  now: Date,
+  shifts: ShopShift[] | null | undefined,
+  timezone?: string | null,
+): boolean {
+  const list = Array.isArray(shifts) && shifts.length ? shifts : [];
+  if (!list.length || now.getTime() <= openedAt.getTime()) return false;
+
+  const fromMs = openedAt.getTime();
+  const toMs = now.getTime();
+  // Recorre ~2 días antes de openedAt hasta now (cubre overnight).
+  const cursor = new Date(openedAt.getTime() - 36 * 60 * 60 * 1000);
+  const end = new Date(now.getTime() + 12 * 60 * 60 * 1000);
+  const seenDays = new Set<string>();
+
+  while (cursor.getTime() <= end.getTime()) {
+    const parts = zonedDateParts(cursor, timezone);
+    const ymd = `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`;
+    if (!seenDays.has(ymd)) {
+      seenDays.add(ymd);
+      const wd = weekdayFromYmd(parts.year, parts.month, parts.day);
+      for (const s of list) {
+        if (!shiftRunsOnWeekday(s, wd)) continue;
+        const opens = minutesOfHhMm(s.opensAt);
+        const closes = minutesOfHhMm(s.closesAt);
+        if (opens === closes) continue; // 24 h: no auto-cierra
+        const range = shopShiftDayRangeUtc(ymd, s, { timezone });
+        const closeMs = range.to.getTime();
+        if (closeMs > fromMs && closeMs <= toMs) return true;
+      }
+    }
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return false;
+}
+
+/**
  * Turno vigente: el que abrió más recientemente entre los que corren ese día
  * (y el de ayer, si todavía no abrió el de hoy).
  */

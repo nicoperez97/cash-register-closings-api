@@ -40,7 +40,9 @@ import {
 import { normalizeShopMenus } from '../menu/menu-parse.util';
 import {
   earliestShiftOpening,
+  findActiveShift,
   normalizeShopShifts,
+  shiftClosedBetween,
   type ShopShift,
 } from '../../common/shop-shifts';
 import { randomUUID } from 'crypto';
@@ -410,6 +412,14 @@ export class ShopsService implements OnModuleInit {
     try {
       await this.shops.query(`
         ALTER TABLE shops
+          ADD COLUMN orderingOpenedAt DATETIME NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
           ADD COLUMN takeawayEnabled TINYINT(1) NOT NULL DEFAULT 1
       `);
     } catch {
@@ -566,8 +576,12 @@ export class ShopsService implements OnModuleInit {
     this.assertShopAccess(user, id);
     const shop = await this.shops.findOne({ where: { id } });
     if (!shop) throw new NotFoundException('Local no encontrado');
+    const justAutoClosed = await this.maybeAutoCloseOrdering(shop);
     const [dto] = await this.withSettlementsEnabled([
-      this.toDto(shop, { emailSmtpConfigured: await this.hasSmtpPassword(id) }),
+      this.toDto(shop, {
+        emailSmtpConfigured: await this.hasSmtpPassword(id),
+        orderingJustAutoClosed: justAutoClosed,
+      }),
     ]);
     return dto;
   }
@@ -734,6 +748,7 @@ export class ShopsService implements OnModuleInit {
         onlineOrderingEnabled: dto.onlineOrderingEnabled ?? false,
         waiterOrderingEnabled: dto.waiterOrderingEnabled ?? false,
         orderingForceClosed: false,
+        orderingOpenedAt: new Date(),
         takeawayEnabled: dto.takeawayEnabled ?? true,
         deliveryEnabled: dto.deliveryEnabled ?? false,
         orderingHours: normalizeShopOrderingHours(dto.orderingHours),
@@ -857,7 +872,10 @@ export class ShopsService implements OnModuleInit {
       shop.waiterOrderingEnabled = !!dto.waiterOrderingEnabled;
     }
     if (dto.orderingForceClosed !== undefined) {
-      shop.orderingForceClosed = !!dto.orderingForceClosed;
+      const nextClosed = !!dto.orderingForceClosed;
+      if (nextClosed !== !!shop.orderingForceClosed) {
+        this.applyOrderingOpenState(shop, !nextClosed);
+      }
     }
     if (dto.takeawayEnabled !== undefined) {
       shop.takeawayEnabled = !!dto.takeawayEnabled;
@@ -1038,7 +1056,10 @@ export class ShopsService implements OnModuleInit {
       shop.waiterOrderingEnabled = !!dto.waiterOrderingEnabled;
     }
     if (dto.orderingForceClosed !== undefined) {
-      shop.orderingForceClosed = !!dto.orderingForceClosed;
+      const nextClosed = !!dto.orderingForceClosed;
+      if (nextClosed !== !!shop.orderingForceClosed) {
+        this.applyOrderingOpenState(shop, !nextClosed);
+      }
     }
     if (dto.takeawayEnabled !== undefined) shop.takeawayEnabled = !!dto.takeawayEnabled;
     if (dto.deliveryEnabled !== undefined) shop.deliveryEnabled = !!dto.deliveryEnabled;
@@ -1106,6 +1127,38 @@ export class ShopsService implements OnModuleInit {
     const fb = shiftWindowFallback(shifts, null);
     shop.serviceDefaultCheckIn = fb.checkIn;
     shop.serviceDefaultCheckOut = fb.checkOut;
+  }
+
+  /** Abre/cierra pedidos online a mano. Al abrir marca el instante para auto-cerrar al fin del turno. */
+  private applyOrderingOpenState(shop: Shop, open: boolean): void {
+    if (open) {
+      shop.orderingForceClosed = false;
+      shop.orderingOpenedAt = new Date();
+    } else {
+      shop.orderingForceClosed = true;
+      shop.orderingOpenedAt = null;
+    }
+  }
+
+  /**
+   * Si el local está abierto a mano y ya pasó el cierre de un turno desde que se abrió,
+   * lo cierra solo. Devuelve true si acaba de cerrar.
+   */
+  async maybeAutoCloseOrdering(shop: Shop): Promise<boolean> {
+    if (shop.orderingForceClosed) return false;
+    let openedAt = shop.orderingOpenedAt ? new Date(shop.orderingOpenedAt) : null;
+    if (!openedAt || Number.isNaN(openedAt.getTime())) {
+      // Locales viejos abiertos sin marca: seed para poder auto-cerrar al fin del turno.
+      shop.orderingOpenedAt = new Date();
+      await this.shops.save(shop);
+      return false;
+    }
+    const shifts = normalizeShopShifts(shop.shifts, shop.openingTime);
+    if (!shiftClosedBetween(openedAt, new Date(), shifts, shop.timezone)) return false;
+    shop.orderingForceClosed = true;
+    shop.orderingOpenedAt = null;
+    await this.shops.save(shop);
+    return true;
   }
 
   private normalizeShifts(
@@ -1341,7 +1394,7 @@ export class ShopsService implements OnModuleInit {
     }
   }
 
-  toDto(s: Shop, opts?: { emailSmtpConfigured?: boolean }) {
+  toDto(s: Shop, opts?: { emailSmtpConfigured?: boolean; orderingJustAutoClosed?: boolean }) {
     return {
       id: s.id,
       name: s.name,
@@ -1396,6 +1449,15 @@ export class ShopsService implements OnModuleInit {
       onlineOrderingEnabled: !!s.onlineOrderingEnabled,
       waiterOrderingEnabled: !!s.waiterOrderingEnabled,
       orderingForceClosed: !!s.orderingForceClosed,
+      orderingOpenedAt: s.orderingOpenedAt
+        ? new Date(s.orderingOpenedAt).toISOString()
+        : null,
+      orderingShiftActive: !!findActiveShift(
+        normalizeShopShifts(s.shifts, s.openingTime),
+        new Date(),
+        s.timezone,
+      ),
+      orderingJustAutoClosed: !!opts?.orderingJustAutoClosed,
       takeawayEnabled:
         s.takeawayEnabled === undefined || s.takeawayEnabled === null
           ? true
