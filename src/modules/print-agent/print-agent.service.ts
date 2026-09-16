@@ -40,9 +40,11 @@ export type PrintAgentInstallerOs = 'windows' | 'macos' | 'linux';
 type InstallerEntry = {
   os: PrintAgentInstallerOs;
   version: string;
+  source: 'file' | 'url';
   originalName: string;
   storedName: string;
   relativePath: string;
+  downloadUrl?: string;
   mime: string;
   size: number;
   uploadedAt: string;
@@ -67,9 +69,12 @@ type LegacyInstallerMeta = {
 export type InstallerPublicItem = {
   os: PrintAgentInstallerOs;
   version: string;
+  source: 'file' | 'url';
   fileName: string;
   size: number;
   uploadedAt: string;
+  /** Solo si source=url: link externo de descarga. */
+  downloadUrl?: string;
 };
 
 export type InstallerPublicCatalog = {
@@ -101,6 +106,60 @@ function normalizeInstallerVersion(raw: unknown): string {
     .trim()
     .replace(/^v/i, '')
     .slice(0, 40);
+}
+
+function normalizeInstallerDownloadUrl(raw: unknown): string | null {
+  const v = String(raw ?? '').trim();
+  if (!v) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(v);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null;
+
+  // Drive share/view → link de descarga directa.
+  const host = parsed.hostname.replace(/^www\./, '');
+  if (host === 'drive.google.com' || host === 'docs.google.com') {
+    const fileId =
+      parsed.searchParams.get('id') ||
+      parsed.pathname.match(/\/file\/d\/([^/]+)/)?.[1] ||
+      parsed.pathname.match(/\/d\/([^/]+)/)?.[1] ||
+      null;
+    if (fileId) {
+      return `https://drive.google.com/uc?export=download&id=${encodeURIComponent(fileId)}`;
+    }
+  }
+
+  return parsed.toString().slice(0, 2000);
+}
+
+function installerUrlDisplayName(downloadUrl: string, os: PrintAgentInstallerOs): string {
+  try {
+    const parsed = new URL(downloadUrl);
+    const host = parsed.hostname.replace(/^www\./, '');
+    if (
+      host === 'drive.google.com' ||
+      host === 'docs.google.com' ||
+      host.includes('googleusercontent.com')
+    ) {
+      return `Google Drive (${os})`;
+    }
+    const pathPart = parsed.pathname.split('/').filter(Boolean).pop();
+    if (
+      pathPart &&
+      pathPart !== 'view' &&
+      pathPart !== 'uc' &&
+      pathPart !== 'open' &&
+      pathPart !== 'edit'
+    ) {
+      return decodeURIComponent(pathPart).slice(0, 180);
+    }
+  } catch {
+    /* ignore */
+  }
+  return `Cierres-Comandas-${os}`;
 }
 
 function installerExt(originalName: string): string {
@@ -155,6 +214,7 @@ export class PrintAgentService implements OnModuleInit {
     for (const sql of [
       `ALTER TABLE shops ADD COLUMN printAgentTokenHash VARCHAR(64) NULL`,
       `ALTER TABLE shops ADD COLUMN printAgentTokenPrefix VARCHAR(24) NULL`,
+      `ALTER TABLE shops ADD COLUMN printAgentToken VARCHAR(120) NULL`,
     ]) {
       try {
         await this.shops.query(sql);
@@ -182,22 +242,44 @@ export class PrintAgentService implements OnModuleInit {
     const hash = this.hashToken(token);
     const shop = await this.shops.findOne({
       where: { printAgentTokenHash: hash, active: true as any },
-      select: ['id', 'name', 'slug', 'timezone', 'printAgentTokenHash'],
+      select: [
+        'id',
+        'name',
+        'slug',
+        'timezone',
+        'printAgentTokenHash',
+        'printAgentToken',
+        'printAgentTokenPrefix',
+      ],
     });
     if (!shop) throw new UnauthorizedException('Token de comandas inválido');
+    // Tokens viejos solo tenían hash: si el agent autentica, guardamos el claro para poder copiarlo.
+    if (!shop.printAgentToken?.trim()) {
+      try {
+        await this.shops.update(shop.id, {
+          printAgentToken: token,
+          printAgentTokenPrefix: shop.printAgentTokenPrefix || `${token.slice(0, 10)}…`,
+        });
+      } catch {
+        /* no bloquear el agent si falla el backfill */
+      }
+    }
     return shop;
   }
 
   async getAdminStatus(user: AuthUser, shopId: string) {
-    this.shopsSvc.assertShopManage(user, shopId);
+    this.shopsSvc.assertShopAccess(user, shopId);
     const shop = await this.shops.findOne({
       where: { id: shopId },
-      select: ['id', 'printAgentTokenPrefix', 'printAgentTokenHash'],
+      select: ['id', 'printAgentTokenPrefix', 'printAgentTokenHash', 'printAgentToken'],
     });
     if (!shop) throw new NotFoundException('Local no encontrado');
+    const token = shop.printAgentToken?.trim() || null;
     return {
       configured: !!shop.printAgentTokenHash,
       tokenPrefix: shop.printAgentTokenPrefix ?? null,
+      token,
+      canReveal: !!token,
     };
   }
 
@@ -208,12 +290,14 @@ export class PrintAgentService implements OnModuleInit {
     const token = `pa_${randomBytes(24).toString('base64url')}`;
     shop.printAgentTokenHash = this.hashToken(token);
     shop.printAgentTokenPrefix = `${token.slice(0, 10)}…`;
+    shop.printAgentToken = token;
     await this.shops.save(shop);
     return {
       token,
       tokenPrefix: shop.printAgentTokenPrefix,
       configured: true,
-      hint: 'Copiá el token ahora: no se vuelve a mostrar. Pegalo en Comandas.exe → Conexión.',
+      canReveal: true,
+      hint: 'Token listo. Podés copiarlo cuando quieras desde Dispositivos.',
     };
   }
 
@@ -223,8 +307,9 @@ export class PrintAgentService implements OnModuleInit {
     if (!shop) throw new NotFoundException('Local no encontrado');
     shop.printAgentTokenHash = null;
     shop.printAgentTokenPrefix = null;
+    shop.printAgentToken = null;
     await this.shops.save(shop);
-    return { configured: false, tokenPrefix: null };
+    return { configured: false, tokenPrefix: null, token: null, canReveal: false };
   }
 
   async session(shop: AgentShop) {
@@ -530,9 +615,13 @@ export class PrintAgentService implements OnModuleInit {
     return {
       os: entry.os,
       version: entry.version,
+      source: entry.source,
       fileName: entry.originalName,
       size: entry.size,
       uploadedAt: entry.uploadedAt,
+      ...(entry.source === 'url' && entry.downloadUrl
+        ? { downloadUrl: entry.downloadUrl }
+        : {}),
     };
   }
 
@@ -558,13 +647,37 @@ export class PrintAgentService implements OnModuleInit {
   }
 
   private normalizeCatalogEntry(raw: Partial<InstallerEntry> | null | undefined): InstallerEntry | null {
-    if (!raw?.relativePath || !raw?.originalName) return null;
+    if (!raw) return null;
     const os = normalizeInstallerOs(raw.os) ?? 'windows';
-    if (!resolveUploadPath(raw.relativePath)) return null;
     const version = normalizeInstallerVersion(raw.version) || '0.0.0';
+    const source: 'file' | 'url' =
+      raw.source === 'url' || (!!raw.downloadUrl && !raw.relativePath) ? 'url' : 'file';
+    if (source === 'url') {
+      const downloadUrl = normalizeInstallerDownloadUrl(raw.downloadUrl);
+      if (!downloadUrl) return null;
+      const osNorm = os;
+      return {
+        os: osNorm,
+        version,
+        source: 'url',
+        originalName: installerUrlDisplayName(
+          downloadUrl,
+          osNorm,
+        ),
+        storedName: '',
+        relativePath: '',
+        downloadUrl,
+        mime: 'application/octet-stream',
+        size: Number(raw.size) || 0,
+        uploadedAt: String(raw.uploadedAt || new Date().toISOString()),
+      };
+    }
+    if (!raw.relativePath || !raw.originalName) return null;
+    if (!resolveUploadPath(raw.relativePath)) return null;
     return {
       os,
       version,
+      source: 'file',
       originalName: String(raw.originalName).slice(0, 180),
       storedName: String(raw.storedName || ''),
       relativePath: String(raw.relativePath),
@@ -580,6 +693,7 @@ export class PrintAgentService implements OnModuleInit {
     return {
       os: normalizeInstallerOs(raw.os) ?? 'windows',
       version: normalizeInstallerVersion(raw.version) || '0.0.0',
+      source: 'file',
       originalName: String(raw.originalName).slice(0, 180),
       storedName: String(raw.storedName || ''),
       relativePath: String(raw.relativePath),
@@ -655,7 +769,7 @@ export class PrintAgentService implements OnModuleInit {
 
     const catalog = this.readInstallerCatalog();
     const prev = catalog.items.find((x) => x.os === os);
-    if (prev?.relativePath) deleteUploadIfExists(prev.relativePath);
+    if (prev?.source === 'file' && prev.relativePath) deleteUploadIfExists(prev.relativePath);
 
     const saved = saveUploadFile({
       relativeDir: INSTALLER_DIR,
@@ -667,11 +781,51 @@ export class PrintAgentService implements OnModuleInit {
     const entry: InstallerEntry = {
       os,
       version,
+      source: 'file',
       originalName: originalName.slice(0, 180),
       storedName: saved.fileName,
       relativePath: saved.relativePath,
       mime: file.mimetype || 'application/octet-stream',
       size: file.size,
+      uploadedAt: new Date().toISOString(),
+    };
+    const nextItems = catalog.items.filter((x) => x.os !== os).concat(entry);
+    this.writeInstallerCatalog({ items: nextItems });
+    return this.getInstallerMetaPublic();
+  }
+
+  setInstallerUrl(
+    user: AuthUser,
+    opts?: { os?: string; version?: string; downloadUrl?: string },
+  ) {
+    this.assertSuperAdmin(user);
+    const os = normalizeInstallerOs(opts?.os);
+    if (!os) {
+      throw new BadRequestException('Elegí el sistema operativo (windows, macos o linux)');
+    }
+    const version = normalizeInstallerVersion(opts?.version);
+    if (!version) {
+      throw new BadRequestException('Indicá la versión del instalador');
+    }
+    const downloadUrl = normalizeInstallerDownloadUrl(opts?.downloadUrl);
+    if (!downloadUrl) {
+      throw new BadRequestException('Indicá un link de descarga válido (http o https)');
+    }
+
+    const catalog = this.readInstallerCatalog();
+    const prev = catalog.items.find((x) => x.os === os);
+    if (prev?.source === 'file' && prev.relativePath) deleteUploadIfExists(prev.relativePath);
+
+    const entry: InstallerEntry = {
+      os,
+      version,
+      source: 'url',
+      originalName: installerUrlDisplayName(downloadUrl, os),
+      storedName: '',
+      relativePath: '',
+      downloadUrl,
+      mime: 'application/octet-stream',
+      size: 0,
       uploadedAt: new Date().toISOString(),
     };
     const nextItems = catalog.items.filter((x) => x.os !== os).concat(entry);
@@ -687,7 +841,7 @@ export class PrintAgentService implements OnModuleInit {
     }
     const catalog = this.readInstallerCatalog();
     const prev = catalog.items.find((x) => x.os === os);
-    if (prev?.relativePath) deleteUploadIfExists(prev.relativePath);
+    if (prev?.source === 'file' && prev?.relativePath) deleteUploadIfExists(prev.relativePath);
     const nextItems = catalog.items.filter((x) => x.os !== os);
     if (nextItems.length === 0) {
       try {
@@ -704,26 +858,35 @@ export class PrintAgentService implements OnModuleInit {
 
   async downloadInstallerForShop(user: AuthUser, shopId: string, osRaw?: string) {
     this.shopsSvc.assertShopManage(user, shopId);
-    return this.openInstallerFile(osRaw);
+    return this.resolveInstallerDownload(osRaw);
   }
 
   downloadInstallerAdmin(user: AuthUser, osRaw?: string) {
     this.assertSuperAdmin(user);
-    return this.openInstallerFile(osRaw);
+    return this.resolveInstallerDownload(osRaw);
   }
 
-  private openInstallerFile(osRaw?: string): {
+  private resolveInstallerDownload(osRaw?: string): {
+    kind: 'file';
     buffer: Buffer;
     fileName: string;
     contentType: string;
+  } | {
+    kind: 'url';
+    url: string;
   } {
     const os = normalizeInstallerOs(osRaw);
     if (!os) throw new BadRequestException('Indicá el sistema operativo');
     const meta = this.findInstallerEntry(os);
     if (!meta) throw new NotFoundException(`Todavía no hay instalador para ${os}`);
+    if (meta.source === 'url' && meta.downloadUrl) {
+      const url = normalizeInstallerDownloadUrl(meta.downloadUrl) || meta.downloadUrl;
+      return { kind: 'url', url };
+    }
     const abs = resolveUploadPath(meta.relativePath);
     if (!abs) throw new NotFoundException(`Todavía no hay instalador para ${os}`);
     return {
+      kind: 'file',
       buffer: readFileSync(abs),
       fileName: meta.originalName || meta.storedName,
       contentType: meta.mime || 'application/octet-stream',

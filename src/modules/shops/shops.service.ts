@@ -553,12 +553,17 @@ export class ShopsService implements OnModuleInit {
     return this.shops.findOne({ where: { slug, active: true } });
   }
 
-  /** Admin del local (shopRole) o admin/owner global, o manager con shops.manage. */
+  /** Admin del local (shopRole) o admin/owner global, o manager con shops/shopConfig.manage. */
   assertShopManage(user: AuthUser, shopId: string) {
     this.assertShopAccess(user, shopId);
     if (isGlobalAdmin(user.globalRole as GlobalRole)) return;
     const role = (user.shopRoles?.[shopId] ?? user.globalRole) as GlobalRole;
-    if (SHOP_ADMIN_ROLES.has(role) && user.permissions.includes('shops.manage')) {
+    const perms: Permission[] = user.shopPermissions?.[shopId] ?? user.permissions ?? [];
+    if (
+      (SHOP_ADMIN_ROLES.has(role) && perms.includes('shops.manage')) ||
+      perms.includes('shops.manage') ||
+      perms.includes('shopConfig.manage')
+    ) {
       return;
     }
     throw new ForbiddenException('No podés administrar este local');
@@ -570,6 +575,7 @@ export class ShopsService implements OnModuleInit {
     if (isGlobalAdmin(user.globalRole as GlobalRole)) return;
     const perms: Permission[] = user.shopPermissions?.[shopId] ?? user.permissions ?? [];
     if (
+      perms.includes('shopConfig.manage') ||
       perms.includes('shops.manage') ||
       perms.includes('orderingCatalog.manage') ||
       perms.includes('customerOrders.manage')

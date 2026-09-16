@@ -75,7 +75,7 @@ export class ShopsController {
   }
 
   @Get(':id/backup.xlsx')
-  @RequirePermissions('shops.manage')
+  @RequireAnyPermissions('shopConfig.manage', 'shops.manage')
   async downloadBackup(
     @CurrentUser() user: AuthUser,
     @Param('id') id: string,
@@ -93,7 +93,7 @@ export class ShopsController {
   }
 
   @Post(':id/backup/restore')
-  @RequirePermissions('shops.manage')
+  @RequireAnyPermissions('shopConfig.manage', 'shops.manage')
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
@@ -112,7 +112,7 @@ export class ShopsController {
   }
 
   @Post(':id/reset')
-  @RequirePermissions('shops.manage')
+  @RequireAnyPermissions('shopConfig.manage', 'shops.manage')
   reset(
     @CurrentUser() user: AuthUser,
     @Param('id') id: string,
@@ -127,6 +127,8 @@ export class ShopsController {
     'orderingCatalog.manage',
     'customerOrders.read',
     'customerOrders.manage',
+    'shopConfig.read',
+    'shopConfig.manage',
     'shops.manage',
   )
   findOne(@CurrentUser() user: AuthUser, @Param('id') id: string) {
@@ -140,7 +142,12 @@ export class ShopsController {
   }
 
   @Patch(':id/ordering-catalog')
-  @RequireAnyPermissions('shops.manage', 'orderingCatalog.manage', 'customerOrders.manage')
+  @RequireAnyPermissions(
+    'shopConfig.manage',
+    'shops.manage',
+    'orderingCatalog.manage',
+    'customerOrders.manage',
+  )
   updateOrderingCatalog(
     @CurrentUser() user: AuthUser,
     @Param('id') id: string,
@@ -195,7 +202,7 @@ export class ShopsController {
   }
 
   @Patch(':id')
-  @RequirePermissions('shops.manage')
+  @RequireAnyPermissions('shopConfig.manage', 'shops.manage')
   update(
     @CurrentUser() user: AuthUser,
     @Param('id') id: string,
@@ -205,7 +212,7 @@ export class ShopsController {
   }
 
   @Post(':id/logo')
-  @RequirePermissions('shops.manage')
+  @RequireAnyPermissions('shopConfig.manage', 'shops.manage')
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {

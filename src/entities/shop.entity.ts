@@ -367,6 +367,10 @@ export class Shop extends BaseEntity {
   @Column({ type: 'varchar', length: 24, nullable: true })
   printAgentTokenPrefix?: string | null;
 
+  /** Token en claro para poder copiarlo después de generado. */
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  printAgentToken?: string | null;
+
   @ManyToOne(() => SalesSystem, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'salesSystemId' })
   salesSystem?: SalesSystem | null;

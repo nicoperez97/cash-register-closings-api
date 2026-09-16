@@ -34,8 +34,8 @@ import { Permission } from '../../common/enums';
 import { isEntityActive } from '../../common/active.util';
 import {
   normalizeOrderingConfigVisibility,
-  OrderingConfigVisibility,
 } from '../../common/ordering-config-visibility';
+import { normalizeShopConfigVisibility } from '../../common/shop-config-visibility';
 import { closingDateKey } from '../../common/soft-delete.util';
 import { saveUploadFile } from '../../common/uploads';
 import {
@@ -721,7 +721,10 @@ export class AuthService implements OnModuleInit {
         isReservationAdmin: !!link?.isReservationAdmin,
         isCustomerOrdersAdmin: !!link?.isCustomerOrdersAdmin,
         orderingConfigVisibility: normalizeOrderingConfigVisibility(
-          link?.orderingConfigVisibility as Partial<OrderingConfigVisibility> | null,
+          link?.orderingConfigVisibility as Partial<Record<string, unknown>> | null,
+        ),
+        shopConfigVisibility: normalizeShopConfigVisibility(
+          link?.shopConfigVisibility as Partial<Record<string, unknown>> | null,
         ),
         canEditExpenses: !!link?.canEditExpenses,
         canEditPayments: !!link?.canEditPayments,
