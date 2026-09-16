@@ -569,7 +569,11 @@ export class ShopsService implements OnModuleInit {
     this.assertShopAccess(user, shopId);
     if (isGlobalAdmin(user.globalRole as GlobalRole)) return;
     const perms: Permission[] = user.shopPermissions?.[shopId] ?? user.permissions ?? [];
-    if (perms.includes('shops.manage') || perms.includes('orderingCatalog.manage')) {
+    if (
+      perms.includes('shops.manage') ||
+      perms.includes('orderingCatalog.manage') ||
+      perms.includes('customerOrders.manage')
+    ) {
       return;
     }
     throw new ForbiddenException('Sin permiso para el catálogo de pedidos online');

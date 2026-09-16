@@ -1,15 +1,21 @@
 import {
-  Body,
   Controller,
   Delete,
   Get,
   Headers,
   Param,
   Post,
+  Res,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
+  Body,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
+import type { Response } from 'express';
+import { memoryStorage } from 'multer';
 import {
   AuthUser,
   CurrentUser,
@@ -92,5 +98,91 @@ export class ShopPrintAgentController {
   @RequirePermissions('shops.manage')
   revoke(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
     return this.service.revokeToken(user, shopId);
+  }
+
+  @Get('installer/meta')
+  @RequirePermissions('shops.manage')
+  installerMeta() {
+    return this.service.getInstallerMetaPublic();
+  }
+
+  @Get('installer/:os')
+  @RequirePermissions('shops.manage')
+  async downloadInstaller(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('os') os: string,
+    @Res() res: Response,
+  ) {
+    const file = await this.service.downloadInstallerForShop(user, shopId, os);
+    res.setHeader('Content-Type', file.contentType);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${file.fileName.replace(/["\\\r\n]/g, '_')}"`,
+    );
+    res.send(file.buffer);
+  }
+}
+
+@ApiTags('admin-print-agent-installer')
+@ApiBearerAuth()
+@UseGuards(AuthGuard('jwt'), PermissionsGuard)
+@Controller('admin/print-agent-installer')
+export class AdminPrintAgentInstallerController {
+  constructor(private readonly service: PrintAgentService) {}
+
+  @Get()
+  meta(@CurrentUser() user: AuthUser) {
+    return this.service.getInstallerMetaAdmin(user);
+  }
+
+  @Get(':os/download')
+  download(
+    @CurrentUser() user: AuthUser,
+    @Param('os') os: string,
+    @Res() res: Response,
+  ) {
+    const file = this.service.downloadInstallerAdmin(user, os);
+    res.setHeader('Content-Type', file.contentType);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${file.fileName.replace(/["\\\r\n]/g, '_')}"`,
+    );
+    res.send(file.buffer);
+  }
+
+  @Post()
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+        os: { type: 'string', enum: ['windows', 'macos', 'linux'] },
+        version: { type: 'string' },
+      },
+      required: ['file', 'os', 'version'],
+    },
+  })
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 180 * 1024 * 1024 },
+    }),
+  )
+  upload(
+    @CurrentUser() user: AuthUser,
+    @UploadedFile() file: Express.Multer.File,
+    @Body() body: { os?: string; version?: string },
+  ) {
+    return this.service.uploadInstaller(user, file, {
+      os: body?.os,
+      version: body?.version,
+    });
+  }
+
+  @Delete(':os')
+  remove(@CurrentUser() user: AuthUser, @Param('os') os: string) {
+    return this.service.deleteInstaller(user, os);
   }
 }

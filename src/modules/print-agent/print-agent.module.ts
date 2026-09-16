@@ -7,6 +7,7 @@ import { ShopsModule } from '../shops/shops.module';
 import {
   PrintAgentController,
   ShopPrintAgentController,
+  AdminPrintAgentInstallerController,
 } from './print-agent.controller';
 import { PrintAgentService } from './print-agent.service';
 
@@ -16,7 +17,11 @@ import { PrintAgentService } from './print-agent.service';
     ShopsModule,
     ShopLiveModule,
   ],
-  controllers: [PrintAgentController, ShopPrintAgentController],
+  controllers: [
+    PrintAgentController,
+    ShopPrintAgentController,
+    AdminPrintAgentInstallerController,
+  ],
   providers: [PrintAgentService],
   exports: [PrintAgentService],
 })

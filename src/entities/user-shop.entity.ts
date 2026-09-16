@@ -67,6 +67,13 @@ export class UserShop {
   @Column({ default: false })
   isCustomerOrdersAdmin: boolean;
 
+  /**
+   * Qué ve en Pedidos → Configurar (true = visible).
+   * Keys: caja, channels, payments, items, extras.
+   */
+  @Column({ type: 'json', nullable: true })
+  orderingConfigVisibility?: Record<string, boolean> | null;
+
   /** Super admin le habilitó editar y borrar gastos de este local. */
   @Column({ default: false })
   canEditExpenses: boolean;

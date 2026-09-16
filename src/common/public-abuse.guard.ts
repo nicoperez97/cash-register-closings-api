@@ -72,6 +72,10 @@ export class PublicAbuseGuard implements CanActivate {
       isPublicApi && method === 'POST' && path.includes('/reservation-requests');
     const isLookup =
       isPublicApi && method === 'GET' && path.includes('/my-reservations');
+    const isOrderLookup =
+      isPublicApi &&
+      method === 'GET' &&
+      (path.includes('/customer-orders/lookup') || path.includes('/mi-pedido'));
 
     if (mutating && isPublicApi) {
       this.assertAllowedOrigin(req);
@@ -95,6 +99,24 @@ export class PublicAbuseGuard implements CanActivate {
           4,
           60 * 60_000,
           'Ya mandamos varias solicitudes con este mail. Revisá tu correo.',
+        );
+      }
+    } else if (isOrderLookup) {
+      this.hit(
+        `co-lookup:${ip}`,
+        12,
+        60_000,
+        'Demasiadas consultas de pedidos. Esperá un momento.',
+      );
+      const phone = String(
+        (req as { query?: Record<string, unknown> }).query?.phone ?? '',
+      ).replace(/\D/g, '');
+      if (phone.length >= 6) {
+        this.hit(
+          `co-lookup-phone:${phone.slice(-10)}`,
+          8,
+          60 * 60_000,
+          'Demasiadas consultas con este celular. Probá más tarde.',
         );
       }
     } else if (isLookup) {
