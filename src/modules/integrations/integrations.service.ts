@@ -755,12 +755,10 @@ export class IntegrationsService implements OnModuleInit {
 
     const tokens = await this.tokensForOrders(row);
     let created: DeliverateOrder | null = null;
-    let usedToken = tokens[0];
     let lastErr: Error | null = null;
     for (const token of tokens) {
       try {
         created = await this.deliverate.createOrder(token, orderPayload);
-        usedToken = token;
         break;
       } catch (err) {
         lastErr = err instanceof Error ? err : new Error(String(err));
@@ -791,33 +789,81 @@ export class IntegrationsService implements OnModuleInit {
       throw new BadRequestException('Deliverate no devolvió order_id');
     }
 
-    let updated: DeliverateOrder = created;
-    try {
-      updated = await this.deliverate.updateOrderState(usedToken, {
-        order_id: orderIdRemote,
-        is_kitchen_ready: true,
-      });
-    } catch (err) {
-      this.logger.warn(
-        `createOrder ok pero kitchen_ready falló (${orderIdRemote}): ${String(err)}`,
-      );
-    }
-
+    // No marcamos kitchen_ready acá: Deliverate exige esperar delay_start_time.
+    // Se marca cuando el pedido local pasa a READY (ver markDeliverateKitchenReady).
     order.externalSource = 'deliverate';
     order.externalId = orderIdRemote;
-    order.externalMeta = this.buildMeta(updated, {
+    order.externalMeta = this.buildMeta(created, {
       requestedAt: new Date().toISOString(),
       cashPrice,
       distance_price: created.distance_price,
+      kitchenReadyPending: true,
     });
-    if (!order.readyAt && order.status !== CustomerOrderStatus.READY) {
-      // No forzamos READY todavía; Deliverate state 1 lo hará vía webhook.
-    }
     await this.orders.save(order);
     row.lastError = null;
     await this.integrations.save(row);
     this.live.tick(shopId, 'customer-orders');
+
+    if (
+      order.status === CustomerOrderStatus.READY ||
+      order.status === CustomerOrderStatus.OUT_FOR_DELIVERY
+    ) {
+      await this.markDeliverateKitchenReady(order).catch(() => undefined);
+    }
+
     return this.orderDeliverateDto(order);
+  }
+
+  /**
+   * Avisa a Deliverate que la cocina está lista (asignar repartidor).
+   * Puede fallar si aún no cumplió delay_start_time de Deliverate.
+   */
+  async markDeliverateKitchenReady(order: CustomerOrder): Promise<void> {
+    if (order.externalSource !== 'deliverate' || !order.externalId) return;
+    const meta = (order.externalMeta ?? {}) as Record<string, unknown>;
+    if (meta['is_kitchen_ready'] === true) return;
+
+    const row = await this.integrations.findOne({
+      where: { shopId: order.shopId, provider: 'deliverate' },
+    });
+    if (!row) return;
+
+    const tokens = await this.tokensForOrders(row);
+    let updated: DeliverateOrder | null = null;
+    let lastErr: Error | null = null;
+    for (const token of tokens) {
+      try {
+        updated = await this.deliverate.updateOrderState(token, {
+          order_id: order.externalId,
+          is_kitchen_ready: true,
+        });
+        break;
+      } catch (err) {
+        lastErr = err instanceof Error ? err : new Error(String(err));
+        this.logger.warn(
+          `kitchen_ready Deliverate ${order.externalId} falló: ${lastErr.message}`,
+        );
+      }
+    }
+
+    if (!updated) {
+      order.externalMeta = {
+        ...meta,
+        kitchenReadyPending: true,
+        kitchenReadyLastError: (lastErr?.message ?? 'Error').slice(0, 300),
+      };
+      await this.orders.save(order);
+      return;
+    }
+
+    order.externalMeta = this.buildMeta(updated, {
+      ...meta,
+      kitchenReadyPending: false,
+      kitchenReadyAt: new Date().toISOString(),
+      kitchenReadyLastError: null,
+    });
+    await this.orders.save(order);
+    this.live.tick(order.shopId, 'customer-orders');
   }
 
   async cancelDeliverateForOrder(order: CustomerOrder): Promise<void> {
@@ -879,7 +925,10 @@ export class IntegrationsService implements OnModuleInit {
   async handleWebhook(body: { action?: string; update?: Record<string, unknown> }) {
     const action = String(body?.action ?? '').trim();
     const update = body?.update ?? {};
-    if (!action) return { ok: true, ignored: true };
+    if (!action) {
+      this.logger.warn('Deliverate webhook sin action');
+      return { ok: true, ignored: true };
+    }
 
     if (action === 'order_update') {
       await this.applyOrderUpdate(update);
@@ -916,12 +965,19 @@ export class IntegrationsService implements OnModuleInit {
         });
       }
     }
+    if (!order && remoteId) {
+      // Fallback: a veces externalSource aún no está, pero el id ya se guardó.
+      order = await this.orders.findOne({ where: { externalId: remoteId } });
+    }
     if (!order) {
-      this.logger.warn(`Webhook order_update sin pedido local: ${remoteId}`);
+      this.logger.warn(
+        `Webhook order_update sin pedido local order_id=${remoteId} integration_id=${integrationId} code=${integrationOrderNumber}`,
+      );
       return;
     }
 
     const prevMeta = (order.externalMeta ?? {}) as Record<string, unknown>;
+    const prevStatus = order.status;
     order.externalSource = 'deliverate';
     if (remoteId) order.externalId = remoteId;
     order.externalMeta = {
@@ -967,9 +1023,16 @@ export class IntegrationsService implements OnModuleInit {
         order.status = CustomerOrderStatus.CANCELLED;
         order.cancelledAt = now;
       }
+    } else if (!Number.isFinite(state)) {
+      this.logger.warn(
+        `Webhook order_update sin state numérico order_id=${remoteId} state=${String(update.state)}`,
+      );
     }
 
     await this.orders.save(order);
+    this.logger.log(
+      `Webhook order_update aplicado code=${order.code} state=${state} ${prevStatus}→${order.status}`,
+    );
     this.live.tick(order.shopId, 'customer-orders');
   }
 

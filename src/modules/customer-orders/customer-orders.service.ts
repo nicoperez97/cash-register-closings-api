@@ -761,7 +761,8 @@ export class CustomerOrdersService implements OnModuleInit {
     }
 
     const code = await this.genCode(shop.id);
-    const autoPrep = isCounter || isTable;
+    // Mostrador, mesa y pedidos cargados por staff (incl. delivery desde POS) van a cocina.
+    const autoPrep = isCounter || isTable || opts.response === 'staff';
     const initialStatus = autoPrep
       ? CustomerOrderStatus.PREPARING
       : CustomerOrderStatus.PENDING;
@@ -805,7 +806,7 @@ export class CustomerOrdersService implements OnModuleInit {
     if (!isTable) {
       void this.notifyStaffNewOrder(shop, order);
     }
-    if (isCounter) {
+    if (isCounter || (opts.response === 'staff' && !isTable)) {
       void this.printAgent
         .enqueueCustomerOrder(shop, order, 'COUNTER', {
           printCustomerTicket: dto.printCustomerTicket !== false,
@@ -1264,6 +1265,9 @@ export class CustomerOrdersService implements OnModuleInit {
     this.live.tick(shopId, 'customer-orders');
     if (next === CustomerOrderStatus.CANCELLED) {
       void this.integrations.cancelDeliverateForOrder(order).catch(() => undefined);
+    }
+    if (next === CustomerOrderStatus.READY) {
+      void this.integrations.markDeliverateKitchenReady(order).catch(() => undefined);
     }
     if (
       advancing &&

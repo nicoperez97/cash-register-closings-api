@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Headers,
+  Logger,
   Param,
   Post,
   Put,
@@ -20,7 +21,7 @@ import {
   RequirePermissions,
 } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
-import { DeliverateWebhookDto, UpsertDeliverateConfigDto } from './dto/deliverate.dto';
+import { UpsertDeliverateConfigDto } from './dto/deliverate.dto';
 import { IntegrationsService } from './integrations.service';
 
 function requestApiOrigin(
@@ -46,12 +47,27 @@ function requestApiOrigin(
 @ApiTags('webhooks')
 @Controller('webhooks')
 export class IntegrationsWebhookController {
+  private readonly logger = new Logger(IntegrationsWebhookController.name);
+
   constructor(private readonly service: IntegrationsService) {}
 
+  /**
+   * Sin DTO estricto: Deliverate a veces manda campos extra y
+   * forbidNonWhitelisted devolvería 400 sin aplicar el update.
+   */
   @Public()
   @Post('deliverate')
-  handleDeliverate(@Body() body: DeliverateWebhookDto) {
-    return this.service.handleWebhook(body);
+  handleDeliverate(@Body() body: Record<string, unknown>) {
+    const action = String(body?.action ?? '').trim();
+    const rawUpdate = body?.update;
+    const update =
+      rawUpdate && typeof rawUpdate === 'object' && !Array.isArray(rawUpdate)
+        ? (rawUpdate as Record<string, unknown>)
+        : body;
+    this.logger.log(
+      `Deliverate webhook action=${action || '(vacío)'} order_id=${String(update?.order_id ?? '')} state=${String(update?.state ?? '')}`,
+    );
+    return this.service.handleWebhook({ action, update });
   }
 }
 
