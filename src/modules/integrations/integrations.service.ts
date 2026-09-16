@@ -88,6 +88,7 @@ export class IntegrationsService implements OnModuleInit {
           closingAccountId CHAR(36) NULL,
           closingKind VARCHAR(32) NOT NULL DEFAULT 'RECORD_ONLY',
           closingIncludeInDeclared TINYINT(1) NOT NULL DEFAULT 0,
+          closingPaymentMethod VARCHAR(16) NOT NULL DEFAULT 'CASH',
           closingSourceId CHAR(36) NULL,
           PRIMARY KEY (id),
           UNIQUE KEY uq_shop_integrations_shop_provider (shopId, provider),
@@ -105,6 +106,7 @@ export class IntegrationsService implements OnModuleInit {
       `ALTER TABLE shop_integrations ADD COLUMN closingKind VARCHAR(32) NOT NULL DEFAULT 'RECORD_ONLY'`,
       `ALTER TABLE shop_integrations ADD COLUMN closingIncludeInDeclared TINYINT(1) NOT NULL DEFAULT 0`,
       `ALTER TABLE shop_integrations ADD COLUMN closingSourceId CHAR(36) NULL`,
+      `ALTER TABLE shop_integrations ADD COLUMN closingPaymentMethod VARCHAR(16) NOT NULL DEFAULT 'CASH'`,
       `ALTER TABLE customer_orders ADD COLUMN deliveryLat DECIMAL(10,7) NULL`,
       `ALTER TABLE customer_orders ADD COLUMN deliveryLng DECIMAL(10,7) NULL`,
       `ALTER TABLE customer_orders ADD COLUMN deliveryStreetNumber VARCHAR(40) NULL`,
@@ -229,7 +231,26 @@ export class IntegrationsService implements OnModuleInit {
       closingAccountName,
       closingKind: row.closingKind ?? ClosingSourceKind.RECORD_ONLY,
       closingIncludeInDeclared: !!row.closingIncludeInDeclared,
+      closingPaymentMethod:
+        row.closingPaymentMethod === 'TRANSFER' ? ('TRANSFER' as const) : ('CASH' as const),
       closingSourceId: row.closingSourceId ?? null,
+    };
+  }
+
+  /** Config de cierre Deliverate para armar el resumen de pedidos. */
+  async getDeliverateClosingHint(shopId: string): Promise<{
+    closingSourceId: string | null;
+    paymentMethod: 'CASH' | 'TRANSFER';
+    includeInDeclared: boolean;
+  } | null> {
+    const row = await this.integrations.findOne({
+      where: { shopId, provider: 'deliverate' },
+    });
+    if (!row?.closingSourceId) return null;
+    return {
+      closingSourceId: row.closingSourceId,
+      paymentMethod: row.closingPaymentMethod === 'TRANSFER' ? 'TRANSFER' : 'CASH',
+      includeInDeclared: !!row.closingIncludeInDeclared,
     };
   }
 
@@ -331,6 +352,10 @@ export class IntegrationsService implements OnModuleInit {
     }
     if (dto.closingIncludeInDeclared !== undefined) {
       row.closingIncludeInDeclared = !!dto.closingIncludeInDeclared;
+    }
+    if (dto.closingPaymentMethod !== undefined) {
+      row.closingPaymentMethod =
+        dto.closingPaymentMethod === 'TRANSFER' ? 'TRANSFER' : 'CASH';
     }
     if (dto.closingAccountId !== undefined) {
       const accountId = dto.closingAccountId ? String(dto.closingAccountId).trim() : '';

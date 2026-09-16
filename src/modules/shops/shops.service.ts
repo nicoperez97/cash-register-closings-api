@@ -895,8 +895,13 @@ export class ShopsService implements OnModuleInit {
     }
     if (dto.orderingForceClosed !== undefined) {
       const nextClosed = !!dto.orderingForceClosed;
+      if (!nextClosed) {
+        throw new BadRequestException(
+          'Para recibir pedidos online abrí la caja del turno (efectivo de apertura)',
+        );
+      }
       if (nextClosed !== !!shop.orderingForceClosed) {
-        this.applyOrderingOpenState(shop, !nextClosed);
+        this.applyOrderingOpenState(shop, false);
       }
     }
     if (dto.takeawayEnabled !== undefined) {
@@ -1087,8 +1092,14 @@ export class ShopsService implements OnModuleInit {
     }
     if (dto.orderingForceClosed !== undefined) {
       const nextClosed = !!dto.orderingForceClosed;
+      // Abrir pedidos solo vía caja abierta (POST /closings/open). Acá solo se permite cerrar.
+      if (!nextClosed) {
+        throw new BadRequestException(
+          'Para recibir pedidos online abrí la caja del turno (efectivo de apertura)',
+        );
+      }
       if (nextClosed !== !!shop.orderingForceClosed) {
-        this.applyOrderingOpenState(shop, !nextClosed);
+        this.applyOrderingOpenState(shop, false);
       }
     }
     if (dto.takeawayEnabled !== undefined) shop.takeawayEnabled = !!dto.takeawayEnabled;
@@ -1166,7 +1177,7 @@ export class ShopsService implements OnModuleInit {
   }
 
   /** Abre/cierra pedidos online a mano. Al abrir marca el instante para auto-cerrar al fin del turno. */
-  private applyOrderingOpenState(shop: Shop, open: boolean): void {
+  applyOrderingOpenState(shop: Shop, open: boolean): void {
     if (open) {
       shop.orderingForceClosed = false;
       shop.orderingOpenedAt = new Date();
@@ -1174,6 +1185,14 @@ export class ShopsService implements OnModuleInit {
       shop.orderingForceClosed = true;
       shop.orderingOpenedAt = null;
     }
+  }
+
+  /** Persiste apertura/cierre de pedidos online (p. ej. al abrir/cerrar caja). */
+  async setOrderingOpen(shopId: string, open: boolean): Promise<void> {
+    const shop = await this.shops.findOne({ where: { id: shopId } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    this.applyOrderingOpenState(shop, open);
+    await this.shops.save(shop);
   }
 
   /**

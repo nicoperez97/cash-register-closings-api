@@ -60,6 +60,7 @@ import { PrintAgentService } from '../print-agent/print-agent.service';
 import { ShopLiveService } from '../shop-live/shop-live.service';
 import { userShopCanReceiveCustomerOrders } from '../profile/notification-eligibility';
 import { IntegrationsService } from '../integrations/integrations.service';
+import { ClosingsService } from '../closings/closings.service';
 import {
   CreateCustomerOrderDto,
   UpdateCustomerOrderStatusDto,
@@ -97,6 +98,8 @@ export class CustomerOrdersService implements OnModuleInit {
     private readonly printAgent: PrintAgentService,
     @Inject(forwardRef(() => IntegrationsService))
     private readonly integrations: IntegrationsService,
+    @Inject(forwardRef(() => ClosingsService))
+    private readonly closingsSvc: ClosingsService,
   ) {}
 
   async onModuleInit() {
@@ -337,7 +340,13 @@ export class CustomerOrdersService implements OnModuleInit {
     const hours = normalizeShopOrderingHours(shop.orderingHours);
     const takeawayHours = hours?.takeaway ?? null;
     const deliveryHours = hours?.delivery ?? null;
-    const forceClosed = !!shop.orderingForceClosed;
+    const hasOpenCaja = await this.closingsSvc.hasOpenDraft(shop.id);
+    if (!hasOpenCaja && !shop.orderingForceClosed) {
+      shop.orderingForceClosed = true;
+      shop.orderingOpenedAt = null;
+      await this.shops.save(shop);
+    }
+    const forceClosed = !!shop.orderingForceClosed || !hasOpenCaja;
     const takeawayEnabled = shop.takeawayEnabled !== false;
     const deliveryEnabled = !!shop.deliveryEnabled;
     // Abierto/cerrado es manual: si no está forzado cerrado, los canales habilitados aceptan pedidos
@@ -423,7 +432,8 @@ export class CustomerOrdersService implements OnModuleInit {
       throw new NotFoundException('Pedidos online no disponibles');
     }
     await this.maybeAutoCloseOrdering(shop);
-    if (shop.orderingForceClosed) {
+    const hasOpenCaja = await this.closingsSvc.hasOpenDraft(shop.id);
+    if (shop.orderingForceClosed || !hasOpenCaja) {
       throw new BadRequestException('El local está cerrado para pedidos online');
     }
     return this.createOrderForShop(shop, dto, {
@@ -931,9 +941,9 @@ export class CustomerOrdersService implements OnModuleInit {
 
     let { rows, sessions, range } = await loadRows(date, shift);
 
-    // Si el turno pedido/vigente no tiene ventas, probar el anterior aunque viniera shiftId
-    // (al generar cierre suele ser el caso: Mañana recién abrió y las ventas son de la mañana).
-    if (!rows.length && !sessions.length) {
+    // Si el turno pedido/vigente no tiene ventas, probar el anterior — salvo que el cliente
+    // pidió un shiftId fijo (p. ej. caja abierta de ese turno).
+    if (!rows.length && !sessions.length && !pinnedShiftId) {
       const weekday = weekdayFromIsoDate(date) ?? 1;
       const prev = previousShiftOf(shift, shifts, weekday);
       const prevDate = previousShiftBusinessDate(date, shift, prev, shifts);
@@ -1040,6 +1050,10 @@ export class CustomerOrdersService implements OnModuleInit {
     let openCount = 0;
     const orderIds: string[] = [];
 
+    const deliverateHint = await this.integrations.getDeliverateClosingHint(shopId);
+    const deliverateBucket = emptyBucket();
+    let deliverateMatchedAmount = 0;
+
     const round2 = (n: number) => Math.round(n * 100) / 100;
 
     for (const row of rows) {
@@ -1048,21 +1062,50 @@ export class CustomerOrdersService implements OnModuleInit {
       orderIds.push(row.id);
       const total = Number(row.total) || 0;
       const fulfillment = String(row.fulfillment || 'TAKEAWAY');
+      const isTransfer = row.paymentMethod === CustomerOrderPaymentMethod.TRANSFER;
+      const isDeliverate =
+        fulfillment === CustomerOrderFulfillment.DELIVERY &&
+        String(row.externalSource ?? '').toLowerCase() === 'deliverate';
       const bucket = byFulfillment[fulfillment] ?? byFulfillment.TAKEAWAY;
+
+      const matchesDeliverateClosing =
+        !!isDeliverate &&
+        !!deliverateHint &&
+        ((deliverateHint.paymentMethod === 'TRANSFER' && isTransfer) ||
+          (deliverateHint.paymentMethod === 'CASH' && !isTransfer));
+
+      if (isDeliverate && deliverateHint) {
+        deliverateBucket.orderCount += 1;
+        if (isTransfer) deliverateBucket.transferTotal += total;
+        else deliverateBucket.cashTotal += total;
+      }
+      if (matchesDeliverateClosing) {
+        deliverateMatchedAmount += total;
+      }
+
       bucket.orderCount += 1;
-      if (row.paymentMethod === CustomerOrderPaymentMethod.TRANSFER) {
+      if (isTransfer) {
         transferTotal += total;
-        bucket.transferTotal += total;
+        if (!matchesDeliverateClosing) bucket.transferTotal += total;
       } else {
         cashTotal += total;
-        bucket.cashTotal += total;
+        if (!matchesDeliverateClosing) bucket.cashTotal += total;
       }
       for (const line of row.items ?? []) {
         const qty = Math.max(0, Number(line.qty) || 0);
         unitsSold += qty;
         bucket.unitsSold += qty;
+        if (isDeliverate && deliverateHint) deliverateBucket.unitsSold += qty;
       }
       if (row.status !== CustomerOrderStatus.COMPLETED) openCount += 1;
+    }
+
+    // Si Deliverate + efectivo va a cuenta aparte, no suma al efectivo de caja.
+    if (deliverateHint?.paymentMethod === 'CASH' && deliverateMatchedAmount > 0) {
+      cashTotal = Math.max(0, cashTotal - deliverateMatchedAmount);
+    }
+    if (deliverateHint?.paymentMethod === 'TRANSFER' && deliverateMatchedAmount > 0) {
+      transferTotal = Math.max(0, transferTotal - deliverateMatchedAmount);
     }
 
     const mapBucket = (b: Bucket) => ({
@@ -1088,13 +1131,25 @@ export class CustomerOrdersService implements OnModuleInit {
       completedCount: orderIds.length - openCount,
       cashTotal: round2(cashTotal),
       transferTotal: round2(transferTotal),
-      total: round2(cashTotal + transferTotal + tables.ticketTotal),
+      total: round2(cashTotal + transferTotal + tables.ticketTotal + deliverateMatchedAmount),
       unitsSold,
       byFulfillment: {
         TAKEAWAY: mapBucket(byFulfillment.TAKEAWAY),
         DELIVERY: mapBucket(byFulfillment.DELIVERY),
         COUNTER: mapBucket(byFulfillment.COUNTER),
       },
+      deliverate: deliverateHint
+        ? {
+            closingSourceId: deliverateHint.closingSourceId,
+            paymentMethod: deliverateHint.paymentMethod,
+            includeInDeclared: deliverateHint.includeInDeclared,
+            amount: round2(deliverateMatchedAmount),
+            cashTotal: round2(deliverateBucket.cashTotal),
+            transferTotal: round2(deliverateBucket.transferTotal),
+            orderCount: deliverateBucket.orderCount,
+            unitsSold: deliverateBucket.unitsSold,
+          }
+        : null,
       tables,
       orderIds,
       orderingForceClosed: !!shop.orderingForceClosed,
