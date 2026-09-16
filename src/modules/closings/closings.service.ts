@@ -41,12 +41,14 @@ import {
   resolveCurrentShift,
 } from '../../common/shop-shifts';
 import { CreateClosingDto, UpdateClosingDto } from './dto/closing.dto';
+import { OpenClosingDto } from './dto/open-closing.dto';
 import { applyClosingFilters, ClosingListFilters } from './closing-filters';
 import { ClosingPosnetAmount, sumPosnetsByType } from '../../common/posnet';
 import { CashWithdrawalsService } from './cash-withdrawals.service';
 import { ClosingStepFilesService } from './closing-step-files.service';
 import { missingRequiredClosingFiles } from './closing-required-files';
 import { TipsService } from '../tips/tips.service';
+import { resolveShopBusinessDate } from '../../common/business-date';
 
 const n = (v?: number | string | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
@@ -428,12 +430,102 @@ export class ClosingsService implements OnModuleInit {
     return this.toDto(row, { stepFiles });
   }
 
+  /** Caja abierta (DRAFT) del local, si hay. */
+  async getOpen(user: AuthUser, shopId: string) {
+    this.shops.assertShopAccess(user, shopId);
+    const row = await this.findOpenDraft(shopId);
+    if (!row) return null;
+    return this.toDto(row);
+  }
+
+  async hasOpenDraft(shopId: string): Promise<boolean> {
+    const row = await this.findOpenDraft(shopId);
+    return !!row;
+  }
+
+  private async findOpenDraft(shopId: string): Promise<CashClosing | null> {
+    return this.closings.findOne({
+      where: { shopId, status: ClosingStatus.DRAFT, active: true as any },
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  /**
+   * Abre la caja del turno: crea un cierre DRAFT con efectivo de apertura
+   * y habilita pedidos online.
+   */
+  async openRegister(user: AuthUser, shopId: string, dto: OpenClosingDto) {
+    this.shops.assertShopAccess(user, shopId);
+    const shop = await this.shops.getShopEntity(shopId);
+    if (!shop) throw new NotFoundException('Local no encontrado');
+
+    const existingDraft = await this.findOpenDraft(shopId);
+    if (existingDraft) {
+      throw new ConflictException(
+        `Ya hay una caja abierta (${existingDraft.shiftName || 'turno'} · ${existingDraft.businessDate}). Generá el cierre antes de abrir otra.`,
+      );
+    }
+
+    const shift = await this.resolveClosingShift(shopId, dto.shiftId);
+    const businessDate = resolveShopBusinessDate(new Date(), {
+      timezone: shop.timezone,
+      openingTime: shop.openingTime,
+    });
+    const dateKey = closingDateKey(businessDate, shift.id);
+    const exists = await this.closings.findOne({ where: { shopId, businessDateKey: dateKey } });
+    if (exists) {
+      throw new ConflictException('Ya existe un cierre para esa fecha y turno');
+    }
+
+    const opening = Math.max(0, n(dto.cashOpeningAmount));
+    const closing = await this.closings.save(
+      this.closings.create({
+        shopId,
+        businessDate,
+        businessDateKey: dateKey,
+        shiftId: shift.id,
+        shiftName: shift.name,
+        posSystemAmount: money(0),
+        cardAmount: money(0),
+        cashAmount: money(0),
+        mercadoPagoAmount: money(0),
+        deliveryAppsAmount: money(0),
+        transferAmount: money(0),
+        accountDniAmount: money(0),
+        otherAmount: money(0),
+        cashOpeningAmount: money(opening),
+        cashLeftInRegister: money(opening),
+        cashPendingPickup: money(0),
+        cashWithdrawn: money(0),
+        tipsAmount: money(0),
+        declaredTotal: money(0),
+        calculatedTotal: money(0),
+        difference: money(0),
+        status: ClosingStatus.DRAFT,
+        createdByUserId: user.id,
+        submittedAt: null,
+        active: true,
+      }),
+    );
+
+    await this.shops.setOrderingOpen(shopId, true);
+    return this.toDto(closing);
+  }
+
   async create(user: AuthUser, shopId: string, dto: CreateClosingDto) {
     this.shops.assertShopAccess(user, shopId);
     const shift = await this.resolveClosingShift(shopId, dto.shiftId);
     const dateKey = closingDateKey(dto.businessDate, shift.id);
     const exists = await this.closings.findOne({ where: { shopId, businessDateKey: dateKey } });
-    if (exists) throw new ConflictException('Ya existe un cierre para esa fecha y turno');
+    if (exists) {
+      if (exists.status === ClosingStatus.DRAFT) {
+        return this.update(user, shopId, exists.id, {
+          ...dto,
+          shiftId: shift.id,
+        } as UpdateClosingDto);
+      }
+      throw new ConflictException('Ya existe un cierre para esa fecha y turno');
+    }
     const normalized = this.applyPosnetSums(dto);
     const posnetAmounts = this.normalizePosnetAmounts(normalized.posnetAmounts);
     const incomeExtras = (normalized.extraLines ?? [])
@@ -590,6 +682,11 @@ export class ClosingsService implements OnModuleInit {
       differenceReason: merged.differenceReason ?? null, notes: merged.notes ?? null,
       evidenceUrl: merged.evidenceUrl ?? null, status: row.status,
     });
+    const wasDraft = row.status === ClosingStatus.DRAFT;
+    if (wasDraft) {
+      row.status = ClosingStatus.SUBMITTED;
+      row.submittedAt = new Date();
+    }
     await this.closings.save(row);
     if (dto.expenses || dto.extraLines || dto.sourceAmounts) {
       await this.replaceChildren(row.id, {
@@ -619,6 +716,20 @@ export class ClosingsService implements OnModuleInit {
           amount: n(s.amount),
         }))) as Array<{ sourceId?: string | null; amount?: number | null }>,
     });
+    if (wasDraft) {
+      await this.shops.setOrderingOpen(shopId, false).catch((err) => {
+        this.logger.warn(
+          `No se pudo cerrar pedidos al enviar cierre ${row.id}: ${(err as Error)?.message ?? err}`,
+        );
+      });
+      const submitted = await this.getOne(user, shopId, id);
+      void this.notifyAdminsClosingCreated(user, shopId, submitted).catch((err) => {
+        this.logger.warn(
+          `No se pudo notificar cierre ${row.id}: ${(err as Error)?.message ?? err}`,
+        );
+      });
+      return submitted;
+    }
     return this.getOne(user, shopId, id);
   }
 

@@ -128,6 +128,13 @@ export class ShopIntegration extends BaseEntity {
   @Column({ type: 'tinyint', default: 0 })
   closingIncludeInDeclared: boolean;
 
+  /**
+   * Medio de pago de los pedidos delivery que van a la fuente Deliverate
+   * (ej. Deliverate + efectivo → cuenta «Deliverate Efectivo»).
+   */
+  @Column({ type: 'varchar', length: 16, default: 'CASH' })
+  closingPaymentMethod: 'CASH' | 'TRANSFER';
+
   /** Fuente extra sincronizada (shop_closing_sources) para el formulario de cierre. */
   @Column({ type: 'varchar', nullable: true })
   closingSourceId?: string | null;

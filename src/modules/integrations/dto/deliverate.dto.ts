@@ -192,6 +192,12 @@ export class UpsertDeliverateConfigDto {
   @IsOptional()
   @IsBoolean()
   closingIncludeInDeclared?: boolean;
+
+  /** Medio de pago de pedidos que impactan en la fuente Deliverate del cierre. */
+  @ApiPropertyOptional({ enum: ['CASH', 'TRANSFER'] })
+  @IsOptional()
+  @IsIn(['CASH', 'TRANSFER'])
+  closingPaymentMethod?: 'CASH' | 'TRANSFER';
 }
 
 export class DeliverateWebhookDto {

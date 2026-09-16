@@ -26,6 +26,7 @@ import { ClosingStepFilesService } from './closing-step-files.service';
 import { CurrentUser, AuthUser, RequireAnyPermissions, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard, assertCanViewClosingsList } from '../../common/guards';
 import { CreateClosingDto, UpdateClosingDto } from './dto/closing.dto';
+import { OpenClosingDto } from './dto/open-closing.dto';
 import { parseClosingFilters } from './closing-filters';
 import { MulterExceptionFilter } from '../../common/filters/multer-exception.filter';
 import {
@@ -210,6 +211,22 @@ export class ClosingsController {
     return doCommit
       ? this.closings.commitReloadIncomes(user, shopId, body?.selected)
       : this.closings.previewReloadIncomes(user, shopId);
+  }
+
+  @Get('open')
+  @RequireAnyPermissions('closings.read', 'customerOrders.read', 'orderingCatalog.manage')
+  getOpen(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
+    return this.closings.getOpen(user, shopId);
+  }
+
+  @Post('open')
+  @RequireAnyPermissions('closings.create', 'orderingCatalog.manage', 'customerOrders.manage')
+  openRegister(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: OpenClosingDto,
+  ) {
+    return this.closings.openRegister(user, shopId, dto);
   }
 
   @Get(':id')

@@ -10,6 +10,7 @@ import { PrintAgentModule } from '../print-agent/print-agent.module';
 import { ShopLiveModule } from '../shop-live/shop-live.module';
 import { ShopsModule } from '../shops/shops.module';
 import { IntegrationsModule } from '../integrations/integrations.module';
+import { ClosingsModule } from '../closings/closings.module';
 import {
   CustomerOrdersController,
   PublicCustomerOrdersController,
@@ -24,6 +25,7 @@ import { CustomerOrdersService } from './customer-orders.service';
     NotificationsModule,
     PrintAgentModule,
     forwardRef(() => IntegrationsModule),
+    forwardRef(() => ClosingsModule),
   ],
   controllers: [PublicCustomerOrdersController, CustomerOrdersController],
   providers: [CustomerOrdersService],
