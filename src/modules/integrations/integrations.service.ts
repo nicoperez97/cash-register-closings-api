@@ -8,6 +8,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AuthUser } from '../../common/decorators';
+import { ClosingSourceKind } from '../../common/enums';
 import { isGlobalAdmin } from '../../common/guards';
 import {
   CustomerOrder,
@@ -15,14 +16,18 @@ import {
   CustomerOrderPaymentMethod,
   CustomerOrderStatus,
 } from '../../entities/customer-order.entity';
+import { LedgerAccount } from '../../entities/ledger-account.entity';
 import {
   DeliverateWorkingDay,
   ShopIntegration,
 } from '../../entities/shop-integration.entity';
+import { ShopClosingSource } from '../../entities/shop-closing-source.entity';
 import { Shop } from '../../entities/shop.entity';
 import { ShopLiveService } from '../shop-live/shop-live.service';
 import { DeliverateClient, DeliverateOrder } from './deliverate.client';
 import { UpsertDeliverateConfigDto } from './dto/deliverate.dto';
+
+const DELIVERATE_CLOSING_SOURCE_NAME = 'Deliverate';
 
 @Injectable()
 export class IntegrationsService implements OnModuleInit {
@@ -35,6 +40,10 @@ export class IntegrationsService implements OnModuleInit {
     private readonly orders: Repository<CustomerOrder>,
     @InjectRepository(Shop)
     private readonly shops: Repository<Shop>,
+    @InjectRepository(LedgerAccount)
+    private readonly accounts: Repository<LedgerAccount>,
+    @InjectRepository(ShopClosingSource)
+    private readonly closingSources: Repository<ShopClosingSource>,
     private readonly deliverate: DeliverateClient,
     private readonly live: ShopLiveService,
   ) {}
@@ -76,6 +85,10 @@ export class IntegrationsService implements OnModuleInit {
           webhookBaseUrl VARCHAR(300) NULL,
           webhookRegisteredAt DATETIME(6) NULL,
           lastError VARCHAR(500) NULL,
+          closingAccountId CHAR(36) NULL,
+          closingKind VARCHAR(32) NOT NULL DEFAULT 'RECORD_ONLY',
+          closingIncludeInDeclared TINYINT(1) NOT NULL DEFAULT 0,
+          closingSourceId CHAR(36) NULL,
           PRIMARY KEY (id),
           UNIQUE KEY uq_shop_integrations_shop_provider (shopId, provider),
           KEY idx_shop_integrations_provider_integration (provider, integrationId)
@@ -88,6 +101,10 @@ export class IntegrationsService implements OnModuleInit {
     for (const sql of [
       `ALTER TABLE shop_integrations ADD COLUMN webhookBaseUrl VARCHAR(300) NULL`,
       `ALTER TABLE shop_integrations ADD COLUMN textAddress VARCHAR(255) NULL`,
+      `ALTER TABLE shop_integrations ADD COLUMN closingAccountId CHAR(36) NULL`,
+      `ALTER TABLE shop_integrations ADD COLUMN closingKind VARCHAR(32) NOT NULL DEFAULT 'RECORD_ONLY'`,
+      `ALTER TABLE shop_integrations ADD COLUMN closingIncludeInDeclared TINYINT(1) NOT NULL DEFAULT 0`,
+      `ALTER TABLE shop_integrations ADD COLUMN closingSourceId CHAR(36) NULL`,
       `ALTER TABLE customer_orders ADD COLUMN deliveryLat DECIMAL(10,7) NULL`,
       `ALTER TABLE customer_orders ADD COLUMN deliveryLng DECIMAL(10,7) NULL`,
       `ALTER TABLE customer_orders ADD COLUMN deliveryStreetNumber VARCHAR(40) NULL`,
@@ -149,7 +166,7 @@ export class IntegrationsService implements OnModuleInit {
     return row;
   }
 
-  toPublicConfig(row: ShopIntegration) {
+  async toPublicConfig(row: ShopIntegration) {
     const base = (() => {
       try {
         return this.normalizeBaseUrl(row.webhookBaseUrl);
@@ -157,6 +174,13 @@ export class IntegrationsService implements OnModuleInit {
         return String(row.webhookBaseUrl ?? '').trim().replace(/\/+$/, '') || null;
       }
     })();
+    let closingAccountName: string | null = null;
+    if (row.closingAccountId) {
+      const acc = await this.accounts.findOne({
+        where: { id: row.closingAccountId, shopId: row.shopId },
+      });
+      closingAccountName = acc?.name ?? null;
+    }
     return {
       provider: 'deliverate' as const,
       enabled: !!row.enabled,
@@ -201,13 +225,18 @@ export class IntegrationsService implements OnModuleInit {
       webhookRegisteredAt: row.webhookRegisteredAt ?? null,
       lastError: row.lastError ?? null,
       webhookUrlHint: base ? `${base}/api/v1/webhooks/deliverate` : null,
+      closingAccountId: row.closingAccountId ?? null,
+      closingAccountName,
+      closingKind: row.closingKind ?? ClosingSourceKind.RECORD_ONLY,
+      closingIncludeInDeclared: !!row.closingIncludeInDeclared,
+      closingSourceId: row.closingSourceId ?? null,
     };
   }
 
   async getDeliverateConfig(user: AuthUser, shopId: string) {
     this.assertShopAccess(user, shopId);
     const row = await this.getOrCreate(shopId);
-    return this.toPublicConfig(row);
+    return await this.toPublicConfig(row);
   }
 
   async isDeliverateEnabled(shopId: string): Promise<boolean> {
@@ -297,6 +326,40 @@ export class IntegrationsService implements OnModuleInit {
       row.webhookBaseUrl = this.normalizeBaseUrl(opts.requestApiOrigin);
     }
 
+    if (dto.closingKind !== undefined) {
+      row.closingKind = dto.closingKind;
+    }
+    if (dto.closingIncludeInDeclared !== undefined) {
+      row.closingIncludeInDeclared = !!dto.closingIncludeInDeclared;
+    }
+    if (dto.closingAccountId !== undefined) {
+      const accountId = dto.closingAccountId ? String(dto.closingAccountId).trim() : '';
+      if (!accountId) {
+        row.closingAccountId = null;
+      } else {
+        const acc = await this.accounts.findOne({
+          where: { id: accountId, shopId },
+        });
+        if (!acc) throw new BadRequestException('La cuenta elegida no pertenece a este local');
+        row.closingAccountId = acc.id;
+      }
+    }
+
+    const kind = row.closingKind ?? ClosingSourceKind.RECORD_ONLY;
+    const needsAccount =
+      kind === ClosingSourceKind.OWN_ACCOUNT || kind === ClosingSourceKind.SETTLE_ACCOUNT;
+    if (needsAccount && !row.closingAccountId) {
+      throw new BadRequestException(
+        'Elegí la cuenta del local para Deliverate (o cambiá el tipo a solo registrar / rinde en efectivo)',
+      );
+    }
+    if (!needsAccount && kind === ClosingSourceKind.SETTLE_CASH) {
+      row.closingAccountId = null;
+    }
+    if (kind === ClosingSourceKind.RECORD_ONLY) {
+      row.closingAccountId = null;
+    }
+
     row.lastError = null;
 
     try {
@@ -313,8 +376,45 @@ export class IntegrationsService implements OnModuleInit {
       throw err;
     }
 
+    await this.syncDeliverateClosingSource(row);
     await this.integrations.save(row);
-    return this.toPublicConfig(row);
+    return await this.toPublicConfig(row);
+  }
+
+  /** Crea/actualiza la fuente extra “Deliverate” para el formulario de cierre. */
+  private async syncDeliverateClosingSource(row: ShopIntegration): Promise<void> {
+    const kind = row.closingKind ?? ClosingSourceKind.RECORD_ONLY;
+    const needsAccount =
+      kind === ClosingSourceKind.OWN_ACCOUNT || kind === ClosingSourceKind.SETTLE_ACCOUNT;
+    const accountId = needsAccount ? row.closingAccountId ?? null : null;
+
+    let source: ShopClosingSource | null = null;
+    if (row.closingSourceId) {
+      source = await this.closingSources.findOne({
+        where: { id: row.closingSourceId, shopId: row.shopId },
+      });
+    }
+    if (!source) {
+      source = await this.closingSources.findOne({
+        where: { shopId: row.shopId, name: DELIVERATE_CLOSING_SOURCE_NAME },
+      });
+    }
+    if (!source) {
+      source = this.closingSources.create({
+        shopId: row.shopId,
+        name: DELIVERATE_CLOSING_SOURCE_NAME,
+        sortOrder: 90,
+      });
+    }
+
+    source.name = DELIVERATE_CLOSING_SOURCE_NAME;
+    source.kind = kind;
+    source.accountId = accountId;
+    source.includeInDeclared = !!row.closingIncludeInDeclared;
+    source = await this.closingSources.save(source);
+
+    row.closingSourceId = source.id;
+    row.closingAccountId = accountId;
   }
 
   private async connectDeliverate(row: ShopIntegration) {
@@ -327,6 +427,8 @@ export class IntegrationsService implements OnModuleInit {
     if (!auth?.id_token) {
       throw new BadRequestException('Deliverate no devolvió id_token');
     }
+    // Según docs Deliverate, authenticate / upsertApiKey suelen devolver shops: [].
+    // La vinculación del comercio es createIntegrationShop (deli_id + integration_id), no esa lista.
     const linkedShops = this.extractShopUsernames(auth.shops);
     this.logger.log(
       `Deliverate connect user=${auth.username ?? username} is_integration=${!!auth.is_integration} shops=[${linkedShops.join(',')}]`,
@@ -339,20 +441,17 @@ export class IntegrationsService implements OnModuleInit {
     );
     row.apiToken = key.id_token || auth.id_token;
     row.webhookRegisteredAt = new Date();
+    row.lastError = null;
 
     const wanted = String(row.integrationId ?? '').trim().toLowerCase();
-    if (wanted && linkedShops.length && !linkedShops.some((s) => s.toLowerCase() === wanted)) {
-      row.lastError =
-        `El shop "${row.integrationId}" no figura en la cuenta "${username}" (shops: ${linkedShops.join(', ')}). Pedile a Deliverate que lo asocie.`.slice(
-          0,
-          500,
-        );
-    } else if (wanted && !linkedShops.length) {
-      row.lastError =
-        `La cuenta "${username}" no tiene shops asociados (lista vacía). El usuario "${row.integrationId}" existe en Deliverate pero no está vinculado a esta integración. Pedile a Deliverate que asocie el shop.`.slice(
-          0,
-          500,
-        );
+    if (
+      wanted &&
+      linkedShops.length &&
+      !linkedShops.some((s) => s.toLowerCase() === wanted)
+    ) {
+      this.logger.warn(
+        `integration_id="${row.integrationId}" no está en shops=[${linkedShops.join(',')}] (informativo; shops vacío es normal)`,
+      );
     }
   }
 
@@ -585,16 +684,8 @@ export class IntegrationsService implements OnModuleInit {
         isIntegration: !!auth.is_integration,
         hasToken: !!auth.id_token,
         shops,
-        warning:
-          !shops.length
-            ? 'Esta cuenta de integración no tiene shops asociados. Sin eso no se pueden crear envíos.'
-            : row.integrationId &&
-                !shops.some(
-                  (s) =>
-                    s.toLowerCase() === String(row.integrationId).trim().toLowerCase(),
-                )
-              ? `El shop "${row.integrationId}" no está en la lista de shops de la cuenta.`
-              : null,
+        // shops [] es normal en auth/upsert; no es un error de vinculación.
+        warning: null as string | null,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -685,11 +776,11 @@ export class IntegrationsService implements OnModuleInit {
       const shopPass = String(row.shopPassword ?? '').trim();
       if (/can'?t create an order/i.test(msg)) {
         throw new BadRequestException(
-          `Deliverate no permite crear el envío con la cuenta de integración` +
+          `Deliverate no permite crear el envío con el token de integración` +
             (shopPass
-              ? ` y la password del shop "${row.integrationId}" es incorrecta.`
-              : ` y no hay password del shop.`) +
-            ` Pedile a Deliverate la password del usuario shop "${row.integrationId}" (o que asocie ese shop a "${row.username}"), cargala en Integraciones y reintentá.`,
+              ? `; también falló con la password del shop "${row.integrationId}".`
+              : ` y falta la password del shop "${row.integrationId}".`) +
+            ` Revisá el token (Conectar), cargá la password del shop y reintentá.`,
         );
       }
       throw lastErr ?? new BadRequestException(msg);

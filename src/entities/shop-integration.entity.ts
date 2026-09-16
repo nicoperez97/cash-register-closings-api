@@ -1,6 +1,9 @@
 import { Column, Entity, Index, JoinColumn, ManyToOne, Unique } from 'typeorm';
+import { ClosingSourceKind } from '../common/enums';
 import { BaseEntity } from './base.entity';
+import { LedgerAccount } from './ledger-account.entity';
 import { Shop } from './shop.entity';
+import { ShopClosingSource } from './shop-closing-source.entity';
 
 export type ShopIntegrationProvider = 'deliverate';
 
@@ -107,7 +110,37 @@ export class ShopIntegration extends BaseEntity {
   @Column({ type: 'varchar', length: 500, nullable: true })
   lastError?: string | null;
 
+  /**
+   * Cuenta del local donde impacta Deliverate en el cierre
+   * (misma idea que las “fuentes extra”).
+   */
+  @Column({ type: 'varchar', nullable: true })
+  closingAccountId?: string | null;
+
+  /** Qué hacer con el monto en el cierre. */
+  @Column({
+    type: 'enum',
+    enum: ClosingSourceKind,
+    default: ClosingSourceKind.RECORD_ONLY,
+  })
+  closingKind: ClosingSourceKind;
+
+  @Column({ type: 'tinyint', default: 0 })
+  closingIncludeInDeclared: boolean;
+
+  /** Fuente extra sincronizada (shop_closing_sources) para el formulario de cierre. */
+  @Column({ type: 'varchar', nullable: true })
+  closingSourceId?: string | null;
+
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })
   shop: Shop;
+
+  @ManyToOne(() => LedgerAccount, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'closingAccountId' })
+  closingAccount?: LedgerAccount | null;
+
+  @ManyToOne(() => ShopClosingSource, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'closingSourceId' })
+  closingSource?: ShopClosingSource | null;
 }

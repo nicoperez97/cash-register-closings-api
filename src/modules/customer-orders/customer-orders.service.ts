@@ -552,9 +552,13 @@ export class CustomerOrdersService implements OnModuleInit {
     if (!shop || !shop.onlineOrderingEnabled) {
       throw new NotFoundException('Pedidos online no disponibles');
     }
+    const fulfillment =
+      dto.fulfillment === CustomerOrderFulfillment.DELIVERY
+        ? CustomerOrderFulfillment.DELIVERY
+        : CustomerOrderFulfillment.COUNTER;
     return this.createOrderForShop(
       shop,
-      { ...dto, fulfillment: CustomerOrderFulfillment.COUNTER },
+      { ...dto, fulfillment },
       {
         bypassHours: true,
         response: 'staff',
@@ -602,6 +606,7 @@ export class CustomerOrdersService implements OnModuleInit {
       }
     } else if (dto.fulfillment === CustomerOrderFulfillment.DELIVERY) {
       if (!deliveryEnabled) throw new BadRequestException('Delivery no disponible');
+      // Staff puede cargar delivery aunque el canal público esté cerrado (bypassHours).
       if (
         !opts.bypassHours &&
         !isOrderingChannelOpenNow(hours?.delivery, now, shop.timezone)
