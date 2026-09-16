@@ -101,6 +101,15 @@ class CreateUserDto {
   @IsBoolean()
   isCustomerOrdersAdmin?: boolean;
   @ApiPropertyOptional({
+    description:
+      'Qué ve en Pedidos → Configurar (true = visible). Keys: caja, channels, payments, items, extras',
+    type: 'object',
+    additionalProperties: { type: 'boolean' },
+  })
+  @IsOptional()
+  @IsObject()
+  orderingConfigVisibility?: Record<string, boolean> | null;
+  @ApiPropertyOptional({
     description: 'Si es true, puede editar y borrar gastos (solo lo asigna un super admin)',
   })
   @IsOptional()
@@ -189,6 +198,15 @@ class UpdateUserDto {
   @IsOptional()
   @IsBoolean()
   isCustomerOrdersAdmin?: boolean;
+  @ApiPropertyOptional({
+    description:
+      'Qué ve en Pedidos → Configurar (true = visible). Keys: caja, channels, payments, items, extras',
+    type: 'object',
+    additionalProperties: { type: 'boolean' },
+  })
+  @IsOptional()
+  @IsObject()
+  orderingConfigVisibility?: Record<string, boolean> | null;
   @ApiPropertyOptional({
     description: 'Si es true, puede editar y borrar gastos (solo lo asigna un super admin)',
   })

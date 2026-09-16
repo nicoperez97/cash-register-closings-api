@@ -46,8 +46,10 @@ import {
 import {
   formatOrderingHoursSummary,
   isOrderingChannelOpenNow,
+  findZoneAtPoint,
   normalizeDeliveryZones,
   normalizeOrderingEta,
+  zonesHavePolygons,
   normalizeOrderingExtras,
   normalizeOrderingPayments,
   normalizeShopMode,
@@ -210,19 +212,36 @@ export class CustomerOrdersService implements OnModuleInit {
   }
 
   private normalizePhone(raw?: string | null): string {
-    return String(raw ?? '').replace(/\D/g, '').slice(0, 40);
+    let d = String(raw ?? '').replace(/\D/g, '');
+    // AR: unificar 54/549… al móvil local de 10 dígitos para create + lookup.
+    if ((d.startsWith('549') || d.startsWith('54')) && d.length >= 12) {
+      d = d.slice(-10);
+    }
+    return d.slice(0, 40);
+  }
+
+  /** Variantes para encontrar pedidos viejos guardados con prefijo país. */
+  private phoneLookupVariants(raw?: string | null): string[] {
+    const canonical = this.normalizePhone(raw);
+    if (!canonical) return [];
+    const set = new Set<string>([canonical]);
+    if (canonical.length === 10) {
+      set.add(`54${canonical}`);
+      set.add(`549${canonical}`);
+    }
+    return [...set];
   }
 
   private async genCode(shopId: string): Promise<string> {
-    for (let attempt = 0; attempt < 12; attempt++) {
+    for (let attempt = 0; attempt < 16; attempt++) {
       let code = '';
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < 6; i++) {
         code += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)];
       }
       const exists = await this.orders.exists({ where: { shopId, code } });
       if (!exists) return code;
     }
-    return `X${Date.now().toString(36).slice(-5).toUpperCase()}`;
+    return `X${Date.now().toString(36).slice(-7).toUpperCase()}`;
   }
 
   private menuItemIndex(shop: Shop): Map<string, ShopMenuItem & { unitPrice: number }> {
@@ -341,24 +360,19 @@ export class CustomerOrdersService implements OnModuleInit {
     const takeawayHours = hours?.takeaway ?? null;
     const deliveryHours = hours?.delivery ?? null;
     const hasOpenCaja = await this.closingsSvc.hasOpenDraft(shop.id);
-    if (!hasOpenCaja && !shop.orderingForceClosed) {
-      shop.orderingForceClosed = true;
-      shop.orderingOpenedAt = null;
-      await this.shops.save(shop);
-    }
+    // Solo lectura: no persistir forceClosed desde un GET público (evita carreras).
     const forceClosed = !!shop.orderingForceClosed || !hasOpenCaja;
     const takeawayEnabled = shop.takeawayEnabled !== false;
     const deliveryEnabled = !!shop.deliveryEnabled;
-    // Abierto/cerrado es manual: si no está forzado cerrado, los canales habilitados aceptan pedidos
-    // aunque el horario o el turno aún no hayan empezado.
+    const zones = normalizeDeliveryZones(shop.deliveryZones);
     const takeawayOpen = !forceClosed && takeawayEnabled;
-    const deliveryOpen = !forceClosed && deliveryEnabled;
+    // Sin zonas no se puede completar un delivery: no ofrecerlo como abierto.
+    const deliveryOpen = !forceClosed && deliveryEnabled && zones.length > 0;
     const payments = normalizeOrderingPayments(shop.orderingPayments) ?? {
       methods: ['CASH', 'TRANSFER'] as CustomerOrderPaymentMethod[],
       transferInstructions: null,
       whatsapp: null,
     };
-    const zones = normalizeDeliveryZones(shop.deliveryZones);
     const eta = normalizeOrderingEta(shop.orderingEta);
     const menus = normalizeShopMenus(shop.menu);
 
@@ -713,22 +727,45 @@ export class CustomerOrdersService implements OnModuleInit {
       if (!zones.length) {
         throw new BadRequestException('No hay zonas de delivery configuradas');
       }
-      const zone = zones.find((z) => z.id === String(dto.deliveryZoneId ?? '').trim());
-      if (!zone) throw new BadRequestException('Seleccioná una zona de entrega');
       const addr = String(dto.address ?? '').trim();
       if (addr.length < 5) throw new BadRequestException('Ingresá la dirección de entrega');
+      const streetNo = String(dto.deliveryStreetNumber ?? '').trim();
+      if (!streetNo) {
+        throw new BadRequestException('Ingresá el número de calle');
+      }
+
+      const lat = Number(dto.deliveryLat);
+      const lng = Number(dto.deliveryLng);
+      const hasCoords = Number.isFinite(lat) && Number.isFinite(lng);
+      const mapped = zonesHavePolygons(zones);
+
+      let zone = zones.find((z) => z.id === String(dto.deliveryZoneId ?? '').trim()) ?? null;
+      if (mapped) {
+        if (!hasCoords) {
+          throw new BadRequestException('Marcá tu ubicación en el mapa de entrega');
+        }
+        if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+          throw new BadRequestException('Ubicación de entrega inválida');
+        }
+        const atPoint = findZoneAtPoint({ lat, lng }, zones);
+        if (!atPoint) {
+          throw new BadRequestException('Esa ubicación está fuera de las zonas de entrega');
+        }
+        // El fee/zona los define el polígono, no el id que manda el cliente.
+        zone = atPoint;
+      } else if (!zone) {
+        throw new BadRequestException('Seleccioná una zona de entrega');
+      }
+
       deliveryFee = zone.fee;
       deliveryZoneId = zone.id;
       deliveryZoneName = zone.name;
       address = addr.slice(0, 300);
-      const lat = Number(dto.deliveryLat);
-      const lng = Number(dto.deliveryLng);
-      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      if (hasCoords) {
         deliveryLat = lat.toFixed(7);
         deliveryLng = lng.toFixed(7);
       }
-      const streetNo = String(dto.deliveryStreetNumber ?? '').trim();
-      deliveryStreetNumber = streetNo ? streetNo.slice(0, 40) : null;
+      deliveryStreetNumber = streetNo.slice(0, 40);
     }
 
     let discountAmount = 0;
@@ -852,16 +889,21 @@ export class CustomerOrdersService implements OnModuleInit {
 
   async lookupPublic(slug: string, phone: string, code: string) {
     const shop = await this.shops.findOne({ where: { slug, active: true as any } });
-    if (!shop || !shop.onlineOrderingEnabled) {
-      throw new NotFoundException('Pedidos online no disponibles');
+    // Lookup de pedidos ya hechos: no exige que /pedir siga activo.
+    if (!shop) {
+      throw new NotFoundException('No encontramos ese pedido');
     }
-    const normalizedPhone = this.normalizePhone(phone);
+    const variants = this.phoneLookupVariants(phone);
     const normalizedCode = String(code ?? '').trim().toUpperCase();
-    if (!normalizedPhone || !normalizedCode) {
+    if (!variants.length || !normalizedCode) {
       throw new BadRequestException('Ingresá celular y código de pedido');
     }
     const order = await this.orders.findOne({
-      where: { shopId: shop.id, code: normalizedCode, phone: normalizedPhone },
+      where: variants.map((p) => ({
+        shopId: shop.id,
+        code: normalizedCode,
+        phone: p,
+      })),
       order: { createdAt: 'DESC' },
     });
     if (!order) throw new NotFoundException('No encontramos ese pedido');
@@ -874,7 +916,10 @@ export class CustomerOrdersService implements OnModuleInit {
     opts?: { status?: CustomerOrderStatus | CustomerOrderStatus[] },
   ) {
     this.assertShopAccess(user, shopId);
-    const where: any = { shopId };
+    const where: any = {
+      shopId,
+      fulfillment: Not(CustomerOrderFulfillment.TABLE),
+    };
     if (opts?.status) {
       where.status = Array.isArray(opts.status) ? In(opts.status) : opts.status;
     }
@@ -1059,6 +1104,11 @@ export class CustomerOrdersService implements OnModuleInit {
     for (const row of rows) {
       // Las mesas se agregan desde table_sessions (evita doble conteo).
       if (row.fulfillment === CustomerOrderFulfillment.TABLE) continue;
+      const isCompleted = row.status === CustomerOrderStatus.COMPLETED;
+      if (!isCompleted) {
+        openCount += 1;
+        continue;
+      }
       orderIds.push(row.id);
       const total = Number(row.total) || 0;
       const fulfillment = String(row.fulfillment || 'TAKEAWAY');
@@ -1097,7 +1147,6 @@ export class CustomerOrdersService implements OnModuleInit {
         bucket.unitsSold += qty;
         if (isDeliverate && deliverateHint) deliverateBucket.unitsSold += qty;
       }
-      if (row.status !== CustomerOrderStatus.COMPLETED) openCount += 1;
     }
 
     // Si Deliverate + efectivo va a cuenta aparte, no suma al efectivo de caja.
@@ -1128,7 +1177,7 @@ export class CustomerOrdersService implements OnModuleInit {
       to: range.to.toISOString(),
       orderCount: orderIds.length,
       openCount,
-      completedCount: orderIds.length - openCount,
+      completedCount: orderIds.length,
       cashTotal: round2(cashTotal),
       transferTotal: round2(transferTotal),
       total: round2(cashTotal + transferTotal + tables.ticketTotal + deliverateMatchedAmount),
@@ -1238,6 +1287,58 @@ export class CustomerOrdersService implements OnModuleInit {
     return this.toDto(order);
   }
 
+  private assertAllowedStatusTransition(
+    fulfillment: CustomerOrderFulfillment,
+    prev: CustomerOrderStatus,
+    next: CustomerOrderStatus,
+  ): void {
+    const forward: Partial<Record<CustomerOrderStatus, CustomerOrderStatus[]>> = {
+      [CustomerOrderStatus.PENDING]: [
+        CustomerOrderStatus.ACCEPTED,
+        CustomerOrderStatus.CANCELLED,
+      ],
+      [CustomerOrderStatus.ACCEPTED]: [
+        CustomerOrderStatus.PREPARING,
+        CustomerOrderStatus.CANCELLED,
+      ],
+      [CustomerOrderStatus.PREPARING]: [
+        CustomerOrderStatus.READY,
+        CustomerOrderStatus.CANCELLED,
+      ],
+      [CustomerOrderStatus.READY]: [
+        CustomerOrderStatus.OUT_FOR_DELIVERY,
+        CustomerOrderStatus.COMPLETED,
+      ],
+      [CustomerOrderStatus.OUT_FOR_DELIVERY]: [CustomerOrderStatus.COMPLETED],
+    };
+    const back: Partial<Record<CustomerOrderStatus, CustomerOrderStatus>> = {
+      [CustomerOrderStatus.ACCEPTED]: CustomerOrderStatus.PENDING,
+      [CustomerOrderStatus.PREPARING]: CustomerOrderStatus.ACCEPTED,
+      [CustomerOrderStatus.READY]: CustomerOrderStatus.PREPARING,
+      [CustomerOrderStatus.OUT_FOR_DELIVERY]: CustomerOrderStatus.READY,
+      [CustomerOrderStatus.COMPLETED]:
+        fulfillment === CustomerOrderFulfillment.DELIVERY
+          ? CustomerOrderStatus.OUT_FOR_DELIVERY
+          : CustomerOrderStatus.READY,
+    };
+
+    let allowed = [...(forward[prev] ?? [])];
+    if (
+      prev === CustomerOrderStatus.READY &&
+      (fulfillment === CustomerOrderFulfillment.TAKEAWAY ||
+        fulfillment === CustomerOrderFulfillment.COUNTER ||
+        fulfillment === CustomerOrderFulfillment.TABLE)
+    ) {
+      allowed = allowed.filter((s) => s !== CustomerOrderStatus.OUT_FOR_DELIVERY);
+    }
+    const prevAllowed = back[prev];
+    if (prevAllowed) allowed.push(prevAllowed);
+
+    if (!allowed.includes(next)) {
+      throw new BadRequestException('Transición de estado no permitida');
+    }
+  }
+
   async updateStatus(
     user: AuthUser,
     shopId: string,
@@ -1254,6 +1355,8 @@ export class CustomerOrdersService implements OnModuleInit {
       throw new BadRequestException('El pedido está cancelado');
     }
     if (next === prev) return this.toDto(order);
+
+    this.assertAllowedStatusTransition(order.fulfillment, prev, next);
 
     if (next === CustomerOrderStatus.COMPLETED && !order.paymentAccreditedAt) {
       throw new BadRequestException(
@@ -1400,7 +1503,10 @@ export class CustomerOrdersService implements OnModuleInit {
         select: ['id', 'active'],
       });
       for (const u of globalOwners) {
-        if (isEntityActive(u.active)) recipientIds.add(u.id);
+        // Solo owners vinculados a este local (no todos los OWNER del sistema).
+        if (isEntityActive(u.active) && userIds.includes(u.id)) {
+          recipientIds.add(u.id);
+        }
       }
       if (!recipientIds.size) return;
 

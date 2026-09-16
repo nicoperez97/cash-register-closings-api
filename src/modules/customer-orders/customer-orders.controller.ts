@@ -14,6 +14,7 @@ import {
   AuthUser,
   CurrentUser,
   Public,
+  RequireAnyPermissions,
   RequirePermissions,
 } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
@@ -92,7 +93,7 @@ export class CustomerOrdersController {
   }
 
   @Get('closing-summary')
-  @RequirePermissions('customerOrders.read')
+  @RequireAnyPermissions('customerOrders.read', 'orderingCatalog.manage', 'closings.create')
   closingSummary(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,

@@ -44,7 +44,7 @@ export class MenuController {
   constructor(private readonly menus: MenuService) {}
 
   @Get()
-  @RequireAnyPermissions('shops.manage', 'orderingCatalog.manage')
+  @RequireAnyPermissions('shops.manage', 'orderingCatalog.manage', 'customerOrders.manage')
   get(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
     return this.menus.getAdmin(user, shopId);
   }

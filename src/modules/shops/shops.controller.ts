@@ -122,7 +122,13 @@ export class ShopsController {
   }
 
   @Get(':id')
-  @RequireAnyPermissions('closings.read', 'orderingCatalog.manage', 'shops.manage')
+  @RequireAnyPermissions(
+    'closings.read',
+    'orderingCatalog.manage',
+    'customerOrders.read',
+    'customerOrders.manage',
+    'shops.manage',
+  )
   findOne(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.shops.findOne(user, id);
   }
@@ -134,7 +140,7 @@ export class ShopsController {
   }
 
   @Patch(':id/ordering-catalog')
-  @RequireAnyPermissions('shops.manage', 'orderingCatalog.manage')
+  @RequireAnyPermissions('shops.manage', 'orderingCatalog.manage', 'customerOrders.manage')
   updateOrderingCatalog(
     @CurrentUser() user: AuthUser,
     @Param('id') id: string,

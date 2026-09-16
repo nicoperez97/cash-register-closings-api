@@ -16,6 +16,9 @@ export function ensureUploadsDir(...parts: string[]): string {
 }
 
 function safeExt(originalName: string | undefined, mime: string | undefined): string {
+  const lower = (originalName || '').toLowerCase();
+  if (lower.endsWith('.tar.gz')) return '.tar.gz';
+  if (lower.endsWith('.appimage')) return '.AppImage';
   const fromName = extname(originalName || '').toLowerCase();
   if (fromName && fromName.length <= 8) return fromName;
   const m = (mime || '').toLowerCase();
@@ -24,6 +27,14 @@ function safeExt(originalName: string | undefined, mime: string | undefined): st
   if (m === 'image/png') return '.png';
   if (m === 'image/webp') return '.webp';
   if (m === 'image/gif') return '.gif';
+  if (m === 'application/zip' || m === 'application/x-zip-compressed') return '.zip';
+  if (
+    m === 'application/vnd.microsoft.portable-executable' ||
+    m === 'application/x-msdownload' ||
+    m === 'application/octet-stream'
+  ) {
+    return fromName || '.bin';
+  }
   return '.bin';
 }
 
@@ -39,7 +50,27 @@ export function saveUploadFile(opts: {
   const fileName = `${opts.basename}${ext}`;
   const dir = ensureUploadsDir(...opts.relativeDir.split('/').filter(Boolean));
   // Limpia versiones previas con otra extensión
-  for (const oldExt of ['.pdf', '.jpg', '.jpeg', '.png', '.webp', '.gif', '.bin']) {
+  for (const oldExt of [
+    '.pdf',
+    '.jpg',
+    '.jpeg',
+    '.png',
+    '.webp',
+    '.gif',
+    '.bin',
+    '.exe',
+    '.msi',
+    '.zip',
+    '.dmg',
+    '.pkg',
+    '.deb',
+    '.rpm',
+    '.AppImage',
+    '.appimage',
+    '.tar.gz',
+    '.gz',
+    '.tgz',
+  ]) {
     const old = join(dir, `${opts.basename}${oldExt}`);
     if (existsSync(old) && old !== join(dir, fileName)) {
       try {

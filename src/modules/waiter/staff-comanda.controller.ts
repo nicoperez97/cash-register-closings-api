@@ -18,24 +18,14 @@ export class StaffComandaController {
 
   /** Emite un token de comanda para el usuario logueado (sin PIN). */
   @Post('enter')
-  @RequireAnyPermissions(
-    'customerOrders.read',
-    'orderingCatalog.manage',
-    'reservations.read',
-    'shops.manage',
-  )
+  @RequireAnyPermissions('comanda.manage', 'shops.manage')
   enter(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
     return this.waiter.staffEnter(user, shopId);
   }
 
   /** Mozos para asignar al abrir una mesa desde la web admin. */
   @Get('waiters')
-  @RequireAnyPermissions(
-    'customerOrders.read',
-    'orderingCatalog.manage',
-    'reservations.read',
-    'shops.manage',
-  )
+  @RequireAnyPermissions('comanda.manage', 'shops.manage')
   waiters(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
     return this.waiter.listStaffWaiters(user, shopId);
   }

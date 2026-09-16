@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
   OnModuleInit,
@@ -7,8 +8,19 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash, randomBytes } from 'crypto';
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
+import { join } from 'path';
 import { Repository } from 'typeorm';
 import { AuthUser } from '../../common/decorators';
+import { GlobalRole } from '../../common/enums';
+import { isSuperAdmin } from '../../common/guards';
+import {
+  deleteUploadIfExists,
+  ensureUploadsDir,
+  resolveUploadPath,
+  saveUploadFile,
+  uploadsRoot,
+} from '../../common/uploads';
 import {
   CustomerOrder,
   CustomerOrderFulfillment,
@@ -22,6 +34,89 @@ import { normalizeShopMenus } from '../menu/menu-parse.util';
 import { normalizeOrderingExtras } from '../../common/shop-ordering';
 
 type AgentShop = Pick<Shop, 'id' | 'name' | 'slug' | 'timezone' | 'printAgentTokenHash'>;
+
+export type PrintAgentInstallerOs = 'windows' | 'macos' | 'linux';
+
+type InstallerEntry = {
+  os: PrintAgentInstallerOs;
+  version: string;
+  originalName: string;
+  storedName: string;
+  relativePath: string;
+  mime: string;
+  size: number;
+  uploadedAt: string;
+};
+
+type InstallerCatalog = {
+  items: InstallerEntry[];
+};
+
+/** Legacy single-file meta (pre multi-OS). */
+type LegacyInstallerMeta = {
+  originalName: string;
+  storedName: string;
+  relativePath: string;
+  mime: string;
+  size: number;
+  uploadedAt: string;
+  os?: string;
+  version?: string;
+};
+
+export type InstallerPublicItem = {
+  os: PrintAgentInstallerOs;
+  version: string;
+  fileName: string;
+  size: number;
+  uploadedAt: string;
+};
+
+export type InstallerPublicCatalog = {
+  items: InstallerPublicItem[];
+};
+
+const INSTALLER_DIR = 'platform';
+const INSTALLER_META = 'cierres-comandas-installer.meta.json';
+const INSTALLER_MAX_BYTES = 180 * 1024 * 1024;
+const INSTALLER_OS_LIST: PrintAgentInstallerOs[] = ['windows', 'macos', 'linux'];
+const INSTALLER_ALLOWED_EXT_BY_OS: Record<PrintAgentInstallerOs, Set<string>> = {
+  windows: new Set(['.exe', '.msi', '.zip']),
+  macos: new Set(['.dmg', '.pkg', '.zip']),
+  linux: new Set(['.AppImage', '.deb', '.rpm', '.tar.gz', '.zip', '.appimage']),
+};
+
+function normalizeInstallerOs(raw: unknown): PrintAgentInstallerOs | null {
+  const v = String(raw ?? '')
+    .trim()
+    .toLowerCase();
+  if (v === 'windows' || v === 'win') return 'windows';
+  if (v === 'macos' || v === 'mac' || v === 'darwin' || v === 'osx') return 'macos';
+  if (v === 'linux') return 'linux';
+  return null;
+}
+
+function normalizeInstallerVersion(raw: unknown): string {
+  return String(raw ?? '')
+    .trim()
+    .replace(/^v/i, '')
+    .slice(0, 40);
+}
+
+function installerExt(originalName: string): string {
+  const name = originalName.toLowerCase();
+  if (name.endsWith('.tar.gz')) return '.tar.gz';
+  if (name.endsWith('.appimage')) return '.AppImage';
+  const idx = originalName.lastIndexOf('.');
+  if (idx < 0) return '';
+  return originalName.slice(idx).toLowerCase() === '.appimage'
+    ? '.AppImage'
+    : originalName.slice(idx).toLowerCase();
+}
+
+function installerBasename(os: PrintAgentInstallerOs): string {
+  return `cierres-comandas-installer-${os}`;
+}
 
 @Injectable()
 export class PrintAgentService implements OnModuleInit {
@@ -419,5 +514,219 @@ export class PrintAgentService implements OnModuleInit {
     );
     this.live.tick(input.shopId, 'customer-orders');
     return job;
+  }
+
+  private assertSuperAdmin(user: AuthUser) {
+    if (!isSuperAdmin(user.globalRole as GlobalRole)) {
+      throw new ForbiddenException('Solo un super admin puede gestionar el instalador');
+    }
+  }
+
+  private installerMetaPath(): string {
+    return join(uploadsRoot(), INSTALLER_DIR, INSTALLER_META);
+  }
+
+  private toPublicItem(entry: InstallerEntry): InstallerPublicItem {
+    return {
+      os: entry.os,
+      version: entry.version,
+      fileName: entry.originalName,
+      size: entry.size,
+      uploadedAt: entry.uploadedAt,
+    };
+  }
+
+  private readInstallerCatalog(): InstallerCatalog {
+    const abs = this.installerMetaPath();
+    if (!existsSync(abs)) return { items: [] };
+    try {
+      const raw = JSON.parse(readFileSync(abs, 'utf8')) as InstallerCatalog | LegacyInstallerMeta;
+      if (raw && Array.isArray((raw as InstallerCatalog).items)) {
+        const items = (raw as InstallerCatalog).items
+          .map((item) => this.normalizeCatalogEntry(item))
+          .filter((x): x is InstallerEntry => !!x);
+        return { items: this.dedupeByOs(items) };
+      }
+      const legacy = this.normalizeLegacyEntry(raw as LegacyInstallerMeta);
+      if (!legacy) return { items: [] };
+      const catalog: InstallerCatalog = { items: [legacy] };
+      this.writeInstallerCatalog(catalog);
+      return catalog;
+    } catch {
+      return { items: [] };
+    }
+  }
+
+  private normalizeCatalogEntry(raw: Partial<InstallerEntry> | null | undefined): InstallerEntry | null {
+    if (!raw?.relativePath || !raw?.originalName) return null;
+    const os = normalizeInstallerOs(raw.os) ?? 'windows';
+    if (!resolveUploadPath(raw.relativePath)) return null;
+    const version = normalizeInstallerVersion(raw.version) || '0.0.0';
+    return {
+      os,
+      version,
+      originalName: String(raw.originalName).slice(0, 180),
+      storedName: String(raw.storedName || ''),
+      relativePath: String(raw.relativePath),
+      mime: String(raw.mime || 'application/octet-stream'),
+      size: Number(raw.size) || 0,
+      uploadedAt: String(raw.uploadedAt || new Date().toISOString()),
+    };
+  }
+
+  private normalizeLegacyEntry(raw: LegacyInstallerMeta | null | undefined): InstallerEntry | null {
+    if (!raw?.relativePath || !raw?.originalName) return null;
+    if (!resolveUploadPath(raw.relativePath)) return null;
+    return {
+      os: normalizeInstallerOs(raw.os) ?? 'windows',
+      version: normalizeInstallerVersion(raw.version) || '0.0.0',
+      originalName: String(raw.originalName).slice(0, 180),
+      storedName: String(raw.storedName || ''),
+      relativePath: String(raw.relativePath),
+      mime: String(raw.mime || 'application/octet-stream'),
+      size: Number(raw.size) || 0,
+      uploadedAt: String(raw.uploadedAt || new Date().toISOString()),
+    };
+  }
+
+  private dedupeByOs(items: InstallerEntry[]): InstallerEntry[] {
+    const map = new Map<PrintAgentInstallerOs, InstallerEntry>();
+    for (const item of items) map.set(item.os, item);
+    return INSTALLER_OS_LIST.map((os) => map.get(os)).filter((x): x is InstallerEntry => !!x);
+  }
+
+  private writeInstallerCatalog(catalog: InstallerCatalog): void {
+    ensureUploadsDir(INSTALLER_DIR);
+    writeFileSync(
+      this.installerMetaPath(),
+      JSON.stringify({ items: this.dedupeByOs(catalog.items) }, null, 2),
+      'utf8',
+    );
+  }
+
+  private findInstallerEntry(os: PrintAgentInstallerOs): InstallerEntry | null {
+    return this.readInstallerCatalog().items.find((x) => x.os === os) ?? null;
+  }
+
+  getInstallerMetaPublic(): InstallerPublicCatalog {
+    return {
+      items: this.readInstallerCatalog().items.map((x) => this.toPublicItem(x)),
+    };
+  }
+
+  getInstallerMetaAdmin(user: AuthUser) {
+    this.assertSuperAdmin(user);
+    return this.getInstallerMetaPublic();
+  }
+
+  uploadInstaller(
+    user: AuthUser,
+    file?: Express.Multer.File,
+    opts?: { os?: string; version?: string },
+  ) {
+    this.assertSuperAdmin(user);
+    const os = normalizeInstallerOs(opts?.os);
+    if (!os) {
+      throw new BadRequestException('Elegí el sistema operativo (windows, macos o linux)');
+    }
+    const version = normalizeInstallerVersion(opts?.version);
+    if (!version) {
+      throw new BadRequestException('Indicá la versión del instalador');
+    }
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('Seleccioná el archivo del instalador');
+    }
+    if (file.size > INSTALLER_MAX_BYTES) {
+      throw new BadRequestException('El instalador supera el tamaño máximo (180 MB)');
+    }
+    const originalName =
+      String(file.originalname ?? `Cierres-Comandas-${os}`).trim() || `Cierres-Comandas-${os}`;
+    const ext = installerExt(originalName);
+    const allowed = INSTALLER_ALLOWED_EXT_BY_OS[os];
+    if (!ext || (!allowed.has(ext) && !allowed.has(ext.toLowerCase()))) {
+      const hint =
+        os === 'windows'
+          ? '.exe, .msi o .zip'
+          : os === 'macos'
+            ? '.dmg, .pkg o .zip'
+            : '.AppImage, .deb, .rpm, .tar.gz o .zip';
+      throw new BadRequestException(`Para ${os} solo se aceptan ${hint}`);
+    }
+
+    const catalog = this.readInstallerCatalog();
+    const prev = catalog.items.find((x) => x.os === os);
+    if (prev?.relativePath) deleteUploadIfExists(prev.relativePath);
+
+    const saved = saveUploadFile({
+      relativeDir: INSTALLER_DIR,
+      basename: installerBasename(os),
+      buffer: file.buffer,
+      originalName,
+      mime: file.mimetype,
+    });
+    const entry: InstallerEntry = {
+      os,
+      version,
+      originalName: originalName.slice(0, 180),
+      storedName: saved.fileName,
+      relativePath: saved.relativePath,
+      mime: file.mimetype || 'application/octet-stream',
+      size: file.size,
+      uploadedAt: new Date().toISOString(),
+    };
+    const nextItems = catalog.items.filter((x) => x.os !== os).concat(entry);
+    this.writeInstallerCatalog({ items: nextItems });
+    return this.getInstallerMetaPublic();
+  }
+
+  deleteInstaller(user: AuthUser, osRaw?: string) {
+    this.assertSuperAdmin(user);
+    const os = normalizeInstallerOs(osRaw);
+    if (!os) {
+      throw new BadRequestException('Indicá el sistema operativo a quitar');
+    }
+    const catalog = this.readInstallerCatalog();
+    const prev = catalog.items.find((x) => x.os === os);
+    if (prev?.relativePath) deleteUploadIfExists(prev.relativePath);
+    const nextItems = catalog.items.filter((x) => x.os !== os);
+    if (nextItems.length === 0) {
+      try {
+        const absMeta = this.installerMetaPath();
+        if (existsSync(absMeta)) unlinkSync(absMeta);
+      } catch {
+        /* ignore */
+      }
+      return this.getInstallerMetaPublic();
+    }
+    this.writeInstallerCatalog({ items: nextItems });
+    return this.getInstallerMetaPublic();
+  }
+
+  async downloadInstallerForShop(user: AuthUser, shopId: string, osRaw?: string) {
+    this.shopsSvc.assertShopManage(user, shopId);
+    return this.openInstallerFile(osRaw);
+  }
+
+  downloadInstallerAdmin(user: AuthUser, osRaw?: string) {
+    this.assertSuperAdmin(user);
+    return this.openInstallerFile(osRaw);
+  }
+
+  private openInstallerFile(osRaw?: string): {
+    buffer: Buffer;
+    fileName: string;
+    contentType: string;
+  } {
+    const os = normalizeInstallerOs(osRaw);
+    if (!os) throw new BadRequestException('Indicá el sistema operativo');
+    const meta = this.findInstallerEntry(os);
+    if (!meta) throw new NotFoundException(`Todavía no hay instalador para ${os}`);
+    const abs = resolveUploadPath(meta.relativePath);
+    if (!abs) throw new NotFoundException(`Todavía no hay instalador para ${os}`);
+    return {
+      buffer: readFileSync(abs),
+      fileName: meta.originalName || meta.storedName,
+      contentType: meta.mime || 'application/octet-stream',
+    };
   }
 }

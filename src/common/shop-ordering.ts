@@ -409,6 +409,51 @@ function normalizeZonePolygon(raw: unknown): DeliveryZonePoint[] | null {
   return pts.length >= 3 ? pts : null;
 }
 
+/** Ray casting: punto dentro del polígono. */
+export function pointInPolygon(
+  point: DeliveryZonePoint,
+  polygon: DeliveryZonePoint[],
+): boolean {
+  if (polygon.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i].lng;
+    const yi = polygon[i].lat;
+    const xj = polygon[j].lng;
+    const yj = polygon[j].lat;
+    const intersect =
+      yi > point.lat !== yj > point.lat &&
+      point.lng < ((xj - xi) * (point.lat - yi)) / (yj - yi + Number.EPSILON) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+function polygonArea(polygon: DeliveryZonePoint[]): number {
+  let area = 0;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    area += polygon[j].lng * polygon[i].lat - polygon[i].lng * polygon[j].lat;
+  }
+  return Math.abs(area / 2);
+}
+
+/** Zona más chica que contiene el punto (si hay solapamiento). */
+export function findZoneAtPoint(
+  point: DeliveryZonePoint,
+  zones: DeliveryZone[],
+): DeliveryZone | null {
+  const hits = zones.filter(
+    (z) => z.polygon && z.polygon.length >= 3 && pointInPolygon(point, z.polygon),
+  );
+  if (!hits.length) return null;
+  hits.sort((a, b) => polygonArea(a.polygon!) - polygonArea(b.polygon!));
+  return hits[0];
+}
+
+export function zonesHavePolygons(zones: DeliveryZone[]): boolean {
+  return zones.some((z) => (z.polygon?.length ?? 0) >= 3);
+}
+
 export function normalizeOrderingEta(raw: unknown): ShopOrderingEta | null {
   if (!raw || typeof raw !== 'object') return null;
   const o = raw as ShopOrderingEta;

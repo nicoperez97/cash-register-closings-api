@@ -960,8 +960,11 @@ export class IntegrationsService implements OnModuleInit {
       return { ok: true };
     }
     if (action === 'order_create') {
-      await this.applyOrderCreate(update);
-      return { ok: true };
+      // No crear pedidos locales desde webhook: el alta es nuestra (POS/público) → requestDeliverate.
+      this.logger.warn(
+        'Deliverate order_create ignorado (solo se aceptan updates de pedidos ya vinculados)',
+      );
+      return { ok: true, ignored: true };
     }
     this.logger.log(`Deliverate webhook ignorado: ${action}`);
     return { ok: true, ignored: true };
@@ -969,42 +972,31 @@ export class IntegrationsService implements OnModuleInit {
 
   private async applyOrderUpdate(update: Record<string, unknown>) {
     const remoteId = String(update.order_id ?? '').trim();
-    const integrationId = String(update.integration_id ?? '').trim();
-    const integrationOrderNumber = String(
-      update.integration_order_number ?? '',
-    ).trim();
-
-    let order: CustomerOrder | null = null;
-    if (remoteId) {
-      order = await this.orders.findOne({
-        where: { externalSource: 'deliverate', externalId: remoteId },
-      });
+    if (!remoteId) {
+      this.logger.warn('Webhook order_update sin order_id');
+      return;
     }
-    if (!order && integrationId && integrationOrderNumber) {
-      const integ = await this.integrations.findOne({
-        where: { provider: 'deliverate', integrationId },
-      });
-      if (integ) {
-        order = await this.orders.findOne({
-          where: { shopId: integ.shopId, code: integrationOrderNumber },
-        });
+
+    // Solo pedidos ya vinculados a Deliverate (evita completar cualquier code local).
+    let order = await this.orders.findOne({
+      where: { externalSource: 'deliverate', externalId: remoteId },
+    });
+    if (!order) {
+      order = await this.orders.findOne({ where: { externalId: remoteId } });
+      if (order && order.externalSource && order.externalSource !== 'deliverate') {
+        this.logger.warn(`Webhook order_update externalSource ajeno order_id=${remoteId}`);
+        return;
       }
     }
-    if (!order && remoteId) {
-      // Fallback: a veces externalSource aún no está, pero el id ya se guardó.
-      order = await this.orders.findOne({ where: { externalId: remoteId } });
-    }
     if (!order) {
-      this.logger.warn(
-        `Webhook order_update sin pedido local order_id=${remoteId} integration_id=${integrationId} code=${integrationOrderNumber}`,
-      );
+      this.logger.warn(`Webhook order_update sin pedido vinculado order_id=${remoteId}`);
       return;
     }
 
     const prevMeta = (order.externalMeta ?? {}) as Record<string, unknown>;
     const prevStatus = order.status;
     order.externalSource = 'deliverate';
-    if (remoteId) order.externalId = remoteId;
+    order.externalId = remoteId;
     order.externalMeta = {
       ...prevMeta,
       ...this.pickMeta(update),
@@ -1039,9 +1031,7 @@ export class IntegrationsService implements OnModuleInit {
         order.status = CustomerOrderStatus.COMPLETED;
         order.completedAt = now;
         order.outForDeliveryAt = order.outForDeliveryAt ?? now;
-        if (!order.paymentAccreditedAt) {
-          order.paymentAccreditedAt = now;
-        }
+        // No acreditar pago automáticamente: lo confirma el local.
       }
     } else if (state === 4 || state === 5 || state === 6) {
       // Cancelación en Deliverate: no cancela el pedido local; libera el vínculo
@@ -1074,75 +1064,9 @@ export class IntegrationsService implements OnModuleInit {
     this.live.tick(order.shopId, 'customer-orders');
   }
 
-  private async applyOrderCreate(update: Record<string, unknown>) {
-    const integrationId = String(update.integration_id ?? '').trim();
-    const remoteId = String(update.order_id ?? '').trim();
-    if (!integrationId || !remoteId) return;
-
-    const existing = await this.orders.findOne({
-      where: { externalSource: 'deliverate', externalId: remoteId },
-    });
-    if (existing) {
-      await this.applyOrderUpdate(update);
-      return;
-    }
-
-    const integ = await this.integrations.findOne({
-      where: { provider: 'deliverate', integrationId },
-    });
-    if (!integ) {
-      this.logger.warn(`order_create sin shop para integration_id=${integrationId}`);
-      return;
-    }
-
-    const code =
-      String(update.integration_order_number ?? '').trim().slice(0, 12) ||
-      `D${Date.now().toString(36).slice(-5).toUpperCase()}`;
-    const coords = (update.location as any)?.coordinates;
-    const lat = Array.isArray(coords) ? Number(coords[0]) : null;
-    const lng = Array.isArray(coords) ? Number(coords[1]) : null;
-    const priceArr = (update.real_price as any)?.price_value;
-    const total = Array.isArray(priceArr) ? Number(priceArr[0]) : Number(update.price) || 0;
-
-    const order = await this.orders.save(
-      this.orders.create({
-        shopId: integ.shopId,
-        code,
-        status: CustomerOrderStatus.PENDING,
-        fulfillment: CustomerOrderFulfillment.DELIVERY,
-        items: [
-          {
-            menuItemId: 'deliverate',
-            name: 'Pedido Deliverate',
-            unitPrice: total,
-            qty: 1,
-            notes: String(update.notes ?? '') || null,
-          },
-        ],
-        subtotal: total.toFixed(2),
-        deliveryFee: '0.00',
-        discountAmount: '0.00',
-        total: Math.max(0.01, total).toFixed(2),
-        firstName: 'Deliverate',
-        lastName: String(update.shop_name ?? integrationId).slice(0, 80),
-        phone: String(update.telephone ?? '').replace(/\D/g, '').slice(0, 40) || '000000',
-        address: null,
-        deliveryLat: lat != null && Number.isFinite(lat) ? lat.toFixed(7) : null,
-        deliveryLng: lng != null && Number.isFinite(lng) ? lng.toFixed(7) : null,
-        deliveryStreetNumber: String(update.street_number ?? '').slice(0, 40) || null,
-        paymentMethod: CustomerOrderPaymentMethod.CASH,
-        customerNotes: String(update.notes ?? '') || null,
-        externalSource: 'deliverate',
-        externalId: remoteId,
-        externalMeta: {
-          ...this.pickMeta(update),
-          inbound: true,
-          lastWebhookAt: new Date().toISOString(),
-        },
-      }),
-    );
-    this.live.tick(integ.shopId, 'customer-orders');
-    this.logger.log(`Pedido inbound Deliverate ${order.code} shop=${integ.shopId}`);
+  /** @deprecated Conservado por si se rehabilita order_create con auth; no se llama. */
+  private async applyOrderCreate(_update: Record<string, unknown>) {
+    return;
   }
 
   private resolveCashPrice(order: CustomerOrder): number {

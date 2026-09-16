@@ -29,6 +29,7 @@ export type ModuleKey =
   | 'orders'
   | 'customerOrders'
   | 'orderingCatalog'
+  | 'comanda'
   | 'integrations'
   | 'tips'
   | 'reimbursements'
@@ -288,6 +289,14 @@ export const MODULE_DEFS: ModuleDef[] = [
     ],
   },
   {
+    key: 'comanda',
+    label: 'Comanda',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
     key: 'integrations',
     label: 'Integraciones',
     levels: [
@@ -450,6 +459,7 @@ export function expandModulePermissions(
   pair('customerOrders', 'customerOrders.read', 'customerOrders.manage');
   pair('integrations', 'integrations.read', 'integrations.manage');
   if (modules.orderingCatalog === 'manage') add(set, 'orderingCatalog.manage');
+  if (modules.comanda === 'manage') add(set, 'comanda.manage');
   switch (modules.tips) {
     case 'read':
       add(set, 'tips.read');
@@ -556,6 +566,7 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
     orders: level('orders.read', 'orders.manage'),
     customerOrders: level('customerOrders.read', 'customerOrders.manage'),
     orderingCatalog: has('orderingCatalog.manage') ? 'manage' : 'none',
+    comanda: has('comanda.manage') ? 'manage' : 'none',
     integrations: level('integrations.read', 'integrations.manage'),
     tips: (() => {
       if (has('tips.manage')) return 'manage';
