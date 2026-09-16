@@ -1019,9 +1019,21 @@ export class IntegrationsService implements OnModuleInit {
         }
       }
     } else if (state === 4 || state === 5 || state === 6) {
-      if (order.status !== CustomerOrderStatus.COMPLETED) {
-        order.status = CustomerOrderStatus.CANCELLED;
-        order.cancelledAt = now;
+      // Cancelación en Deliverate: no cancela el pedido local; libera el vínculo
+      // para poder volver a «Solicitar Deliverate».
+      if (order.status !== CustomerOrderStatus.COMPLETED && order.status !== CustomerOrderStatus.CANCELLED) {
+        if (order.status === CustomerOrderStatus.OUT_FOR_DELIVERY) {
+          order.status = CustomerOrderStatus.READY;
+          order.outForDeliveryAt = null;
+          order.readyAt = order.readyAt ?? now;
+        }
+        order.externalSource = null;
+        order.externalId = null;
+        order.externalMeta = {
+          lastDeliverateCancelAt: now.toISOString(),
+          lastDeliverateCancelState: state,
+          lastDeliverateOrderId: remoteId || null,
+        };
       }
     } else if (!Number.isFinite(state)) {
       this.logger.warn(
@@ -1031,7 +1043,8 @@ export class IntegrationsService implements OnModuleInit {
 
     await this.orders.save(order);
     this.logger.log(
-      `Webhook order_update aplicado code=${order.code} state=${state} ${prevStatus}→${order.status}`,
+      `Webhook order_update aplicado code=${order.code} state=${state} ${prevStatus}→${order.status}` +
+        (state >= 4 && state <= 6 && !order.externalId ? ' (Deliverate desvinculado)' : ''),
     );
     this.live.tick(order.shopId, 'customer-orders');
   }
