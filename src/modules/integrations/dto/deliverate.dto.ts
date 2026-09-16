@@ -4,15 +4,18 @@ import {
   ArrayMaxSize,
   IsArray,
   IsBoolean,
+  IsEnum,
   IsIn,
   IsNumber,
   IsObject,
   IsOptional,
   IsString,
+  IsUUID,
   MaxLength,
   MinLength,
   ValidateNested,
 } from 'class-validator';
+import { ClosingSourceKind } from '../../../common/enums';
 
 export class DeliverateWorkingDayDto {
   @ApiProperty({ description: '0=domingo … 6=sábado' })
@@ -173,6 +176,22 @@ export class UpsertDeliverateConfigDto {
   @IsOptional()
   @IsBoolean()
   createShop?: boolean;
+
+  /** Cuenta del local para el cierre (fuentes extra). */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsUUID()
+  closingAccountId?: string | null;
+
+  @ApiPropertyOptional({ enum: ClosingSourceKind })
+  @IsOptional()
+  @IsEnum(ClosingSourceKind)
+  closingKind?: ClosingSourceKind;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  closingIncludeInDeclared?: boolean;
 }
 
 export class DeliverateWebhookDto {
