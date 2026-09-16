@@ -36,6 +36,7 @@ export type ModuleKey =
   | 'vacations'
   | 'serviceRules'
   | 'shop'
+  | 'shopConfig'
   | 'users';
 
 export type ModuleLevel = string;
@@ -348,6 +349,16 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Local / POS',
     levels: [
       { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
+    key: 'shopConfig',
+    label: 'Configuración del local',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
       { value: 'manage', label: 'Gestionar' },
     ],
   },
@@ -503,7 +514,16 @@ export function expandModulePermissions(
   if (modules.concepts === 'manage') {
     add(set, 'concepts.manage', 'expenses.read', 'accountTransfers.read', 'incomes.read', 'movements.read');
   }
-  if (modules.shop === 'manage') add(set, 'shops.manage');
+  if (modules.shop === 'read') add(set, 'shops.read');
+  if (modules.shop === 'manage') add(set, 'shops.read', 'shops.manage');
+  // Legacy: shop sin shopConfig explícito → mismo nivel en config del local.
+  const shopConfigLevel = Object.prototype.hasOwnProperty.call(modules, 'shopConfig')
+    ? modules.shopConfig
+    : modules.shop === 'read' || modules.shop === 'manage'
+      ? modules.shop
+      : undefined;
+  if (shopConfigLevel === 'read') add(set, 'shopConfig.read');
+  if (shopConfigLevel === 'manage') add(set, 'shopConfig.read', 'shopConfig.manage');
   if (modules.users === 'manage') add(set, 'users.manage');
 
   return [...set];
@@ -584,7 +604,16 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
     serviceRules: level('serviceRules.read', 'serviceRules.manage'),
     accounts: has('accounts.manage') ? 'manage' : 'none',
     concepts: has('concepts.manage') ? 'manage' : 'none',
-    shop: has('shops.manage') ? 'manage' : 'none',
+    shop: has('shops.manage') ? 'manage' : has('shops.read') ? 'read' : 'none',
+    shopConfig: has('shopConfig.manage')
+      ? 'manage'
+      : has('shopConfig.read')
+        ? 'read'
+        : has('shops.manage')
+          ? 'manage'
+          : has('shops.read')
+            ? 'read'
+            : 'none',
     users: has('users.manage') ? 'manage' : 'none',
   };
 }
@@ -615,11 +644,20 @@ export function sanitizeModulePermissions(
     if (fromStock.includes('manage')) rawInput.orders = 'manage';
     else if (fromStock.includes('read')) rawInput.orders = 'read';
   }
+  const shopConfigExplicit = Object.prototype.hasOwnProperty.call(rawInput, 'shopConfig');
+  if (
+    !shopConfigExplicit &&
+    (rawInput.shop === 'read' || rawInput.shop === 'manage') &&
+    (!rawInput.shopConfig || rawInput.shopConfig === 'none')
+  ) {
+    // Migración soft al guardar: Local/POS antiguo incluía config del local.
+    rawInput.shopConfig = rawInput.shop;
+  }
   const out: ModulePermissionsMap = {};
   for (const def of MODULE_DEFS) {
     if (def.key === 'users' && !allowUsers) continue;
     const raw = rawInput[def.key];
-    if (def.key === 'orders' && raw === 'none') {
+    if ((def.key === 'orders' || def.key === 'shopConfig') && raw === 'none') {
       out[def.key] = 'none';
       continue;
     }

@@ -20,6 +20,7 @@ import {
   AuthUser,
   CurrentUser,
   Public,
+  RequireAnyPermissions,
   RequirePermissions,
 } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
@@ -83,31 +84,31 @@ export class ShopPrintAgentController {
   constructor(private readonly service: PrintAgentService) {}
 
   @Get()
-  @RequirePermissions('shops.manage')
+  @RequireAnyPermissions('shopConfig.read', 'shopConfig.manage', 'shops.manage')
   status(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
     return this.service.getAdminStatus(user, shopId);
   }
 
   @Post('token')
-  @RequirePermissions('shops.manage')
+  @RequireAnyPermissions('shopConfig.manage', 'shops.manage')
   generate(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
     return this.service.generateToken(user, shopId);
   }
 
   @Delete('token')
-  @RequirePermissions('shops.manage')
+  @RequireAnyPermissions('shopConfig.manage', 'shops.manage')
   revoke(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
     return this.service.revokeToken(user, shopId);
   }
 
   @Get('installer/meta')
-  @RequirePermissions('shops.manage')
+  @RequireAnyPermissions('shopConfig.read', 'shopConfig.manage', 'shops.manage')
   installerMeta() {
     return this.service.getInstallerMetaPublic();
   }
 
   @Get('installer/:os')
-  @RequirePermissions('shops.manage')
+  @RequireAnyPermissions('shopConfig.read', 'shopConfig.manage', 'shops.manage')
   async downloadInstaller(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -115,6 +116,10 @@ export class ShopPrintAgentController {
     @Res() res: Response,
   ) {
     const file = await this.service.downloadInstallerForShop(user, shopId, os);
+    if (file.kind === 'url') {
+      res.redirect(302, file.url);
+      return;
+    }
     res.setHeader('Content-Type', file.contentType);
     res.setHeader(
       'Content-Disposition',
@@ -143,6 +148,10 @@ export class AdminPrintAgentInstallerController {
     @Res() res: Response,
   ) {
     const file = this.service.downloadInstallerAdmin(user, os);
+    if (file.kind === 'url') {
+      res.redirect(302, file.url);
+      return;
+    }
     res.setHeader('Content-Type', file.contentType);
     res.setHeader(
       'Content-Disposition',
@@ -178,6 +187,18 @@ export class AdminPrintAgentInstallerController {
     return this.service.uploadInstaller(user, file, {
       os: body?.os,
       version: body?.version,
+    });
+  }
+
+  @Post('link')
+  setLink(
+    @CurrentUser() user: AuthUser,
+    @Body() body: { os?: string; version?: string; downloadUrl?: string },
+  ) {
+    return this.service.setInstallerUrl(user, {
+      os: body?.os,
+      version: body?.version,
+      downloadUrl: body?.downloadUrl,
     });
   }
 

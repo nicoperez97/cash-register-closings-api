@@ -35,6 +35,12 @@ import {
   normalizeOrderingConfigVisibility,
   OrderingConfigVisibility,
 } from '../../common/ordering-config-visibility';
+import {
+  defaultShopConfigVisibility,
+  mergeShopConfigVisibility,
+  normalizeShopConfigVisibility,
+  ShopConfigVisibility,
+} from '../../common/shop-config-visibility';
 
 const SHOP_ADMIN_ROLES = new Set([GlobalRole.OWNER, GlobalRole.ADMIN]);
 
@@ -73,6 +79,8 @@ export class CreateUserBody {
   isCustomerOrdersAdmin?: boolean;
   /** Qué ve en Pedidos → Configurar (true = visible). */
   orderingConfigVisibility?: Partial<OrderingConfigVisibility> | null;
+  /** Nivel por sección de Configuración del local (none | read | manage). */
+  shopConfigVisibility?: Partial<ShopConfigVisibility> | null;
   canEditExpenses?: boolean;
   canEditPayments?: boolean;
   /** En el cierre, si hay monto hay que adjuntar archivo. */
@@ -109,6 +117,8 @@ export class UpdateUserBody {
   isCustomerOrdersAdmin?: boolean;
   /** Qué ve en Pedidos → Configurar (true = visible). */
   orderingConfigVisibility?: Partial<OrderingConfigVisibility> | null;
+  /** Nivel por sección de Configuración del local (none | read | manage). */
+  shopConfigVisibility?: Partial<ShopConfigVisibility> | null;
   canEditExpenses?: boolean;
   canEditPayments?: boolean;
   requireClosingFiles?: boolean;
@@ -205,6 +215,14 @@ export class UsersService implements OnModuleInit {
       await this.userShops.query(`
         ALTER TABLE user_shops
           ADD COLUMN orderingConfigVisibility JSON NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.userShops.query(`
+        ALTER TABLE user_shops
+          ADD COLUMN shopConfigVisibility JSON NULL
       `);
     } catch {
       // columna ya existe
@@ -402,6 +420,7 @@ export class UsersService implements OnModuleInit {
         isReservationAdmin: !!link?.isReservationAdmin,
         isCustomerOrdersAdmin: !!link?.isCustomerOrdersAdmin,
         orderingConfigVisibility: this.linkOrderingConfigVisibility(link),
+        shopConfigVisibility: this.linkShopConfigVisibility(link),
         canEditExpenses: !!link?.canEditExpenses,
         canEditPayments: !!link?.canEditPayments,
         requireClosingFiles: !!link?.requireClosingFiles,
@@ -459,6 +478,10 @@ export class UsersService implements OnModuleInit {
         defaultShopId === shopId
           ? this.resolveOrderingConfigVisibilityFromDto(dto)
           : defaultOrderingConfigVisibility();
+      const shopConfigVisibility =
+        defaultShopId === shopId
+          ? this.resolveShopConfigVisibilityFromDto(dto)
+          : defaultShopConfigVisibility();
       await this.userShops.save(
         this.userShops.create({
           userId: user.id,
@@ -477,6 +500,7 @@ export class UsersService implements OnModuleInit {
           isCustomerOrdersAdmin:
             defaultShopId === shopId ? !!dto.isCustomerOrdersAdmin : false,
           orderingConfigVisibility,
+          shopConfigVisibility,
           canEditExpenses:
             defaultShopId === shopId && isSuperAdmin(actor.globalRole as GlobalRole)
               ? !!dto.canEditExpenses
@@ -598,6 +622,10 @@ export class UsersService implements OnModuleInit {
               shopId === sid
                 ? this.resolveOrderingConfigVisibilityFromDto(dto)
                 : defaultOrderingConfigVisibility();
+            const shopConfigVisibility =
+              shopId === sid
+                ? this.resolveShopConfigVisibilityFromDto(dto)
+                : defaultShopConfigVisibility();
             await this.userShops.save(
               this.userShops.create({
                 userId: id,
@@ -618,6 +646,7 @@ export class UsersService implements OnModuleInit {
                 isReservationAdmin: shopId === sid ? !!dto.isReservationAdmin : false,
                 isCustomerOrdersAdmin: shopId === sid ? !!dto.isCustomerOrdersAdmin : false,
                 orderingConfigVisibility,
+                shopConfigVisibility,
                 requireClosingFiles: shopId === sid ? !!dto.requireClosingFiles : false,
                 ...this.editFlagsFromDto(actor, dto, undefined, shopId === sid),
               }),
@@ -639,6 +668,9 @@ export class UsersService implements OnModuleInit {
                 dto,
                 exists,
               );
+            }
+            if (shopId === sid && dto.shopConfigVisibility !== undefined) {
+              exists.shopConfigVisibility = this.resolveShopConfigVisibilityFromDto(dto, exists);
             }
             if (shopId === sid && dto.isStockAdmin !== undefined) {
               exists.isStockAdmin = !!dto.isStockAdmin;
@@ -685,6 +717,9 @@ export class UsersService implements OnModuleInit {
         const prevOrderingConfigVisibility = new Map(
           links.map((l) => [l.shopId, this.linkOrderingConfigVisibility(l)]),
         );
+        const prevShopConfigVisibility = new Map(
+          links.map((l) => [l.shopId, this.linkShopConfigVisibility(l)]),
+        );
         const prevEditExpenses = new Map(links.map((l) => [l.shopId, !!l.canEditExpenses]));
         const prevEditPayments = new Map(links.map((l) => [l.shopId, !!l.canEditPayments]));
         const prevRequireClosingFiles = new Map(
@@ -705,6 +740,12 @@ export class UsersService implements OnModuleInit {
                   orderingConfigVisibility: prevOrderingConfigVisibility.get(sid),
                 } as UserShop)
               : (prevOrderingConfigVisibility.get(sid) ?? defaultOrderingConfigVisibility());
+          const shopConfigVisibility =
+            shopId === sid && dto.shopConfigVisibility !== undefined
+              ? this.resolveShopConfigVisibilityFromDto(dto, {
+                  shopConfigVisibility: prevShopConfigVisibility.get(sid),
+                } as UserShop)
+              : (prevShopConfigVisibility.get(sid) ?? defaultShopConfigVisibility());
           const stockAdmin =
             shopId === sid && dto.isStockAdmin !== undefined
               ? !!dto.isStockAdmin
@@ -757,6 +798,7 @@ export class UsersService implements OnModuleInit {
               isReservationAdmin: reservationAdmin,
               isCustomerOrdersAdmin: customerOrdersAdmin,
               orderingConfigVisibility,
+              shopConfigVisibility,
               requireClosingFiles,
               canEditExpenses: editFlags.canEditExpenses,
               canEditPayments: editFlags.canEditPayments,
@@ -770,6 +812,7 @@ export class UsersService implements OnModuleInit {
         modulesIncoming !== undefined ||
         this.hasVisibilityPatch(dto) ||
         dto.orderingConfigVisibility !== undefined ||
+        dto.shopConfigVisibility !== undefined ||
         dto.isStockAdmin !== undefined ||
         dto.isBeverageStockAdmin !== undefined ||
         dto.isShortageAdmin !== undefined ||
@@ -794,6 +837,9 @@ export class UsersService implements OnModuleInit {
         }
         if (dto.orderingConfigVisibility !== undefined) {
           link.orderingConfigVisibility = this.resolveOrderingConfigVisibilityFromDto(dto, link);
+        }
+        if (dto.shopConfigVisibility !== undefined) {
+          link.shopConfigVisibility = this.resolveShopConfigVisibilityFromDto(dto, link);
         }
         if (dto.isStockAdmin !== undefined) {
           link.isStockAdmin = !!dto.isStockAdmin;
@@ -839,6 +885,7 @@ export class UsersService implements OnModuleInit {
             isReservationAdmin: !!dto.isReservationAdmin,
             isCustomerOrdersAdmin: !!dto.isCustomerOrdersAdmin,
             orderingConfigVisibility: this.resolveOrderingConfigVisibilityFromDto(dto),
+            shopConfigVisibility: this.resolveShopConfigVisibilityFromDto(dto),
             requireClosingFiles: !!dto.requireClosingFiles,
             ...this.editFlagsFromDto(actor, dto, undefined, true),
           }),
@@ -916,6 +963,7 @@ export class UsersService implements OnModuleInit {
       isReservationAdmin: !!link?.isReservationAdmin,
       isCustomerOrdersAdmin: !!link?.isCustomerOrdersAdmin,
       orderingConfigVisibility: this.linkOrderingConfigVisibility(link),
+      shopConfigVisibility: this.linkShopConfigVisibility(link),
       canEditExpenses: !!link?.canEditExpenses,
       canEditPayments: !!link?.canEditPayments,
       requireClosingFiles: !!link?.requireClosingFiles,
@@ -935,7 +983,13 @@ export class UsersService implements OnModuleInit {
 
   private linkOrderingConfigVisibility(link?: UserShop | null): OrderingConfigVisibility {
     return normalizeOrderingConfigVisibility(
-      link?.orderingConfigVisibility as Partial<OrderingConfigVisibility> | null,
+      link?.orderingConfigVisibility as Partial<Record<string, unknown>> | null,
+    );
+  }
+
+  private linkShopConfigVisibility(link?: UserShop | null): ShopConfigVisibility {
+    return normalizeShopConfigVisibility(
+      link?.shopConfigVisibility as Partial<Record<string, unknown>> | null,
     );
   }
 
@@ -972,7 +1026,7 @@ export class UsersService implements OnModuleInit {
   }
 
   private resolveOrderingConfigVisibilityFromDto(
-    dto: { orderingConfigVisibility?: Partial<OrderingConfigVisibility> | null },
+    dto: { orderingConfigVisibility?: Partial<Record<string, unknown>> | null },
     existing?: UserShop | null,
   ): OrderingConfigVisibility {
     const base = existing
@@ -980,6 +1034,19 @@ export class UsersService implements OnModuleInit {
       : defaultOrderingConfigVisibility();
     if (dto.orderingConfigVisibility !== undefined) {
       return mergeOrderingConfigVisibility(base, dto.orderingConfigVisibility);
+    }
+    return base;
+  }
+
+  private resolveShopConfigVisibilityFromDto(
+    dto: { shopConfigVisibility?: Partial<Record<string, unknown>> | null },
+    existing?: UserShop | null,
+  ): ShopConfigVisibility {
+    const base = existing
+      ? this.linkShopConfigVisibility(existing)
+      : defaultShopConfigVisibility();
+    if (dto.shopConfigVisibility !== undefined) {
+      return mergeShopConfigVisibility(base, dto.shopConfigVisibility);
     }
     return base;
   }

@@ -68,11 +68,18 @@ export class UserShop {
   isCustomerOrdersAdmin: boolean;
 
   /**
-   * Qué ve en Pedidos → Configurar (true = visible).
+   * Nivel por bloque en Pedidos → Configurar: none | read | manage.
    * Keys: caja, channels, payments, items, extras.
    */
   @Column({ type: 'json', nullable: true })
-  orderingConfigVisibility?: Record<string, boolean> | null;
+  orderingConfigVisibility?: Record<string, string | boolean> | null;
+
+  /**
+   * Nivel por sección de Configuración del local: none | read | manage.
+   * Keys: identidad, operacion, pedidos, comanda, dispositivos, menu, avanzado.
+   */
+  @Column({ type: 'json', nullable: true })
+  shopConfigVisibility?: Record<string, string> | null;
 
   /** Super admin le habilitó editar y borrar gastos de este local. */
   @Column({ default: false })

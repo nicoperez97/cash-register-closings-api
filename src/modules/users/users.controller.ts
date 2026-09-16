@@ -102,13 +102,22 @@ class CreateUserDto {
   isCustomerOrdersAdmin?: boolean;
   @ApiPropertyOptional({
     description:
-      'Qué ve en Pedidos → Configurar (true = visible). Keys: caja, channels, payments, items, extras',
+      'Nivel por bloque en Pedidos → Configurar (none | read | manage). Keys: caja, channels, payments, items, extras',
     type: 'object',
-    additionalProperties: { type: 'boolean' },
+    additionalProperties: { type: 'string' },
   })
   @IsOptional()
   @IsObject()
-  orderingConfigVisibility?: Record<string, boolean> | null;
+  orderingConfigVisibility?: Record<string, string> | null;
+  @ApiPropertyOptional({
+    description:
+      'Nivel por sección de Configuración del local (none | read | manage). Keys: identidad, operacion, pedidos, comanda, dispositivos, menu, avanzado',
+    type: 'object',
+    additionalProperties: { type: 'string' },
+  })
+  @IsOptional()
+  @IsObject()
+  shopConfigVisibility?: Record<string, string> | null;
   @ApiPropertyOptional({
     description: 'Si es true, puede editar y borrar gastos (solo lo asigna un super admin)',
   })
@@ -200,13 +209,22 @@ class UpdateUserDto {
   isCustomerOrdersAdmin?: boolean;
   @ApiPropertyOptional({
     description:
-      'Qué ve en Pedidos → Configurar (true = visible). Keys: caja, channels, payments, items, extras',
+      'Nivel por bloque en Pedidos → Configurar (none | read | manage). Keys: caja, channels, payments, items, extras',
     type: 'object',
-    additionalProperties: { type: 'boolean' },
+    additionalProperties: { type: 'string' },
   })
   @IsOptional()
   @IsObject()
-  orderingConfigVisibility?: Record<string, boolean> | null;
+  orderingConfigVisibility?: Record<string, string> | null;
+  @ApiPropertyOptional({
+    description:
+      'Nivel por sección de Configuración del local (none | read | manage). Keys: identidad, operacion, pedidos, comanda, dispositivos, menu, avanzado',
+    type: 'object',
+    additionalProperties: { type: 'string' },
+  })
+  @IsOptional()
+  @IsObject()
+  shopConfigVisibility?: Record<string, string> | null;
   @ApiPropertyOptional({
     description: 'Si es true, puede editar y borrar gastos (solo lo asigna un super admin)',
   })
