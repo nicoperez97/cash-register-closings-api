@@ -48,6 +48,7 @@ import {
   isOrderingChannelOpenNow,
   findZoneAtPoint,
   normalizeDeliveryZones,
+  normalizeDiscountPresets,
   normalizeOrderingEta,
   zonesHavePolygons,
   normalizeOrderingExtras,
@@ -420,6 +421,7 @@ export class CustomerOrdersService implements OnModuleInit {
           price: e.price,
           menuItemIds: e.menuItemIds ?? [],
         })),
+      discountPresets: normalizeDiscountPresets(shop.discountPresets),
       menus: menus.map((m) => ({
         id: m.id,
         slug: m.slug,
@@ -490,6 +492,7 @@ export class CustomerOrdersService implements OnModuleInit {
           price: e.price,
           menuItemIds: e.menuItemIds ?? [],
         })),
+      discountPresets: normalizeDiscountPresets(shop.discountPresets),
       tablePaymentMethods: normalizeTablePaymentMethods(shop.tablePaymentMethods).filter(
         (m) => m.active !== false,
       ),

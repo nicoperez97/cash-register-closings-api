@@ -366,6 +366,19 @@ export class CreateShopDto {
     menuItemIds?: string[];
   }> | null;
 
+  @ApiPropertyOptional({
+    description:
+      'Atajos de descuento en ticket/caja rápida: { id?, label?, mode: percent|fixed, value }. null = default 10%. [] = sin atajos.',
+  })
+  @IsOptional()
+  @IsArray()
+  discountPresets?: Array<{
+    id?: string;
+    label?: string;
+    mode: 'percent' | 'fixed';
+    value: number;
+  }> | null;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsNumber()

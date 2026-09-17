@@ -27,6 +27,7 @@ import { CreateShopDto, UpdateShopDto } from './dto/shop.dto';
 import { PosnetType, ShopPosnet } from '../../common/posnet';
 import {
   normalizeDeliveryZones,
+  normalizeDiscountPresets,
   normalizeOrderingEta,
   normalizeOrderingExtras,
   normalizeOrderingPayments,
@@ -37,6 +38,7 @@ import {
   syncOrderingPayItemsFromMethods,
   ShopMode,
   type DeliveryZone,
+  type DiscountPreset,
   type OrderingPaymentMethodItem,
   type ShopOrderingEta,
   type ShopOrderingHours,
@@ -497,6 +499,14 @@ export class ShopsService implements OnModuleInit {
     } catch {
       // columna ya existe
     }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN discountPresets JSON NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
     await this.ensureDefaultShifts();
   }
 
@@ -792,6 +802,7 @@ export class ShopsService implements OnModuleInit {
         deliveryZones: normalizeDeliveryZones(dto.deliveryZones),
         orderingEta: normalizeOrderingEta(dto.orderingEta),
         orderingExtras: normalizeOrderingExtras(dto.orderingExtras),
+        discountPresets: normalizeDiscountPresets(dto.discountPresets),
         defaultChangeAmount: String(dto.defaultChangeAmount ?? 0),
         productionDefaultHours: String(
           dto.productionDefaultHours !== undefined && dto.productionDefaultHours !== null
@@ -936,6 +947,9 @@ export class ShopsService implements OnModuleInit {
     }
     if (dto.orderingExtras !== undefined) {
       shop.orderingExtras = normalizeOrderingExtras(dto.orderingExtras);
+    }
+    if (dto.discountPresets !== undefined) {
+      shop.discountPresets = normalizeDiscountPresets(dto.discountPresets);
     }
     if (dto.timezone !== undefined) shop.timezone = dto.timezone;
     if (dto.shifts !== undefined) {
@@ -1082,6 +1096,7 @@ export class ShopsService implements OnModuleInit {
         available?: boolean;
         menuItemIds?: string[];
       }> | null;
+      discountPresets?: DiscountPreset[] | null;
       menuItemAvailability?: Array<{ id: string; available: boolean }> | null;
       orderingExtraAvailability?: Array<{ id: string; available: boolean }> | null;
     },
@@ -1142,6 +1157,9 @@ export class ShopsService implements OnModuleInit {
     }
     if (dto.orderingExtras !== undefined) {
       shop.orderingExtras = normalizeOrderingExtras(dto.orderingExtras);
+    }
+    if (dto.discountPresets !== undefined) {
+      shop.discountPresets = normalizeDiscountPresets(dto.discountPresets);
     }
     if (dto.orderingExtraAvailability?.length) {
       const map = new Map(
@@ -1559,6 +1577,7 @@ export class ShopsService implements OnModuleInit {
       deliveryZones: normalizeDeliveryZones(s.deliveryZones),
       orderingEta: normalizeOrderingEta(s.orderingEta),
       orderingExtras: normalizeOrderingExtras(s.orderingExtras),
+      discountPresets: normalizeDiscountPresets(s.discountPresets),
       defaultChangeAmount: Number(s.defaultChangeAmount),
       productionDefaultHours: Number(s.productionDefaultHours ?? 8) || 8,
       logoUrl: s.logoUrl ?? null,

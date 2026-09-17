@@ -7,6 +7,7 @@ import { ShopPosnet } from '../common/posnet';
 import { ShopShift } from '../common/shop-shifts';
 import {
   DeliveryZone,
+  DiscountPreset,
   OrderingExtra,
   ShopMode,
   ShopOrderingEta,
@@ -201,6 +202,10 @@ export class Shop extends BaseEntity {
   /** Extras opcionales del pedido online (precio + ítems adheridos). */
   @Column({ type: 'simple-json', nullable: true })
   orderingExtras?: OrderingExtra[] | null;
+
+  /** Atajos de descuento (ticket comanda + caja rápida). null = default 10%. */
+  @Column({ type: 'simple-json', nullable: true })
+  discountPresets?: DiscountPreset[] | null;
 
   /** Cartas publicadas (una o varias: menú, vinos, etc.). */
   @Column({ type: 'simple-json', nullable: true })
