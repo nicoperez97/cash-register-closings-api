@@ -474,7 +474,27 @@ export class ClosingsService implements OnModuleInit {
     const dateKey = closingDateKey(businessDate, shift.id);
     const exists = await this.closings.findOne({ where: { shopId, businessDateKey: dateKey } });
     if (exists) {
-      throw new ConflictException('Ya existe un cierre para esa fecha y turno');
+      if (exists.status === ClosingStatus.DRAFT) {
+        // Misma caja (p.ej. carrera o getOpen desfasado): reutilizar.
+        const opening = Math.max(0, n(dto.cashOpeningAmount));
+        exists.cashOpeningAmount = money(opening);
+        exists.cashLeftInRegister = money(opening);
+        exists.shiftId = shift.id;
+        exists.shiftName = shift.name;
+        exists.createdByUserId = user.id;
+        await this.closings.save(exists);
+        await this.shops.setOrderingOpen(shopId, true);
+        return this.toDto(exists);
+      }
+      // Ya hay un cierre confirmado de este turno: liberar la clave única para
+      // poder abrir de nuevo (pedidos / segunda tanda). El cierre anterior sigue
+      // en el historial con businessDateKey archivada.
+      exists.businessDateKey = markDeletedUnique(
+        exists.businessDateKey || dateKey,
+        exists.id,
+        80,
+      );
+      await this.closings.save(exists);
     }
 
     const opening = Math.max(0, n(dto.cashOpeningAmount));
