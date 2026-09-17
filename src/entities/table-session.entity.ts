@@ -30,6 +30,21 @@ export class TableSession extends BaseEntity {
   @Column({ type: 'int', default: 2 })
   covers: number;
 
+  /** Promo matchable activa en la mesa (legacy; preferir sessionPromos). */
+  @Column({ type: 'varchar', length: 40, nullable: true })
+  promoId?: string | null;
+
+  /** Cupo de packs (null = ilimitado) — legacy. */
+  @Column({ type: 'int', nullable: true })
+  promoMaxCount?: number | null;
+
+  /**
+   * Promos de mesa (multi).
+   * [{ promoId, maxCount }] — maxCount null = ilimitado.
+   */
+  @Column({ type: 'json', nullable: true })
+  sessionPromos?: Array<{ promoId: string; maxCount: number | null }> | null;
+
   /** Si ya se imprimió al menos un ticket cliente en esta sesión. */
   @Column({ type: 'tinyint', default: 0 })
   customerTicketPrinted: boolean;

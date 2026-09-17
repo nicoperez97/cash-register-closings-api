@@ -58,6 +58,10 @@ import {
   normalizeTablePaymentMethods,
   classifyPaymentMethodKind,
 } from '../../common/shop-ordering';
+import {
+  isPromoInSchedule,
+  normalizeShopPromos,
+} from '../../common/shop-promos';
 import { normalizeRemovableIngredients, normalizeShopMenus, ShopMenuItem } from '../menu/menu-parse.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrintAgentService } from '../print-agent/print-agent.service';
@@ -496,6 +500,19 @@ export class CustomerOrdersService implements OnModuleInit {
       tablePaymentMethods: normalizeTablePaymentMethods(shop.tablePaymentMethods).filter(
         (m) => m.active !== false,
       ),
+      promos: normalizeShopPromos(shop.promos)
+        .filter((p) => p.available && (p.sellable || p.tableMatchable))
+        .map((p) => ({
+          id: p.id,
+          name: p.name,
+          description: p.description ?? null,
+          fixedPrice: p.fixedPrice,
+          sellable: p.sellable,
+          tableMatchable: p.tableMatchable,
+          inSchedule: isPromoInSchedule(p, new Date(), shop.timezone),
+          items: p.items,
+          specialName: p.specialName ?? null,
+        })),
       menus: menus.map((m) => ({
         id: m.id,
         slug: m.slug,
@@ -532,6 +549,7 @@ export class CustomerOrdersService implements OnModuleInit {
         qty: number;
         attachedToMenuItemId?: string | null;
       }>;
+      promos?: Array<{ promoId: string; qty: number }>;
       customerNotes?: string | null;
       salonTableId: string;
       tableSessionId: string;
@@ -574,6 +592,7 @@ export class CustomerOrdersService implements OnModuleInit {
         bypassHours: true,
         response: input.response === 'guest' ? 'guest' : 'waiter',
         allowDiscount: false,
+        promoSales: input.promos,
       },
     );
   }
@@ -613,6 +632,7 @@ export class CustomerOrdersService implements OnModuleInit {
       bypassHours: boolean;
       response: 'public' | 'staff' | 'waiter' | 'guest';
       allowDiscount: boolean;
+      promoSales?: Array<{ promoId: string; qty: number }>;
     },
   ) {
     const takeawayEnabled = shop.takeawayEnabled !== false;
@@ -681,7 +701,7 @@ export class CustomerOrdersService implements OnModuleInit {
     const catalog = this.menuItemIndex(shop);
     const lines: CustomerOrderLine[] = [];
     let subtotal = 0;
-    for (const row of dto.items) {
+    for (const row of dto.items ?? []) {
       const found = catalog.get(String(row.menuItemId).trim());
       if (!found) {
         throw new BadRequestException(`Ítem no disponible: ${row.menuItemId}`);
@@ -704,6 +724,72 @@ export class CustomerOrdersService implements OnModuleInit {
         kind: 'ITEM',
         removedIngredients: removedIngredients.length ? removedIngredients : undefined,
       });
+    }
+
+    if (opts.promoSales?.length) {
+      const promosById = new Map(
+        normalizeShopPromos(shop.promos).map((p) => [p.id, p] as const),
+      );
+      for (const sale of opts.promoSales) {
+        const promo = promosById.get(String(sale.promoId ?? '').trim());
+        if (!promo || !promo.available || !promo.sellable) {
+          throw new BadRequestException(`Promo no disponible: ${sale.promoId}`);
+        }
+        if (!isPromoInSchedule(promo, now, shop.timezone)) {
+          throw new BadRequestException(`Promo fuera de horario: ${promo.name}`);
+        }
+        const packs = Math.max(1, Math.min(99, Math.round(Number(sale.qty) || 1)));
+
+        // Con composición: mismos ítems de carta que una carga manual (matching de mesa).
+        if (promo.items.length) {
+          for (const it of promo.items) {
+            const found = catalog.get(it.menuItemId);
+            if (!found) {
+              throw new BadRequestException(
+                `Ítem de promo no disponible: ${it.menuItemId}`,
+              );
+            }
+            const qty = it.qty * packs;
+            const unitPrice = Number(found.price) || 0;
+            lines.push({
+              menuItemId: String(found.id),
+              name: found.name,
+              unitPrice,
+              qty,
+              notes: null,
+              kind: 'ITEM',
+            });
+            subtotal += unitPrice * qty;
+          }
+          continue;
+        }
+
+        // Sin composición (evento): línea PROMO + ítem especial a $0.
+        const bundleKey = `pb_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+        const note = `Promo: ${promo.name}`;
+        const special = String(promo.specialName || promo.name).trim();
+        lines.push({
+          menuItemId: promo.id,
+          name: special,
+          unitPrice: 0,
+          qty: packs,
+          notes: note,
+          kind: 'ITEM',
+          promoId: promo.id,
+          promoBundleKey: bundleKey,
+        });
+        subtotal += promo.fixedPrice * packs;
+        lines.push({
+          menuItemId: promo.id,
+          name: promo.name,
+          unitPrice: promo.fixedPrice,
+          qty: packs,
+          notes: null,
+          kind: 'PROMO',
+          promoId: promo.id,
+          promoBundleKey: bundleKey,
+        });
+      }
     }
 
     const extrasCatalog = new Map(
@@ -893,6 +979,12 @@ export class CustomerOrdersService implements OnModuleInit {
     if (!isTable) {
       void this.notifyStaffNewOrder(shop, order);
     }
+
+    let print: {
+      kitchenQueued: boolean;
+      kitchenWarning: string | null;
+    } | null = null;
+
     if (isCounter || (opts.response === 'staff' && !isTable)) {
       void this.printAgent
         .enqueueCustomerOrder(shop, order, 'COUNTER', {
@@ -903,18 +995,42 @@ export class CustomerOrdersService implements OnModuleInit {
       const printKitchen = dto.printKitchen !== false;
       const printCustomerTicket = !!dto.printCustomerTicket;
       if (printKitchen || printCustomerTicket) {
-        void this.printAgent
-          .enqueueCustomerOrder(shop, order, 'TABLE', {
+        try {
+          if (printKitchen && !shop.printAgentTokenHash) {
+            print = {
+              kitchenQueued: false,
+              kitchenWarning:
+                'Comanda no encolada: configurá el Print agent en Dispositivos.',
+            };
+          }
+          const kitchenJob = await this.printAgent.enqueueCustomerOrder(shop, order, 'TABLE', {
             printKitchen,
             printCustomerTicket,
             tableLabel: dto.tableLabel ?? null,
             waiterName: dto.waiterName ?? null,
-          })
-          .catch(() => undefined);
+          });
+          if (printKitchen) {
+            if (kitchenJob) {
+              print = { kitchenQueued: true, kitchenWarning: null };
+            } else {
+              print = print ?? {
+                kitchenQueued: false,
+                kitchenWarning: 'Comanda no encolada: revisá el Print agent.',
+              };
+            }
+          }
+        } catch (err) {
+          const msg =
+            err instanceof Error ? err.message : 'No se pudo encolar la comanda';
+          if (printKitchen) {
+            print = { kitchenQueued: false, kitchenWarning: msg };
+          }
+        }
       }
     }
     if (opts.response === 'staff' || opts.response === 'waiter' || opts.response === 'guest') {
-      return this.toDto(order);
+      const dtoOut = this.toDto(order);
+      return print ? { ...dtoOut, print } : dtoOut;
     }
     return this.publicDto(order, shop);
   }

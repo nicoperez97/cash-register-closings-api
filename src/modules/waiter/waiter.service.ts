@@ -37,6 +37,13 @@ import {
   type WaiterCapProfile,
 } from '../../common/shop-ordering';
 import {
+  computeMultiPromoBreakdown,
+  normalizeSessionPromos,
+  normalizeShopPromos,
+  type PromoBreakdown,
+  type SessionPromoAssignment,
+} from '../../common/shop-promos';
+import {
   normalizeShopShifts,
   resolveCurrentShift,
   shopShiftOwnershipRangeUtc,
@@ -251,6 +258,27 @@ export class WaiterService implements OnModuleInit {
     try {
       await this.sessions.query(
         `ALTER TABLE table_sessions ADD COLUMN tipLabel VARCHAR(80) NULL`,
+      );
+    } catch {
+      /* already exists */
+    }
+    try {
+      await this.sessions.query(
+        `ALTER TABLE table_sessions ADD COLUMN promoId VARCHAR(40) NULL`,
+      );
+    } catch {
+      /* already exists */
+    }
+    try {
+      await this.sessions.query(
+        `ALTER TABLE table_sessions ADD COLUMN promoMaxCount INT NULL`,
+      );
+    } catch {
+      /* already exists */
+    }
+    try {
+      await this.sessions.query(
+        `ALTER TABLE table_sessions ADD COLUMN sessionPromos JSON NULL`,
       );
     } catch {
       /* already exists */
@@ -664,7 +692,7 @@ export class WaiterService implements OnModuleInit {
     waiter: WaiterAuthPayload,
     sessionId: string,
     dto: {
-      items: Array<{
+      items?: Array<{
         menuItemId: string;
         qty: number;
         notes?: string | null;
@@ -675,6 +703,7 @@ export class WaiterService implements OnModuleInit {
         qty: number;
         attachedToMenuItemId?: string | null;
       }>;
+      promos?: Array<{ promoId: string; qty: number }>;
       customerNotes?: string | null;
       printKitchen?: boolean;
       printCustomerTicket?: boolean;
@@ -720,6 +749,7 @@ export class WaiterService implements OnModuleInit {
     const order = await this.customerOrders.createTableOrder(shop, {
       items: dto.items ?? [],
       extras: dto.extras,
+      promos: dto.promos,
       customerNotes: dto.customerNotes,
       salonTableId: table.id,
       tableSessionId: session.id,
@@ -730,13 +760,166 @@ export class WaiterService implements OnModuleInit {
       printCustomerTicket,
     });
 
-    if (printCustomerTicket && !session.customerTicketPrinted) {
-      session.customerTicketPrinted = true;
-      await this.sessions.save(session);
+    // Sellables con composición: asegurar promo en la mesa para el matching.
+    if (dto.promos?.length) {
+      const catalog = normalizeShopPromos(shop.promos);
+      const byId = new Map(catalog.map((p) => [p.id, p] as const));
+      const current = this.readSessionPromos(session);
+      const seen = new Set(current.map((p) => p.promoId));
+      let changed = false;
+      for (const sale of dto.promos) {
+        const promo = byId.get(String(sale.promoId ?? '').trim());
+        if (!promo?.tableMatchable || !promo.items.length || !promo.available) continue;
+        if (seen.has(promo.id)) continue;
+        current.push({ promoId: promo.id, maxCount: null });
+        seen.add(promo.id);
+        changed = true;
+      }
+      if (changed) {
+        this.applySessionPromos(session, current);
+        await this.sessions.save(session);
+      }
     }
+
+    // El ticket de sesión (con total/promos) se marca solo en printCustomerTicket().
+    // No usar el flag del envío: imprimir ticket por orden no fija ticketTotal.
     this.live.tick(shop.id, 'customer-orders');
     return order;
   }
+
+  async reprintSessionKitchen(
+    slug: string,
+    waiter: WaiterAuthPayload,
+    sessionId: string,
+    orderId: string,
+  ) {
+    assertWaiterShopSlug(waiter, slug);
+    const shop = await this.requireShop(slug);
+    const caps = this.caps(shop, waiter);
+    this.denyUnless(caps.allowPrintKitchen, 'No está permitido imprimir cocina');
+    const session = await this.sessions.findOne({
+      where: { id: sessionId, shopId: shop.id },
+    });
+    if (!session) throw new NotFoundException('Sesión no encontrada');
+    const order = await this.orders.findOne({
+      where: { id: orderId, shopId: shop.id, tableSessionId: session.id },
+    });
+    if (!order) throw new NotFoundException('Envío no encontrado');
+    const table = await this.tables.findOne({
+      where: { id: session.salonTableId, shopId: shop.id },
+    });
+    const sessionWaiter = session.waiterEmployeeId
+      ? await this.employees.findOne({
+          where: { id: session.waiterEmployeeId, shopId: shop.id },
+        })
+      : null;
+    const result = await this.printAgent.reprintKitchenForOrder(shop, order, {
+      reason: 'TABLE',
+      tableLabel: table?.label ?? null,
+      waiterName: sessionWaiter?.fullName?.trim() || waiter.name,
+    });
+    return { ok: true, ...result };
+  }
+
+  /** Asigna promos matchables (multi) y cupo por promo a la mesa. */
+  async patchSessionPromo(
+    slug: string,
+    waiter: WaiterAuthPayload,
+    sessionId: string,
+    dto: {
+      promoId?: string | null;
+      promoMaxCount?: number | null;
+      promos?: Array<{ promoId: string; maxCount?: number | null }> | null;
+    },
+  ) {
+    assertWaiterShopSlug(waiter, slug);
+    const shop = await this.requireShop(slug);
+    const session = await this.sessions.findOne({
+      where: { id: sessionId, shopId: shop.id },
+    });
+    if (!session) throw new NotFoundException('Sesión no encontrada');
+    if (session.status !== TableSessionStatus.OPEN) {
+      throw new BadRequestException('La mesa ya está cerrada');
+    }
+
+    const catalog = normalizeShopPromos(shop.promos);
+    const byId = new Map(catalog.map((p) => [p.id, p] as const));
+    let next: SessionPromoAssignment[];
+
+    if (dto.promos !== undefined) {
+      next = normalizeSessionPromos(dto.promos);
+    } else {
+      // Compat: un solo promoId / cupo.
+      next = normalizeSessionPromos(session.sessionPromos, {
+        promoId: session.promoId,
+        promoMaxCount: session.promoMaxCount,
+      });
+      if (dto.promoId !== undefined) {
+        const id = String(dto.promoId ?? '').trim();
+        if (!id) {
+          next = [];
+        } else {
+          const existing = next.find((p) => p.promoId === id);
+          const max =
+            dto.promoMaxCount !== undefined
+              ? dto.promoMaxCount == null
+                ? null
+                : Math.round(Number(dto.promoMaxCount))
+              : existing?.maxCount ?? null;
+          const maxCount =
+            max != null && Number.isFinite(max) && max >= 0 ? Math.min(999, max) : null;
+          next = [{ promoId: id, maxCount }, ...next.filter((p) => p.promoId !== id)];
+        }
+      } else if (dto.promoMaxCount !== undefined && next.length === 1) {
+        const max =
+          dto.promoMaxCount == null ? null : Math.round(Number(dto.promoMaxCount));
+        next = [
+          {
+            promoId: next[0].promoId,
+            maxCount:
+              max != null && Number.isFinite(max) && max >= 0 ? Math.min(999, max) : null,
+          },
+        ];
+      }
+    }
+
+    for (const a of next) {
+      const promo = byId.get(a.promoId);
+      if (!promo || !promo.available || !promo.tableMatchable) {
+        throw new BadRequestException(`Promo no disponible para mesa: ${a.promoId}`);
+      }
+      if (a.maxCount != null && (!Number.isFinite(a.maxCount) || a.maxCount < 1 || a.maxCount > 999)) {
+        throw new BadRequestException('Cupo inválido (1–999 o ilimitado)');
+      }
+    }
+
+    this.applySessionPromos(session, next);
+
+    if (session.customerTicketPrinted) {
+      session.customerTicketPrinted = false;
+      session.ticketTotal = null;
+      session.ticketDiscountAmount = '0';
+      session.ticketDiscountLabel = null;
+    }
+    await this.sessions.save(session);
+    this.live.tick(shop.id, 'customer-orders');
+    return this.sessionDetail(shop, session);
+  }
+
+  /** Persiste multi-promo y sincroniza columnas legacy. */
+  private applySessionPromos(session: TableSession, list: SessionPromoAssignment[]): void {
+    session.sessionPromos = list.length ? list : null;
+    session.promoId = list[0]?.promoId ?? null;
+    session.promoMaxCount = list[0] ? list[0].maxCount : null;
+  }
+
+  private readSessionPromos(session: TableSession): SessionPromoAssignment[] {
+    return normalizeSessionPromos(session.sessionPromos, {
+      promoId: session.promoId,
+      promoMaxCount: session.promoMaxCount,
+    });
+  }
+
 
   /** Ajusta cantidad, precio o quita una línea del ticket (antes de imprimir/cerrar). */
   async patchSessionLine(
@@ -887,10 +1070,13 @@ export class WaiterService implements OnModuleInit {
     );
     const methodById = new Map(methods.map((m) => [m.id, m]));
 
+    // Con ticket de sesión usamos ese total (incl. descuento). Sin ticket, breakdown
+    // de promos de mesa — nunca la suma cruda de order.total (precios de carta).
+    const { sessionSubtotal } = this.resolveSessionPromo(shop, session, orders);
     const due =
       session.ticketTotal != null
         ? Number(session.ticketTotal) || 0
-        : orders.reduce((s, o) => s + (Number(o.total) || 0), 0);
+        : sessionSubtotal;
     const tipMode = caps.allowTipOnClose ? opts?.tipMode : 'none';
     const tipValue = caps.allowTipOnClose ? opts?.tipValue : null;
     const { tipAmount, tipLabel } = calcTip(due, tipMode, tipValue);
@@ -1141,7 +1327,11 @@ export class WaiterService implements OnModuleInit {
         })
       : null;
     const waiterName = sessionWaiter?.fullName?.trim() || waiter.name;
-    const subtotal = orders.reduce((s, o) => s + (Number(o.total) || 0), 0);
+    const { promoBreakdown, sessionSubtotal: subtotal } = this.resolveSessionPromo(
+      shop,
+      session,
+      orders,
+    );
     const discountMode = caps.allowTicketDiscount ? opts?.discountMode : 'none';
     const discountValue = caps.allowTicketDiscount ? opts?.discountValue : null;
     const { discountAmount, discountLabel } = calcTicketDiscount(
@@ -1161,12 +1351,14 @@ export class WaiterService implements OnModuleInit {
         removedIngredients: it.removedIngredients ?? [],
         attachedToMenuItemId: it.attachedToMenuItemId ?? null,
         extraId: it.extraId ?? null,
+        promoId: it.promoId ?? null,
+        promoBundleKey: it.promoBundleKey ?? null,
       })),
     );
     const code = orders.map((o) => o.code).filter(Boolean).join('+') || session.id.slice(0, 6);
 
-    await this.printAgent
-      .enqueueTableSessionTicket(shop, {
+    try {
+      await this.printAgent.enqueueTableSessionTicket(shop, {
         sessionId: session.id,
         code,
         items,
@@ -1174,11 +1366,17 @@ export class WaiterService implements OnModuleInit {
         discountAmount,
         discountLabel,
         total,
+        promoBreakdown,
         tableLabel: table?.label ?? null,
         waiterName,
         covers: Number(session.covers) || 2,
-      })
-      .catch(() => undefined);
+      });
+    } catch (err) {
+      if (err instanceof BadRequestException) throw err;
+      throw new BadRequestException(
+        err instanceof Error ? err.message : 'No se pudo encolar el ticket',
+      );
+    }
 
     session.customerTicketPrinted = true;
     session.ticketDiscountAmount = String(discountAmount);
@@ -1187,6 +1385,44 @@ export class WaiterService implements OnModuleInit {
     await this.sessions.save(session);
     this.live.tick(shop.id, 'customer-orders');
     return this.sessionDetail(shop, session);
+  }
+
+
+  private resolveSessionPromo(
+    shop: Shop,
+    session: TableSession,
+    orders: CustomerOrder[],
+  ): { promoBreakdown: PromoBreakdown | null; sessionSubtotal: number } {
+    const flat = orders.flatMap((o) =>
+      (o.items ?? []).map((it) => ({
+        menuItemId: it.menuItemId ?? null,
+        name: it.name,
+        qty: Number(it.qty) || 0,
+        unitPrice: Number(it.unitPrice) || 0,
+        kind: it.kind || 'ITEM',
+        promoId: it.promoId ?? null,
+        notes: it.notes ?? null,
+        extraId: it.extraId ?? null,
+        attachedToMenuItemId: it.attachedToMenuItemId ?? null,
+      })),
+    );
+    const assigned = this.readSessionPromos(session);
+    const byId = new Map(normalizeShopPromos(shop.promos).map((p) => [p.id, p] as const));
+    const assignments: Array<{ promo: NonNullable<ReturnType<typeof byId.get>>; maxCount: number | null }> =
+      [];
+    for (const a of assigned) {
+      const promo = byId.get(a.promoId);
+      if (promo) assignments.push({ promo, maxCount: a.maxCount });
+    }
+
+    const promoBreakdown = computeMultiPromoBreakdown(flat, assignments, {
+      timezone: shop.timezone,
+    });
+    const raw = orders.reduce((s, o) => s + (Number(o.total) || 0), 0);
+    const sessionSubtotal = promoBreakdown
+      ? promoBreakdown.baseTotal
+      : Math.max(0, Math.round(raw * 100) / 100);
+    return { promoBreakdown, sessionSubtotal };
   }
 
   private async sessionDetail(shop: Shop, session: TableSession) {
@@ -1202,11 +1438,27 @@ export class WaiterService implements OnModuleInit {
       where: { shopId: shop.id, tableSessionId: session.id },
       order: { createdAt: 'ASC' },
     });
-    const subtotal = orders.reduce((s, o) => s + (Number(o.total) || 0), 0);
+    const { promoBreakdown, sessionSubtotal: subtotal } = this.resolveSessionPromo(
+      shop,
+      session,
+      orders,
+    );
+    const catalog = normalizeShopPromos(shop.promos);
+    const byId = new Map(catalog.map((p) => [p.id, p] as const));
+    const sessionPromos = this.readSessionPromos(session).map((a) => ({
+      promoId: a.promoId,
+      maxCount: a.maxCount,
+      name: byId.get(a.promoId)?.name ?? a.promoId,
+    }));
     return {
       id: session.id,
       status: session.status,
       covers: Number(session.covers) || 2,
+      promoId: sessionPromos[0]?.promoId ?? null,
+      promoMaxCount: sessionPromos[0]?.maxCount ?? null,
+      promoName: sessionPromos[0]?.name ?? null,
+      sessionPromos,
+      promoBreakdown,
       customerTicketPrinted: !!session.customerTicketPrinted,
       ticketDiscountAmount: Number(session.ticketDiscountAmount ?? 0) || 0,
       ticketDiscountLabel: session.ticketDiscountLabel ?? null,

@@ -16,6 +16,7 @@ import {
   TablePaymentMethod,
   WaiterCapabilities,
 } from '../common/shop-ordering';
+import type { ShopPromo } from '../common/shop-promos';
 
 /** Mapa código POS → campo de cierre (cash|card|mercadoPago|delivery|transfer|accountDni|other). */
 export type PosPaymentMap = Record<string, string>;
@@ -206,6 +207,10 @@ export class Shop extends BaseEntity {
   /** Atajos de descuento (ticket comanda + caja rápida). null = default 10%. */
   @Column({ type: 'simple-json', nullable: true })
   discountPresets?: DiscountPreset[] | null;
+
+  /** Promos / packs del local (aparte de la carta). */
+  @Column({ type: 'simple-json', nullable: true })
+  promos?: ShopPromo[] | null;
 
   /** Cartas publicadas (una o varias: menú, vinos, etc.). */
   @Column({ type: 'simple-json', nullable: true })

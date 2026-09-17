@@ -25,6 +25,10 @@ export class PrintJob extends BaseEntity {
   @Column({ type: 'int', default: 1 })
   copies: number;
 
+  /** Intentos de impresión (sube en cada FAILED; a 3 queda FAILED terminal). */
+  @Column({ type: 'int', default: 0 })
+  attempts: number;
+
   @Column({ type: 'simple-json' })
   payload: Record<string, unknown>;
 

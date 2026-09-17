@@ -22,6 +22,7 @@ import {
   ShopMenu,
   ShopMenuDoc,
 } from './menu-parse.util';
+import { isPromoInSchedule, normalizeShopPromos, type ShopPromo } from '../../common/shop-promos';
 
 @Injectable()
 export class MenuService {
@@ -117,6 +118,41 @@ export class MenuService {
       slug: shop.slug,
       menus: this.readMenus(shop).map((m) => this.withSafeSource(m, shopId)),
     };
+  }
+
+  async getPromosAdmin(user: AuthUser, shopId: string) {
+    this.shops.assertOrderingCatalogManage(user, shopId);
+    const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    return {
+      slug: shop.slug,
+      promos: normalizeShopPromos(shop.promos),
+      menus: this.readMenus(shop).map((m) => ({
+        id: m.id,
+        title: m.title,
+        sections: (m.sections ?? []).map((sec) => ({
+          name: sec.name,
+          items: (sec.items ?? [])
+            .filter((it) => it.id && it.name)
+            .map((it) => ({
+              id: it.id!,
+              name: it.name,
+              price: it.price ?? null,
+              available: it.available !== false,
+            })),
+        })),
+      })),
+    };
+  }
+
+  async savePromosAdmin(user: AuthUser, shopId: string, body: { promos?: ShopPromo[] } | ShopPromo[]) {
+    this.shops.assertOrderingCatalogManage(user, shopId);
+    const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    const raw = Array.isArray(body) ? body : body?.promos;
+    shop.promos = normalizeShopPromos(raw);
+    await this.shopsRepo.save(shop);
+    return { promos: normalizeShopPromos(shop.promos) };
   }
 
   async saveAdmin(user: AuthUser, shopId: string, body: { menus?: ShopMenu[] } | ShopMenu) {
@@ -458,6 +494,21 @@ export class MenuService {
     if (!shop) throw new NotFoundException('Carta no disponible en este local');
     const selected = this.resolvePublished(shop, menuSlug);
     const published = this.readMenus(shop).filter(menuHasItems);
+    const promos = normalizeShopPromos(shop.promos)
+      .filter(
+        (p) =>
+          p.available &&
+          p.showOnPublicMenu &&
+          isPromoInSchedule(p, new Date(), shop.timezone),
+      )
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        description: p.description ?? null,
+        fixedPrice: p.fixedPrice,
+        items: p.items,
+        specialName: p.specialName ?? null,
+      }));
     return {
       shop: this.publicShop(shop),
       menus: published.map((m) => ({
@@ -465,6 +516,7 @@ export class MenuService {
         title: m.title || 'Carta',
       })),
       menu: this.publicMenuPayload(selected),
+      promos,
     };
   }
 
