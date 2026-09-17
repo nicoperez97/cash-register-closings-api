@@ -248,6 +248,26 @@ class UpdateUserDto {
   @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() cbu?: string | null;
 }
 
+class UpdateUserNotificationPreferencesDto {
+  @ApiPropertyOptional({ nullable: true, type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  mutedNotificationTypes?: string[] | null;
+
+  @ApiPropertyOptional({ nullable: true, type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  mutedAppNotificationTypes?: string[] | null;
+
+  @ApiPropertyOptional({ nullable: true, type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  mutedEmailNotificationTypes?: string[] | null;
+}
+
 @ApiTags('users')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'), PermissionsGuard)
@@ -307,6 +327,31 @@ export class UsersController {
     if (shopId) this.users.assertShopUserAdmin(user, shopId);
     if (!file?.buffer?.length) throw new BadRequestException('Adjuntá una imagen');
     return this.profile.uploadAvatarAsAdmin(id, file);
+  }
+
+  @Get(':id/notification-preferences')
+  @RequireManageUsers()
+  getNotificationPreferences(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Query('shopId') shopId?: string,
+  ) {
+    if (!shopId) throw new BadRequestException('shopId es obligatorio');
+    this.users.assertShopUserAdmin(user, shopId);
+    return this.profile.getShopPreferencesForUser(shopId, id);
+  }
+
+  @Patch(':id/notification-preferences')
+  @RequireManageUsers()
+  updateNotificationPreferences(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() dto: UpdateUserNotificationPreferencesDto,
+    @Query('shopId') shopId?: string,
+  ) {
+    if (!shopId) throw new BadRequestException('shopId es obligatorio');
+    this.users.assertShopUserAdmin(user, shopId);
+    return this.profile.updateShopNotificationMutesForUser(shopId, id, dto);
   }
 
   @Get(':id')

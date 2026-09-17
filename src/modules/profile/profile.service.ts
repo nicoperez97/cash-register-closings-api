@@ -231,12 +231,18 @@ export class ProfileService implements OnModuleInit {
 
   async getShopPreferences(actor: AuthUser, shopId: string) {
     this.assertShopMember(actor, shopId);
+    return this.getShopPreferencesForUser(shopId, actor.id);
+  }
+
+  /** Preferencias de un usuario en el local (sin chequear el actor). */
+  async getShopPreferencesForUser(shopId: string, userId: string) {
     const shop = await this.shops.findOne({ where: { id: shopId, active: true } });
     if (!shop) throw new NotFoundException('Local no encontrado');
-    const link = await this.userShops.findOne({ where: { userId: actor.id, shopId } });
-    const user = await this.loadUser(actor.id);
+    const link = await this.userShops.findOne({ where: { userId, shopId } });
+    const user = await this.loadUser(userId);
     return {
       shopId,
+      userId,
       shopNavConfig: shop.navConfig ?? null,
       navConfig: link?.navConfig ?? null,
       shopToolbarConfig: shop.toolbarConfig ?? null,
@@ -305,6 +311,34 @@ export class ProfileService implements OnModuleInit {
         { toolbarConfig: link.toolbarConfig },
       );
     }
+    this.applyMuteDto(link, dto);
+    await this.userShops.save(link);
+    return this.getShopPreferencesForUser(shopId, actor.id);
+  }
+
+  /** Solo mutes App/Mail de un usuario en el local (admin). */
+  async updateShopNotificationMutesForUser(
+    shopId: string,
+    userId: string,
+    dto: Pick<
+      UpdateShopPreferencesDto,
+      'mutedNotificationTypes' | 'mutedAppNotificationTypes' | 'mutedEmailNotificationTypes'
+    >,
+  ) {
+    const link = await this.userShops.findOne({ where: { userId, shopId } });
+    if (!link) throw new NotFoundException('El usuario no pertenece a este local');
+    this.applyMuteDto(link, dto);
+    await this.userShops.save(link);
+    return this.getShopPreferencesForUser(shopId, userId);
+  }
+
+  private applyMuteDto(
+    link: UserShop,
+    dto: Pick<
+      UpdateShopPreferencesDto,
+      'mutedNotificationTypes' | 'mutedAppNotificationTypes' | 'mutedEmailNotificationTypes'
+    >,
+  ) {
     const cleanTypes = (raw: string[] | null | undefined) =>
       raw == null
         ? null
@@ -325,8 +359,6 @@ export class ProfileService implements OnModuleInit {
     } else if (dto.mutedNotificationTypes !== undefined) {
       link.mutedNotificationTypes = cleanTypes(dto.mutedNotificationTypes);
     }
-    await this.userShops.save(link);
-    return this.getShopPreferences(actor, shopId);
   }
 
   private normalizeNavConfig(
