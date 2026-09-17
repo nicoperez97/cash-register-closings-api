@@ -55,6 +55,7 @@ import {
   normalizeShopMode,
   normalizeShopOrderingHours,
   normalizeTablePaymentMethods,
+  classifyPaymentMethodKind,
 } from '../../common/shop-ordering';
 import { normalizeRemovableIngredients, normalizeShopMenus, ShopMenuItem } from '../menu/menu-parse.util';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -75,11 +76,7 @@ function classifyTablePaymentKind(
   id: string,
   name: string,
 ): 'CASH' | 'TRANSFER' | 'CARD' {
-  const key = `${id} ${name}`.toLowerCase();
-  if (/transf|transfer|alias|cbu|cvu|mercado\s*pago|mp\b/.test(key)) return 'TRANSFER';
-  if (/tarjeta|card|d[eé]bito|cr[eé]dito|posnet|visa|master|amex/.test(key)) return 'CARD';
-  if (/efectivo|cash|contado|tp_cash/.test(key)) return 'CASH';
-  return 'CASH';
+  return classifyPaymentMethodKind(id, name);
 }
 
 @Injectable()
@@ -370,6 +367,10 @@ export class CustomerOrdersService implements OnModuleInit {
     const deliveryOpen = !forceClosed && deliveryEnabled && zones.length > 0;
     const payments = normalizeOrderingPayments(shop.orderingPayments) ?? {
       methods: ['CASH', 'TRANSFER'] as CustomerOrderPaymentMethod[],
+      items: [
+        { id: 'op_cash', name: 'Efectivo', accountId: null, active: true },
+        { id: 'op_transfer', name: 'Transferencia', accountId: null, active: true },
+      ],
       transferInstructions: null,
       whatsapp: null,
     };
@@ -644,6 +645,10 @@ export class CustomerOrdersService implements OnModuleInit {
     const isTable = dto.fulfillment === CustomerOrderFulfillment.TABLE;
     const payments = normalizeOrderingPayments(shop.orderingPayments) ?? {
       methods: ['CASH', 'TRANSFER'] as CustomerOrderPaymentMethod[],
+      items: [
+        { id: 'op_cash', name: 'Efectivo', accountId: null, active: true },
+        { id: 'op_transfer', name: 'Transferencia', accountId: null, active: true },
+      ],
       transferInstructions: null,
       whatsapp: null,
     };

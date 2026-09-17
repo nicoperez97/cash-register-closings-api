@@ -291,12 +291,19 @@ export class CreateShopDto {
   } | null;
 
   @ApiPropertyOptional({
-    description: 'Medios de pago online: CASH / TRANSFER + instrucciones de transferencia',
+    description:
+      'Medios de pago online: items (nombre + cuenta) o legacy methods CASH/TRANSFER + instrucciones',
   })
   @IsOptional()
   @IsObject()
   orderingPayments?: {
     methods?: Array<'CASH' | 'TRANSFER'>;
+    items?: Array<{
+      id?: string;
+      name: string;
+      accountId?: string | null;
+      active?: boolean;
+    }>;
     transferInstructions?: string | null;
     whatsapp?: string | null;
   } | null;

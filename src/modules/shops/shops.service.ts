@@ -33,8 +33,10 @@ import {
   normalizeShopOrderingHours,
   normalizeTablePaymentMethods,
   normalizeWaiterCapabilities,
+  syncOrderingPayItemsFromMethods,
   ShopMode,
   type DeliveryZone,
+  type OrderingPaymentMethodItem,
   type ShopOrderingEta,
   type ShopOrderingHours,
   type ShopOrderingPayments,
@@ -1126,8 +1128,19 @@ export class ShopsService implements OnModuleInit {
     if (dto.orderingPayments !== undefined) {
       const prev = normalizeOrderingPayments(shop.orderingPayments);
       const incoming = dto.orderingPayments ?? {};
+      const incomingItems = Array.isArray((incoming as { items?: unknown }).items)
+        ? ((incoming as { items: OrderingPaymentMethodItem[] }).items)
+        : null;
+      const incomingMethods = Array.isArray(incoming.methods)
+        ? (incoming.methods as Array<'CASH' | 'TRANSFER'>)
+        : null;
+      let items = incomingItems ?? prev?.items ?? [];
+      if (!incomingItems && incomingMethods) {
+        items = syncOrderingPayItemsFromMethods(items, incomingMethods);
+      }
       shop.orderingPayments = normalizeOrderingPayments({
-        methods: incoming.methods ?? prev?.methods,
+        items,
+        methods: incomingMethods ?? prev?.methods,
         transferInstructions:
           incoming.transferInstructions !== undefined
             ? incoming.transferInstructions
