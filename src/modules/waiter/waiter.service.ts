@@ -707,13 +707,7 @@ export class WaiterService implements OnModuleInit {
     }
     if (!caps.allowPrintKitchen) printKitchen = false;
     if (!caps.allowPrintCustomerTicket) printCustomerTicket = false;
-    if (!printKitchen && !printCustomerTicket) {
-      if (caps.allowPrintKitchen) printKitchen = true;
-      else if (caps.allowPrintCustomerTicket) printCustomerTicket = true;
-      else {
-        throw new BadRequestException('No hay impresiones habilitadas para enviar');
-      }
-    }
+    // Se puede agregar a la mesa sin imprimir (sin cocina ni ticket).
 
     const sessionWaiterId = session.waiterEmployeeId ?? waiterEmployeeIdOrNull(waiter);
     const sessionWaiter = sessionWaiterId

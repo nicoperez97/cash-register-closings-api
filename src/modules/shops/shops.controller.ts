@@ -200,6 +200,12 @@ export class ShopsController {
         available?: boolean;
         menuItemIds?: string[];
       }> | null;
+      discountPresets?: Array<{
+        id?: string;
+        label?: string;
+        mode: 'percent' | 'fixed';
+        value: number;
+      }> | null;
       menuItemAvailability?: Array<{ id: string; available: boolean }> | null;
       orderingExtraAvailability?: Array<{ id: string; available: boolean }> | null;
     },

@@ -366,6 +366,57 @@ export function normalizeOrderingExtras(raw: unknown): OrderingExtra[] {
   return out;
 }
 
+/** Atajo de descuento en ticket (comanda) y caja rápida (POS). */
+export type DiscountPreset = {
+  id: string;
+  label: string;
+  mode: 'percent' | 'fixed';
+  value: number;
+};
+
+function newDiscountPresetId(): string {
+  return `dp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+export const DEFAULT_DISCOUNT_PRESETS: DiscountPreset[] = [
+  { id: 'dp_10pct', label: '10%', mode: 'percent', value: 10 },
+];
+
+/**
+ * null/undefined → default (10%).
+ * [] → sin atajos (solo No / % / $).
+ */
+export function normalizeDiscountPresets(raw: unknown): DiscountPreset[] {
+  if (raw === undefined || raw === null) {
+    return DEFAULT_DISCOUNT_PRESETS.map((p) => ({ ...p }));
+  }
+  if (!Array.isArray(raw)) {
+    return DEFAULT_DISCOUNT_PRESETS.map((p) => ({ ...p }));
+  }
+  if (raw.length === 0) return [];
+  const used = new Set<string>();
+  const out: DiscountPreset[] = [];
+  for (const row of raw.slice(0, 12)) {
+    if (!row || typeof row !== 'object') continue;
+    const r = row as Partial<DiscountPreset>;
+    const mode = r.mode === 'fixed' ? 'fixed' : r.mode === 'percent' ? 'percent' : null;
+    if (!mode) continue;
+    let value = Number(r.value);
+    if (!Number.isFinite(value) || value <= 0) continue;
+    if (mode === 'percent') value = Math.min(100, Math.round(value * 100) / 100);
+    else value = Math.round(value * 100) / 100;
+    let label = String(r.label ?? '').trim().slice(0, 24);
+    if (!label) {
+      label = mode === 'percent' ? `${value}%` : `$${value}`;
+    }
+    let id = String(r.id ?? '').trim().slice(0, 40);
+    if (!id || used.has(id)) id = newDiscountPresetId();
+    used.add(id);
+    out.push({ id, label, mode, value });
+  }
+  return out;
+}
+
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 /** Safari/iOS a veces manda HH:mm:ss en inputs time. */
 const HHMM_LOOSE = /^([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?$/;
