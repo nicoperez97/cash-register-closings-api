@@ -200,6 +200,7 @@ export class PrintAgentService implements OnModuleInit {
           status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
           sourceId VARCHAR(80) NULL,
           copies INT NOT NULL DEFAULT 1,
+          attempts INT NOT NULL DEFAULT 0,
           payload JSON NOT NULL,
           error VARCHAR(500) NULL,
           printedAt DATETIME(6) NULL,
@@ -210,6 +211,13 @@ export class PrintAgentService implements OnModuleInit {
       `);
     } catch {
       /* already exists / dialect */
+    }
+    try {
+      await this.jobs.query(
+        `ALTER TABLE print_jobs ADD COLUMN attempts INT NOT NULL DEFAULT 0`,
+      );
+    } catch {
+      /* already exists */
     }
     for (const sql of [
       `ALTER TABLE shops ADD COLUMN printAgentTokenHash VARCHAR(64) NULL`,
@@ -381,14 +389,29 @@ export class PrintAgentService implements OnModuleInit {
     if (status !== 'PRINTED' && status !== 'FAILED') {
       throw new BadRequestException('status debe ser PRINTED o FAILED');
     }
-    job.status = status as PrintJobStatus;
-    job.error =
-      status === 'FAILED'
-        ? String(body?.error ?? 'Error de impresión').trim().slice(0, 500) || 'Error de impresión'
-        : null;
-    job.printedAt = status === 'PRINTED' ? new Date() : job.printedAt ?? null;
+    if (status === 'PRINTED') {
+      job.status = 'PRINTED';
+      job.error = null;
+      job.printedAt = new Date();
+      await this.jobs.save(job);
+      return { id: job.id, status: job.status, attempts: job.attempts ?? 0 };
+    }
+
+    const msg =
+      String(body?.error ?? 'Error de impresión').trim().slice(0, 500) ||
+      'Error de impresión';
+    const attempts = Math.max(0, Number(job.attempts) || 0) + 1;
+    job.attempts = attempts;
+    job.error = msg;
+    // Hasta 3 intentos: vuelve a PENDING para que el agent reintente.
+    if (attempts < 3) {
+      job.status = 'PENDING';
+    } else {
+      job.status = 'FAILED';
+    }
     await this.jobs.save(job);
-    return { id: job.id, status: job.status };
+    this.live.tick(shop.id, 'customer-orders');
+    return { id: job.id, status: job.status, attempts: job.attempts };
   }
 
   async enqueueTest(shop: AgentShop) {
@@ -419,6 +442,8 @@ export class PrintAgentService implements OnModuleInit {
       waiterName?: string | null;
       /** Sufijo para reimprimir ticket cliente (ej. close). */
       customerSourceSuffix?: string;
+      /** Sufijo para reimprimir cocina (fuerza nuevo job). */
+      kitchenSourceSuffix?: string;
     },
   ) {
     if (!shop.printAgentTokenHash) return null;
@@ -477,10 +502,13 @@ export class PrintAgentService implements OnModuleInit {
     const printKitchen = opts?.printKitchen !== false;
     let kitchen: PrintJob | null = null;
     if (printKitchen) {
+      const kitchenSuffix = opts?.kitchenSourceSuffix
+        ? `_${opts.kitchenSourceSuffix}`
+        : '';
       kitchen = await this.enqueue({
         shopId: shop.id,
         kind: 'CUSTOMER_ORDER',
-        sourceId: `co_${order.id}_${reason}_kitchen`,
+        sourceId: `co_${order.id}_${reason}_kitchen${kitchenSuffix}`,
         copies: 1,
         payload: {
           ...base,
@@ -518,6 +546,54 @@ export class PrintAgentService implements OnModuleInit {
     return kitchen;
   }
 
+  /**
+   * Reencola comanda de cocina (nuevo job). Sirve si falló o si hay que reimprimir.
+   * También reabre FAILED del source canónico a PENDING.
+   */
+  async reprintKitchenForOrder(
+    shop: Shop,
+    order: CustomerOrder,
+    opts?: { tableLabel?: string | null; waiterName?: string | null; reason?: 'TABLE' | 'COUNTER' | 'ACCEPTED' },
+  ) {
+    if (!shop.printAgentTokenHash) {
+      throw new BadRequestException(
+        'Print agent no configurado. Configuralo en Dispositivos.',
+      );
+    }
+    const reason = opts?.reason ?? 'TABLE';
+    const canonical = `co_${order.id}_${reason}_kitchen`;
+    const existing = await this.jobs.findOne({
+      where: { shopId: shop.id, sourceId: canonical },
+    });
+    if (existing && (existing.status === 'FAILED' || existing.status === 'PRINTED')) {
+      // Nuevo job con payload fresco (FAILED no reusa el viejo; PRINTED reimprime).
+      const job = await this.enqueueCustomerOrder(shop, order, reason, {
+        printKitchen: true,
+        printCustomerTicket: false,
+        tableLabel: opts?.tableLabel ?? null,
+        waiterName: opts?.waiterName ?? null,
+        kitchenSourceSuffix: `r${Date.now().toString(36)}`,
+      });
+      if (!job) {
+        throw new BadRequestException('No se pudo encolar la comanda');
+      }
+      return { id: job.id, status: job.status, reused: false };
+    }
+    if (existing && existing.status === 'PENDING') {
+      return { id: existing.id, status: existing.status, reused: true };
+    }
+    const job = await this.enqueueCustomerOrder(shop, order, reason, {
+      printKitchen: true,
+      printCustomerTicket: false,
+      tableLabel: opts?.tableLabel ?? null,
+      waiterName: opts?.waiterName ?? null,
+    });
+    if (!job) {
+      throw new BadRequestException('No se pudo encolar la comanda');
+    }
+    return { id: job.id, status: job.status, reused: false };
+  }
+
   /** Ticket cliente de toda la sesión de mesa (varios envíos + descuento). */
   async enqueueTableSessionTicket(
     shop: Shop,
@@ -529,6 +605,29 @@ export class PrintAgentService implements OnModuleInit {
       discountAmount: number;
       discountLabel?: string | null;
       total: number;
+      promoBreakdown?: {
+        promoName: string;
+        packs: number;
+        packPrice: number;
+        packsTotal: number;
+        applied?: Array<{
+          promoId?: string;
+          promoName: string;
+          packs: number;
+          packPrice?: number;
+          packsTotal: number;
+        }>;
+        outside: Array<{
+          name: string;
+          qty: number;
+          unitPrice: number;
+          amount: number;
+          kind: string;
+        }>;
+        outsideTotal: number;
+        soldPromoTotal: number;
+        baseTotal: number;
+      } | null;
       tableLabel?: string | null;
       waiterName?: string | null;
       covers?: number;
@@ -562,6 +661,7 @@ export class PrintAgentService implements OnModuleInit {
         discountLabel: input.discountLabel ?? null,
         discountAmount: Number(input.discountAmount) || 0,
         total: Number(input.total) || 0,
+        promoBreakdown: input.promoBreakdown ?? null,
         items: input.items,
         createdAt: new Date().toISOString(),
         acceptedAt: null,
@@ -592,6 +692,7 @@ export class PrintAgentService implements OnModuleInit {
         status: 'PENDING',
         sourceId: input.sourceId,
         copies: Math.max(1, Math.min(5, input.copies || 1)),
+        attempts: 0,
         payload: input.payload,
         error: null,
         printedAt: null,

@@ -32,9 +32,13 @@ export type CustomerOrderLine = {
   unitPrice: number;
   qty: number;
   notes?: string | null;
-  kind?: 'ITEM' | 'EXTRA';
+  kind?: 'ITEM' | 'EXTRA' | 'PROMO';
   extraId?: string | null;
   attachedToMenuItemId?: string | null;
+  /** Promo de venta (línea cobro o hijos de pack). */
+  promoId?: string | null;
+  /** Agrupa hijos + línea PROMO de una misma venta. */
+  promoBundleKey?: string | null;
   /** Ingredientes pedidos sin (subset de removableIngredients del ítem). */
   removedIngredients?: string[];
 };

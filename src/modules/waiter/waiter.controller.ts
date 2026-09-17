@@ -194,14 +194,50 @@ class PatchSessionLineDto {
   remove?: boolean;
 }
 
-class CreateSessionOrderDto {
-  @ApiProperty({ type: [WaiterOrderItemDto] })
+class WaiterOrderPromoDto {
+  @ApiProperty()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  promoId: string;
+
+  @ApiProperty({ example: 1 })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(99)
+  qty: number;
+}
+
+class PatchSessionPromoDto {
+  @ApiPropertyOptional({ description: 'null = quitar promo de la mesa (legacy)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  promoId?: string | null;
+
+  @ApiPropertyOptional({ description: 'null = ilimitado; omitir = no cambiar (legacy)' })
+  @IsOptional()
+  promoMaxCount?: number | null;
+
+  @ApiPropertyOptional({
+    description: 'Lista completa de promos de mesa (reemplaza). maxCount null = ilimitado.',
+    type: 'array',
+  })
+  @IsOptional()
   @IsArray()
-  @ArrayMinSize(1)
+  @ArrayMaxSize(20)
+  promos?: Array<{ promoId: string; maxCount?: number | null }> | null;
+}
+
+class CreateSessionOrderDto {
+  @ApiPropertyOptional({ type: [WaiterOrderItemDto] })
+  @IsOptional()
+  @IsArray()
   @ArrayMaxSize(80)
   @ValidateNested({ each: true })
   @Type(() => WaiterOrderItemDto)
-  items: WaiterOrderItemDto[];
+  items?: WaiterOrderItemDto[];
 
   @ApiPropertyOptional({ type: [WaiterOrderExtraDto] })
   @IsOptional()
@@ -210,6 +246,14 @@ class CreateSessionOrderDto {
   @ValidateNested({ each: true })
   @Type(() => WaiterOrderExtraDto)
   extras?: WaiterOrderExtraDto[];
+
+  @ApiPropertyOptional({ type: [WaiterOrderPromoDto] })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(40)
+  @ValidateNested({ each: true })
+  @Type(() => WaiterOrderPromoDto)
+  promos?: WaiterOrderPromoDto[];
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -325,6 +369,34 @@ export class WaiterController {
     @Body() dto: CreateSessionOrderDto,
   ) {
     return this.waiter.createSessionOrder(slug, waiter, id, dto);
+  }
+
+  @Public()
+  @UseGuards(WaiterAuthGuard)
+  @Post('sessions/:id/orders/:orderId/reprint-kitchen')
+  reprintKitchen(
+    @Param('slug') slug: string,
+    @CurrentWaiter() waiter: WaiterAuthPayload,
+    @Param('id') id: string,
+    @Param('orderId') orderId: string,
+  ) {
+    return this.waiter.reprintSessionKitchen(slug, waiter, id, orderId);
+  }
+
+  @Public()
+  @UseGuards(WaiterAuthGuard)
+  @Patch('sessions/:id/promo')
+  patchSessionPromo(
+    @Param('slug') slug: string,
+    @CurrentWaiter() waiter: WaiterAuthPayload,
+    @Param('id') id: string,
+    @Body() dto: PatchSessionPromoDto,
+  ) {
+    return this.waiter.patchSessionPromo(slug, waiter, id, {
+      promoId: dto.promoId,
+      promoMaxCount: dto.promoMaxCount,
+      promos: dto.promos,
+    });
   }
 
   @Public()

@@ -46,6 +46,7 @@ import {
   type TablePaymentMethod,
   type WaiterCapabilities,
 } from '../../common/shop-ordering';
+import { normalizeShopPromos, type ShopPromo } from '../../common/shop-promos';
 import { normalizeShopMenus } from '../menu/menu-parse.util';
 import {
   earliestShiftOpening,
@@ -503,6 +504,14 @@ export class ShopsService implements OnModuleInit {
       await this.shops.query(`
         ALTER TABLE shops
           ADD COLUMN discountPresets JSON NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN promos JSON NULL
       `);
     } catch {
       // columna ya existe
@@ -1578,6 +1587,7 @@ export class ShopsService implements OnModuleInit {
       orderingEta: normalizeOrderingEta(s.orderingEta),
       orderingExtras: normalizeOrderingExtras(s.orderingExtras),
       discountPresets: normalizeDiscountPresets(s.discountPresets),
+      promos: normalizeShopPromos(s.promos),
       defaultChangeAmount: Number(s.defaultChangeAmount),
       productionDefaultHours: Number(s.productionDefaultHours ?? 8) || 8,
       logoUrl: s.logoUrl ?? null,
