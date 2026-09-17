@@ -22,8 +22,19 @@ export type ShopOrderingHours = {
 
 export type OrderingPaymentMethod = 'CASH' | 'TRANSFER';
 
+/** Medio de pago del pedido online: nombre libre + cuenta opcional (igual que mesa). */
+export type OrderingPaymentMethodItem = {
+  id: string;
+  name: string;
+  accountId?: string | null;
+  active?: boolean;
+};
+
 export type ShopOrderingPayments = {
+  /** Derivado de `items` activos (compat checkout / legacy). */
   methods?: OrderingPaymentMethod[];
+  /** Lista editable (nombre + cuenta), igual que medios de mesa. */
+  items?: OrderingPaymentMethodItem[];
   transferInstructions?: string | null;
   /** WhatsApp para comprobantes de transferencia. Si vacío, se usa el teléfono del local. */
   whatsapp?: string | null;
@@ -39,6 +50,103 @@ export type TablePaymentMethod = {
 
 function newTablePayId(): string {
   return `tp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function newOrderingPayId(): string {
+  return `op_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+/** Clasifica un medio por id/nombre para cierre / enum de pedidos. */
+export function classifyPaymentMethodKind(
+  id: string,
+  name: string,
+): 'CASH' | 'TRANSFER' | 'CARD' {
+  const key = `${id} ${name}`.toLowerCase();
+  if (/transf|transfer|alias|cbu|cvu|mercado\s*pago|mp\b/.test(key)) return 'TRANSFER';
+  if (/tarjeta|card|d[eé]bito|cr[eé]dito|posnet|visa|master|amex/.test(key)) return 'CARD';
+  if (/efectivo|cash|contado|tp_cash|op_cash/.test(key)) return 'CASH';
+  return 'CASH';
+}
+
+function defaultOrderingPayItems(): OrderingPaymentMethodItem[] {
+  return [
+    { id: 'op_cash', name: 'Efectivo', accountId: null, active: true },
+    { id: 'op_transfer', name: 'Transferencia', accountId: null, active: true },
+  ];
+}
+
+function normalizeOrderingPayItems(raw: unknown): OrderingPaymentMethodItem[] {
+  if (!Array.isArray(raw)) return [];
+  const used = new Set<string>();
+  const out: OrderingPaymentMethodItem[] = [];
+  for (const row of raw.slice(0, 30)) {
+    if (!row || typeof row !== 'object') continue;
+    const r = row as OrderingPaymentMethodItem;
+    const name = String(r.name ?? '').trim().slice(0, 80);
+    if (!name) continue;
+    let id = String(r.id ?? '').trim().slice(0, 40);
+    if (!id || used.has(id)) id = newOrderingPayId();
+    used.add(id);
+    const accountId = String(r.accountId ?? '').trim().slice(0, 36) || null;
+    out.push({
+      id,
+      name,
+      accountId,
+      active: r.active !== false,
+    });
+  }
+  return out;
+}
+
+function orderingItemsFromLegacyMethods(
+  methods: OrderingPaymentMethod[],
+): OrderingPaymentMethodItem[] {
+  const wantCash = !methods.length || methods.includes('CASH');
+  const wantTransfer = !methods.length || methods.includes('TRANSFER');
+  return [
+    { id: 'op_cash', name: 'Efectivo', accountId: null, active: wantCash },
+    { id: 'op_transfer', name: 'Transferencia', accountId: null, active: wantTransfer },
+  ];
+}
+
+function deriveOrderingMethods(
+  items: OrderingPaymentMethodItem[],
+): OrderingPaymentMethod[] {
+  const set = new Set<OrderingPaymentMethod>();
+  for (const item of items) {
+    if (item.active === false) continue;
+    const kind = classifyPaymentMethodKind(item.id, item.name);
+    set.add(kind === 'TRANSFER' ? 'TRANSFER' : 'CASH');
+  }
+  if (!set.size) return ['CASH', 'TRANSFER'];
+  return [...set];
+}
+
+/** Activa/desactiva items según methods legacy (panel rápido Pedidos clientes). */
+export function syncOrderingPayItemsFromMethods(
+  items: OrderingPaymentMethodItem[],
+  methods: OrderingPaymentMethod[],
+): OrderingPaymentMethodItem[] {
+  const wantCash = methods.includes('CASH');
+  const wantTransfer = methods.includes('TRANSFER');
+  let hasCash = false;
+  let hasTransfer = false;
+  const out = (items.length ? items : defaultOrderingPayItems()).map((it) => {
+    const kind = classifyPaymentMethodKind(it.id, it.name);
+    if (kind === 'TRANSFER') {
+      hasTransfer = true;
+      return { ...it, active: wantTransfer };
+    }
+    hasCash = true;
+    return { ...it, active: wantCash };
+  });
+  if (wantCash && !hasCash) {
+    out.push({ id: 'op_cash', name: 'Efectivo', accountId: null, active: true });
+  }
+  if (wantTransfer && !hasTransfer) {
+    out.push({ id: 'op_transfer', name: 'Transferencia', accountId: null, active: true });
+  }
+  return out;
 }
 
 export function normalizeTablePaymentMethods(raw: unknown): TablePaymentMethod[] {
@@ -346,20 +454,28 @@ export function normalizeShopOrderingHours(raw: unknown): ShopOrderingHours | nu
 
 export function normalizeOrderingPayments(raw: unknown): ShopOrderingPayments | null {
   if (!raw || typeof raw !== 'object') return null;
-  const o = raw as ShopOrderingPayments;
-  const methods = Array.isArray(o.methods)
+  const o = raw as ShopOrderingPayments & { items?: unknown };
+  const legacyMethods = Array.isArray(o.methods)
     ? ([...new Set(o.methods.map((m) => String(m).toUpperCase()))].filter(
         (m) => m === 'CASH' || m === 'TRANSFER',
       ) as OrderingPaymentMethod[])
     : [];
+  let items = normalizeOrderingPayItems(o.items);
+  if (!items.length) {
+    items = orderingItemsFromLegacyMethods(legacyMethods);
+  }
+  if (!items.length) {
+    items = defaultOrderingPayItems();
+  }
+  const methods = deriveOrderingMethods(items);
   const transferInstructions =
     String(o.transferInstructions ?? '')
       .trim()
       .slice(0, 500) || null;
   const whatsapp = String(o.whatsapp ?? '').trim().slice(0, 40) || null;
-  if (!methods.length && !transferInstructions && !whatsapp) return null;
   return {
-    methods: methods.length ? methods : (['CASH', 'TRANSFER'] as OrderingPaymentMethod[]),
+    items,
+    methods,
     transferInstructions,
     whatsapp,
   };
