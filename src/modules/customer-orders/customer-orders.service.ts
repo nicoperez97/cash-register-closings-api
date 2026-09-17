@@ -1227,6 +1227,26 @@ export class CustomerOrdersService implements OnModuleInit {
       }
     }
 
+    // Caja con fecha/turno fijo sin movimientos: probar día laboral actual
+    // (evita cierre vacío cuando la caja quedó del día anterior).
+    if (!rows.length && !sessions.length && pinnedShiftId) {
+      const liveDate = resolveShopBusinessDate(new Date(), {
+        timezone: shop.timezone,
+        openingTime: shop.openingTime,
+      });
+      const liveShift = resolveCurrentShift(shifts, new Date(), shop.timezone);
+      if (liveDate !== date || liveShift.id !== shift.id) {
+        const liveLoad = await loadRows(liveDate, liveShift);
+        if (liveLoad.rows.length || liveLoad.sessions.length) {
+          rows = liveLoad.rows;
+          sessions = liveLoad.sessions;
+          range = liveLoad.range;
+          date = liveDate;
+          shift = liveShift;
+        }
+      }
+    }
+
     type Bucket = {
       cashTotal: number;
       transferTotal: number;
@@ -1322,9 +1342,8 @@ export class CustomerOrdersService implements OnModuleInit {
     });
 
     const tables = this.aggregateClosedTables(sessions);
-    const openTablesCount = await this.tableSessions.count({
-      where: { shopId, status: TableSessionStatus.OPEN },
-    });
+    await this.closeEmptyOpenTableSessions(shopId);
+    const openTablesCount = await this.countOccupiedOpenTables(shopId);
 
     return {
       businessDate: date,
@@ -1367,6 +1386,40 @@ export class CustomerOrdersService implements OnModuleInit {
       orderingForceClosed: !!shop.orderingForceClosed,
       defaultChangeAmount: Number(shop.defaultChangeAmount) || 0,
     };
+  }
+
+  private async closeEmptyOpenTableSessions(shopId: string): Promise<void> {
+    const open = await this.tableSessions.find({
+      where: { shopId, status: TableSessionStatus.OPEN },
+      take: 500,
+    });
+    if (!open.length) return;
+    for (const session of open) {
+      const orderCount = await this.orders.count({
+        where: { shopId, tableSessionId: session.id },
+      });
+      if (orderCount > 0) continue;
+      session.status = TableSessionStatus.CLOSED;
+      session.closedAt = new Date();
+      await this.tableSessions.save(session);
+    }
+  }
+
+  /** Misma regla que el mapa: abierta = OPEN con al menos un envío. */
+  private async countOccupiedOpenTables(shopId: string): Promise<number> {
+    const open = await this.tableSessions.find({
+      where: { shopId, status: TableSessionStatus.OPEN },
+      take: 500,
+    });
+    if (!open.length) return 0;
+    let n = 0;
+    for (const session of open) {
+      const orderCount = await this.orders.count({
+        where: { shopId, tableSessionId: session.id },
+      });
+      if (orderCount > 0) n += 1;
+    }
+    return n;
   }
 
   private aggregateClosedTables(sessions: TableSession[]) {

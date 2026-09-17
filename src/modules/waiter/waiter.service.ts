@@ -665,10 +665,6 @@ export class WaiterService implements OnModuleInit {
   async discardSession(slug: string, waiter: WaiterAuthPayload, sessionId: string) {
     assertWaiterShopSlug(waiter, slug);
     const shop = await this.requireShop(slug);
-    this.denyUnless(
-      this.caps(shop, waiter).allowDiscardEmptySession,
-      'No está permitido descartar la mesa',
-    );
     const session = await this.sessions.findOne({
       where: { id: sessionId, shopId: shop.id },
     });
@@ -679,6 +675,7 @@ export class WaiterService implements OnModuleInit {
     if (orderCount > 0) {
       throw new BadRequestException('La mesa ya tiene envíos; cerrala en lugar de descartar');
     }
+    // Sesiones vacías siempre se pueden limpiar (el mapa las oculta y ensucian el cierre).
     if (session.status === TableSessionStatus.OPEN) {
       session.status = TableSessionStatus.CLOSED;
       session.closedAt = new Date();
