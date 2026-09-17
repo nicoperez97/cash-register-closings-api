@@ -374,6 +374,10 @@ export class CustomerOrdersService implements OnModuleInit {
       transferInstructions: null,
       whatsapp: null,
     };
+    const publicPayments = {
+      ...payments,
+      items: (payments.items ?? []).filter((i) => i.active !== false),
+    };
     const eta = normalizeOrderingEta(shop.orderingEta);
     const menus = normalizeShopMenus(shop.menu);
 
@@ -405,7 +409,7 @@ export class CustomerOrdersService implements OnModuleInit {
       takeawayHoursSummary: formatOrderingHoursSummary(takeawayHours),
       deliveryHoursSummary: formatOrderingHoursSummary(deliveryHours),
       orderingHours: hours,
-      payments,
+      payments: publicPayments,
       deliveryZones: zones,
       eta,
       extras: normalizeOrderingExtras(shop.orderingExtras)
@@ -652,7 +656,22 @@ export class CustomerOrdersService implements OnModuleInit {
       transferInstructions: null,
       whatsapp: null,
     };
-    if (!isTable && !payments.methods?.includes(dto.paymentMethod)) {
+    const activeItems = (payments.items ?? []).filter((i) => i.active !== false);
+    const payId = String(dto.paymentMethodId ?? '').trim();
+    const payItem = payId
+      ? activeItems.find((i) => i.id === payId) ?? null
+      : null;
+    if (payId && !isTable && !payItem) {
+      throw new BadRequestException('Medio de pago no disponible');
+    }
+    let paymentMethod = dto.paymentMethod;
+    if (payItem) {
+      const kind = classifyPaymentMethodKind(payItem.id, payItem.name);
+      paymentMethod =
+        kind === 'TRANSFER'
+          ? CustomerOrderPaymentMethod.TRANSFER
+          : CustomerOrderPaymentMethod.CASH;
+    } else if (!isTable && !payments.methods?.includes(dto.paymentMethod)) {
       throw new BadRequestException('Medio de pago no disponible');
     }
 
@@ -796,10 +815,23 @@ export class CustomerOrdersService implements OnModuleInit {
 
     const total = Math.max(0, Math.round((subtotal - discountAmount + deliveryFee) * 100) / 100);
 
-    if (!isTable && dto.paymentMethod === CustomerOrderPaymentMethod.CASH) {
-      const cash = Number(dto.cashAmount);
-      if (!Number.isFinite(cash) || cash < total) {
-        throw new BadRequestException('Indicá con cuánto abonás (debe cubrir el total)');
+    const needsCashTender =
+      !isTable &&
+      paymentMethod === CustomerOrderPaymentMethod.CASH &&
+      (!payItem ||
+        /efectivo|cash|contado|op_cash|tp_cash/.test(
+          `${payItem.id} ${payItem.name}`.toLowerCase(),
+        ));
+    let cashAmountValue: number | null = null;
+    if (!isTable && paymentMethod === CustomerOrderPaymentMethod.CASH) {
+      if (needsCashTender) {
+        const cash = Number(dto.cashAmount);
+        if (!Number.isFinite(cash) || cash < total) {
+          throw new BadRequestException('Indicá con cuánto abonás (debe cubrir el total)');
+        }
+        cashAmountValue = cash;
+      } else {
+        cashAmountValue = total;
       }
     }
 
@@ -839,11 +871,11 @@ export class CustomerOrdersService implements OnModuleInit {
         deliveryStreetNumber,
         deliveryZoneId,
         deliveryZoneName,
-        paymentMethod: isTable ? CustomerOrderPaymentMethod.CASH : dto.paymentMethod,
+        paymentMethod: isTable ? CustomerOrderPaymentMethod.CASH : paymentMethod,
         cashAmount: isTable
           ? total.toFixed(2)
-          : dto.paymentMethod === CustomerOrderPaymentMethod.CASH
-            ? Number(dto.cashAmount).toFixed(2)
+          : cashAmountValue != null
+            ? cashAmountValue.toFixed(2)
             : null,
         customerNotes: String(dto.customerNotes ?? '').trim().slice(0, 500) || null,
         salonTableId: isTable ? dto.salonTableId ?? null : null,
@@ -1171,6 +1203,9 @@ export class CustomerOrdersService implements OnModuleInit {
     });
 
     const tables = this.aggregateClosedTables(sessions);
+    const openTablesCount = await this.tableSessions.count({
+      where: { shopId, status: TableSessionStatus.OPEN },
+    });
 
     return {
       businessDate: date,
@@ -1182,9 +1217,13 @@ export class CustomerOrdersService implements OnModuleInit {
       to: range.to.toISOString(),
       orderCount: orderIds.length,
       openCount,
+      openTablesCount,
       completedCount: orderIds.length,
       cashTotal: round2(cashTotal),
       transferTotal: round2(transferTotal),
+      /** Efectivo de pedidos + mesas (sin Deliverate a fuente aparte). */
+      cashDeclaredTotal: round2(cashTotal + tables.cashTotal),
+      transferDeclaredTotal: round2(transferTotal + tables.transferTotal),
       total: round2(cashTotal + transferTotal + tables.ticketTotal + deliverateMatchedAmount),
       unitsSold,
       byFulfillment: {

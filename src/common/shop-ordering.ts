@@ -63,7 +63,9 @@ export function classifyPaymentMethodKind(
 ): 'CASH' | 'TRANSFER' | 'CARD' {
   const key = `${id} ${name}`.toLowerCase();
   if (/transf|transfer|alias|cbu|cvu|mercado\s*pago|mp\b/.test(key)) return 'TRANSFER';
-  if (/tarjeta|card|d[eé]bito|cr[eé]dito|posnet|visa|master|amex/.test(key)) return 'CARD';
+  if (/tarjeta|card|d[eé]bito|cr[eé]dito|posnet|visa|master|amex|\bpvs\b/.test(key)) {
+    return 'CARD';
+  }
   if (/efectivo|cash|contado|tp_cash|op_cash/.test(key)) return 'CASH';
   return 'CASH';
 }

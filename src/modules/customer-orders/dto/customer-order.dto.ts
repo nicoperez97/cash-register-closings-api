@@ -154,6 +154,12 @@ export class CreateCustomerOrderDto {
   @IsEnum(CustomerOrderPaymentMethod)
   paymentMethod: CustomerOrderPaymentMethod;
 
+  @ApiPropertyOptional({ description: 'Id del medio configurado en el local' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  paymentMethodId?: string | null;
+
   @ApiPropertyOptional({ description: 'Con cuánto abona (efectivo)' })
   @IsOptional()
   @Type(() => Number)
