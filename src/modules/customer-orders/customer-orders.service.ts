@@ -1227,8 +1227,7 @@ export class CustomerOrdersService implements OnModuleInit {
       }
     }
 
-    // Caja con fecha/turno fijo sin movimientos: probar día laboral actual
-    // (evita cierre vacío cuando la caja quedó del día anterior).
+    // Caja con fecha/turno fijo sin movimientos: día laboral actual (turno + día completo).
     if (!rows.length && !sessions.length && pinnedShiftId) {
       const liveDate = resolveShopBusinessDate(new Date(), {
         timezone: shop.timezone,
@@ -1241,6 +1240,42 @@ export class CustomerOrdersService implements OnModuleInit {
           rows = liveLoad.rows;
           sessions = liveLoad.sessions;
           range = liveLoad.range;
+          date = liveDate;
+          shift = liveShift;
+        }
+      }
+      if (!rows.length && !sessions.length) {
+        const day = shopBusinessDayRangeUtc(liveDate, {
+          timezone: shop.timezone,
+          openingTime: shop.openingTime,
+        });
+        const dayRows = await this.orders.find({
+          where: {
+            shopId,
+            status: Not(CustomerOrderStatus.CANCELLED),
+            createdAt: And(MoreThanOrEqual(day.from), LessThan(day.to)),
+          },
+          order: { createdAt: 'ASC' },
+          take: 2000,
+        });
+        const daySessions = await this.tableSessions.find({
+          where: {
+            shopId,
+            status: TableSessionStatus.CLOSED,
+            closedAt: And(MoreThanOrEqual(day.from), LessThan(day.to)),
+          },
+          order: { closedAt: 'ASC' },
+          take: 2000,
+        });
+        if (dayRows.length || daySessions.length) {
+          rows = dayRows;
+          sessions = daySessions;
+          range = {
+            from: day.from,
+            to: day.to,
+            untilOpensAt: normalizeOpeningTime(shop.openingTime),
+            untilDate: nextCalendarDate(liveDate),
+          };
           date = liveDate;
           shift = liveShift;
         }
