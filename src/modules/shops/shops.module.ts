@@ -7,6 +7,7 @@ import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
 import { ShopClosingSource } from '../../entities/shop-closing-source.entity';
 import { Concept } from '../../entities/concept.entity';
+import { CashClosing } from '../../entities/cash-closing.entity';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
 import { ShopsController, PublicShopsController } from './shops.controller';
 import { ShopsService } from './shops.service';
@@ -22,6 +23,7 @@ import { ShopBackupService } from './shop-backup.service';
       LedgerAccountUser,
       Concept,
       ShopClosingSource,
+      CashClosing,
     ]),
   ],
   controllers: [ShopsController, PublicShopsController],

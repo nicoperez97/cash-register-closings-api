@@ -13,8 +13,9 @@ import { UserShop } from '../../entities/user-shop.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
 import { ShopClosingSource } from '../../entities/shop-closing-source.entity';
+import { CashClosing } from '../../entities/cash-closing.entity';
 import { AuthUser } from '../../common/decorators';
-import { ClosingSourceKind, GlobalRole, LedgerAccountType, Permission } from '../../common/enums';
+import { ClosingSourceKind, ClosingStatus, GlobalRole, LedgerAccountType, Permission } from '../../common/enums';
 import { isGlobalAdmin, isSuperAdmin } from '../../common/guards';
 import { normalizeLogoUrl } from '../../common/drive-url';
 import { isEntityActive } from '../../common/active.util';
@@ -106,6 +107,7 @@ export class ShopsService implements OnModuleInit {
     private readonly accountLinks: Repository<LedgerAccountUser>,
     @InjectRepository(ShopClosingSource)
     private readonly closingSources: Repository<ShopClosingSource>,
+    @InjectRepository(CashClosing) private readonly cashClosings: Repository<CashClosing>,
     private readonly catalogSeed: CatalogSeedService,
     private readonly live: ShopLiveService,
   ) {}
@@ -906,15 +908,7 @@ export class ShopsService implements OnModuleInit {
       shop.waiterOrderingEnabled = !!dto.waiterOrderingEnabled;
     }
     if (dto.orderingForceClosed !== undefined) {
-      const nextClosed = !!dto.orderingForceClosed;
-      if (!nextClosed) {
-        throw new BadRequestException(
-          'Para recibir pedidos online abrí la caja del turno (efectivo de apertura)',
-        );
-      }
-      if (nextClosed !== !!shop.orderingForceClosed) {
-        this.applyOrderingOpenState(shop, false);
-      }
+      await this.applyOrderingForceClosedChange(shop, !!dto.orderingForceClosed);
     }
     if (dto.takeawayEnabled !== undefined) {
       shop.takeawayEnabled = !!dto.takeawayEnabled;
@@ -1103,16 +1097,7 @@ export class ShopsService implements OnModuleInit {
       shop.waiterOrderingEnabled = !!dto.waiterOrderingEnabled;
     }
     if (dto.orderingForceClosed !== undefined) {
-      const nextClosed = !!dto.orderingForceClosed;
-      // Abrir pedidos solo vía caja abierta (POST /closings/open). Acá solo se permite cerrar.
-      if (!nextClosed) {
-        throw new BadRequestException(
-          'Para recibir pedidos online abrí la caja del turno (efectivo de apertura)',
-        );
-      }
-      if (nextClosed !== !!shop.orderingForceClosed) {
-        this.applyOrderingOpenState(shop, false);
-      }
+      await this.applyOrderingForceClosedChange(shop, !!dto.orderingForceClosed);
     }
     if (dto.takeawayEnabled !== undefined) shop.takeawayEnabled = !!dto.takeawayEnabled;
     if (dto.deliveryEnabled !== undefined) shop.deliveryEnabled = !!dto.deliveryEnabled;
@@ -1208,6 +1193,32 @@ export class ShopsService implements OnModuleInit {
       shop.orderingForceClosed = true;
       shop.orderingOpenedAt = null;
     }
+  }
+
+  /**
+   * Cerrar siempre se puede. Abrir (recibir pedidos) exige caja DRAFT abierta;
+   * con caja abierta se puede volver a abrir/cerrar el local a mano.
+   */
+  private async applyOrderingForceClosedChange(shop: Shop, nextClosed: boolean): Promise<void> {
+    if (!nextClosed) {
+      const hasOpenCaja = await this.hasOpenCashDraft(shop.id);
+      if (!hasOpenCaja) {
+        throw new BadRequestException(
+          'Para recibir pedidos online abrí la caja del turno (efectivo de apertura)',
+        );
+      }
+    }
+    if (nextClosed !== !!shop.orderingForceClosed) {
+      this.applyOrderingOpenState(shop, !nextClosed);
+    }
+  }
+
+  private async hasOpenCashDraft(shopId: string): Promise<boolean> {
+    const row = await this.cashClosings.findOne({
+      where: { shopId, status: ClosingStatus.DRAFT, active: true as any },
+      select: ['id'],
+    });
+    return !!row;
   }
 
   /** Persiste apertura/cierre de pedidos online (p. ej. al abrir/cerrar caja). */
