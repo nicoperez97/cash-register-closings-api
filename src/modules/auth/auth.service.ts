@@ -543,6 +543,16 @@ export class AuthService implements OnModuleInit {
         continue;
       }
 
+      // Admin del local: acceso total (no depende de un snapshot viejo de módulos).
+      if (effectiveRole === GlobalRole.OWNER || effectiveRole === GlobalRole.ADMIN) {
+        shopPermissions[id] = [...ALL_PERMISSIONS_LIST];
+        shopModulePermissions[id] = deriveModulesFromRole(GlobalRole.OWNER) as Record<
+          string,
+          string
+        >;
+        continue;
+      }
+
       let modules: ModulePermissionsMap;
       // null = legacy (derivar del rol); objeto (aunque vacío) = explícito.
       if (link?.modulePermissions != null) {

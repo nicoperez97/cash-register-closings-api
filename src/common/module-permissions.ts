@@ -35,6 +35,17 @@ export type ModuleKey =
   | 'reimbursements'
   | 'vacations'
   | 'serviceRules'
+  | 'publicPages'
+  | 'publicMenu'
+  | 'publicOrdering'
+  | 'publicOrderLookup'
+  | 'publicWaiter'
+  | 'publicReservationsBoard'
+  | 'publicReservationSignup'
+  | 'publicReservationLookup'
+  | 'publicWaiting'
+  | 'publicAttendance'
+  | 'publicNormas'
   | 'shop'
   | 'shopConfig'
   | 'users';
@@ -345,6 +356,86 @@ export const MODULE_DEFS: ModuleDef[] = [
     ],
   },
   {
+    key: 'publicMenu',
+    label: 'Carta pública',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+    ],
+  },
+  {
+    key: 'publicOrdering',
+    label: 'Pedir (público)',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+    ],
+  },
+  {
+    key: 'publicOrderLookup',
+    label: 'Consultar pedido',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+    ],
+  },
+  {
+    key: 'publicWaiter',
+    label: 'Comanda mozos (link)',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+    ],
+  },
+  {
+    key: 'publicReservationsBoard',
+    label: 'Tablero de reservas',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+    ],
+  },
+  {
+    key: 'publicReservationSignup',
+    label: 'Reservar (público)',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+    ],
+  },
+  {
+    key: 'publicReservationLookup',
+    label: 'Consultar reserva',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+    ],
+  },
+  {
+    key: 'publicWaiting',
+    label: 'Lista de espera (pública)',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+    ],
+  },
+  {
+    key: 'publicAttendance',
+    label: 'Presentismo público',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+    ],
+  },
+  {
+    key: 'publicNormas',
+    label: 'Normas públicas',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+    ],
+  },
+  {
     key: 'shop',
     label: 'Local / POS',
     levels: [
@@ -502,6 +593,32 @@ export function expandModulePermissions(
       add(set, 'serviceRules.read', 'serviceRules.manage');
       break;
   }
+  if (modules.publicMenu === 'read') add(set, 'publicMenu.read');
+  if (modules.publicOrdering === 'read') add(set, 'publicOrdering.read');
+  if (modules.publicOrderLookup === 'read') add(set, 'publicOrderLookup.read');
+  if (modules.publicWaiter === 'read') add(set, 'publicWaiter.read');
+  if (modules.publicReservationsBoard === 'read') add(set, 'publicReservationsBoard.read');
+  if (modules.publicReservationSignup === 'read') add(set, 'publicReservationSignup.read');
+  if (modules.publicReservationLookup === 'read') add(set, 'publicReservationLookup.read');
+  if (modules.publicWaiting === 'read') add(set, 'publicWaiting.read');
+  if (modules.publicAttendance === 'read') add(set, 'publicAttendance.read');
+  if (modules.publicNormas === 'read') add(set, 'publicNormas.read');
+  if (modules.publicPages === 'read') {
+    add(
+      set,
+      'publicMenu.read',
+      'publicOrdering.read',
+      'publicOrderLookup.read',
+      'publicWaiter.read',
+      'publicReservationsBoard.read',
+      'publicReservationSignup.read',
+      'publicReservationLookup.read',
+      'publicWaiting.read',
+      'publicAttendance.read',
+      'publicNormas.read',
+      'publicPages.read',
+    );
+  }
   // Quien gestiona pagos puede elegir / crear proveedores en el formulario.
   if (modules.payments === 'manage') {
     add(set, 'suppliers.read', 'suppliers.manage', 'services.read', 'services.manage');
@@ -602,6 +719,19 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
     })(),
     vacations: level('vacations.read', 'vacations.manage'),
     serviceRules: level('serviceRules.read', 'serviceRules.manage'),
+    publicMenu: has('publicMenu.read') || has('publicPages.read') ? 'read' : 'none',
+    publicOrdering: has('publicOrdering.read') || has('publicPages.read') ? 'read' : 'none',
+    publicOrderLookup: has('publicOrderLookup.read') || has('publicPages.read') ? 'read' : 'none',
+    publicWaiter: has('publicWaiter.read') || has('publicPages.read') ? 'read' : 'none',
+    publicReservationsBoard:
+      has('publicReservationsBoard.read') || has('publicPages.read') ? 'read' : 'none',
+    publicReservationSignup:
+      has('publicReservationSignup.read') || has('publicPages.read') ? 'read' : 'none',
+    publicReservationLookup:
+      has('publicReservationLookup.read') || has('publicPages.read') ? 'read' : 'none',
+    publicWaiting: has('publicWaiting.read') || has('publicPages.read') ? 'read' : 'none',
+    publicAttendance: has('publicAttendance.read') || has('publicPages.read') ? 'read' : 'none',
+    publicNormas: has('publicNormas.read') || has('publicPages.read') ? 'read' : 'none',
     accounts: has('accounts.manage') ? 'manage' : 'none',
     concepts: has('concepts.manage') ? 'manage' : 'none',
     shop: has('shops.manage') ? 'manage' : has('shops.read') ? 'read' : 'none',
@@ -664,6 +794,23 @@ export function sanitizeModulePermissions(
     if (!raw || raw === 'none') continue;
     if (!def.levels.some((l) => l.value === raw)) continue;
     out[def.key] = raw;
+  }
+  // Legacy publicPages → todas las páginas públicas
+  if (rawInput.publicPages === 'read') {
+    for (const k of [
+      'publicMenu',
+      'publicOrdering',
+      'publicOrderLookup',
+      'publicWaiter',
+      'publicReservationsBoard',
+      'publicReservationSignup',
+      'publicReservationLookup',
+      'publicWaiting',
+      'publicAttendance',
+      'publicNormas',
+    ] as ModuleKey[]) {
+      if (!out[k]) out[k] = 'read';
+    }
   }
   return out;
 }

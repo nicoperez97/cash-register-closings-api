@@ -59,6 +59,22 @@ class WaiterOrderItemDto {
   @ArrayMaxSize(24)
   @IsString({ each: true })
   removedIngredients?: string[];
+
+  @ApiPropertyOptional({ description: 'Marcar como entrada en comanda de cocina' })
+  @IsOptional()
+  @IsBoolean()
+  isEntrada?: boolean;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Nombres de otros platos del envío con los que combina',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(24)
+  @IsString({ each: true })
+  @MaxLength(120, { each: true })
+  combinesWithNames?: string[];
 }
 
 class WaiterOrderExtraDto {

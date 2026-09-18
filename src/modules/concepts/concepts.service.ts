@@ -5,7 +5,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Concept } from '../../entities/concept.entity';
 import { AuthUser } from '../../common/decorators';
 import { ConceptKind } from '../../common/enums';
@@ -174,6 +174,140 @@ export class ConceptsService implements OnModuleInit {
     await this.concepts.save(row);
     await this.concepts.softRemove(row);
     return { ok: true };
+  }
+
+  /**
+   * Une varios conceptos en uno (nuevo o existente).
+   * Reasigna pagos, movimientos y egresos de cierre; archiva los de origen.
+   */
+  async unify(
+    user: AuthUser,
+    shopId: string,
+    dto: {
+      sourceIds: string[];
+      targetId?: string | null;
+      targetName?: string | null;
+      kind?: ConceptKind;
+      categories?: string[] | null;
+    },
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    const sourceIds = [...new Set((dto.sourceIds || []).map((id) => String(id || '').trim()).filter(Boolean))];
+    if (sourceIds.length < 1) {
+      throw new BadRequestException('Seleccioná al menos un concepto para unificar');
+    }
+
+    const sources = await this.concepts.find({
+      where: { id: In(sourceIds), shopId },
+    });
+    if (sources.length !== sourceIds.length) {
+      throw new NotFoundException('Algún concepto no existe en este local');
+    }
+
+    let target: Concept | null = null;
+    const targetId = (dto.targetId || '').trim() || null;
+    if (targetId) {
+      target = await this.concepts.findOne({ where: { id: targetId, shopId } });
+      if (!target) {
+        throw new NotFoundException('Concepto destino no encontrado');
+      }
+      if (sourceIds.includes(target.id) && sourceIds.length === 1) {
+        throw new BadRequestException('Elegí al menos otro concepto además del destino');
+      }
+    } else {
+      const name = String(dto.targetName || '').trim();
+      if (!name) {
+        throw new BadRequestException('Ingresá el nombre del concepto unificado');
+      }
+      const clash = await this.concepts.findOne({ where: { shopId, name } });
+      if (clash && !sourceIds.includes(clash.id)) {
+        throw new BadRequestException('Ya existe un concepto con ese nombre');
+      }
+      if (clash && sourceIds.includes(clash.id)) {
+        target = clash;
+      } else {
+        const kind = dto.kind ?? sources[0]?.kind ?? ConceptKind.EXPENSE;
+        const categories =
+          dto.categories !== undefined
+            ? normalizeConceptCategories(dto.categories)
+            : normalizeConceptCategories(sources[0]?.categories) || inferConceptCategories(name);
+        target = await this.concepts.save(
+          this.concepts.create({
+            shopId,
+            name,
+            description: null,
+            kind,
+            categories,
+            validated: true,
+            active: true,
+          }),
+        );
+      }
+    }
+
+    const fromIds = sourceIds.filter((id) => id !== target!.id);
+    if (!fromIds.length) {
+      return {
+        ok: true,
+        target: this.toDto(target!),
+        reassigned: { payments: 0, movements: 0, closingExpenses: 0 },
+        removed: 0,
+      };
+    }
+
+    const payBefore = await this.concepts.query(
+      `SELECT COUNT(*) AS c FROM payments WHERE shopId = ? AND conceptId IN (${fromIds.map(() => '?').join(',')})`,
+      [shopId, ...fromIds],
+    );
+    const movBefore = await this.concepts.query(
+      `SELECT COUNT(*) AS c FROM movements WHERE shopId = ? AND conceptId IN (${fromIds.map(() => '?').join(',')})`,
+      [shopId, ...fromIds],
+    );
+    const ceBefore = await this.concepts.query(
+      `SELECT COUNT(*) AS c FROM closing_expenses ce
+       INNER JOIN cash_closings cc ON cc.id = ce.closingId
+       WHERE cc.shopId = ? AND ce.conceptId IN (${fromIds.map(() => '?').join(',')})`,
+      [shopId, ...fromIds],
+    );
+
+    await this.concepts.query(
+      `UPDATE payments SET conceptId = ? WHERE shopId = ? AND conceptId IN (${fromIds.map(() => '?').join(',')})`,
+      [target!.id, shopId, ...fromIds],
+    );
+    await this.concepts.query(
+      `UPDATE movements SET conceptId = ? WHERE shopId = ? AND conceptId IN (${fromIds.map(() => '?').join(',')})`,
+      [target!.id, shopId, ...fromIds],
+    );
+    await this.concepts.query(
+      `UPDATE closing_expenses ce
+       INNER JOIN cash_closings cc ON cc.id = ce.closingId
+       SET ce.conceptId = ?
+       WHERE cc.shopId = ? AND ce.conceptId IN (${fromIds.map(() => '?').join(',')})`,
+      [target!.id, shopId, ...fromIds],
+    );
+
+    let removed = 0;
+    for (const row of sources) {
+      if (row.id === target!.id) continue;
+      row.name = markDeletedUnique(row.name, row.id);
+      row.active = false;
+      await this.concepts.save(row);
+      await this.concepts.softRemove(row);
+      removed += 1;
+    }
+
+    const countOf = (rows: Array<{ c?: number | string }>) => Number(rows?.[0]?.c ?? 0) || 0;
+
+    return {
+      ok: true,
+      target: this.toDto(target!),
+      reassigned: {
+        payments: countOf(payBefore),
+        movements: countOf(movBefore),
+        closingExpenses: countOf(ceBefore),
+      },
+      removed,
+    };
   }
 
   async findByShop(shopId: string) {

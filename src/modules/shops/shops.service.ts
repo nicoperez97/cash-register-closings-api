@@ -516,6 +516,14 @@ export class ShopsService implements OnModuleInit {
     } catch {
       // columna ya existe
     }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN kitchenSectors JSON NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
     await this.ensureDefaultShifts();
   }
 

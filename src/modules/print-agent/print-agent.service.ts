@@ -30,7 +30,7 @@ import { PrintJob, PrintJobKind, PrintJobStatus } from '../../entities/print-job
 import { Shop } from '../../entities/shop.entity';
 import { ShopLiveService } from '../shop-live/shop-live.service';
 import { ShopsService } from '../shops/shops.service';
-import { normalizeShopMenus } from '../menu/menu-parse.util';
+import { normalizeShopMenus, normalizeKitchenSectors, normalizeKitchenSectorIds } from '../menu/menu-parse.util';
 import { normalizeOrderingExtras } from '../../common/shop-ordering';
 
 type AgentShop = Pick<Shop, 'id' | 'name' | 'slug' | 'timezone' | 'printAgentTokenHash'>;
@@ -337,9 +337,11 @@ export class PrintAgentService implements OnModuleInit {
     const full = await this.shops.findOne({ where: { id: shop.id } });
     if (!full) throw new NotFoundException('Local no encontrado');
     const menus = normalizeShopMenus(full.menu);
+    const kitchenSectors = normalizeKitchenSectors(full.kitchenSectors);
     return {
       shopId: shop.id,
       shopName: shop.name,
+      kitchenSectors,
       menus: menus.map((m) => ({
         id: m.id,
         title: m.title || m.slug || 'Menú',
@@ -347,10 +349,15 @@ export class PrintAgentService implements OnModuleInit {
           name: sec.name || 'Sin categoría',
           items: (sec.items ?? [])
             .filter((it) => it?.id && it.available !== false)
-            .map((it) => ({
-              id: String(it.id),
-              name: String(it.name || '').trim() || 'Ítem',
-            })),
+            .map((it) => {
+              const kitchenSectorIds = normalizeKitchenSectorIds(it);
+              return {
+                id: String(it.id),
+                name: String(it.name || '').trim() || 'Ítem',
+                kitchenSectorIds,
+                kitchenSectorId: kitchenSectorIds[0] ?? null,
+              };
+            }),
         })),
       })),
       extras: normalizeOrderingExtras(full.orderingExtras)
@@ -361,6 +368,59 @@ export class PrintAgentService implements OnModuleInit {
           menuItemIds: e.menuItemIds ?? [],
         })),
     };
+  }
+
+  /** Mapa menuItemId → kitchenSectorIds desde la carta del local. */
+  private kitchenSectorsByMenuItem(shop: { menu?: unknown }): Map<string, string[]> {
+    const map = new Map<string, string[]>();
+    for (const m of normalizeShopMenus(shop.menu)) {
+      for (const sec of m.sections ?? []) {
+        for (const it of sec.items ?? []) {
+          const id = String(it.id ?? '').trim();
+          const ids = normalizeKitchenSectorIds(it);
+          if (id && ids.length) map.set(id, ids);
+        }
+      }
+    }
+    return map;
+  }
+
+  private sectorNameById(shop: { kitchenSectors?: unknown }, sectorId: string | null | undefined) {
+    const sid = String(sectorId ?? '').trim();
+    if (!sid) return null;
+    const hit = normalizeKitchenSectors(shop.kitchenSectors).find((s) => s.id === sid);
+    return hit?.name ?? null;
+  }
+
+  private withKitchenSectorsOnItems<
+    T extends { menuItemId?: string | null; attachedToMenuItemId?: string | null },
+  >(
+    shop: { menu?: unknown; kitchenSectors?: unknown },
+    items: T[],
+  ): Array<
+    T & {
+      kitchenSectorIds: string[];
+      kitchenSectorNames: string[];
+      kitchenSectorId: string | null;
+      kitchenSectorName: string | null;
+    }
+  > {
+    const byItem = this.kitchenSectorsByMenuItem(shop);
+    return items.map((it) => {
+      const key =
+        String(it.attachedToMenuItemId ?? '').trim() || String(it.menuItemId ?? '').trim();
+      const kitchenSectorIds = (key && byItem.get(key)) || [];
+      const kitchenSectorNames = kitchenSectorIds
+        .map((sid) => this.sectorNameById(shop, sid))
+        .filter((n): n is string => !!n);
+      return {
+        ...it,
+        kitchenSectorIds,
+        kitchenSectorNames,
+        kitchenSectorId: kitchenSectorIds[0] ?? null,
+        kitchenSectorName: kitchenSectorNames[0] ?? null,
+      };
+    });
   }
 
   async listPendingJobs(shop: AgentShop) {
@@ -458,16 +518,23 @@ export class PrintAgentService implements OnModuleInit {
             : 'TAKE AWAY';
     const payment =
       order.paymentMethod === CustomerOrderPaymentMethod.TRANSFER ? 'Transferencia' : 'Efectivo';
-    const items = (order.items ?? []).map((it) => ({
-      menuItemId: it.menuItemId ?? null,
-      name: it.name,
-      qty: it.qty,
-      notes: it.notes ?? null,
-      kind: it.kind || 'ITEM',
-      removedIngredients: it.removedIngredients ?? [],
-      attachedToMenuItemId: it.attachedToMenuItemId ?? null,
-      extraId: it.extraId ?? null,
-    }));
+    const items = this.withKitchenSectorsOnItems(
+      shop,
+      (order.items ?? []).map((it) => ({
+        menuItemId: it.menuItemId ?? null,
+        name: it.name,
+        qty: it.qty,
+        notes: it.notes ?? null,
+        kind: it.kind || 'ITEM',
+        removedIngredients: it.removedIngredients ?? [],
+        attachedToMenuItemId: it.attachedToMenuItemId ?? null,
+        extraId: it.extraId ?? null,
+        isEntrada: !!it.isEntrada,
+        combinesWithNames: Array.isArray(it.combinesWithNames)
+          ? it.combinesWithNames.map((n) => String(n || '').trim()).filter(Boolean)
+          : [],
+      })),
+    );
     const phoneDigits = String(order.phone ?? '').replace(/\D/g, '');
     const phoneOk =
       phoneDigits.length >= 6 && !/^1+$/.test(phoneDigits) && phoneDigits !== '0000000000';
@@ -662,7 +729,14 @@ export class PrintAgentService implements OnModuleInit {
         discountAmount: Number(input.discountAmount) || 0,
         total: Number(input.total) || 0,
         promoBreakdown: input.promoBreakdown ?? null,
-        items: input.items,
+        items: this.withKitchenSectorsOnItems(
+          shop,
+          input.items as Array<{
+            menuItemId?: string | null;
+            attachedToMenuItemId?: string | null;
+            [k: string]: unknown;
+          }>,
+        ),
         createdAt: new Date().toISOString(),
         acceptedAt: null,
         tableLabel,

@@ -16,6 +16,7 @@ import { GeminiDocumentService } from '../ai/gemini-document.service';
 import {
   emptyShopMenu,
   menuHasItems,
+  normalizeKitchenSectors,
   normalizeRemovableIngredients,
   normalizeShopMenus,
   parseMenuFile,
@@ -117,6 +118,7 @@ export class MenuService {
       enabled: !!shop.menuEnabled,
       slug: shop.slug,
       menus: this.readMenus(shop).map((m) => this.withSafeSource(m, shopId)),
+      kitchenSectors: normalizeKitchenSectors(shop.kitchenSectors),
     };
   }
 
@@ -155,7 +157,11 @@ export class MenuService {
     return { promos: normalizeShopPromos(shop.promos) };
   }
 
-  async saveAdmin(user: AuthUser, shopId: string, body: { menus?: ShopMenu[] } | ShopMenu) {
+  async saveAdmin(
+    user: AuthUser,
+    shopId: string,
+    body: { menus?: ShopMenu[]; kitchenSectors?: Array<{ id?: string; name?: string; showEntradas?: boolean }> } | ShopMenu,
+  ) {
     this.shops.assertOrderingCatalogManage(user, shopId);
     const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
     if (!shop) throw new NotFoundException('Local no encontrado');
@@ -164,12 +170,20 @@ export class MenuService {
       previous.map((m) => m.sourceFile).filter((p): p is string => !!p),
     );
     const previousImages = this.collectItemImages(previous);
-    const menus = normalizeShopMenus(
-      body && typeof body === 'object' && Array.isArray((body as { menus?: ShopMenu[] }).menus)
-        ? body
-        : { menus: [body as ShopMenu] },
-    ).map((m) => this.withSafeSource(m, shopId));
+    const asStore = body && typeof body === 'object' && Array.isArray((body as { menus?: ShopMenu[] }).menus)
+      ? body
+      : { menus: [body as ShopMenu] };
+    const menus = normalizeShopMenus(asStore).map((m) => this.withSafeSource(m, shopId));
     shop.menu = { menus };
+    if (
+      body &&
+      typeof body === 'object' &&
+      Array.isArray((body as { kitchenSectors?: unknown }).kitchenSectors)
+    ) {
+      shop.kitchenSectors = normalizeKitchenSectors(
+        (body as { kitchenSectors: unknown }).kitchenSectors,
+      );
+    }
     await this.shopsRepo.save(shop);
     const keepFiles = new Set(menus.map((m) => m.sourceFile).filter((p): p is string => !!p));
     for (const file of previousFiles) {
@@ -179,7 +193,12 @@ export class MenuService {
     for (const file of previousImages) {
       if (!keepImages.has(file)) deleteUploadIfExists(file);
     }
-    return { enabled: !!shop.menuEnabled, slug: shop.slug, menus };
+    return {
+      enabled: !!shop.menuEnabled,
+      slug: shop.slug,
+      menus,
+      kitchenSectors: normalizeKitchenSectors(shop.kitchenSectors),
+    };
   }
 
   async parseUpload(user: AuthUser, shopId: string, file?: Express.Multer.File) {

@@ -14,6 +14,18 @@ export type ShopMenuItem = {
   imageUrl?: string | null;
   /** Ingredientes que el cliente puede pedir sin (ej. cebolla, tomate). */
   removableIngredients?: string[];
+  /** Sectores (comanda): ids del catálogo kitchenSectors del local. */
+  kitchenSectorIds?: string[];
+  /** @deprecated usar kitchenSectorIds */
+  kitchenSectorId?: string | null;
+};
+
+/** Sectores del local (Cocina, Pizzería, Bar…). */
+export type KitchenSector = {
+  id: string;
+  name: string;
+  /** En otras comandas del pedido, avisar en chico las entradas de este envío. */
+  showEntradas?: boolean;
 };
 
 export type ShopMenuSection = {
@@ -224,6 +236,52 @@ function newMenuItemId(): string {
   return `i_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+export function newKitchenSectorId(): string {
+  return `ks_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function normalizeKitchenSectors(raw: unknown): KitchenSector[] {
+  if (!Array.isArray(raw)) return [];
+  const out: KitchenSector[] = [];
+  const seen = new Set<string>();
+  for (const row of raw) {
+    const id = String((row as { id?: string })?.id ?? '').trim().slice(0, 40) || newKitchenSectorId();
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const name = String((row as { name?: string })?.name ?? '').trim().slice(0, 60);
+    if (!name) continue;
+    const showEntradas = !!(row as { showEntradas?: unknown })?.showEntradas;
+    out.push({ id, name, showEntradas });
+  }
+  return out;
+}
+
+/** Normaliza sectores del ítem; migra kitchenSectorId legacy → array. */
+export function normalizeKitchenSectorIds(raw: unknown): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (v: unknown) => {
+    const id = String(v ?? '').trim().slice(0, 40);
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    out.push(id);
+  };
+  if (Array.isArray(raw)) {
+    for (const v of raw) push(v);
+    return out;
+  }
+  if (raw && typeof raw === 'object') {
+    const obj = raw as { kitchenSectorIds?: unknown; kitchenSectorId?: unknown };
+    if (Array.isArray(obj.kitchenSectorIds)) {
+      for (const v of obj.kitchenSectorIds) push(v);
+    }
+    push(obj.kitchenSectorId);
+    return out;
+  }
+  push(raw);
+  return out;
+}
+
 export function normalizeShopMenu(raw?: ShopMenu | null): ShopMenu {
   const title = String(raw?.title ?? '').trim().slice(0, 80) || null;
   const note = String(raw?.note ?? '').trim().slice(0, 500) || null;
@@ -249,6 +307,7 @@ export function normalizeShopMenu(raw?: ShopMenu | null): ShopMenu {
         .trim()
         .replace(/\\/g, '/')
         .slice(0, 220) || null;
+      const kitchenSectorIds = normalizeKitchenSectorIds(it);
       items.push({
         id,
         name: itemName,
@@ -260,6 +319,7 @@ export function normalizeShopMenu(raw?: ShopMenu | null): ShopMenu {
         removableIngredients: normalizeRemovableIngredients(
           (it as { removableIngredients?: unknown })?.removableIngredients,
         ),
+        kitchenSectorIds,
       });
     }
     sections.push({ name, items });
