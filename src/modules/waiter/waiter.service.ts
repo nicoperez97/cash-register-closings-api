@@ -37,6 +37,7 @@ import {
   type WaiterCapProfile,
 } from '../../common/shop-ordering';
 import {
+  autoAssignPromosAtOpen,
   computeMultiPromoBreakdown,
   normalizeSessionPromos,
   normalizeShopPromos,
@@ -648,6 +649,20 @@ export class WaiterService implements OnModuleInit {
         active: true,
       }),
     );
+
+    const auto = autoAssignPromosAtOpen(
+      normalizeShopPromos(shop.promos),
+      new Date(),
+      shop.timezone,
+    );
+    if (auto.length) {
+      this.applySessionPromos(
+        row,
+        auto.map((p) => ({ promoId: p.id, maxCount: null })),
+      );
+      await this.sessions.save(row);
+    }
+
     return this.sessionDetail(shop, row);
   }
 
@@ -694,6 +709,8 @@ export class WaiterService implements OnModuleInit {
         qty: number;
         notes?: string | null;
         removedIngredients?: string[];
+        isEntrada?: boolean;
+        combinesWithNames?: string[];
       }>;
       extras?: Array<{
         extraId: string;
@@ -1350,9 +1367,11 @@ export class WaiterService implements OnModuleInit {
         extraId: it.extraId ?? null,
         promoId: it.promoId ?? null,
         promoBundleKey: it.promoBundleKey ?? null,
+        isEntrada: !!it.isEntrada,
       })),
     );
-    const code = orders.map((o) => o.code).filter(Boolean).join('+') || session.id.slice(0, 6);
+    // Ticket de mesa: sin códigos de cada envío (AB12+CD34… queda ilegible).
+    const code = '';
 
     try {
       await this.printAgent.enqueueTableSessionTicket(shop, {

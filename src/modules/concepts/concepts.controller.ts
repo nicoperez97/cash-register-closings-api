@@ -64,6 +64,34 @@ class UpdateConceptDto {
   @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
 }
 
+class UnifyConceptsDto {
+  @ApiProperty({ type: [String] })
+  @IsArray()
+  @IsString({ each: true })
+  sourceIds: string[];
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  targetId?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  targetName?: string | null;
+
+  @ApiPropertyOptional({ enum: ConceptKind })
+  @IsOptional()
+  @IsEnum(ConceptKind)
+  kind?: ConceptKind;
+
+  @ApiPropertyOptional({ enum: ConceptCategory, isArray: true })
+  @IsOptional()
+  @IsArray()
+  @IsEnum(ConceptCategory, { each: true })
+  categories?: ConceptCategory[];
+}
+
 @ApiTags('concepts')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'), PermissionsGuard)
@@ -155,6 +183,16 @@ export class ConceptsController {
     @Body() dto: CreateConceptDto,
   ) {
     return this.concepts.create(user, shopId, dto);
+  }
+
+  @Post('unify')
+  @RequirePermissions('concepts.manage')
+  unify(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: UnifyConceptsDto,
+  ) {
+    return this.concepts.unify(user, shopId, dto);
   }
 
   @Patch(':id')

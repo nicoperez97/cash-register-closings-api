@@ -543,6 +543,8 @@ export class CustomerOrdersService implements OnModuleInit {
         qty: number;
         notes?: string | null;
         removedIngredients?: string[];
+        isEntrada?: boolean;
+        combinesWithNames?: string[];
       }>;
       extras?: Array<{
         extraId: string;
@@ -715,6 +717,15 @@ export class CustomerOrdersService implements OnModuleInit {
       const removedIngredients = normalizeRemovableIngredients(row.removedIngredients).filter(
         (name) => allowedRemoved.has(name.toLowerCase()),
       );
+      const combinesWithNames = Array.isArray(row.combinesWithNames)
+        ? [
+            ...new Set(
+              row.combinesWithNames
+                .map((n) => String(n ?? '').trim().slice(0, 120))
+                .filter(Boolean),
+            ),
+          ].slice(0, 24)
+        : [];
       lines.push({
         menuItemId: String(found.id),
         name: found.name,
@@ -723,6 +734,8 @@ export class CustomerOrdersService implements OnModuleInit {
         notes: String(row.notes ?? '').trim().slice(0, 300) || null,
         kind: 'ITEM',
         removedIngredients: removedIngredients.length ? removedIngredients : undefined,
+        isEntrada: !!row.isEntrada,
+        combinesWithNames: combinesWithNames.length ? combinesWithNames : undefined,
       });
     }
 

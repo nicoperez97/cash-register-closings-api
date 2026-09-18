@@ -41,6 +41,10 @@ export type CustomerOrderLine = {
   promoBundleKey?: string | null;
   /** Ingredientes pedidos sin (subset de removableIngredients del ítem). */
   removedIngredients?: string[];
+  /** Marca de entrada (sale a cocina destacada). */
+  isEntrada?: boolean;
+  /** Otros platos del envío con los que combina (texto en comanda). */
+  combinesWithNames?: string[];
 };
 
 @Entity({ name: 'customer_orders' })

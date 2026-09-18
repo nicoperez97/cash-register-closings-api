@@ -212,6 +212,10 @@ export class Shop extends BaseEntity {
   @Column({ type: 'simple-json', nullable: true })
   promos?: ShopPromo[] | null;
 
+  /** Sectores (Cocina, Pizzería…) para ruteo de comandas. */
+  @Column({ type: 'simple-json', nullable: true })
+  kitchenSectors?: Array<{ id: string; name: string; showEntradas?: boolean }> | null;
+
   /** Cartas publicadas (una o varias: menú, vinos, etc.). */
   @Column({ type: 'simple-json', nullable: true })
   menu?: {
@@ -230,6 +234,8 @@ export class Shop extends BaseEntity {
           priceLabel?: string | null;
           available?: boolean;
           imageUrl?: string | null;
+          kitchenSectorIds?: string[];
+          kitchenSectorId?: string | null;
         }>;
       }>;
     }>;

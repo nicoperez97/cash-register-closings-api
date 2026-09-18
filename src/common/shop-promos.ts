@@ -22,8 +22,10 @@ export type ShopPromo = {
   items: ShopPromoItem[];
   /** Si no hay composición: nombre de la línea de cocina. */
   specialName?: string | null;
-  /** Ventanas por día; null = siempre. */
+  /** Ventanas por día de semana; null/vacío = sin límite semanal. */
   schedule?: OrderingHoursByWeekday | null;
+  /** Fechas puntuales YYYY-MM-DD (modo “solo hoy” / fechas). */
+  validDates?: string[] | null;
 };
 
 /** Promo asignada a una mesa (cupo null = ilimitado). */
@@ -34,6 +36,43 @@ export type SessionPromoAssignment = {
 
 function newPromoId(): string {
   return `pr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+export function normalizePromoValidDates(raw: unknown): string[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const row of raw.slice(0, 60)) {
+    const d = String(row ?? '').trim().slice(0, 10);
+    if (!DATE_RE.test(d) || seen.has(d)) continue;
+    seen.add(d);
+    out.push(d);
+  }
+  return out.length ? out : null;
+}
+
+/** Fecha local YYYY-MM-DD en la zona del local. */
+export function localDateKey(now: Date, timezone?: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone || undefined,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(now);
+    const y = parts.find((p) => p.type === 'year')?.value ?? '';
+    const m = parts.find((p) => p.type === 'month')?.value ?? '';
+    const d = parts.find((p) => p.type === 'day')?.value ?? '';
+    if (y && m && d) return `${y}-${m}-${d}`;
+  } catch {
+    // fall through
+  }
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
 }
 
 export function normalizeShopPromos(raw: unknown): ShopPromo[] {
@@ -78,6 +117,7 @@ export function normalizeShopPromos(raw: unknown): ShopPromo[] {
       items,
       specialName: items.length ? null : specialName,
       schedule: normalizeOrderingHoursByWeekday(r.schedule ?? null),
+      validDates: normalizePromoValidDates(r.validDates ?? null),
     });
   }
   return out;
@@ -119,8 +159,40 @@ export function isPromoInSchedule(
   now = new Date(),
   timezone?: string,
 ): boolean {
-  if (!promo.schedule || !Object.keys(promo.schedule).length) return true;
+  const dates = promo.validDates?.filter(Boolean) ?? [];
+  const hasSchedule = !!(promo.schedule && Object.keys(promo.schedule).length);
+
+  if (dates.length) {
+    const today = localDateKey(now, timezone);
+    if (!dates.includes(today)) return false;
+    // Fechas puntuales + schedule → respetar ventana horaria del día.
+    if (hasSchedule) return isOrderingChannelOpenNow(promo.schedule, now, timezone);
+    return true; // todo el día
+  }
+
+  if (!hasSchedule) return true;
   return isOrderingChannelOpenNow(promo.schedule, now, timezone);
+}
+
+/** Tiene vigencia acotada (días / fechas) → candidata a autoasignar al abrir mesa. */
+export function promoHasTimeRestriction(promo: ShopPromo): boolean {
+  if (promo.validDates?.length) return true;
+  return !!(promo.schedule && Object.keys(promo.schedule).length);
+}
+
+/** Promos de mesa vigentes ahora, para autoasignar al abrir. */
+export function autoAssignPromosAtOpen(
+  promos: ShopPromo[],
+  now = new Date(),
+  timezone?: string,
+): ShopPromo[] {
+  return promos.filter(
+    (p) =>
+      p.available &&
+      p.tableMatchable &&
+      promoHasTimeRestriction(p) &&
+      isPromoInSchedule(p, now, timezone),
+  );
 }
 
 export type PromoMatchLine = {
@@ -309,11 +381,8 @@ export function computePromoBreakdown(
 export function computeMultiPromoBreakdown(
   lines: PromoMatchLine[],
   assignments: Array<{ promo: ShopPromo; maxCount: number | null }>,
-  opts?: { now?: Date; timezone?: string },
+  _opts?: { now?: Date; timezone?: string },
 ): PromoBreakdown | null {
-  const now = opts?.now ?? new Date();
-  const timezone = opts?.timezone;
-
   const soldPromoTotal = money2(
     lines
       .filter((l) => (l.kind || 'ITEM') === 'PROMO')
@@ -338,7 +407,7 @@ export function computeMultiPromoBreakdown(
   for (const a of assignments) {
     const promo = a.promo;
     if (!promo?.available || !promo.tableMatchable) continue;
-    if (!isPromoInSchedule(promo, now, timezone)) continue;
+    // Ya asignada a la sesión: no cortar packs si la ventana expiró después de abrir.
     if (!promo.items?.length) continue;
     const hit = applyOnePromoToPool(remainingByItem, promo, a.maxCount);
     if (hit) applied.push(hit);
