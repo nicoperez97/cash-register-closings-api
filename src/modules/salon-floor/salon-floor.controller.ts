@@ -17,7 +17,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
-import { AuthUser, CurrentUser, RequirePermissions } from '../../common/decorators';
+import { AuthUser, CurrentUser, RequireAnyPermissions, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { SalonArea } from '../../entities/salon-table.entity';
 import { SalonFloorService } from './salon-floor.service';
@@ -257,13 +257,13 @@ export class SalonFloorController {
   constructor(private readonly salon: SalonFloorService) {}
 
   @Get()
-  @RequirePermissions('reservations.read')
+  @RequireAnyPermissions('salonTables.read', 'diagrama.read', 'salonRules.read')
   getFloor(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
     return this.salon.getFloor(user, shopId);
   }
 
   @Post('sectors')
-  @RequirePermissions('reservations.manage')
+  @RequirePermissions('salonTables.manage')
   createSector(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -273,7 +273,7 @@ export class SalonFloorController {
   }
 
   @Patch('sectors/:id')
-  @RequirePermissions('reservations.manage')
+  @RequirePermissions('salonTables.manage')
   updateSector(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -284,7 +284,7 @@ export class SalonFloorController {
   }
 
   @Delete('sectors/:id')
-  @RequirePermissions('reservations.manage')
+  @RequirePermissions('salonTables.manage')
   removeSector(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -294,7 +294,7 @@ export class SalonFloorController {
   }
 
   @Put('sectors/:id/map')
-  @RequirePermissions('reservations.manage')
+  @RequirePermissions('salonTables.manage')
   saveSectorMap(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -305,7 +305,7 @@ export class SalonFloorController {
   }
 
   @Post('tables')
-  @RequirePermissions('reservations.manage')
+  @RequirePermissions('salonTables.manage')
   createTable(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -315,7 +315,7 @@ export class SalonFloorController {
   }
 
   @Post('tables/bulk')
-  @RequirePermissions('reservations.manage')
+  @RequirePermissions('salonTables.manage')
   createTablesBulk(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -325,7 +325,7 @@ export class SalonFloorController {
   }
 
   @Patch('tables/:id')
-  @RequirePermissions('reservations.manage')
+  @RequirePermissions('salonTables.manage')
   updateTable(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -336,7 +336,7 @@ export class SalonFloorController {
   }
 
   @Delete('tables/:id')
-  @RequirePermissions('reservations.manage')
+  @RequirePermissions('salonTables.manage')
   removeTable(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -346,7 +346,7 @@ export class SalonFloorController {
   }
 
   @Post('from-reservations')
-  @RequirePermissions('reservations.manage')
+  @RequireAnyPermissions('diagrama.manage', 'salonRules.manage')
   applyFromReservations(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -358,7 +358,7 @@ export class SalonFloorController {
   }
 
   @Put('rules')
-  @RequirePermissions('reservations.manage')
+  @RequirePermissions('salonRules.manage')
   replaceRules(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
