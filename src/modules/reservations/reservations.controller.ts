@@ -28,7 +28,7 @@ import {
   ValidateIf,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { CurrentUser, AuthUser, RequirePermissions, Public } from '../../common/decorators';
+import { CurrentUser, AuthUser, RequireAnyPermissions, RequirePermissions, Public } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { ReservationArea, ReservationStatus } from '../../entities/reservation.entity';
 import { WaitingListStatus } from '../../entities/waiting-list-entry.entity';
@@ -471,7 +471,7 @@ export class ReservationsController {
   }
 
   @Get('reservation-public-form')
-  @RequirePermissions('reservations.read')
+  @RequireAnyPermissions('salonHours.read', 'reservations.read')
   getReservationPublicForm(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -480,7 +480,7 @@ export class ReservationsController {
   }
 
   @Put('reservation-public-form')
-  @RequirePermissions('reservations.manage')
+  @RequireAnyPermissions('salonHours.manage', 'reservations.manage')
   saveReservationPublicForm(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,

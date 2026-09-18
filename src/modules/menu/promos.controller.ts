@@ -18,13 +18,18 @@ export class PromosController {
   constructor(private readonly menus: MenuService) {}
 
   @Get()
-  @RequireAnyPermissions('shops.manage', 'orderingCatalog.manage', 'customerOrders.manage')
+  @RequireAnyPermissions(
+    'shops.manage',
+    'orderingCatalog.manage',
+    'promos.manage',
+    'customerOrders.manage',
+  )
   get(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
     return this.menus.getPromosAdmin(user, shopId);
   }
 
   @Put()
-  @RequireAnyPermissions('shops.manage', 'orderingCatalog.manage')
+  @RequireAnyPermissions('shops.manage', 'orderingCatalog.manage', 'promos.manage')
   save(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,

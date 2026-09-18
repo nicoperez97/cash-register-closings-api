@@ -4,7 +4,7 @@ import { AuthGuard } from '@nestjs/passport';
 import type { Response } from 'express';
 import { ReportsService } from './reports.service';
 import { UserActivityService } from './user-activity.service';
-import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
+import { CurrentUser, AuthUser, RequireAnyPermissions, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { parseClosingFilters } from '../closings/closing-filters';
 
@@ -69,7 +69,7 @@ export class ReportsController {
   }
 
   @Get('expenses-by-concept')
-  @RequirePermissions('reports.view')
+  @RequireAnyPermissions('reportsConcepts.read', 'reports.view')
   expensesByConcept(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -79,7 +79,7 @@ export class ReportsController {
   }
 
   @Get('concepts/export.xlsx')
-  @RequirePermissions('reports.export')
+  @RequireAnyPermissions('reportsConcepts.read', 'reports.export')
   async conceptsExport(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -100,7 +100,7 @@ export class ReportsController {
   }
 
   @Get('concepts')
-  @RequirePermissions('reports.view')
+  @RequireAnyPermissions('reportsConcepts.read', 'reports.view')
   concepts(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,

@@ -6,12 +6,19 @@ export type ModuleKey =
   | 'cashWithdrawals'
   | 'settlements'
   | 'reports'
+  | 'reportsConcepts'
+  | 'reportsProducts'
+  | 'reportsStats'
   | 'movements'
   | 'expenses'
   | 'accountTransfers'
   | 'partnerSplits'
+  | 'splits'
+  | 'accountBalances'
+  | 'transactions'
   | 'incomes'
   | 'attendance'
+  | 'productionAttendance'
   | 'employees'
   | 'candidates'
   | 'payroll'
@@ -19,8 +26,15 @@ export type ModuleKey =
   | 'accounts'
   | 'concepts'
   | 'reservations'
+  | 'salonTables'
+  | 'diagrama'
+  | 'salonRules'
+  | 'salonHours'
   | 'waitingList'
-  | 'payments'
+  | 'paymentsSuppliers'
+  | 'paymentsServices'
+  | 'paymentsEmployees'
+  | 'paymentsPartners'
   | 'suppliers'
   | 'services'
   | 'stock'
@@ -29,6 +43,7 @@ export type ModuleKey =
   | 'orders'
   | 'customerOrders'
   | 'orderingCatalog'
+  | 'promos'
   | 'comanda'
   | 'integrations'
   | 'tips'
@@ -97,11 +112,35 @@ export const MODULE_DEFS: ModuleDef[] = [
   },
   {
     key: 'reports',
-    label: 'Reportes',
+    label: 'Reportes · Cierres',
     levels: [
       { value: 'none', label: 'Ninguno' },
       { value: 'read', label: 'Ver' },
       { value: 'export', label: 'Exportar' },
+    ],
+  },
+  {
+    key: 'reportsConcepts',
+    label: 'Reportes · Conceptos',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+    ],
+  },
+  {
+    key: 'reportsProducts',
+    label: 'Reportes · Ventas POS',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+    ],
+  },
+  {
+    key: 'reportsStats',
+    label: 'Reportes · Estadísticas',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
     ],
   },
   {
@@ -132,6 +171,31 @@ export const MODULE_DEFS: ModuleDef[] = [
     ],
   },
   {
+    key: 'splits',
+    label: 'Divisiones',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
+    key: 'accountBalances',
+    label: 'Saldos',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+    ],
+  },
+  {
+    key: 'transactions',
+    label: 'Transacciones',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+    ],
+  },
+  {
     key: 'incomes',
     label: 'Ingresos',
     levels: [
@@ -142,10 +206,19 @@ export const MODULE_DEFS: ModuleDef[] = [
   },
   {
     key: 'attendance',
-    label: 'Asistencia',
+    label: 'Presentismo de salón',
     levels: [
       { value: 'none', label: 'Ninguno' },
       { value: 'self', label: 'Solo mis horas (producción)' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
+    key: 'productionAttendance',
+    label: 'Horas de cocina',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
       { value: 'read', label: 'Ver' },
       { value: 'manage', label: 'Gestionar' },
     ],
@@ -212,6 +285,42 @@ export const MODULE_DEFS: ModuleDef[] = [
     ],
   },
   {
+    key: 'salonTables',
+    label: 'Mesas',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
+    key: 'diagrama',
+    label: 'Diagrama',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
+    key: 'salonRules',
+    label: 'Reglas',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
+    key: 'salonHours',
+    label: 'Horarios',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
     key: 'waitingList',
     label: 'Lista de espera',
     levels: [
@@ -221,8 +330,35 @@ export const MODULE_DEFS: ModuleDef[] = [
     ],
   },
   {
-    key: 'payments',
-    label: 'Pagos',
+    key: 'paymentsSuppliers',
+    label: 'Pagos · Proveedores',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
+    key: 'paymentsServices',
+    label: 'Pagos · Servicios',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
+    key: 'paymentsEmployees',
+    label: 'Pagos · Empleados',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
+    key: 'paymentsPartners',
+    label: 'Pagos · Socios',
     levels: [
       { value: 'none', label: 'Ninguno' },
       { value: 'read', label: 'Ver' },
@@ -294,7 +430,15 @@ export const MODULE_DEFS: ModuleDef[] = [
   },
   {
     key: 'orderingCatalog',
-    label: 'Catálogo pedidos online',
+    label: 'Carta',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'manage', label: 'Gestionar' },
+    ],
+  },
+  {
+    key: 'promos',
+    label: 'Promos',
     levels: [
       { value: 'none', label: 'Ninguno' },
       { value: 'manage', label: 'Gestionar' },
@@ -499,6 +643,9 @@ export function expandModulePermissions(
       add(set, 'reports.view', 'reports.export');
       break;
   }
+  if (modules.reportsConcepts === 'read') add(set, 'reportsConcepts.read');
+  if (modules.reportsProducts === 'read') add(set, 'reportsProducts.read');
+  if (modules.reportsStats === 'read') add(set, 'reportsStats.read');
 
   const pair = (
     key: ModuleKey,
@@ -525,6 +672,9 @@ export function expandModulePermissions(
   const splitLevel = modules.partnerSplits || transfersLevel;
   if (splitLevel === 'read') add(set, 'partnerSplits.read');
   if (splitLevel === 'manage') add(set, 'partnerSplits.read', 'partnerSplits.manage');
+  pair('splits', 'splits.read', 'splits.manage');
+  if (modules.accountBalances === 'read') add(set, 'accountBalances.read');
+  if (modules.transactions === 'read') add(set, 'transactions.read');
   const incomesLevel = modules.incomes || expensesLevel;
   if (incomesLevel === 'read') add(set, 'incomes.read');
   if (incomesLevel === 'manage') add(set, 'incomes.read', 'incomes.manage');
@@ -545,13 +695,33 @@ export function expandModulePermissions(
       add(set, 'attendance.read', 'attendance.manage');
       break;
   }
+  pair('productionAttendance', 'productionAttendance.read', 'productionAttendance.manage');
   pair('employees', 'employees.read', 'employees.manage');
   pair('candidates', 'candidates.read', 'candidates.manage');
   pair('payroll', 'payroll.read', 'payroll.manage');
   pair('commissions', 'commissions.read', 'commissions.manage');
   pair('reservations', 'reservations.read', 'reservations.manage');
+  pair('salonTables', 'salonTables.read', 'salonTables.manage');
+  pair('diagrama', 'diagrama.read', 'diagrama.manage');
+  pair('salonRules', 'salonRules.read', 'salonRules.manage');
+  pair('salonHours', 'salonHours.read', 'salonHours.manage');
   pair('waitingList', 'waitingList.read', 'waitingList.manage');
-  pair('payments', 'payments.read', 'payments.manage');
+  pair('paymentsSuppliers', 'paymentsSuppliers.read', 'paymentsSuppliers.manage');
+  pair('paymentsServices', 'paymentsServices.read', 'paymentsServices.manage');
+  pair('paymentsEmployees', 'paymentsEmployees.read', 'paymentsEmployees.manage');
+  pair('paymentsPartners', 'paymentsPartners.read', 'paymentsPartners.manage');
+  {
+    const payLevels = [
+      modules.paymentsSuppliers,
+      modules.paymentsServices,
+      modules.paymentsEmployees,
+      modules.paymentsPartners,
+      // legacy key
+      (modules as Record<string, string>).payments,
+    ];
+    if (payLevels.some((l) => l === 'read' || l === 'manage')) add(set, 'payments.read');
+    if (payLevels.some((l) => l === 'manage')) add(set, 'payments.manage');
+  }
   pair('suppliers', 'suppliers.read', 'suppliers.manage');
   pair('services', 'services.read', 'services.manage');
   pair('stock', 'stock.read', 'stock.manage');
@@ -561,6 +731,7 @@ export function expandModulePermissions(
   pair('customerOrders', 'customerOrders.read', 'customerOrders.manage');
   pair('integrations', 'integrations.read', 'integrations.manage');
   if (modules.orderingCatalog === 'manage') add(set, 'orderingCatalog.manage');
+  if (modules.promos === 'manage') add(set, 'promos.manage');
   if (modules.comanda === 'manage') add(set, 'comanda.manage');
   switch (modules.tips) {
     case 'read':
@@ -620,10 +791,23 @@ export function expandModulePermissions(
     );
   }
   // Quien gestiona pagos puede elegir / crear proveedores en el formulario.
-  if (modules.payments === 'manage') {
+  if (
+    modules.paymentsSuppliers === 'manage' ||
+    modules.paymentsServices === 'manage' ||
+    modules.paymentsEmployees === 'manage' ||
+    modules.paymentsPartners === 'manage' ||
+    (modules as Record<string, string>).payments === 'manage'
+  ) {
     add(set, 'suppliers.read', 'suppliers.manage', 'services.read', 'services.manage');
+  } else if (
+    modules.paymentsSuppliers === 'read' ||
+    modules.paymentsServices === 'read' ||
+    modules.paymentsEmployees === 'read' ||
+    modules.paymentsPartners === 'read' ||
+    (modules as Record<string, string>).payments === 'read'
+  ) {
+    add(set, 'suppliers.read', 'services.read');
   }
-  if (modules.payments === 'read') add(set, 'suppliers.read', 'services.read');
 
   if (modules.accounts === 'manage') {
     add(set, 'accounts.manage', 'expenses.read', 'accountTransfers.read', 'incomes.read', 'movements.read');
@@ -683,18 +867,76 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
     cashWithdrawals: level('cashWithdrawals.read', 'cashWithdrawals.manage'),
     settlements: level('settlements.read', 'settlements.manage'),
     reports: reports(),
+    reportsConcepts: has('reportsConcepts.read') || has('reports.view') ? 'read' : 'none',
+    reportsProducts: has('reportsProducts.read') || has('reports.view') ? 'read' : 'none',
+    reportsStats: has('reportsStats.read') || has('reports.view') ? 'read' : 'none',
     expenses: level('expenses.read', 'expenses.manage'),
     accountTransfers: level('accountTransfers.read', 'accountTransfers.manage'),
     partnerSplits: level('partnerSplits.read', 'partnerSplits.manage'),
+    splits:
+      level('splits.read', 'splits.manage') !== 'none'
+        ? level('splits.read', 'splits.manage')
+        : level('partnerSplits.read', 'partnerSplits.manage'),
+    accountBalances:
+      has('accountBalances.read') ||
+      has('expenses.read') ||
+      has('incomes.read') ||
+      has('accountTransfers.read')
+        ? 'read'
+        : 'none',
+    transactions:
+      has('transactions.read') ||
+      has('expenses.read') ||
+      has('incomes.read') ||
+      has('accountTransfers.read')
+        ? 'read'
+        : 'none',
     incomes: level('incomes.read', 'incomes.manage'),
     attendance: attendance(),
+    productionAttendance:
+      level('productionAttendance.read', 'productionAttendance.manage') !== 'none'
+        ? level('productionAttendance.read', 'productionAttendance.manage')
+        : attendance() === 'self'
+          ? 'none'
+          : attendance(),
     employees: level('employees.read', 'employees.manage'),
     candidates: level('candidates.read', 'candidates.manage'),
     payroll: level('payroll.read', 'payroll.manage'),
     commissions: level('commissions.read', 'commissions.manage'),
     reservations: level('reservations.read', 'reservations.manage'),
+    salonTables: level('salonTables.read', 'salonTables.manage'),
+    diagrama: level('diagrama.read', 'diagrama.manage'),
+    salonRules: level('salonRules.read', 'salonRules.manage'),
+    salonHours: level('salonHours.read', 'salonHours.manage'),
     waitingList: level('waitingList.read', 'waitingList.manage'),
-    payments: level('payments.read', 'payments.manage'),
+    paymentsSuppliers: (() => {
+      const l = level('paymentsSuppliers.read', 'paymentsSuppliers.manage');
+      if (l !== 'none') return l;
+      if (has('payments.manage')) return 'manage';
+      if (has('payments.read')) return 'read';
+      return 'none';
+    })(),
+    paymentsServices: (() => {
+      const l = level('paymentsServices.read', 'paymentsServices.manage');
+      if (l !== 'none') return l;
+      if (has('payments.manage')) return 'manage';
+      if (has('payments.read')) return 'read';
+      return 'none';
+    })(),
+    paymentsEmployees: (() => {
+      const l = level('paymentsEmployees.read', 'paymentsEmployees.manage');
+      if (l !== 'none') return l;
+      if (has('payments.manage')) return 'manage';
+      if (has('payments.read')) return 'read';
+      return 'none';
+    })(),
+    paymentsPartners: (() => {
+      const l = level('paymentsPartners.read', 'paymentsPartners.manage');
+      if (l !== 'none') return l;
+      if (has('payments.manage')) return 'manage';
+      if (has('payments.read')) return 'read';
+      return 'none';
+    })(),
     suppliers: level('suppliers.read', 'suppliers.manage'),
     services: level('services.read', 'services.manage'),
     stock: level('stock.read', 'stock.manage'),
@@ -703,6 +945,7 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
     orders: level('orders.read', 'orders.manage'),
     customerOrders: level('customerOrders.read', 'customerOrders.manage'),
     orderingCatalog: has('orderingCatalog.manage') ? 'manage' : 'none',
+    promos: has('promos.manage') || has('orderingCatalog.manage') ? 'manage' : 'none',
     comanda: has('comanda.manage') ? 'manage' : 'none',
     integrations: level('integrations.read', 'integrations.manage'),
     tips: (() => {
@@ -782,6 +1025,31 @@ export function sanitizeModulePermissions(
   ) {
     // Migración soft al guardar: Local/POS antiguo incluía config del local.
     rawInput.shopConfig = rawInput.shop;
+  }
+  // Legacy: un solo módulo "salon" → Mesas / Diagrama / Reglas / Horarios.
+  const legacySalon = rawInput.salon;
+  if (legacySalon && legacySalon !== 'none') {
+    for (const key of ['salonTables', 'diagrama', 'salonRules', 'salonHours'] as const) {
+      if (!Object.prototype.hasOwnProperty.call(rawInput, key) || rawInput[key] === 'none') {
+        rawInput[key] = legacySalon;
+      }
+    }
+    delete rawInput.salon;
+  }
+  // Legacy: un solo "payments" → cuatro tipos.
+  const legacyPayments = rawInput.payments;
+  if (legacyPayments && legacyPayments !== 'none') {
+    for (const key of [
+      'paymentsSuppliers',
+      'paymentsServices',
+      'paymentsEmployees',
+      'paymentsPartners',
+    ] as const) {
+      if (!Object.prototype.hasOwnProperty.call(rawInput, key) || rawInput[key] === 'none') {
+        rawInput[key] = legacyPayments;
+      }
+    }
+    delete rawInput.payments;
   }
   const out: ModulePermissionsMap = {};
   for (const def of MODULE_DEFS) {

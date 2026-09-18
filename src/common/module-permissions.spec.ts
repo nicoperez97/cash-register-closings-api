@@ -30,12 +30,21 @@ describe('expandModulePermissions', () => {
     );
   });
 
-  it('reservations-only: no incluye waitingList', () => {
+  it('reservations-only: no incluye waitingList ni mesas/diagrama', () => {
     const perms = expandModulePermissions({ reservations: 'manage' });
     expect(perms).toEqual(
       expect.arrayContaining(['reservations.read', 'reservations.manage']),
     );
     expect(perms).not.toContain('waitingList.read');
+    expect(perms).not.toContain('salonTables.read');
+    expect(perms).not.toContain('diagrama.read');
+  });
+
+  it('mesas-only: no incluye diagrama ni reservas', () => {
+    const perms = expandModulePermissions({ salonTables: 'manage' });
+    expect(perms).toEqual(expect.arrayContaining(['salonTables.read', 'salonTables.manage']));
+    expect(perms).not.toContain('diagrama.read');
+    expect(perms).not.toContain('reservations.read');
   });
 
   it('mapa vacío explícito → sin permisos', () => {
