@@ -5,6 +5,7 @@ import {
   Headers,
   Param,
   Post,
+  Query,
   Res,
   UploadedFile,
   UseGuards,
@@ -73,6 +74,38 @@ export class PrintAgentController {
     return this.service
       .resolveShopFromToken(authorization)
       .then((shop) => this.service.enqueueTest(shop));
+  }
+
+  @Public()
+  @Get('update')
+  update(
+    @Headers('authorization') authorization?: string,
+    @Query('os') os?: string,
+  ) {
+    return this.service
+      .resolveShopFromToken(authorization)
+      .then(() => this.service.getAgentUpdate(os));
+  }
+
+  @Public()
+  @Get('update/download')
+  async downloadUpdate(
+    @Res() res: Response,
+    @Headers('authorization') authorization?: string,
+    @Query('os') os?: string,
+  ) {
+    await this.service.resolveShopFromToken(authorization);
+    const file = this.service.downloadInstallerForAgent(os);
+    if (file.kind === 'url') {
+      res.redirect(302, file.url);
+      return;
+    }
+    res.setHeader('Content-Type', file.contentType);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${file.fileName.replace(/["\\\r\n]/g, '_')}"`,
+    );
+    res.send(file.buffer);
   }
 }
 

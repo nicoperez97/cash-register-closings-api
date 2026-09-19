@@ -130,3 +130,26 @@ export const EXPENSE_CATEGORY_TO_CONCEPT: Record<string, string> = {
   MARKETING: 'Marketing',
   COMMISSIONS: 'Comisiones empleados',
 };
+
+function accountNameKey(name: string): string {
+  return name
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+/** Cuenta física de caja (código EFECTIVO / nombre Efectivo Caja), no el depósito del cierre. */
+export function findCashDrawerAccount<
+  T extends { name: string; code?: string | null; active?: boolean | number | null },
+>(accounts: T[]): T | null {
+  const usable = accounts.filter(
+    (a) => a.active === undefined || a.active === null || !!a.active,
+  );
+  const pool = usable.length ? usable : accounts;
+  return (
+    pool.find((a) => String(a.code ?? '').toUpperCase() === 'EFECTIVO') ??
+    pool.find((a) => accountNameKey(a.name) === 'efectivo caja') ??
+    null
+  );
+}

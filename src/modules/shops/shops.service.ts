@@ -359,6 +359,14 @@ export class ShopsService implements OnModuleInit {
     try {
       await this.shops.query(`
         ALTER TABLE shops
+          ADD COLUMN cashWithdrawalConceptId VARCHAR(36) NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
           ADD COLUMN navConfig JSON NULL
       `);
     } catch {
@@ -843,6 +851,7 @@ export class ShopsService implements OnModuleInit {
         emailNotificationUserIds: this.normalizeStringList(dto.emailNotificationUserIds),
         emailMessageTemplates: normalizeEmailMessageTemplates(dto.emailMessageTemplates),
         salesSystemId: dto.salesSystemId ?? null,
+        cashWithdrawalConceptId: dto.cashWithdrawalConceptId ?? null,
         posPaymentMap: dto.posPaymentMap ?? null,
         posnets: this.normalizePosnets(dto.posnets),
         paymentConceptCategories: dto.paymentConceptCategories
@@ -1034,6 +1043,9 @@ export class ShopsService implements OnModuleInit {
     }
     if (dto.salesSystemId !== undefined) {
       shop.salesSystemId = dto.salesSystemId || null;
+    }
+    if (dto.cashWithdrawalConceptId !== undefined) {
+      shop.cashWithdrawalConceptId = dto.cashWithdrawalConceptId || null;
     }
     if (dto.posPaymentMap !== undefined) {
       shop.posPaymentMap = dto.posPaymentMap;
@@ -1620,6 +1632,7 @@ export class ShopsService implements OnModuleInit {
           ? s.emailMessageTemplates
           : null,
       salesSystemId: s.salesSystemId ?? null,
+      cashWithdrawalConceptId: s.cashWithdrawalConceptId ?? null,
       posPaymentMap: s.posPaymentMap ?? null,
       posnets: s.posnets ?? [],
       paymentConceptCategories: normalizePaymentConceptCategories(s.paymentConceptCategories),

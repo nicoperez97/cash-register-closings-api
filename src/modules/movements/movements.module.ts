@@ -10,6 +10,8 @@ import { Employee } from '../../entities/employee.entity';
 import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { Payment } from '../../entities/payment.entity';
+import { Shop } from '../../entities/shop.entity';
+import { CashPendingWithdrawal } from '../../entities/cash-pending-withdrawal.entity';
 import { AccountsModule } from '../accounts/accounts.module';
 import { ShopsModule } from '../shops/shops.module';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -31,6 +33,8 @@ import { MovementsExcelImportService } from './movements-excel-import.service';
       UserShop,
       LedgerAccountUser,
       Payment,
+      Shop,
+      CashPendingWithdrawal,
     ]),
     ShopsModule,
     AccountsModule,

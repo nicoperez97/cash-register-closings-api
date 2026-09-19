@@ -5,13 +5,17 @@ import { CashClosing } from '../../entities/cash-closing.entity';
 import { Movement } from '../../entities/movement.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { Concept } from '../../entities/concept.entity';
+import { Shop } from '../../entities/shop.entity';
+import { CashPendingWithdrawal } from '../../entities/cash-pending-withdrawal.entity';
 import {
   LinkedPaymentMethod,
   ClosingSourceKind,
   LedgerAccountType,
+  CashPendingWithdrawalStatus,
 } from '../../common/enums';
-import { EXPENSE_CATEGORY_TO_CONCEPT } from '../../common/catalog-seed';
+import { EXPENSE_CATEGORY_TO_CONCEPT, findCashDrawerAccount } from '../../common/catalog-seed';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
+import { resolveShopBusinessDate } from '../../common/business-date';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
@@ -25,6 +29,10 @@ export class ClosingMovementsSyncService {
     @InjectRepository(Concept) private readonly concepts: Repository<Concept>,
     @InjectRepository(CashClosing)
     private readonly closings: Repository<CashClosing>,
+    @InjectRepository(Shop)
+    private readonly shops: Repository<Shop>,
+    @InjectRepository(CashPendingWithdrawal)
+    private readonly pendingWithdrawals: Repository<CashPendingWithdrawal>,
     private readonly catalogSeed: CatalogSeedService,
   ) {}
 
@@ -58,6 +66,8 @@ export class ClosingMovementsSyncService {
 
     const rows: Partial<Movement>[] = [];
     const date = closing.businessDate;
+    const shop = await this.shops.findOne({ where: { id: closing.shopId } });
+    const withdrawalDate = await this.resolveWithdrawalBusinessDate(closing, shop);
 
     const pushIncome = (
       method: LinkedPaymentMethod,
@@ -145,8 +155,9 @@ export class ClosingMovementsSyncService {
     }
 
     const cashChannel = byMethod.get(LinkedPaymentMethod.CASH) ?? null;
+    const cashDrawer = findCashDrawerAccount(accounts) ?? cashChannel;
 
-    // Efectivo a la cuenta de quien se lo lleva (PARTNER).
+    // Efectivo Caja → cuenta de quien se lo lleva (PARTNER).
     let partnerDestId: string | null = null;
     if (closing.cashWithdrawnToAccountId) {
       const dest = accounts.find((a) => a.id === closing.cashWithdrawnToAccountId);
@@ -167,15 +178,15 @@ export class ClosingMovementsSyncService {
         ? n(closing.cashWithdrawn)
         : Math.max(0, n(closing.cashAmount) - n(closing.cashLeftInRegister) - expensesTotal);
 
-    if (cashChannel && partnerDestId && cashTake > 0) {
+    if (cashDrawer && partnerDestId && cashTake > 0) {
       rows.push({
         shopId: closing.shopId,
-        businessDate: date,
-        fromAccountId: cashChannel.id,
+        businessDate: withdrawalDate,
+        fromAccountId: cashDrawer.id,
         toAccountId: partnerDestId,
         description: `Efectivo — ${closing.cashWithdrawnByName ?? 'retiro'}`,
         amountUyu: money(cashTake),
-        conceptId: findConcept('Utilidades') ?? findConcept('Gastos varios'),
+        conceptId: this.resolveWithdrawalConceptId(shop, concepts, findConcept),
         closingId: closing.id,
         employeeId: closing.cashWithdrawnByEmployeeId ?? null,
         invoiced: false,
@@ -208,6 +219,66 @@ export class ClosingMovementsSyncService {
     if (rows.length) {
       await this.movements.save(rows.map((r) => this.movements.create(r)));
     }
+  }
+
+  /**
+   * Fecha del retiro en sí: si se confirmó después (A retirar), usa esa fecha laboral.
+   * Si se asignó quién en el momento del cierre, queda la fecha del cierre.
+   */
+  private async resolveWithdrawalBusinessDate(
+    closing: CashClosing,
+    shop: Shop | null,
+  ): Promise<string> {
+    const tz = {
+      timezone: shop?.timezone,
+      openingTime: shop?.openingTime,
+    };
+    const picked = await this.pendingWithdrawals.findOne({
+      where: {
+        closingId: closing.id,
+        shopId: closing.shopId,
+        status: CashPendingWithdrawalStatus.PICKED,
+        active: true,
+      },
+      order: { pickedAt: 'DESC' },
+    });
+    if (picked?.pickedAt) {
+      return resolveShopBusinessDate(new Date(picked.pickedAt), tz);
+    }
+    const stillPending = await this.pendingWithdrawals.findOne({
+      where: {
+        closingId: closing.id,
+        shopId: closing.shopId,
+        status: CashPendingWithdrawalStatus.PENDING,
+        active: true,
+      },
+    });
+    const hasWho = !!(
+      closing.cashWithdrawnByUserId ||
+      closing.cashWithdrawnByEmployeeId ||
+      closing.cashWithdrawnToAccountId
+    );
+    if (stillPending && hasWho) {
+      return resolveShopBusinessDate(new Date(), tz);
+    }
+    return closing.businessDate;
+  }
+
+  private resolveWithdrawalConceptId(
+    shop: Shop | null,
+    concepts: Concept[],
+    findConcept: (name: string) => string | null,
+  ): string | null {
+    const configuredId = shop?.cashWithdrawalConceptId?.trim();
+    if (configuredId) {
+      const configured = concepts.find((c) => c.id === configuredId && c.active);
+      if (configured) return configured.id;
+    }
+    return (
+      findConcept('Utilidades') ??
+      findConcept('Gastos varios') ??
+      findConcept('Transferencia e/ cuentas')
+    );
   }
 
   async previewMissingIncomes(shopId: string) {

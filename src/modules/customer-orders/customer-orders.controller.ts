@@ -18,7 +18,11 @@ import {
   RequirePermissions,
 } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
-import { CustomerOrderStatus } from '../../entities/customer-order.entity';
+import {
+  CustomerOrderFulfillment,
+  CustomerOrderPaymentMethod,
+  CustomerOrderStatus,
+} from '../../entities/customer-order.entity';
 import { CustomerOrdersService } from './customer-orders.service';
 import {
   CreateCustomerOrderDto,
@@ -76,6 +80,13 @@ export class CustomerOrdersController {
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
     @Query('status') status?: string,
+    @Query('scope') scope?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('q') q?: string,
+    @Query('fulfillment') fulfillment?: string,
+    @Query('paymentMethod') paymentMethod?: string,
+    @Query('accredited') accredited?: string,
   ) {
     const statuses = status
       ? (status
@@ -83,7 +94,22 @@ export class CustomerOrdersController {
           .map((s) => s.trim())
           .filter(Boolean) as CustomerOrderStatus[])
       : undefined;
-    return this.service.listStaff(user, shopId, { status: statuses });
+    const fulfillments = Object.values(CustomerOrderFulfillment) as string[];
+    const payments = Object.values(CustomerOrderPaymentMethod) as string[];
+    return this.service.listStaff(user, shopId, {
+      status: statuses,
+      scope: scope === 'current-shift' ? 'current-shift' : undefined,
+      from,
+      to,
+      q,
+      fulfillment: fulfillments.includes(String(fulfillment ?? ''))
+        ? (fulfillment as CustomerOrderFulfillment)
+        : undefined,
+      paymentMethod: payments.includes(String(paymentMethod ?? ''))
+        ? (paymentMethod as CustomerOrderPaymentMethod)
+        : undefined,
+      accredited: accredited === 'yes' || accredited === 'no' ? accredited : undefined,
+    });
   }
 
   @Get('pending-count')

@@ -29,4 +29,11 @@ export class StaffComandaController {
   waiters(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
     return this.waiter.listStaffWaiters(user, shopId);
   }
+
+  /** Tablero de monitoreo: mesas abiertas, envíos y cambios del turno. */
+  @Get('monitor')
+  @RequireAnyPermissions('comanda.manage', 'shops.manage')
+  monitor(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
+    return this.waiter.staffMonitor(user, shopId);
+  }
 }
