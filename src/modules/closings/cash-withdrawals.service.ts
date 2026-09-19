@@ -31,6 +31,7 @@ import {
   NotificationType,
 } from '../../common/enums';
 import { isEntityActive } from '../../common/active.util';
+import { findCashDrawerAccount } from '../../common/catalog-seed';
 import { PickCashWithdrawalsDto } from './dto/cash-withdrawal.dto';
 
 const n = (v?: number | string | null) => Number(v ?? 0);
@@ -212,6 +213,7 @@ export class CashWithdrawalsService implements OnModuleInit {
       pickedAt: string;
       pickedByUserId: string | null;
       pickedByName: string;
+      fromAccountName: string;
       accountId: string | null;
       accountName: string | null;
       confirmedByUserId: string | null;
@@ -226,6 +228,7 @@ export class CashWithdrawalsService implements OnModuleInit {
       }>;
     };
 
+    const fromAccountName = await this.cashDrawerAccountName(shopId);
     const groups = new Map<string, Group>();
     for (const r of rows) {
       const pickedAtIso = r.pickedAt ? new Date(r.pickedAt).toISOString() : '';
@@ -250,6 +253,7 @@ export class CashWithdrawalsService implements OnModuleInit {
         pickedAt: pickedAtIso,
         pickedByUserId: r.pickedByUserId ?? null,
         pickedByName: r.pickedByName?.trim() || 'Sin asignar',
+        fromAccountName,
         accountId: r.pickedToAccountId ?? null,
         accountName: r.pickedToAccount?.name ?? null,
         confirmedByUserId: r.confirmedByUserId ?? null,
@@ -365,10 +369,12 @@ export class CashWithdrawalsService implements OnModuleInit {
       totalAmount += take;
     }
 
+    const fromAccountName = await this.cashDrawerAccountName(shopId);
     void this.notifyAdminsWithdrawalPicked(user, shopId, {
       count: toPick.length,
       totalAmount,
       pickedByName: picker.fullName,
+      fromAccountName,
       accountName: account.name,
       closingId: toPick.length === 1 ? toPick[0].closingId : null,
     }).catch((err) => {
@@ -547,6 +553,11 @@ export class CashWithdrawalsService implements OnModuleInit {
       .map((a) => a.id);
   }
 
+  private async cashDrawerAccountName(shopId: string): Promise<string> {
+    const rows = await this.ledger.find({ where: { shopId, active: true } });
+    return findCashDrawerAccount(rows)?.name?.trim() || 'Efectivo Caja';
+  }
+
   private isCashDrawerExpense(
     m: Movement,
     cashIds: string[],
@@ -566,6 +577,7 @@ export class CashWithdrawalsService implements OnModuleInit {
       count: number;
       totalAmount: number;
       pickedByName: string;
+      fromAccountName: string;
       accountName: string;
       closingId?: string | null;
     },
@@ -593,7 +605,7 @@ export class CashWithdrawalsService implements OnModuleInit {
 
     const title =
       info.count === 1 ? 'Retiro de efectivo' : `${info.count} retiros de efectivo`;
-    const body = `${shopName} · ${formatMoney(info.totalAmount)} · ${info.pickedByName} → ${info.accountName}${
+    const body = `${shopName} · ${formatMoney(info.totalAmount)} · ${info.fromAccountName} → ${info.accountName}${
       actor.fullName || actor.email ? ` · por ${actor.fullName || actor.email}` : ''
     }`;
 

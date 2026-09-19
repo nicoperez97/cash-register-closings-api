@@ -330,6 +330,7 @@ export class PrintAgentService implements OnModuleInit {
       shopSlug: shop.slug,
       timezone: shop.timezone,
       pendingJobs: pending,
+      installer: this.getInstallerMetaPublic(),
     };
   }
 
@@ -901,6 +902,19 @@ export class PrintAgentService implements OnModuleInit {
     return {
       items: this.readInstallerCatalog().items.map((x) => this.toPublicItem(x)),
     };
+  }
+
+  getAgentUpdate(osRaw?: string) {
+    const os = normalizeInstallerOs(osRaw) ?? 'windows';
+    const entry = this.findInstallerEntry(os);
+    if (!entry) {
+      return { os, available: false, version: null as string | null };
+    }
+    return { available: true, ...this.toPublicItem(entry) };
+  }
+
+  downloadInstallerForAgent(osRaw?: string) {
+    return this.resolveInstallerDownload(osRaw);
   }
 
   getInstallerMetaAdmin(user: AuthUser) {

@@ -530,6 +530,16 @@ export class CreateShopDto {
   salesSystemId?: string | null;
 
   @ApiPropertyOptional({
+    description:
+      'Concepto del movimiento al retirar efectivo (Efectivo Caja → socio). null = Utilidades / Gastos varios.',
+    nullable: true,
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  cashWithdrawalConceptId?: string | null;
+
+  @ApiPropertyOptional({
     description: 'Mapa código FormaDePago → cash|card|mercadoPago|delivery|transfer|accountDni|other',
   })
   @IsOptional()

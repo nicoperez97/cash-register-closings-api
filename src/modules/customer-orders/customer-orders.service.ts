@@ -8,7 +8,7 @@ import {
   forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { And, In, Not, MoreThanOrEqual, LessThan, Repository } from 'typeorm';
+import { And, Brackets, In, Not, MoreThanOrEqual, LessThan, Repository } from 'typeorm';
 import {
   CustomerOrder,
   CustomerOrderFulfillment,
@@ -32,6 +32,7 @@ import {
   normalizeOpeningTime,
   resolveShopBusinessDate,
   shopBusinessDayRangeUtc,
+  zonedLocalToUtc,
 } from '../../common/business-date';
 import {
   normalizeShopShifts,
@@ -1082,21 +1083,111 @@ export class CustomerOrdersService implements OnModuleInit {
   async listStaff(
     user: AuthUser,
     shopId: string,
-    opts?: { status?: CustomerOrderStatus | CustomerOrderStatus[] },
+    opts?: {
+      status?: CustomerOrderStatus | CustomerOrderStatus[];
+      scope?: 'current-shift';
+      from?: string;
+      to?: string;
+      q?: string;
+      fulfillment?: CustomerOrderFulfillment;
+      paymentMethod?: CustomerOrderPaymentMethod;
+      accredited?: 'yes' | 'no';
+    },
   ) {
     this.assertShopAccess(user, shopId);
-    const where: any = {
-      shopId,
-      fulfillment: Not(CustomerOrderFulfillment.TABLE),
-    };
-    if (opts?.status) {
-      where.status = Array.isArray(opts.status) ? In(opts.status) : opts.status;
+    const qb = this.orders
+      .createQueryBuilder('o')
+      .where('o.shopId = :shopId', { shopId })
+      .andWhere('o.fulfillment != :tableFulfillment', {
+        tableFulfillment: CustomerOrderFulfillment.TABLE,
+      });
+
+    const statuses = opts?.status
+      ? Array.isArray(opts.status)
+        ? opts.status
+        : [opts.status]
+      : [];
+    if (statuses.length) {
+      qb.andWhere('o.status IN (:...statuses)', { statuses });
     }
-    const rows = await this.orders.find({
-      where,
-      order: { createdAt: 'DESC' },
-      take: 200,
-    });
+    if (opts?.fulfillment) {
+      qb.andWhere('o.fulfillment = :fulfillment', { fulfillment: opts.fulfillment });
+    }
+    if (opts?.paymentMethod) {
+      qb.andWhere('o.paymentMethod = :paymentMethod', {
+        paymentMethod: opts.paymentMethod,
+      });
+    }
+    if (opts?.accredited === 'yes') {
+      qb.andWhere('o.paymentAccreditedAt IS NOT NULL');
+    } else if (opts?.accredited === 'no') {
+      qb.andWhere('o.paymentAccreditedAt IS NULL');
+    }
+
+    const shop = await this.shops.findOne({ where: { id: shopId } });
+    if (opts?.scope === 'current-shift' && shop) {
+      const shifts = normalizeShopShifts(shop.shifts as ShopShift[] | null, shop.openingTime);
+      const date = resolveShopBusinessDate(new Date(), {
+        timezone: shop.timezone,
+        openingTime: shop.openingTime,
+      });
+      const shift = resolveCurrentShift(shifts, new Date(), shop.timezone);
+      const range = shopShiftOwnershipRangeUtc(date, shift, shifts, {
+        timezone: shop.timezone,
+      });
+      const onlyCompleted =
+        statuses.length === 1 && statuses[0] === CustomerOrderStatus.COMPLETED;
+      if (onlyCompleted) {
+        qb.andWhere(
+          new Brackets((b) => {
+            b.where('o.completedAt >= :from AND o.completedAt < :to').orWhere(
+              '(o.completedAt IS NULL AND o.createdAt >= :from AND o.createdAt < :to)',
+            );
+          }),
+          { from: range.from, to: range.to },
+        );
+      } else {
+        qb.andWhere('o.createdAt >= :from AND o.createdAt < :to', {
+          from: range.from,
+          to: range.to,
+        });
+      }
+    } else if ((opts?.from || opts?.to) && shop) {
+      const from =
+        opts.from && /^\d{4}-\d{2}-\d{2}$/.test(opts.from) ? opts.from : null;
+      const to = opts.to && /^\d{4}-\d{2}-\d{2}$/.test(opts.to) ? opts.to : null;
+      const tz = shop.timezone;
+      if (from) {
+        qb.andWhere('o.createdAt >= :fromDay', {
+          fromDay: zonedLocalToUtc(`${from}T00:00:00`, tz),
+        });
+      }
+      if (to) {
+        qb.andWhere('o.createdAt < :toDay', {
+          toDay: zonedLocalToUtc(`${nextCalendarDate(to)}T00:00:00`, tz),
+        });
+      }
+    }
+
+    const q = String(opts?.q ?? '').trim();
+    if (q) {
+      const like = `%${q.replace(/[%_]/g, '')}%`;
+      qb.andWhere(
+        new Brackets((b) => {
+          b.where('o.code LIKE :like')
+            .orWhere('o.firstName LIKE :like')
+            .orWhere('o.lastName LIKE :like')
+            .orWhere('o.phone LIKE :like');
+        }),
+        { like },
+      );
+    }
+
+    qb.orderBy('o.createdAt', 'DESC');
+    const take =
+      opts?.scope === 'current-shift' ? 300 : opts?.from || opts?.to || q ? 800 : 200;
+    qb.take(take);
+    const rows = await qb.getMany();
     return rows.map((r) => this.toDto(r));
   }
 

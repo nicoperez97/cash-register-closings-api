@@ -11,6 +11,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
 import { And, In, LessThan, MoreThanOrEqual, Repository } from 'typeorm';
 import { isEntityActive } from '../../common/active.util';
+import {
+  ComandaLineAudit,
+  type ComandaLineAuditAction,
+  type ComandaLineAuditRelated,
+} from '../../entities/comanda-line-audit.entity';
 import { CustomerOrder, CustomerOrderLine } from '../../entities/customer-order.entity';
 import { Employee, EmployeeJobRole, normalizeEmployeeJobRoles } from '../../entities/employee.entity';
 import { SalonMapObject } from '../../entities/salon-map-object.entity';
@@ -137,6 +142,34 @@ function money2(n: number): string {
   return (Math.round((Number(n) || 0) * 100) / 100).toFixed(2);
 }
 
+function snapshotLine(line: CustomerOrderLine): Record<string, unknown> {
+  return {
+    menuItemId: line.menuItemId,
+    name: line.name,
+    qty: Number(line.qty) || 0,
+    unitPrice: Number(line.unitPrice) || 0,
+    kind: line.kind ?? 'ITEM',
+    notes: line.notes ?? null,
+    extraId: line.extraId ?? null,
+    attachedToMenuItemId: line.attachedToMenuItemId ?? null,
+    isEntrada: !!line.isEntrada,
+  };
+}
+
+function relatedFromLine(
+  line: CustomerOrderLine,
+  extra?: { qtyAfter?: number | null; unitPriceAfter?: number | null },
+): ComandaLineAuditRelated {
+  return {
+    name: line.name,
+    qty: Number(line.qty) || 0,
+    unitPrice: Number(line.unitPrice) || 0,
+    kind: line.kind ?? 'ITEM',
+    qtyAfter: extra?.qtyAfter ?? null,
+    unitPriceAfter: extra?.unitPriceAfter ?? null,
+  };
+}
+
 @Injectable()
 export class WaiterService implements OnModuleInit {
   constructor(
@@ -148,6 +181,8 @@ export class WaiterService implements OnModuleInit {
     private readonly mapObjects: Repository<SalonMapObject>,
     @InjectRepository(TableSession) private readonly sessions: Repository<TableSession>,
     @InjectRepository(CustomerOrder) private readonly orders: Repository<CustomerOrder>,
+    @InjectRepository(ComandaLineAudit)
+    private readonly lineAudits: Repository<ComandaLineAudit>,
     private readonly jwt: JwtService,
     private readonly customerOrders: CustomerOrdersService,
     private readonly printAgent: PrintAgentService,
@@ -283,6 +318,42 @@ export class WaiterService implements OnModuleInit {
       );
     } catch {
       /* already exists */
+    }
+    try {
+      await this.sessions.query(`
+        CREATE TABLE IF NOT EXISTS comanda_line_audits (
+          id CHAR(36) NOT NULL,
+          createdAt DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+          updatedAt DATETIME(6) NULL,
+          deletedAt DATETIME(6) NULL,
+          active TINYINT(1) NOT NULL DEFAULT 1,
+          shopId CHAR(36) NOT NULL,
+          tableSessionId CHAR(36) NOT NULL,
+          salonTableId CHAR(36) NULL,
+          tableLabel VARCHAR(64) NULL,
+          customerOrderId CHAR(36) NULL,
+          orderCode VARCHAR(12) NOT NULL,
+          action VARCHAR(16) NOT NULL,
+          lineIndex INT NOT NULL,
+          itemName VARCHAR(200) NOT NULL,
+          lineKind VARCHAR(16) NOT NULL DEFAULT 'ITEM',
+          qtyBefore INT NULL,
+          qtyAfter INT NULL,
+          unitPriceBefore DECIMAL(12,2) NULL,
+          unitPriceAfter DECIMAL(12,2) NULL,
+          relatedLines TEXT NULL,
+          lineBefore TEXT NULL,
+          actorTyp VARCHAR(24) NOT NULL,
+          actorEmployeeId CHAR(36) NULL,
+          actorName VARCHAR(120) NOT NULL,
+          orderRemoved TINYINT(1) NOT NULL DEFAULT 0,
+          PRIMARY KEY (id),
+          KEY idx_comanda_audits_session (shopId, tableSessionId, createdAt),
+          KEY idx_comanda_audits_shop_created (shopId, createdAt)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+      `);
+    } catch {
+      /* tabla ya existe / dialecto distinto */
     }
   }
 
@@ -578,6 +649,181 @@ export class WaiterService implements OnModuleInit {
     const preferred = rows.filter(isWaiterLike);
     const list = preferred.length ? preferred : rows;
     return list.map((e) => ({ id: e.id, fullName: e.fullName }));
+  }
+
+  /** Tablero de monitoreo staff: mesas abiertas, últimos envíos y cambios del turno. */
+  async staffMonitor(user: AuthUser, shopId: string) {
+    this.shopsSvc.assertShopAccess(user, shopId);
+    const shop = await this.shops.findOne({ where: { id: shopId, active: true as any } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    if (!shop.waiterOrderingEnabled) {
+      throw new ForbiddenException(
+        'Comanda no disponible. Activála en Configuración → Pedidos y guardá.',
+      );
+    }
+
+    const shifts = normalizeShopShifts(shop.shifts as ShopShift[] | null, shop.openingTime);
+    const businessDate = resolveShopBusinessDate(new Date(), {
+      timezone: shop.timezone,
+      openingTime: shop.openingTime,
+    });
+    const shift = resolveCurrentShift(shifts, new Date(), shop.timezone);
+    const ownership = shopShiftOwnershipRangeUtc(businessDate, shift, shifts, {
+      timezone: shop.timezone,
+    });
+
+    const openSessions = await this.sessions.find({
+      where: { shopId: shop.id, status: TableSessionStatus.OPEN },
+      order: { createdAt: 'ASC' },
+    });
+    const sessionIds = openSessions.map((s) => s.id);
+    const orders = sessionIds.length
+      ? await this.orders.find({
+          where: { shopId: shop.id, tableSessionId: In(sessionIds) },
+          order: { createdAt: 'DESC' },
+        })
+      : [];
+    const ordersBySession = new Map<string, CustomerOrder[]>();
+    for (const o of orders) {
+      const sid = String(o.tableSessionId ?? '');
+      if (!sid) continue;
+      const list = ordersBySession.get(sid) ?? [];
+      list.push(o);
+      ordersBySession.set(sid, list);
+    }
+
+    const tableIds = [...new Set(openSessions.map((s) => s.salonTableId))];
+    const tables = tableIds.length
+      ? await this.tables.find({ where: { shopId: shop.id, id: In(tableIds) } })
+      : [];
+    const tableById = new Map(tables.map((t) => [t.id, t]));
+    const sectorIds = [
+      ...new Set(tables.map((t) => t.sectorId).filter(Boolean) as string[]),
+    ];
+    const sectors = sectorIds.length
+      ? await this.sectors.find({ where: { id: In(sectorIds) } })
+      : [];
+    const sectorName = new Map(
+      sectors.map((s) => [s.id, (s.name ?? '').trim() || 'Sector']),
+    );
+    const waiterIds = [
+      ...new Set(
+        openSessions
+          .map((s) => s.waiterEmployeeId)
+          .filter((id): id is string => !!String(id ?? '').trim()),
+      ),
+    ];
+    const waiters = waiterIds.length
+      ? await this.employees.find({ where: { shopId: shop.id, id: In(waiterIds) } })
+      : [];
+    const waiterName = new Map(waiters.map((e) => [e.id, e.fullName]));
+
+    const compactLines = (items: CustomerOrderLine[], max = 14) => {
+      const rows: Array<{ qty: number; name: string; extra: boolean }> = [];
+      for (const l of items ?? []) {
+        rows.push({
+          qty: Number(l.qty) || 0,
+          name: l.name,
+          extra: String(l.kind || '').toUpperCase() === 'EXTRA',
+        });
+        if (rows.length >= max) break;
+      }
+      return rows;
+    };
+
+    const tableDtos = openSessions
+      .map((session) => {
+        const sessionOrders = ordersBySession.get(session.id) ?? [];
+        if (!sessionOrders.length) return null;
+        const table = tableById.get(session.salonTableId);
+        const sid = table?.sectorId ?? null;
+        const newest = sessionOrders[0];
+        const oldestFirst = [...sessionOrders].sort(
+          (a, b) => a.createdAt.getTime() - b.createdAt.getTime(),
+        );
+        const lines: Array<{ qty: number; name: string; extra: boolean }> = [];
+        for (const o of oldestFirst) {
+          for (const row of compactLines(o.items ?? [], 40)) {
+            lines.push(row);
+            if (lines.length >= 16) break;
+          }
+          if (lines.length >= 16) break;
+        }
+        const total = sessionOrders.reduce((s, o) => s + (Number(o.total) || 0), 0);
+        return {
+          sessionId: session.id,
+          tableId: session.salonTableId,
+          tableLabel: table?.label ?? 'Mesa',
+          sectorName: sid
+            ? sectorName.get(sid) ?? 'Sector'
+            : table?.area === 'OUTSIDE'
+              ? 'Afuera'
+              : 'Adentro',
+          covers: Number(session.covers) || 2,
+          waiterName:
+            (session.waiterEmployeeId && waiterName.get(session.waiterEmployeeId)) ||
+            '—',
+          openedAt: session.createdAt,
+          orderCount: sessionOrders.length,
+          customerTicketPrinted: !!session.customerTicketPrinted,
+          lastOrderAt: newest?.createdAt ?? session.createdAt,
+          lastOrderCode: newest?.code ?? null,
+          total: Math.round(total * 100) / 100,
+          lines,
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => !!row);
+
+    const recentOrders = orders.slice(0, 20).map((o) => {
+      const session = openSessions.find((s) => s.id === o.tableSessionId);
+      const table = session ? tableById.get(session.salonTableId) : null;
+      return {
+        id: o.id,
+        code: o.code,
+        tableLabel: table?.label ?? 'Mesa',
+        waiterName:
+          (session?.waiterEmployeeId && waiterName.get(session.waiterEmployeeId)) ||
+          '—',
+        createdAt: o.createdAt,
+        total: Number(o.total) || 0,
+        items: compactLines(o.items ?? [], 8),
+      };
+    });
+
+    const audits = await this.lineAudits.find({
+      where: {
+        shopId: shop.id,
+        createdAt: And(MoreThanOrEqual(ownership.from), LessThan(ownership.to)),
+      },
+      order: { createdAt: 'DESC' },
+      take: 80,
+    });
+
+    return {
+      shopName: shop.name,
+      shiftName: shift?.name ?? null,
+      tables: tableDtos,
+      recentOrders,
+      recentAudits: audits.map((a) => ({
+        id: a.id,
+        action: a.action,
+        orderCode: a.orderCode,
+        itemName: a.itemName,
+        lineKind: a.lineKind,
+        qtyBefore: a.qtyBefore,
+        qtyAfter: a.qtyAfter,
+        unitPriceBefore:
+          a.unitPriceBefore == null ? null : Number(a.unitPriceBefore) || 0,
+        unitPriceAfter:
+          a.unitPriceAfter == null ? null : Number(a.unitPriceAfter) || 0,
+        relatedLines: a.relatedLines ?? [],
+        actorName: a.actorName,
+        actorTyp: a.actorTyp,
+        orderRemoved: !!a.orderRemoved,
+        createdAt: a.createdAt,
+        tableLabel: a.tableLabel ?? null,
+      })),
+    };
   }
 
   async openSession(
@@ -971,6 +1217,7 @@ export class WaiterService implements OnModuleInit {
     }
 
     const line = items[idx];
+    const lineBefore = snapshotLine(line);
     const remove = !!dto.remove || (dto.qty != null && Number(dto.qty) <= 0);
     const hasQty = dto.qty != null && Number.isFinite(Number(dto.qty));
     if (remove) {
@@ -984,13 +1231,45 @@ export class WaiterService implements OnModuleInit {
       throw new BadRequestException('Nada para actualizar');
     }
 
+    const qtyBefore = Math.max(0, Math.floor(Number(line.qty) || 0));
+    const priceBefore = Math.max(0, Math.round((Number(line.unitPrice) || 0) * 100) / 100);
+    const qtyAfter = remove
+      ? 0
+      : hasQty
+        ? Math.max(1, Math.min(99, Math.floor(Number(dto.qty))))
+        : qtyBefore;
+    const priceAfter = remove
+      ? priceBefore
+      : hasPrice
+        ? Math.max(0, Math.round(Number(dto.unitPrice) * 100) / 100)
+        : priceBefore;
+    if (!remove && qtyAfter === qtyBefore && nearlyEqual(priceAfter, priceBefore)) {
+      throw new BadRequestException('Nada para actualizar');
+    }
+
+    const pairedIdx = !isExtraLine(line) ? pairedExtraIndices(items, idx) : [];
+    let action: ComandaLineAuditAction = 'EDIT';
+    if (remove) action = 'REMOVE';
+    else if (qtyAfter !== qtyBefore && nearlyEqual(priceAfter, priceBefore)) action = 'QTY';
+    else if (qtyAfter === qtyBefore && !nearlyEqual(priceAfter, priceBefore)) action = 'PRICE';
+
+    const relatedLines: ComandaLineAuditRelated[] =
+      pairedIdx.length && (remove || (hasQty && qtyAfter !== qtyBefore))
+        ? pairedIdx.map((ei) =>
+            relatedFromLine(items[ei], {
+              qtyAfter: remove ? 0 : qtyAfter,
+              unitPriceAfter: Number(items[ei].unitPrice) || 0,
+            }),
+          )
+        : [];
+
+    let next = items;
+    let orderRemoved = false;
     if (remove) {
-      const toRemove = new Set<number>([idx]);
-      if (!isExtraLine(line)) {
-        for (const ei of pairedExtraIndices(items, idx)) toRemove.add(ei);
-      }
-      const next = items.filter((_, i) => !toRemove.has(i));
-      if (!next.length) {
+      const toRemove = new Set<number>([idx, ...pairedIdx]);
+      next = items.filter((_, i) => !toRemove.has(i));
+      orderRemoved = !next.length;
+      if (orderRemoved) {
         await this.orders.remove(order);
       } else {
         order.items = next;
@@ -998,23 +1277,44 @@ export class WaiterService implements OnModuleInit {
         await this.orders.save(order);
       }
     } else {
-      if (hasPrice) {
-        line.unitPrice = Math.max(0, Math.round(Number(dto.unitPrice) * 100) / 100);
-      }
+      if (hasPrice) line.unitPrice = priceAfter;
       if (hasQty) {
-        const qty = Math.max(1, Math.min(99, Math.floor(Number(dto.qty))));
-        line.qty = qty;
-        if (!isExtraLine(line)) {
-          for (const ei of pairedExtraIndices(items, idx)) {
-            items[ei].qty = qty;
-          }
-        }
+        line.qty = qtyAfter;
+        for (const ei of pairedIdx) items[ei].qty = qtyAfter;
       }
       items[idx] = line;
       order.items = items;
       this.recalcOrderTotals(order);
       await this.orders.save(order);
     }
+
+    const table = await this.tables.findOne({
+      where: { id: session.salonTableId, shopId: shop.id },
+    });
+    await this.lineAudits.save(
+      this.lineAudits.create({
+        shopId: shop.id,
+        tableSessionId: session.id,
+        salonTableId: session.salonTableId,
+        tableLabel: table?.label ?? null,
+        customerOrderId: order.id,
+        orderCode: order.code,
+        action,
+        lineIndex: idx,
+        itemName: line.name,
+        lineKind: line.kind ?? 'ITEM',
+        qtyBefore,
+        qtyAfter: remove ? 0 : qtyAfter,
+        unitPriceBefore: money2(priceBefore),
+        unitPriceAfter: money2(remove ? priceBefore : priceAfter),
+        relatedLines: relatedLines.length ? relatedLines : null,
+        lineBefore,
+        actorTyp: waiter.typ,
+        actorEmployeeId: waiterEmployeeIdOrNull(waiter),
+        actorName: String(waiter.name ?? '').trim() || '—',
+        orderRemoved,
+      }),
+    );
 
     if (session.customerTicketPrinted) {
       session.customerTicketPrinted = false;
@@ -1454,6 +1754,11 @@ export class WaiterService implements OnModuleInit {
       where: { shopId: shop.id, tableSessionId: session.id },
       order: { createdAt: 'ASC' },
     });
+    const audits = await this.lineAudits.find({
+      where: { shopId: shop.id, tableSessionId: session.id },
+      order: { createdAt: 'DESC' },
+      take: 200,
+    });
     const { promoBreakdown, sessionSubtotal: subtotal } = this.resolveSessionPromo(
       shop,
       session,
@@ -1534,6 +1839,24 @@ export class WaiterService implements OnModuleInit {
         total: Number(o.total),
         customerNotes: o.customerNotes ?? null,
         createdAt: o.createdAt,
+      })),
+      lineAudits: audits.map((a) => ({
+        id: a.id,
+        action: a.action,
+        orderCode: a.orderCode,
+        itemName: a.itemName,
+        lineKind: a.lineKind,
+        qtyBefore: a.qtyBefore,
+        qtyAfter: a.qtyAfter,
+        unitPriceBefore:
+          a.unitPriceBefore == null ? null : Number(a.unitPriceBefore) || 0,
+        unitPriceAfter:
+          a.unitPriceAfter == null ? null : Number(a.unitPriceAfter) || 0,
+        relatedLines: a.relatedLines ?? [],
+        actorName: a.actorName,
+        actorTyp: a.actorTyp,
+        orderRemoved: !!a.orderRemoved,
+        createdAt: a.createdAt,
       })),
     };
   }

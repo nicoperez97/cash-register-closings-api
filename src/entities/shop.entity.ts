@@ -340,6 +340,13 @@ export class Shop extends BaseEntity {
   posnets?: ShopPosnet[] | null;
 
   /**
+   * Concepto del movimiento al retirar efectivo de caja (Efectivo Caja → socio).
+   * null = Utilidades / Gastos varios.
+   */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  cashWithdrawalConceptId?: string | null;
+
+  /**
    * Categorías de concepto a listar según el tipo de pago / movimiento.
    * null = defaults (proveedores, servicios+proveedores, empleados, movimientos).
    */

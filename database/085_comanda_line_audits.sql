@@ -1,0 +1,32 @@
+-- Auditoría de ítems de comanda ya emitidos (quita, cantidad, precio).
+
+CREATE TABLE IF NOT EXISTS comanda_line_audits (
+  id CHAR(36) NOT NULL,
+  createdAt DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updatedAt DATETIME(6) NULL,
+  deletedAt DATETIME(6) NULL,
+  active TINYINT(1) NOT NULL DEFAULT 1,
+  shopId CHAR(36) NOT NULL,
+  tableSessionId CHAR(36) NOT NULL,
+  salonTableId CHAR(36) NULL,
+  tableLabel VARCHAR(64) NULL,
+  customerOrderId CHAR(36) NULL,
+  orderCode VARCHAR(12) NOT NULL,
+  action VARCHAR(16) NOT NULL,
+  lineIndex INT NOT NULL,
+  itemName VARCHAR(200) NOT NULL,
+  lineKind VARCHAR(16) NOT NULL DEFAULT 'ITEM',
+  qtyBefore INT NULL,
+  qtyAfter INT NULL,
+  unitPriceBefore DECIMAL(12,2) NULL,
+  unitPriceAfter DECIMAL(12,2) NULL,
+  relatedLines TEXT NULL,
+  lineBefore TEXT NULL,
+  actorTyp VARCHAR(24) NOT NULL,
+  actorEmployeeId CHAR(36) NULL,
+  actorName VARCHAR(120) NOT NULL,
+  orderRemoved TINYINT(1) NOT NULL DEFAULT 0,
+  PRIMARY KEY (id),
+  KEY idx_comanda_audits_session (shopId, tableSessionId, createdAt),
+  KEY idx_comanda_audits_shop_created (shopId, createdAt)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ComandaLineAudit } from '../../entities/comanda-line-audit.entity';
 import { CustomerOrder } from '../../entities/customer-order.entity';
 import { Employee } from '../../entities/employee.entity';
 import { SalonMapObject } from '../../entities/salon-map-object.entity';
@@ -27,6 +28,7 @@ import { WaiterService } from './waiter.service';
       SalonMapObject,
       TableSession,
       CustomerOrder,
+      ComandaLineAudit,
     ]),
     AuthModule,
     ShopsModule,

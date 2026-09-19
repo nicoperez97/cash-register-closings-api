@@ -109,6 +109,7 @@ export class ConceptsController {
     'movements.read',
     'concepts.manage',
     'payments.read',
+    'shopConfig.read',
   )
   list(
     @CurrentUser() user: AuthUser,
