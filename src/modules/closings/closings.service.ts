@@ -430,15 +430,11 @@ export class ClosingsService implements OnModuleInit {
     return this.toDto(row, { stepFiles });
   }
 
-  /** Caja abierta (DRAFT) del local, si hay. Si quedó de un día laboral anterior, la pasa a hoy. */
+  /** Caja abierta (DRAFT) del local, si hay. No se reasigna si el día o el turno ya no coinciden. */
   async getOpen(user: AuthUser, shopId: string) {
     this.shops.assertShopAccess(user, shopId);
-    let row = await this.findOpenDraft(shopId);
+    const row = await this.findOpenDraft(shopId);
     if (!row) return null;
-    const shop = await this.shops.getShopEntity(shopId);
-    if (shop) {
-      row = await this.ensureOpenDraftCurrentDay(shop, row);
-    }
     return this.toDto(row);
   }
 
@@ -452,54 +448,6 @@ export class ClosingsService implements OnModuleInit {
       where: { shopId, status: ClosingStatus.DRAFT, active: true as any },
       order: { createdAt: 'DESC' },
     });
-  }
-
-  /**
-   * Si la caja abierta es de un día laboral pasado (o el turno cambió de nombre),
-   * la reasigna al día/turno actual sin pedir reabrir.
-   */
-  private async ensureOpenDraftCurrentDay(shop: Shop, row: CashClosing): Promise<CashClosing> {
-    const todayBd = resolveShopBusinessDate(new Date(), {
-      timezone: shop.timezone,
-      openingTime: shop.openingTime,
-    });
-    const rowDate = String(row.businessDate ?? '').slice(0, 10);
-    const shifts = normalizeShopShifts(shop.shifts as any, shop.openingTime);
-    const shift = resolveCurrentShift(shifts, new Date(), shop.timezone);
-    const newKey = closingDateKey(todayBd, shift.id);
-    const sameDay = rowDate === todayBd;
-    const sameShift =
-      String(row.shiftId ?? '') === shift.id && String(row.shiftName ?? '') === shift.name;
-    if (sameDay && sameShift && row.businessDateKey === newKey) {
-      return row;
-    }
-
-    if (row.id && row.businessDateKey !== newKey) {
-      await this.freeClosingDateKey(shop.id, newKey, row.id);
-    }
-    row.businessDate = todayBd;
-    row.businessDateKey = newKey;
-    row.shiftId = shift.id;
-    row.shiftName = shift.name;
-    return this.closings.save(row);
-  }
-
-  private async freeClosingDateKey(
-    shopId: string,
-    dateKey: string,
-    keepId: string,
-  ): Promise<void> {
-    const exists = await this.closings.findOne({ where: { shopId, businessDateKey: dateKey } });
-    if (!exists || exists.id === keepId) return;
-    if (exists.status === ClosingStatus.DRAFT) {
-      // Otro draft con esa clave: no debería pasar; archivar la clave del otro.
-    }
-    exists.businessDateKey = markDeletedUnique(
-      exists.businessDateKey || dateKey,
-      exists.id,
-      80,
-    );
-    await this.closings.save(exists);
   }
 
   /**
