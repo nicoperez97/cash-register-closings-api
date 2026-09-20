@@ -24,6 +24,7 @@ import { parseCommissionPercent } from '../../common/account-commission';
 import { ShopsService } from '../shops/shops.service';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
 import { markDeletedUnique } from '../../common/soft-delete.util';
+import { excludeDeletedClosingMovements } from '../movements/movement-query.util';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
@@ -491,12 +492,13 @@ export class AccountsService implements OnModuleInit {
     accountId: string,
     openingBalance = 0,
   ): Promise<number> {
-    const rows = await this.movements
+    const qb = this.movements
       .createQueryBuilder('m')
       .where('m.shopId = :shopId', { shopId })
       .andWhere('m.active = true')
-      .andWhere('(m.fromAccountId = :id OR m.toAccountId = :id)', { id: accountId })
-      .getMany();
+      .andWhere('(m.fromAccountId = :id OR m.toAccountId = :id)', { id: accountId });
+    excludeDeletedClosingMovements(qb);
+    const rows = await qb.getMany();
     let income = 0;
     let expense = 0;
     for (const r of rows) {

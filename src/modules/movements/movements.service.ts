@@ -39,6 +39,7 @@ import { StreamableFile } from '@nestjs/common';
 import * as ExcelJS from 'exceljs';
 import { accountCommissionOf } from '../../common/account-commission';
 import { formatMoney } from '../../common/format-money';
+import { excludeDeletedClosingMovements } from './movement-query.util';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
@@ -426,6 +427,7 @@ export class MovementsService implements OnModuleInit {
       )
       .where('m.shopId = :shopId', { shopId })
       .andWhere('m.active = true');
+    excludeDeletedClosingMovements(qb);
 
     if (filters.from) qb.andWhere('m.businessDate >= :from', { from: filters.from });
     if (filters.to) qb.andWhere('m.businessDate <= :to', { to: filters.to });
@@ -576,6 +578,7 @@ export class MovementsService implements OnModuleInit {
       .leftJoinAndSelect('m.concept', 'concept')
       .where('m.shopId = :shopId', { shopId })
       .andWhere('m.active = true');
+    excludeDeletedClosingMovements(qb);
     if (filters.from) qb.andWhere('m.businessDate >= :from', { from: filters.from });
     if (filters.to) qb.andWhere('m.businessDate <= :to', { to: filters.to });
     if (filters.kind === 'expense') {
@@ -1289,6 +1292,7 @@ export class MovementsService implements OnModuleInit {
       .select(['m.id', 'm.fromAccountId', 'm.toAccountId', 'm.amountUyu'])
       .where('m.shopId = :shopId', { shopId })
       .andWhere('m.active = true');
+    excludeDeletedClosingMovements(qb);
     if (filters.from) qb.andWhere('m.businessDate >= :from', { from: filters.from });
     if (filters.to) qb.andWhere('m.businessDate <= :to', { to: filters.to });
     const rows = await qb.getMany();

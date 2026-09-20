@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
+import { randomUUID } from 'crypto';
 import { CashClosing } from '../../entities/cash-closing.entity';
 import { ClosingExpense } from '../../entities/closing-expense.entity';
 import { ClosingExtraLine } from '../../entities/closing-extra-line.entity';
@@ -25,6 +26,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { AuthUser } from '../../common/decorators';
 import { assertCanViewClosingsList } from '../../common/guards';
 import {
+  ClosingKind,
   ClosingStatus,
   ExpenseCategory,
   ExtraLineType,
@@ -33,7 +35,7 @@ import {
 } from '../../common/enums';
 import { isGlobalAdmin } from '../../common/guards';
 import { isEntityActive } from '../../common/active.util';
-import { closingDateKey, markDeletedUnique } from '../../common/soft-delete.util';
+import { closingDateKey, closingEventDateKey, markDeletedUnique } from '../../common/soft-delete.util';
 import { formatMoney } from '../../common/format-money';
 import {
   findShopShift,
@@ -69,6 +71,22 @@ function sourceLinesOf(raw?: unknown): number[] {
 function sourceAmountOf(row: { amount?: number | string | null; lines?: unknown }): number {
   const lines = sourceLinesOf(row.lines);
   return lines.length ? lines.reduce((sum, v) => sum + v, 0) : n(row.amount);
+}
+
+function isEventKind(kind?: string | null): boolean {
+  return String(kind ?? '') === ClosingKind.EVENT;
+}
+
+function uniqueKeyForClosing(opts: {
+  kind?: string | null;
+  businessDate: string;
+  shiftId?: string | null;
+  closingId: string;
+}): string {
+  if (isEventKind(opts.kind)) {
+    return closingEventDateKey(opts.businessDate, opts.closingId);
+  }
+  return closingDateKey(opts.businessDate, opts.shiftId);
 }
 
 const SHOP_ADMIN_ROLES = new Set<GlobalRole>([GlobalRole.OWNER, GlobalRole.ADMIN]);
@@ -124,6 +142,22 @@ export class ClosingsService implements OnModuleInit {
       // columna ya existe
     }
     await this.backfillClosingShifts();
+    try {
+      await this.closings.query(`
+        ALTER TABLE cash_closings
+          ADD COLUMN kind VARCHAR(16) NOT NULL DEFAULT 'REGULAR'
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.closings.query(`
+        ALTER TABLE cash_closings
+          ADD COLUMN eventName VARCHAR(120) NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
     try {
       await this.closings.query(`
         ALTER TABLE cash_closings
@@ -319,6 +353,8 @@ export class ClosingsService implements OnModuleInit {
       id: c.id, shopId: c.shopId, businessDate: c.businessDate,
       shiftId: c.shiftId ?? null,
       shiftName: c.shiftName ?? null,
+      kind: isEventKind(c.kind) ? ClosingKind.EVENT : ClosingKind.REGULAR,
+      eventName: c.eventName ?? null,
       posSystemAmount: n(c.posSystemAmount), cardAmount: n(c.cardAmount), cashAmount: n(c.cashAmount),
       mercadoPagoAmount: n(c.mercadoPagoAmount), deliveryAppsAmount: n(c.deliveryAppsAmount),
       transferAmount: n(c.transferAmount), accountDniAmount: n(c.accountDniAmount), otherAmount: n(c.otherAmount),
@@ -444,10 +480,14 @@ export class ClosingsService implements OnModuleInit {
   }
 
   private async findOpenDraft(shopId: string): Promise<CashClosing | null> {
-    return this.closings.findOne({
-      where: { shopId, status: ClosingStatus.DRAFT, active: true as any },
-      order: { createdAt: 'DESC' },
-    });
+    return this.closings
+      .createQueryBuilder('c')
+      .where('c.shopId = :shopId', { shopId })
+      .andWhere('c.status = :status', { status: ClosingStatus.DRAFT })
+      .andWhere('c.active = true')
+      .andWhere('(c.kind IS NULL OR c.kind = :kind)', { kind: ClosingKind.REGULAR })
+      .orderBy('c.createdAt', 'DESC')
+      .getOne();
   }
 
   /**
@@ -505,6 +545,8 @@ export class ClosingsService implements OnModuleInit {
         businessDateKey: dateKey,
         shiftId: shift.id,
         shiftName: shift.name,
+        kind: ClosingKind.REGULAR,
+        eventName: null,
         posSystemAmount: money(0),
         cardAmount: money(0),
         cashAmount: money(0),
@@ -535,17 +577,31 @@ export class ClosingsService implements OnModuleInit {
   async create(user: AuthUser, shopId: string, dto: CreateClosingDto) {
     this.shops.assertShopAccess(user, shopId);
     const shift = await this.resolveClosingShift(shopId, dto.shiftId);
-    const dateKey = closingDateKey(dto.businessDate, shift.id);
-    const exists = await this.closings.findOne({ where: { shopId, businessDateKey: dateKey } });
-    if (exists) {
-      if (exists.status === ClosingStatus.DRAFT) {
-        return this.update(user, shopId, exists.id, {
-          ...dto,
-          shiftId: shift.id,
-        } as UpdateClosingDto);
-      }
-      throw new ConflictException('Ya existe un cierre para esa fecha y turno');
+    const asEvent = isEventKind(dto.kind);
+    const eventName = String(dto.eventName ?? '').trim() || null;
+    if (asEvent && !eventName) {
+      throw new BadRequestException('Indicá el nombre del evento');
     }
+    if (!asEvent) {
+      const dateKey = closingDateKey(dto.businessDate, shift.id);
+      const exists = await this.closings.findOne({ where: { shopId, businessDateKey: dateKey } });
+      if (exists) {
+        if (exists.status === ClosingStatus.DRAFT && !isEventKind(exists.kind)) {
+          return this.update(user, shopId, exists.id, {
+            ...dto,
+            shiftId: shift.id,
+          } as UpdateClosingDto);
+        }
+        throw new ConflictException('Ya existe un cierre para esa fecha y turno');
+      }
+    }
+    const closingId = randomUUID();
+    const dateKey = uniqueKeyForClosing({
+      kind: asEvent ? ClosingKind.EVENT : ClosingKind.REGULAR,
+      businessDate: dto.businessDate,
+      shiftId: shift.id,
+      closingId,
+    });
     const normalized = this.applyPosnetSums(dto);
     const posnetAmounts = this.normalizePosnetAmounts(normalized.posnetAmounts);
     const incomeExtras = (normalized.extraLines ?? [])
@@ -567,8 +623,11 @@ export class ClosingsService implements OnModuleInit {
       normalized.cashWithdrawnToAccountId,
     );
     const closing = await this.closings.save(this.closings.create({
+      id: closingId,
       shopId, businessDate: normalized.businessDate, businessDateKey: dateKey,
       shiftId: shift.id, shiftName: shift.name,
+      kind: asEvent ? ClosingKind.EVENT : ClosingKind.REGULAR,
+      eventName: asEvent ? eventName : null,
       posSystemAmount: money(n(normalized.posSystemAmount)), cardAmount: money(n(normalized.cardAmount)),
       cashAmount: money(n(normalized.cashAmount)), mercadoPagoAmount: money(n(normalized.mercadoPagoAmount)),
       deliveryAppsAmount: money(n(normalized.deliveryAppsAmount)), transferAmount: money(n(normalized.transferAmount)),
@@ -591,7 +650,9 @@ export class ClosingsService implements OnModuleInit {
     }));
     await this.replaceChildren(closing.id, normalized as CreateClosingDto, shopId);
     await this.syncMovements(closing.id);
-    await this.syncTipsFromClosing(user, shopId, closing.id, normalized as CreateClosingDto);
+    if (!asEvent) {
+      await this.syncTipsFromClosing(user, shopId, closing.id, normalized as CreateClosingDto);
+    }
     const created = await this.getOne(user, shopId, closing.id);
     void this.notifyAdminsClosingCreated(user, shopId, created).catch((err) => {
       this.logger.warn(
@@ -613,13 +674,31 @@ export class ClosingsService implements OnModuleInit {
     }
     const shift = await this.resolveClosingShift(shopId, dto.shiftId ?? row.shiftId);
     const nextDate = dto.businessDate ?? row.businessDate;
-    const nextKey = closingDateKey(nextDate, shift.id);
+    const kind = isEventKind(row.kind) ? ClosingKind.EVENT : ClosingKind.REGULAR;
+    if (kind === ClosingKind.EVENT) {
+      const nextName = dto.eventName !== undefined
+        ? String(dto.eventName ?? '').trim()
+        : String(row.eventName ?? '').trim();
+      if (!nextName) {
+        throw new BadRequestException('Indicá el nombre del evento');
+      }
+    }
+    const nextKey = uniqueKeyForClosing({
+      kind,
+      businessDate: nextDate,
+      shiftId: shift.id,
+      closingId: row.id,
+    });
     if (nextKey !== row.businessDateKey) {
       const clash = await this.closings.findOne({
         where: { shopId, businessDateKey: nextKey },
       });
       if (clash && clash.id !== row.id) {
-        throw new ConflictException('Ya existe un cierre para esa fecha y turno');
+        throw new ConflictException(
+          kind === ClosingKind.EVENT
+            ? 'Ya existe un cierre de evento con esa clave'
+            : 'Ya existe un cierre para esa fecha y turno',
+        );
       }
     }
     const mergedRaw: CreateClosingDto = {
@@ -680,9 +759,16 @@ export class ClosingsService implements OnModuleInit {
     );
     Object.assign(row, {
       businessDate: merged.businessDate,
-      businessDateKey: closingDateKey(merged.businessDate, shift.id),
+      businessDateKey: nextKey,
       shiftId: shift.id,
       shiftName: shift.name,
+      kind,
+      eventName:
+        kind === ClosingKind.EVENT
+          ? (dto.eventName !== undefined
+              ? String(dto.eventName ?? '').trim() || row.eventName
+              : row.eventName)
+          : null,
       posSystemAmount: money(n(merged.posSystemAmount)), cardAmount: money(n(merged.cardAmount)),
       cashAmount: money(n(merged.cashAmount)), mercadoPagoAmount: money(n(merged.mercadoPagoAmount)),
       deliveryAppsAmount: money(n(merged.deliveryAppsAmount)), transferAmount: money(n(merged.transferAmount)),
@@ -722,7 +808,9 @@ export class ClosingsService implements OnModuleInit {
       }, shopId);
     }
     await this.syncMovements(row.id);
-    await this.syncTipsFromClosing(user, shopId, row.id, merged);
+    if (kind !== ClosingKind.EVENT) {
+      await this.syncTipsFromClosing(user, shopId, row.id, merged);
+    }
     await this.assertRequiredStepFiles(user, shopId, row.id, {
       posnetAmounts: posnetAmounts ?? [],
       posSystemAmount: row.posSystemAmount,
@@ -736,7 +824,7 @@ export class ClosingsService implements OnModuleInit {
           amount: n(s.amount),
         }))) as Array<{ sourceId?: string | null; amount?: number | null }>,
     });
-    if (wasDraft) {
+    if (wasDraft && kind !== ClosingKind.EVENT) {
       await this.shops.setOrderingOpen(shopId, false).catch((err) => {
         this.logger.warn(
           `No se pudo cerrar pedidos al enviar cierre ${row.id}: ${(err as Error)?.message ?? err}`,
@@ -855,12 +943,7 @@ export class ClosingsService implements OnModuleInit {
       relations: ['expenses', 'extraLines', 'sourceAmounts'],
     });
     if (!row) throw new NotFoundException('Cierre no encontrado');
-    await this.closingMovements.syncFromClosing({
-      ...row,
-      expenses: [],
-      extraLines: [],
-      sourceAmounts: [],
-    } as CashClosing);
+    await this.closingMovements.removeFromClosing(id);
     await this.cashWithdrawals.cancelForClosing(id);
     await this.expenses.delete({ closingId: id });
     await this.extras.delete({ closingId: id });
@@ -972,6 +1055,8 @@ export class ClosingsService implements OnModuleInit {
       id: string;
       businessDate: string;
       declaredTotal: number;
+      kind?: string | null;
+      eventName?: string | null;
       cashPendingPickup?: number;
       cashWithdrawnByUserId?: string | null;
       cashWithdrawnByEmployeeId?: string | null;
@@ -1000,7 +1085,12 @@ export class ClosingsService implements OnModuleInit {
     if (!recipientIds.size) return;
 
     const date = String(closing.businessDate || '').slice(0, 10);
-    const title = 'Nuevo cierre de caja';
+    const eventLabel = String(closing.eventName ?? '').trim();
+    const title = isEventKind(closing.kind)
+      ? eventLabel
+        ? `Cierre de evento: ${eventLabel}`
+        : 'Cierre de evento'
+      : 'Nuevo cierre de caja';
     const parts = [
       shopName,
       date,

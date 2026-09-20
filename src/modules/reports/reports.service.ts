@@ -131,11 +131,11 @@ export class ReportsService {
     const prev = previousPeriod(from, to);
     const [rows, pos, reservations, tips, prevRows, prevPos, prevTips] =
       await Promise.all([
-        this.filteredRows(shopId, { from, to }),
+        this.filteredRows(shopId, { from, to, kind: 'regular' }),
         this.salesProducts.summary(user, shopId, { from, to }),
         this.safeReservationsSummary(user, shopId, from, to),
         this.tips.summary(user, shopId, from, to),
-        this.filteredRows(shopId, { from: prev.from, to: prev.to }),
+        this.filteredRows(shopId, { from: prev.from, to: prev.to, kind: 'regular' }),
         this.salesProducts.summary(user, shopId, { from: prev.from, to: prev.to }),
         this.tips.summary(user, shopId, prev.from, prev.to),
       ]);
@@ -315,7 +315,10 @@ export class ReportsService {
 
   async summary(user: AuthUser, shopId: string, filters: ClosingListFilters) {
     this.shops.assertShopAccess(user, shopId);
-    const rows = await this.filteredRows(shopId, filters);
+    const rows = await this.filteredRows(shopId, {
+      ...filters,
+      kind: filters.kind ?? 'regular',
+    });
     const expensesByConcept = await this.movementsService.expensesByConcept(
       user,
       shopId,
@@ -340,6 +343,8 @@ export class ReportsService {
       days: rows.map((r) => ({
         id: r.id,
         businessDate: r.businessDate,
+        kind: r.kind ?? 'REGULAR',
+        eventName: r.eventName ?? null,
         posSystemAmount: n(r.posSystemAmount),
         calculatedTotal: n(r.calculatedTotal),
         declaredTotal: n(r.declaredTotal),
@@ -775,6 +780,8 @@ export class ReportsService {
     const wsClosings = wb.addWorksheet('Cierres');
     wsClosings.columns = [
       { header: 'Fecha', key: 'date', width: 12 },
+      { header: 'Tipo', key: 'kind', width: 12 },
+      { header: 'Evento', key: 'eventName', width: 22 },
       { header: 'Caja', key: 'caja', width: 12 },
       { header: 'PVS', key: 'pvs', width: 12 },
       { header: 'Efectivo', key: 'cash', width: 12 },
@@ -793,6 +800,8 @@ export class ReportsService {
     for (const r of rows) {
       wsClosings.addRow({
         date: r.businessDate,
+        kind: String(r.kind ?? '') === 'EVENT' ? 'Evento' : 'Día',
+        eventName: r.eventName ?? '',
         caja: n(r.posSystemAmount),
         pvs: n(r.cardAmount),
         cash: n(r.cashAmount),

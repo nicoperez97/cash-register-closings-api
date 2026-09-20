@@ -7,12 +7,13 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  MaxLength,
   Min,
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
-import { ClosingStatus, ExpenseCategory, ExtraLineType } from '../../../common/enums';
+import { ClosingKind, ClosingStatus, ExpenseCategory, ExtraLineType } from '../../../common/enums';
 import { ClosingSourceAmountDto } from './closing-source.dto';
 import { PosnetType } from '../../../common/posnet';
 
@@ -90,6 +91,17 @@ export class CreateClosingDto {
   @IsOptional()
   @IsString()
   shiftId?: string | null;
+
+  @ApiPropertyOptional({ enum: ClosingKind, description: 'REGULAR (turno) o EVENT (aparte del día).' })
+  @IsOptional()
+  @IsEnum(ClosingKind)
+  kind?: ClosingKind;
+
+  @ApiPropertyOptional({ description: 'Nombre del evento. Obligatorio si kind = EVENT.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  eventName?: string | null;
 
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) posSystemAmount?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) cardAmount?: number;

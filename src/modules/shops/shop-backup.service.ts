@@ -11,7 +11,7 @@ import * as ExcelJS from 'exceljs';
 import { AuthUser } from '../../common/decorators';
 import { GlobalRole } from '../../common/enums';
 import { isSuperAdmin } from '../../common/guards';
-import { closingDateKey } from '../../common/soft-delete.util';
+import { closingDateKey, closingEventDateKey } from '../../common/soft-delete.util';
 import { Shop } from '../../entities/shop.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
@@ -1183,14 +1183,21 @@ export class ShopBackupService {
     for (const r of this.readRowsSheet(wb, 'cash_closings')) {
       const id = newId(String(r.id));
       const businessDate = String(r.businessDate ?? '').slice(0, 10);
+      const kind = String(r.kind ?? 'REGULAR') === 'EVENT' ? 'EVENT' : 'REGULAR';
+      const eventName = this.emptyToNull(r.eventName);
       await manager.getRepository(CashClosing).save(
         manager.getRepository(CashClosing).create({
           id,
           shopId,
           businessDate,
-          businessDateKey: closingDateKey(businessDate, String(r.shiftId ?? '') || null),
+          businessDateKey:
+            kind === 'EVENT'
+              ? closingEventDateKey(businessDate, id)
+              : closingDateKey(businessDate, String(r.shiftId ?? '') || null),
           shiftId: this.emptyToNull(r.shiftId),
           shiftName: this.emptyToNull(r.shiftName),
+          kind,
+          eventName,
           posSystemAmount: String(r.posSystemAmount ?? '0'),
           cardAmount: String(r.cardAmount ?? '0'),
           cashAmount: String(r.cashAmount ?? '0'),
@@ -1379,6 +1386,8 @@ export class ShopBackupService {
       businessDateKey: c.businessDateKey ?? '',
       shiftId: c.shiftId ?? '',
       shiftName: c.shiftName ?? '',
+      kind: c.kind ?? 'REGULAR',
+      eventName: c.eventName ?? '',
       posSystemAmount: c.posSystemAmount,
       cardAmount: c.cardAmount,
       cashAmount: c.cashAmount,

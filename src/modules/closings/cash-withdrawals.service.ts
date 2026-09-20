@@ -149,7 +149,6 @@ export class CashWithdrawalsService implements OnModuleInit {
     const rows = await this.pending.find({
       where: {
         closingId,
-        status: CashPendingWithdrawalStatus.PENDING,
         active: true,
       },
     });

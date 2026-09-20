@@ -5,6 +5,17 @@ export function closingDateKey(businessDate: string, shiftId?: string | null): s
   return shift ? `${date}__${shift}` : date;
 }
 
+/** Clave de un cierre de evento: no choca con el cierre del turno. */
+export function closingEventDateKey(businessDate: string, closingId: string): string {
+  const date = String(businessDate ?? '').slice(0, 10);
+  const id = String(closingId ?? '').replace(/-/g, '').slice(0, 32);
+  return `${date}__EVENT__${id}`;
+}
+
+export function isClosingEventKey(key?: string | null): boolean {
+  return String(key ?? '').includes('__EVENT__');
+}
+
 /**
  * Libera uniques al soft-delete: `valor__DELETED__{8 hex del id}`.
  * Truncates to maxLen so columns like sales_systems.code (64) stay valid.

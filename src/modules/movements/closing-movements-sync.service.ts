@@ -16,6 +16,7 @@ import {
 import { EXPENSE_CATEGORY_TO_CONCEPT, findCashDrawerAccount } from '../../common/catalog-seed';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
 import { resolveShopBusinessDate } from '../../common/business-date';
+import { isLiveClosingMovement } from './movement-query.util';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
@@ -35,6 +36,12 @@ export class ClosingMovementsSyncService {
     private readonly pendingWithdrawals: Repository<CashPendingWithdrawal>,
     private readonly catalogSeed: CatalogSeedService,
   ) {}
+
+  /** Anula los movimientos del cierre (p. ej. al eliminarlo) sin volver a generarlos. */
+  async removeFromClosing(closingId: string): Promise<void> {
+    await this.movements.update({ closingId }, { active: false });
+    await this.movements.softDelete({ closingId });
+  }
 
   async syncFromClosing(closing: CashClosing) {
     await this.movements.delete({ closingId: closing.id });
@@ -331,9 +338,10 @@ export class ClosingMovementsSyncService {
 
     const existing = await this.movements.find({
       where: { shopId, active: true },
-      relations: ['fromAccount', 'toAccount'],
+      relations: ['fromAccount', 'toAccount', 'closing'],
     });
-    const incomePool = existing.filter((m) => this.isIngresoAccount(m.fromAccount));
+    const liveExisting = existing.filter((m) => isLiveClosingMovement(m));
+    const incomePool = liveExisting.filter((m) => this.isIngresoAccount(m.fromAccount));
     const used = new Set<string>();
     const items = expected.map((row) => {
       if (!row.toAccountId) {
@@ -438,7 +446,7 @@ export class ClosingMovementsSyncService {
         amount: r.amount - r.existingAmount,
       })),
     ];
-    const balances = this.projectBalances(accounts, existing, extras);
+    const balances = this.projectBalances(accounts, liveExisting, extras);
     return {
       closingsCount: closings.length,
       createdCount: commit ? toCreate.length : 0,
