@@ -1,6 +1,6 @@
 import { SelectQueryBuilder } from 'typeorm';
 import { CashClosing } from '../../entities/cash-closing.entity';
-import { ClosingStatus } from '../../common/enums';
+import { ClosingKind, ClosingStatus } from '../../common/enums';
 
 export type ClosingPaymentMethod =
   | 'card'
@@ -13,10 +13,13 @@ export type ClosingPaymentMethod =
 
 export type ClosingSource = 'manual' | 'whatsapp' | 'excel';
 
+export type ClosingKindFilter = 'regular' | 'event' | 'all';
+
 export interface ClosingListFilters {
   from?: string;
   to?: string;
   status?: ClosingStatus | string;
+  kind?: ClosingKindFilter | string;
   withdrawnByUserId?: string;
   createdByUserId?: string;
   minTotal?: number;
@@ -38,6 +41,7 @@ export function parseClosingFilters(query: Record<string, string | undefined>): 
     from: query['from'] || undefined,
     to: query['to'] || undefined,
     status: query['status'] || undefined,
+    kind: query['kind'] || undefined,
     withdrawnByUserId: query['withdrawnByUserId'] || undefined,
     createdByUserId: query['createdByUserId'] || undefined,
     minTotal: num(query['minTotal']),
@@ -65,6 +69,14 @@ export function applyClosingFilters(
 
   if (filters.status && Object.values(ClosingStatus).includes(filters.status as ClosingStatus)) {
     qb.andWhere(`${alias}.status = :status`, { status: filters.status });
+  }
+
+  if (filters.kind === 'event') {
+    qb.andWhere(`${alias}.kind = :kind`, { kind: ClosingKind.EVENT });
+  } else if (filters.kind === 'regular') {
+    qb.andWhere(`(${alias}.kind IS NULL OR ${alias}.kind = :kind)`, {
+      kind: ClosingKind.REGULAR,
+    });
   }
 
   if (filters.withdrawnByUserId) {

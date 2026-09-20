@@ -14,6 +14,12 @@ export enum ClosingStatus {
   LOCKED = 'LOCKED',
 }
 
+/** Cierre del turno vs cierre aparte (evento) que no ocupa el slot del día. */
+export enum ClosingKind {
+  REGULAR = 'REGULAR',
+  EVENT = 'EVENT',
+}
+
 /** Retiro de efectivo del cierre aún no asignado a un socio. */
 export enum CashPendingWithdrawalStatus {
   PENDING = 'PENDING',

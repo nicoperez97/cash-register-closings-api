@@ -10,7 +10,7 @@ import {
 import { BaseEntity } from './base.entity';
 import { Shop } from './shop.entity';
 import { User } from './user.entity';
-import { ClosingStatus } from '../common/enums';
+import { ClosingKind, ClosingStatus } from '../common/enums';
 import { ClosingPosnetAmount } from '../common/posnet';
 import { ClosingExpense } from './closing-expense.entity';
 import { ClosingExtraLine } from './closing-extra-line.entity';
@@ -38,6 +38,14 @@ export class CashClosing extends BaseEntity {
   /** Nombre del turno al guardar (queda aunque se renombre después). */
   @Column({ type: 'varchar', length: 80, nullable: true })
   shiftName?: string | null;
+
+  /** REGULAR = cierre del turno. EVENT = aparte, no ocupa el slot del día. */
+  @Column({ type: 'varchar', length: 16, default: ClosingKind.REGULAR })
+  kind: ClosingKind | string;
+
+  /** Nombre del evento (solo kind = EVENT). */
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  eventName?: string | null;
 
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
   posSystemAmount: string;
