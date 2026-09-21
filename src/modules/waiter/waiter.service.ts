@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   OnModuleInit,
   UnauthorizedException,
@@ -9,12 +10,14 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
-import { And, In, LessThan, MoreThanOrEqual, Repository } from 'typeorm';
+import { And, EntityManager, In, LessThan, MoreThanOrEqual, Repository } from 'typeorm';
 import { isEntityActive } from '../../common/active.util';
 import {
   ComandaLineAudit,
+  COMANDA_LINE_REASONS,
   type ComandaLineAuditAction,
   type ComandaLineAuditRelated,
+  type ComandaLineReason,
 } from '../../entities/comanda-line-audit.entity';
 import { CustomerOrder, CustomerOrderLine } from '../../entities/customer-order.entity';
 import { Employee, EmployeeJobRole, normalizeEmployeeJobRoles } from '../../entities/employee.entity';
@@ -31,6 +34,8 @@ import { CustomerOrdersService } from '../customer-orders/customer-orders.servic
 import { PrintAgentService } from '../print-agent/print-agent.service';
 import { ShopLiveService } from '../shop-live/shop-live.service';
 import { ShopsService } from '../shops/shops.service';
+import { StockService } from '../stock/stock.service';
+import { normalizeShopMenus } from '../menu/menu-parse.util';
 import {
   assertWaiterShopSlug,
   waiterEmployeeIdOrNull,
@@ -56,6 +61,7 @@ import {
   type ShopShift,
 } from '../../common/shop-shifts';
 import { resolveShopBusinessDate } from '../../common/business-date';
+import { isMysqlDuplicateKey, lockEntity } from '../../common/row-lock';
 
 function hashPin(pin: string): string {
   return createHash('sha256').update(String(pin).trim()).digest('hex');
@@ -172,6 +178,8 @@ function relatedFromLine(
 
 @Injectable()
 export class WaiterService implements OnModuleInit {
+  private readonly logger = new Logger(WaiterService.name);
+
   constructor(
     @InjectRepository(Shop) private readonly shops: Repository<Shop>,
     @InjectRepository(Employee) private readonly employees: Repository<Employee>,
@@ -188,6 +196,7 @@ export class WaiterService implements OnModuleInit {
     private readonly printAgent: PrintAgentService,
     private readonly live: ShopLiveService,
     private readonly shopsSvc: ShopsService,
+    private readonly stock: StockService,
   ) {}
 
   async onModuleInit() {
@@ -320,6 +329,56 @@ export class WaiterService implements OnModuleInit {
       /* already exists */
     }
     try {
+      await this.sessions.query(
+        `ALTER TABLE table_sessions ADD COLUMN openSalonTableId CHAR(36) NULL`,
+      );
+    } catch {
+      /* already exists */
+    }
+    try {
+      await this.sessions.query(`
+        UPDATE table_sessions t
+        INNER JOIN (
+          SELECT shopId, salonTableId, MIN(id) AS keepId
+          FROM table_sessions
+          WHERE status = 'OPEN' AND deletedAt IS NULL
+          GROUP BY shopId, salonTableId
+          HAVING COUNT(*) > 1
+        ) d ON t.shopId = d.shopId AND t.salonTableId = d.salonTableId
+        SET t.status = 'CLOSED',
+            t.closedAt = IFNULL(t.closedAt, NOW(6)),
+            t.openSalonTableId = NULL
+        WHERE t.status = 'OPEN' AND t.deletedAt IS NULL AND t.id <> d.keepId
+      `);
+    } catch {
+      /* ignore */
+    }
+    try {
+      await this.sessions.query(`
+        UPDATE table_sessions
+        SET openSalonTableId = salonTableId
+        WHERE status = 'OPEN' AND deletedAt IS NULL
+      `);
+    } catch {
+      /* ignore */
+    }
+    try {
+      await this.sessions.query(`
+        UPDATE table_sessions
+        SET openSalonTableId = NULL
+        WHERE status <> 'OPEN' OR deletedAt IS NOT NULL
+      `);
+    } catch {
+      /* ignore */
+    }
+    try {
+      await this.sessions.query(
+        `ALTER TABLE table_sessions ADD UNIQUE KEY uq_table_sessions_open_table (shopId, openSalonTableId)`,
+      );
+    } catch {
+      /* already exists */
+    }
+    try {
       await this.sessions.query(`
         CREATE TABLE IF NOT EXISTS comanda_line_audits (
           id CHAR(36) NOT NULL,
@@ -355,6 +414,20 @@ export class WaiterService implements OnModuleInit {
     } catch {
       /* tabla ya existe / dialecto distinto */
     }
+    try {
+      await this.sessions.query(
+        `ALTER TABLE comanda_line_audits ADD COLUMN reason VARCHAR(24) NULL`,
+      );
+    } catch {
+      /* columna ausente / ya existe */
+    }
+    try {
+      await this.sessions.query(
+        `ALTER TABLE comanda_line_audits ADD COLUMN reasonNote VARCHAR(200) NULL`,
+      );
+    } catch {
+      /* columna ausente / ya existe */
+    }
   }
 
   private async requireShop(slug: string): Promise<Shop> {
@@ -368,6 +441,30 @@ export class WaiterService implements OnModuleInit {
       );
     }
     return shop;
+  }
+
+  private markSessionClosed(session: TableSession): void {
+    session.status = TableSessionStatus.CLOSED;
+    session.closedAt = new Date();
+    session.openSalonTableId = null;
+  }
+
+  private async withLockedSession<T>(
+    shopId: string,
+    sessionId: string,
+    fn: (session: TableSession, manager: EntityManager) => Promise<T>,
+  ): Promise<T> {
+    return this.sessions.manager.transaction(async (manager) => {
+      const session = await lockEntity(
+        manager,
+        TableSession,
+        's',
+        's.id = :id AND s.shopId = :shopId',
+        { id: sessionId, shopId },
+      );
+      if (!session) throw new NotFoundException('Sesión no encontrada');
+      return fn(session, manager);
+    });
   }
 
   /** Info pública del local para la pantalla de login (sin PIN). */
@@ -820,6 +917,8 @@ export class WaiterService implements OnModuleInit {
         actorName: a.actorName,
         actorTyp: a.actorTyp,
         orderRemoved: !!a.orderRemoved,
+        reason: a.reason ?? null,
+        reasonNote: a.reasonNote ?? null,
         createdAt: a.createdAt,
         tableLabel: a.tableLabel ?? null,
       })),
@@ -864,49 +963,71 @@ export class WaiterService implements OnModuleInit {
       }
     }
 
-    const existing = await this.sessions.findOne({
-      where: {
-        shopId: shop.id,
-        salonTableId: table.id,
-        status: TableSessionStatus.OPEN,
-      },
-    });
-    if (existing) {
-      const orderCount = await this.orders.count({
-        where: { shopId: shop.id, tableSessionId: existing.id },
-      });
-      if (orderCount > 0) {
-        return this.sessionDetail(shop, existing);
+    const existing = await this.sessions.manager.transaction(async (manager) => {
+      const repo = manager.getRepository(TableSession);
+      const open = await repo
+        .createQueryBuilder('s')
+        .setLock('pessimistic_write')
+        .where('s.shopId = :shopId', { shopId: shop.id })
+        .andWhere('s.salonTableId = :tableId', { tableId: table.id })
+        .andWhere('s.status = :st', { st: TableSessionStatus.OPEN })
+        .getOne();
+      if (open) {
+        const orderCount = await manager.getRepository(CustomerOrder).count({
+          where: { shopId: shop.id, tableSessionId: open.id },
+        });
+        if (orderCount > 0) {
+          return { session: open, created: false as const };
+        }
+        open.covers = covers;
+        open.waiterEmployeeId = waiterEmployeeId;
+        open.openSalonTableId = table.id;
+        await repo.save(open);
+        return { session: open, created: false as const };
       }
-      existing.covers = covers;
-      existing.waiterEmployeeId = waiterEmployeeId;
-      await this.sessions.save(existing);
-      return this.sessionDetail(shop, existing);
-    }
-    const row = await this.sessions.save(
-      this.sessions.create({
-        shopId: shop.id,
-        salonTableId: table.id,
-        waiterEmployeeId,
-        status: TableSessionStatus.OPEN,
-        covers,
-        customerTicketPrinted: false,
-        closedAt: null,
-        active: true,
-      }),
-    );
+      try {
+        const row = await repo.save(
+          repo.create({
+            shopId: shop.id,
+            salonTableId: table.id,
+            waiterEmployeeId,
+            status: TableSessionStatus.OPEN,
+            openSalonTableId: table.id,
+            covers,
+            customerTicketPrinted: false,
+            closedAt: null,
+            active: true,
+          }),
+        );
+        return { session: row, created: true as const };
+      } catch (err) {
+        if (!isMysqlDuplicateKey(err)) throw err;
+        const again = await repo.findOne({
+          where: {
+            shopId: shop.id,
+            salonTableId: table.id,
+            status: TableSessionStatus.OPEN,
+          },
+        });
+        if (!again) throw err;
+        return { session: again, created: false as const };
+      }
+    });
 
-    const auto = autoAssignPromosAtOpen(
-      normalizeShopPromos(shop.promos),
-      new Date(),
-      shop.timezone,
-    );
-    if (auto.length) {
-      this.applySessionPromos(
-        row,
-        auto.map((p) => ({ promoId: p.id, maxCount: null })),
+    const row = existing.session;
+    if (existing.created) {
+      const auto = autoAssignPromosAtOpen(
+        normalizeShopPromos(shop.promos),
+        new Date(),
+        shop.timezone,
       );
-      await this.sessions.save(row);
+      if (auto.length) {
+        this.applySessionPromos(
+          row,
+          auto.map((p) => ({ promoId: p.id, maxCount: null })),
+        );
+        await this.sessions.save(row);
+      }
     }
 
     return this.sessionDetail(shop, row);
@@ -926,23 +1047,22 @@ export class WaiterService implements OnModuleInit {
   async discardSession(slug: string, waiter: WaiterAuthPayload, sessionId: string) {
     assertWaiterShopSlug(waiter, slug);
     const shop = await this.requireShop(slug);
-    const session = await this.sessions.findOne({
-      where: { id: sessionId, shopId: shop.id },
+    return this.withLockedSession(shop.id, sessionId, async (session, manager) => {
+      const orderCount = await manager.getRepository(CustomerOrder).count({
+        where: { shopId: shop.id, tableSessionId: session.id },
+      });
+      if (orderCount > 0) {
+        throw new BadRequestException('La mesa ya tiene envíos; cerrala en lugar de descartar');
+      }
+      if (session.status === TableSessionStatus.OPEN) {
+        this.markSessionClosed(session);
+        await manager.getRepository(TableSession).save(session);
+      }
+      return { ok: true };
+    }).catch((err) => {
+      if (err instanceof NotFoundException) return { ok: true };
+      throw err;
     });
-    if (!session) return { ok: true };
-    const orderCount = await this.orders.count({
-      where: { shopId: shop.id, tableSessionId: session.id },
-    });
-    if (orderCount > 0) {
-      throw new BadRequestException('La mesa ya tiene envíos; cerrala en lugar de descartar');
-    }
-    // Sesiones vacías siempre se pueden limpiar (el mapa las oculta y ensucian el cierre).
-    if (session.status === TableSessionStatus.OPEN) {
-      session.status = TableSessionStatus.CLOSED;
-      session.closedAt = new Date();
-      await this.sessions.save(session);
-    }
-    return { ok: true };
   }
 
   async createSessionOrder(
@@ -973,10 +1093,7 @@ export class WaiterService implements OnModuleInit {
     const shop = await this.requireShop(slug);
     const caps = this.caps(shop, waiter);
     this.denyUnless(caps.allowSendOrder, 'No está permitido enviar comandas');
-    const session = await this.sessions.findOne({
-      where: { id: sessionId, shopId: shop.id },
-    });
-    if (!session) throw new NotFoundException('Sesión no encontrada');
+    return this.withLockedSession(shop.id, sessionId, async (session, manager) => {
     if (session.status !== TableSessionStatus.OPEN) {
       throw new BadRequestException('La mesa ya está cerrada');
     }
@@ -1037,7 +1154,7 @@ export class WaiterService implements OnModuleInit {
       }
       if (changed) {
         this.applySessionPromos(session, current);
-        await this.sessions.save(session);
+        await manager.getRepository(TableSession).save(session);
       }
     }
 
@@ -1045,6 +1162,7 @@ export class WaiterService implements OnModuleInit {
     // No usar el flag del envío: imprimir ticket por orden no fija ticketTotal.
     this.live.tick(shop.id, 'customer-orders');
     return order;
+    });
   }
 
   async reprintSessionKitchen(
@@ -1081,6 +1199,87 @@ export class WaiterService implements OnModuleInit {
     return { ok: true, ...result };
   }
 
+  /**
+   * Dispara a cocina solo los principales pendientes (!entrada y sin mainFired).
+   * Sirve cuando las entradas ya salieron y la mesa está lista para el plato.
+   */
+  async fireSessionMains(slug: string, waiter: WaiterAuthPayload, sessionId: string) {
+    assertWaiterShopSlug(waiter, slug);
+    const shop = await this.requireShop(slug);
+    const caps = this.caps(shop, waiter);
+    this.denyUnless(caps.allowPrintKitchen, 'No está permitido imprimir cocina');
+    const printed = await this.withLockedSession(shop.id, sessionId, async (session, manager) => {
+      if (session.status !== TableSessionStatus.OPEN) {
+        throw new BadRequestException('La mesa ya está cerrada');
+      }
+      const orderRepo = manager.getRepository(CustomerOrder);
+      const orders = await orderRepo.find({
+        where: { shopId: shop.id, tableSessionId: session.id },
+        order: { createdAt: 'ASC' },
+      });
+      const table = await this.tables.findOne({
+        where: { id: session.salonTableId, shopId: shop.id },
+      });
+      const sessionWaiter = session.waiterEmployeeId
+        ? await this.employees.findOne({
+            where: { id: session.waiterEmployeeId, shopId: shop.id },
+          })
+        : null;
+      const waiterName = sessionWaiter?.fullName?.trim() || waiter.name;
+      let printedOrders = 0;
+      let pendingBefore = 0;
+      for (const order of orders) {
+        const items = [...(order.items ?? [])];
+        const pending = items.filter(
+          (it) =>
+            String(it.kind || '').toUpperCase() !== 'EXTRA' &&
+            !it.isEntrada &&
+            !it.mainFired,
+        );
+        pendingBefore += pending.length;
+        if (!pending.length) continue;
+        const job = await this.printAgent.enqueueCustomerOrder(shop, order, 'TABLE', {
+          printKitchen: true,
+          printCustomerTicket: false,
+          tableLabel: table?.label ?? null,
+          waiterName,
+          kitchenItemsMode: 'MAINS_PENDING',
+          kitchenBanner: '>>> PRINCIPALES',
+          kitchenSourceSuffix: `fire${Date.now().toString(36)}`,
+        });
+        if (job) printedOrders += 1;
+        for (const it of items) {
+          if (
+            String(it.kind || '').toUpperCase() !== 'EXTRA' &&
+            !it.isEntrada &&
+            !it.mainFired
+          ) {
+            it.mainFired = true;
+          }
+        }
+        order.items = items;
+        await orderRepo.save(order);
+      }
+      if (!pendingBefore) {
+        throw new BadRequestException('No hay principales pendientes en esta mesa');
+      }
+      if (!printedOrders && !shop.printAgentTokenHash) {
+        throw new BadRequestException(
+          'Print agent no configurado. Configuralo en Dispositivos.',
+        );
+      }
+      return printedOrders;
+    });
+    this.live.tick(shop.id, 'customer-orders');
+    const session = await this.sessions.findOne({ where: { id: sessionId, shopId: shop.id } });
+    if (!session) throw new NotFoundException('Sesión no encontrada');
+    return {
+      ok: true,
+      printedOrders: printed,
+      ...(await this.sessionDetail(shop, session)),
+    };
+  }
+
   /** Asigna promos matchables (multi) y cupo por promo a la mesa. */
   async patchSessionPromo(
     slug: string,
@@ -1094,10 +1293,7 @@ export class WaiterService implements OnModuleInit {
   ) {
     assertWaiterShopSlug(waiter, slug);
     const shop = await this.requireShop(slug);
-    const session = await this.sessions.findOne({
-      where: { id: sessionId, shopId: shop.id },
-    });
-    if (!session) throw new NotFoundException('Sesión no encontrada');
+    return this.withLockedSession(shop.id, sessionId, async (session, manager) => {
     if (session.status !== TableSessionStatus.OPEN) {
       throw new BadRequestException('La mesa ya está cerrada');
     }
@@ -1161,9 +1357,10 @@ export class WaiterService implements OnModuleInit {
       session.ticketDiscountAmount = '0';
       session.ticketDiscountLabel = null;
     }
-    await this.sessions.save(session);
+    await manager.getRepository(TableSession).save(session);
     this.live.tick(shop.id, 'customer-orders');
     return this.sessionDetail(shop, session);
+    });
   }
 
   /** Persiste multi-promo y sincroniza columnas legacy. */
@@ -1192,22 +1389,28 @@ export class WaiterService implements OnModuleInit {
       qty?: number | null;
       unitPrice?: number | null;
       remove?: boolean;
+      reason?: string | null;
+      reasonNote?: string | null;
     },
   ) {
     assertWaiterShopSlug(waiter, slug);
     const shop = await this.requireShop(slug);
     const caps = this.caps(shop, waiter);
-    const session = await this.sessions.findOne({
-      where: { id: sessionId, shopId: shop.id },
-    });
-    if (!session) throw new NotFoundException('Sesión no encontrada');
+    return this.withLockedSession(shop.id, sessionId, async (session, manager) => {
     if (session.status !== TableSessionStatus.OPEN) {
       throw new BadRequestException('La mesa ya está cerrada');
     }
 
-    const order = await this.orders.findOne({
-      where: { id: dto.orderId, shopId: shop.id, tableSessionId: session.id },
-    });
+    const orderRepo = manager.getRepository(CustomerOrder);
+    const order = await orderRepo
+      .createQueryBuilder('o')
+      .setLock('pessimistic_write')
+      .where('o.id = :id AND o.shopId = :shopId AND o.tableSessionId = :sessionId', {
+        id: dto.orderId,
+        shopId: shop.id,
+        sessionId: session.id,
+      })
+      .getOne();
     if (!order) throw new NotFoundException('Envío no encontrado');
 
     const items = [...(order.items ?? [])];
@@ -1247,6 +1450,24 @@ export class WaiterService implements OnModuleInit {
       throw new BadRequestException('Nada para actualizar');
     }
 
+    const needsReason = remove || qtyAfter < qtyBefore;
+    let reason: ComandaLineReason | null = null;
+    let reasonNote: string | null = null;
+    if (needsReason) {
+      const raw = String(dto.reason ?? '')
+        .trim()
+        .toLowerCase();
+      if (!COMANDA_LINE_REASONS.includes(raw as ComandaLineReason)) {
+        throw new BadRequestException(
+          'Indicá el motivo (cortesía, error, cambio de mesa, transferencia, merma u otro)',
+        );
+      }
+      reason = raw as ComandaLineReason;
+      reasonNote = String(dto.reasonNote ?? '')
+        .trim()
+        .slice(0, 200) || null;
+    }
+
     const pairedIdx = !isExtraLine(line) ? pairedExtraIndices(items, idx) : [];
     let action: ComandaLineAuditAction = 'EDIT';
     if (remove) action = 'REMOVE';
@@ -1270,11 +1491,11 @@ export class WaiterService implements OnModuleInit {
       next = items.filter((_, i) => !toRemove.has(i));
       orderRemoved = !next.length;
       if (orderRemoved) {
-        await this.orders.remove(order);
+        await orderRepo.remove(order);
       } else {
         order.items = next;
         this.recalcOrderTotals(order);
-        await this.orders.save(order);
+        await orderRepo.save(order);
       }
     } else {
       if (hasPrice) line.unitPrice = priceAfter;
@@ -1285,14 +1506,14 @@ export class WaiterService implements OnModuleInit {
       items[idx] = line;
       order.items = items;
       this.recalcOrderTotals(order);
-      await this.orders.save(order);
+      await orderRepo.save(order);
     }
 
     const table = await this.tables.findOne({
       where: { id: session.salonTableId, shopId: shop.id },
     });
-    await this.lineAudits.save(
-      this.lineAudits.create({
+    await manager.getRepository(ComandaLineAudit).save(
+      manager.getRepository(ComandaLineAudit).create({
         shopId: shop.id,
         tableSessionId: session.id,
         salonTableId: session.salonTableId,
@@ -1313,6 +1534,8 @@ export class WaiterService implements OnModuleInit {
         actorEmployeeId: waiterEmployeeIdOrNull(waiter),
         actorName: String(waiter.name ?? '').trim() || '—',
         orderRemoved,
+        reason,
+        reasonNote,
       }),
     );
 
@@ -1321,11 +1544,42 @@ export class WaiterService implements OnModuleInit {
       session.ticketDiscountAmount = '0';
       session.ticketDiscountLabel = null;
       session.ticketTotal = null;
-      await this.sessions.save(session);
+      await manager.getRepository(TableSession).save(session);
+    }
+
+    // Al enviar se descontó stock; al quitar o bajar qty hay que devolverlo (y al subir, descontar).
+    if (remove || qtyAfter !== qtyBefore) {
+      const deltaQty = remove ? qtyBefore : Math.abs(qtyAfter - qtyBefore);
+      if (deltaQty > 0) {
+        const direction: 'consume' | 'restock' =
+          remove || qtyAfter < qtyBefore ? 'restock' : 'consume';
+        const affected = [line, ...pairedIdx.map((ei) => items[ei])].map((l) => ({
+          menuItemId: l.menuItemId,
+          qty: deltaQty,
+          kind: l.kind ?? null,
+        }));
+        this.applyTicketLineStock(shop, affected, direction, order.code);
+      }
     }
 
     this.live.tick(shop.id, 'customer-orders');
     return this.sessionDetail(shop, session);
+    });
+  }
+
+  /** Ajusta stock por receta tras editar el ticket (no bloquea la edición si falla). */
+  private applyTicketLineStock(
+    shop: Shop,
+    lines: Array<{ menuItemId?: string; qty?: number; kind?: string | null }>,
+    direction: 'consume' | 'restock',
+    orderCode: string,
+  ): void {
+    const menus = normalizeShopMenus(shop.menu);
+    void this.stock.applySaleStock(shop.id, menus, lines, direction).catch((err) => {
+      this.logger.warn(
+        `No se pudo ${direction === 'restock' ? 'devolver' : 'descontar'} stock del ticket ${orderCode}: ${(err as Error)?.message ?? err}`,
+      );
+    });
   }
 
   private recalcOrderTotals(order: CustomerOrder): void {
@@ -1356,22 +1610,19 @@ export class WaiterService implements OnModuleInit {
     const shop = await this.requireShop(slug);
     const caps = this.caps(shop, waiter);
     this.denyUnless(caps.allowCloseTable, 'No está permitido cerrar mesas');
-    const session = await this.sessions.findOne({
-      where: { id: sessionId, shopId: shop.id },
-    });
-    if (!session) throw new NotFoundException('Sesión no encontrada');
+    return this.withLockedSession(shop.id, sessionId, async (session, manager) => {
     if (session.status === TableSessionStatus.CLOSED) {
       return this.sessionDetail(shop, session);
     }
 
-    const orders = await this.orders.find({
+    const orderRepo = manager.getRepository(CustomerOrder);
+    const orders = await orderRepo.find({
       where: { shopId: shop.id, tableSessionId: session.id },
       order: { createdAt: 'DESC' },
     });
     if (!orders.length) {
-      session.status = TableSessionStatus.CLOSED;
-      session.closedAt = new Date();
-      await this.sessions.save(session);
+      this.markSessionClosed(session);
+      await manager.getRepository(TableSession).save(session);
       return this.sessionDetail(shop, session);
     }
 
@@ -1450,11 +1701,11 @@ export class WaiterService implements OnModuleInit {
     session.paymentAccountId = primary.paymentAccountId;
     session.tipAmount = money2(tipAmount);
     session.tipLabel = tipLabel;
-    session.status = TableSessionStatus.CLOSED;
-    session.closedAt = new Date();
-    await this.sessions.save(session);
+    this.markSessionClosed(session);
+    await manager.getRepository(TableSession).save(session);
     this.live.tick(shop.id, 'customer-orders');
     return this.sessionDetail(shop, session);
+    });
   }
 
   /** Propinas de mesas cerradas en el turno vigente. */
@@ -1618,10 +1869,7 @@ export class WaiterService implements OnModuleInit {
     const shop = await this.requireShop(slug);
     const caps = this.caps(shop, waiter);
     this.denyUnless(caps.allowPrintCustomerTicket, 'No está permitido imprimir ticket cliente');
-    const session = await this.sessions.findOne({
-      where: { id: sessionId, shopId: shop.id },
-    });
-    if (!session) throw new NotFoundException('Sesión no encontrada');
+    return this.withLockedSession(shop.id, sessionId, async (session, manager) => {
     if (session.status === TableSessionStatus.CLOSED) {
       throw new BadRequestException('La mesa ya está cerrada');
     }
@@ -1698,9 +1946,10 @@ export class WaiterService implements OnModuleInit {
     session.ticketDiscountAmount = String(discountAmount);
     session.ticketDiscountLabel = discountLabel;
     session.ticketTotal = String(total);
-    await this.sessions.save(session);
+    await manager.getRepository(TableSession).save(session);
     this.live.tick(shop.id, 'customer-orders');
     return this.sessionDetail(shop, session);
+    });
   }
 
 
@@ -1814,6 +2063,18 @@ export class WaiterService implements OnModuleInit {
       ),
       sessionSubtotal: subtotal,
       orderCount: orders.length,
+      pendingMainsCount: orders.reduce((n, o) => {
+        const items = o.items ?? [];
+        return (
+          n +
+          items.filter(
+            (it) =>
+              String(it.kind || '').toUpperCase() !== 'EXTRA' &&
+              !it.isEntrada &&
+              !it.mainFired,
+          ).length
+        );
+      }, 0),
       openedAt: session.createdAt,
       closedAt: session.closedAt ?? null,
       table: table
@@ -1856,6 +2117,8 @@ export class WaiterService implements OnModuleInit {
         actorName: a.actorName,
         actorTyp: a.actorTyp,
         orderRemoved: !!a.orderRemoved,
+        reason: a.reason ?? null,
+        reasonNote: a.reasonNote ?? null,
         createdAt: a.createdAt,
       })),
     };

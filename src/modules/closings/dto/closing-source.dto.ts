@@ -8,6 +8,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Max,
   MaxLength,
   Min,
   MinLength,
@@ -38,6 +39,15 @@ export class UpsertShopClosingSourceDto {
   @ValidateIf((_, v) => v != null)
   @IsUUID()
   accountId?: string | null;
+
+  @ApiPropertyOptional({
+    description: 'Días hasta acreditación esperada (solo SETTLE_CASH / SETTLE_ACCOUNT)',
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(90)
+  settlementLagDays?: number;
 
   @ApiPropertyOptional()
   @IsOptional()

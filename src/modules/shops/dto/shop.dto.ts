@@ -241,7 +241,11 @@ export class CreateShopDto {
   @IsBoolean()
   menuEnabled?: boolean;
 
-  @ApiPropertyOptional({ enum: ShopMode, description: 'Al paso o restaurante' })
+  @ApiPropertyOptional({
+    enum: ShopMode,
+    deprecated: true,
+    description: 'Obsoleto. Pedidos, Comanda y Salón se habilitan por separado.',
+  })
   @IsOptional()
   @IsEnum(ShopMode)
   shopMode?: ShopMode;
@@ -383,6 +387,15 @@ export class CreateShopDto {
   @IsOptional()
   @IsNumber()
   defaultChangeAmount?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Si |caja sistema − declarado| llega a este monto, el motivo de diferencia es obligatorio. 0 = no pedir.',
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  differenceReasonMinAmount?: number;
 
   @ApiPropertyOptional({
     example: 8,

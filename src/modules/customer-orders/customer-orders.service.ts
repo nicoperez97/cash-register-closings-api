@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
   OnModuleInit,
   forwardRef,
@@ -23,6 +24,10 @@ import {
   TableSession,
   TableSessionStatus,
 } from '../../entities/table-session.entity';
+import {
+  Reservation,
+  ReservationStatus,
+} from '../../entities/reservation.entity';
 import { AuthUser } from '../../common/decorators';
 import { GlobalRole, NotificationType } from '../../common/enums';
 import { isEntityActive } from '../../common/active.util';
@@ -54,7 +59,6 @@ import {
   zonesHavePolygons,
   normalizeOrderingExtras,
   normalizeOrderingPayments,
-  normalizeShopMode,
   normalizeShopOrderingHours,
   normalizeTablePaymentMethods,
   classifyPaymentMethodKind,
@@ -70,6 +74,8 @@ import { ShopLiveService } from '../shop-live/shop-live.service';
 import { userShopCanReceiveCustomerOrders } from '../profile/notification-eligibility';
 import { IntegrationsService } from '../integrations/integrations.service';
 import { ClosingsService } from '../closings/closings.service';
+import { StockService } from '../stock/stock.service';
+import { isMysqlDuplicateKey, lockEntity } from '../../common/row-lock';
 import {
   CreateCustomerOrderDto,
   UpdateCustomerOrderStatusDto,
@@ -87,6 +93,8 @@ function classifyTablePaymentKind(
 
 @Injectable()
 export class CustomerOrdersService implements OnModuleInit {
+  private readonly logger = new Logger(CustomerOrdersService.name);
+
   constructor(
     @InjectRepository(CustomerOrder)
     private readonly orders: Repository<CustomerOrder>,
@@ -98,6 +106,8 @@ export class CustomerOrdersService implements OnModuleInit {
     private readonly users: Repository<User>,
     @InjectRepository(TableSession)
     private readonly tableSessions: Repository<TableSession>,
+    @InjectRepository(Reservation)
+    private readonly reservations: Repository<Reservation>,
     private readonly live: ShopLiveService,
     private readonly notifications: NotificationsService,
     private readonly printAgent: PrintAgentService,
@@ -105,6 +115,7 @@ export class CustomerOrdersService implements OnModuleInit {
     private readonly integrations: IntegrationsService,
     @Inject(forwardRef(() => ClosingsService))
     private readonly closingsSvc: ClosingsService,
+    private readonly stock: StockService,
   ) {}
 
   async onModuleInit() {
@@ -141,8 +152,10 @@ export class CustomerOrdersService implements OnModuleInit {
           outForDeliveryAt DATETIME(6) NULL,
           completedAt DATETIME(6) NULL,
           cancelledAt DATETIME(6) NULL,
+          clientRequestId VARCHAR(64) NULL,
           PRIMARY KEY (id),
           UNIQUE KEY idx_customer_orders_shop_code (shopId, code),
+          UNIQUE KEY idx_customer_orders_shop_client_req (shopId, clientRequestId),
           KEY idx_customer_orders_shop_created (shopId, createdAt),
           KEY idx_customer_orders_shop_status (shopId, status)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
@@ -199,12 +212,20 @@ export class CustomerOrdersService implements OnModuleInit {
       `ALTER TABLE customer_orders ADD COLUMN externalSource VARCHAR(32) NULL`,
       `ALTER TABLE customer_orders ADD COLUMN externalId VARCHAR(80) NULL`,
       `ALTER TABLE customer_orders ADD COLUMN externalMeta TEXT NULL`,
+      `ALTER TABLE customer_orders ADD COLUMN clientRequestId VARCHAR(64) NULL`,
     ]) {
       try {
         await this.orders.query(sql);
       } catch {
         /* already exists */
       }
+    }
+    try {
+      await this.orders.query(
+        `ALTER TABLE customer_orders ADD UNIQUE KEY idx_customer_orders_shop_client_req (shopId, clientRequestId)`,
+      );
+    } catch {
+      /* already exists */
     }
   }
 
@@ -386,6 +407,7 @@ export class CustomerOrdersService implements OnModuleInit {
     };
     const eta = normalizeOrderingEta(shop.orderingEta);
     const menus = normalizeShopMenus(shop.menu);
+    const soldOut = await this.safeSoldOutIds(shop.id, menus);
 
     const tableOrderingEnabled = false;
     const tableOrderingOpen = false;
@@ -402,7 +424,6 @@ export class CustomerOrdersService implements OnModuleInit {
         phone: shop.phone ?? null,
         instagramHandle: shop.instagramHandle ?? null,
         currency: shop.currency || 'ARS',
-        shopMode: normalizeShopMode(shop.shopMode),
       },
       takeawayEnabled,
       deliveryEnabled,
@@ -435,7 +456,7 @@ export class CustomerOrdersService implements OnModuleInit {
         sections: (m.sections ?? []).map((sec) => ({
           name: sec.name,
           items: (sec.items ?? [])
-            .filter((it) => it.available !== false && it.price != null)
+            .filter((it) => it.available !== false && it.price != null && !soldOut.has(String(it.id ?? '')))
             .map((it) => ({
               id: it.id,
               name: it.name,
@@ -478,6 +499,7 @@ export class CustomerOrdersService implements OnModuleInit {
       );
     }
     const menus = normalizeShopMenus(shop.menu);
+    const soldOut = await this.safeSoldOutIds(shop.id, menus);
     return {
       enabled: true,
       shop: {
@@ -522,7 +544,7 @@ export class CustomerOrdersService implements OnModuleInit {
         sections: (m.sections ?? []).map((sec) => ({
           name: sec.name,
           items: (sec.items ?? [])
-            .filter((it) => it.available !== false && it.price != null)
+            .filter((it) => it.available !== false && it.price != null && !soldOut.has(String(it.id ?? '')))
             .map((it) => ({
               id: it.id,
               name: it.name,
@@ -638,6 +660,16 @@ export class CustomerOrdersService implements OnModuleInit {
       promoSales?: Array<{ promoId: string; qty: number }>;
     },
   ) {
+    const clientRequestId = this.normalizeClientRequestId(dto.clientRequestId);
+    if (clientRequestId) {
+      const existing = await this.orders.findOne({
+        where: { shopId: shop.id, clientRequestId },
+      });
+      if (existing) {
+        return this.respondCreatedOrder(shop, existing, opts);
+      }
+    }
+
     const takeawayEnabled = shop.takeawayEnabled !== false;
     const deliveryEnabled = !!shop.deliveryEnabled;
     const hours = normalizeShopOrderingHours(shop.orderingHours);
@@ -953,41 +985,57 @@ export class CustomerOrdersService implements OnModuleInit {
     const initialStatus = autoPrep
       ? CustomerOrderStatus.PREPARING
       : CustomerOrderStatus.PENDING;
-    const order = await this.orders.save(
-      this.orders.create({
-        shopId: shop.id,
-        code,
-        status: initialStatus,
-        fulfillment: dto.fulfillment,
-        items: lines,
-        subtotal: subtotal.toFixed(2),
-        deliveryFee: deliveryFee.toFixed(2),
-        discountAmount: discountAmount.toFixed(2),
-        discountLabel,
-        total: total.toFixed(2),
-        firstName: String(dto.firstName).trim().slice(0, 80),
-        lastName: String(dto.lastName).trim().slice(0, 80),
-        phone,
-        address,
-        deliveryLat,
-        deliveryLng,
-        deliveryStreetNumber,
-        deliveryZoneId,
-        deliveryZoneName,
-        paymentMethod: isTable ? CustomerOrderPaymentMethod.CASH : paymentMethod,
-        cashAmount: isTable
-          ? total.toFixed(2)
-          : cashAmountValue != null
-            ? cashAmountValue.toFixed(2)
-            : null,
-        customerNotes: String(dto.customerNotes ?? '').trim().slice(0, 500) || null,
-        salonTableId: isTable ? dto.salonTableId ?? null : null,
-        tableSessionId: isTable ? dto.tableSessionId ?? null : null,
-        waiterEmployeeId: isTable ? dto.waiterEmployeeId ?? null : null,
-        acceptedAt: autoPrep ? now : null,
-        preparingAt: autoPrep ? now : null,
-      }),
-    );
+    let order: CustomerOrder;
+    try {
+      order = await this.orders.save(
+        this.orders.create({
+          shopId: shop.id,
+          code,
+          clientRequestId,
+          status: initialStatus,
+          fulfillment: dto.fulfillment,
+          items: lines,
+          subtotal: subtotal.toFixed(2),
+          deliveryFee: deliveryFee.toFixed(2),
+          discountAmount: discountAmount.toFixed(2),
+          discountLabel,
+          total: total.toFixed(2),
+          firstName: String(dto.firstName).trim().slice(0, 80),
+          lastName: String(dto.lastName).trim().slice(0, 80),
+          phone,
+          address,
+          deliveryLat,
+          deliveryLng,
+          deliveryStreetNumber,
+          deliveryZoneId,
+          deliveryZoneName,
+          paymentMethod: isTable ? CustomerOrderPaymentMethod.CASH : paymentMethod,
+          cashAmount: isTable
+            ? total.toFixed(2)
+            : cashAmountValue != null
+              ? cashAmountValue.toFixed(2)
+              : null,
+          customerNotes: String(dto.customerNotes ?? '').trim().slice(0, 500) || null,
+          salonTableId: isTable ? dto.salonTableId ?? null : null,
+          tableSessionId: isTable ? dto.tableSessionId ?? null : null,
+          waiterEmployeeId: isTable ? dto.waiterEmployeeId ?? null : null,
+          acceptedAt: autoPrep ? now : null,
+          preparingAt: autoPrep ? now : null,
+        }),
+      );
+    } catch (err) {
+      if (clientRequestId && isMysqlDuplicateKey(err)) {
+        const existing = await this.orders.findOne({
+          where: { shopId: shop.id, clientRequestId },
+        });
+        if (existing) {
+          return this.respondCreatedOrder(shop, existing, opts);
+        }
+      }
+      throw err;
+    }
+
+    void this.applyOrderStock(shop, order, 'consume');
 
     this.live.tick(shop.id, 'customer-orders');
     if (!isTable) {
@@ -1042,11 +1090,52 @@ export class CustomerOrdersService implements OnModuleInit {
         }
       }
     }
+    return this.respondCreatedOrder(shop, order, opts, print);
+  }
+
+  private normalizeClientRequestId(raw?: string | null): string | null {
+    const id = String(raw ?? '').trim().slice(0, 64);
+    if (id.length < 8 || !/^[A-Za-z0-9._-]+$/.test(id)) return null;
+    return id;
+  }
+
+  private respondCreatedOrder(
+    shop: Shop,
+    order: CustomerOrder,
+    opts: { response: 'public' | 'staff' | 'waiter' | 'guest' },
+    print?: { kitchenQueued: boolean; kitchenWarning: string | null } | null,
+  ) {
     if (opts.response === 'staff' || opts.response === 'waiter' || opts.response === 'guest') {
       const dtoOut = this.toDto(order);
       return print ? { ...dtoOut, print } : dtoOut;
     }
     return this.publicDto(order, shop);
+  }
+
+  private async safeSoldOutIds(shopId: string, menus: ReturnType<typeof normalizeShopMenus>) {
+    try {
+      return await this.stock.soldOutMenuItemIds(shopId, menus);
+    } catch (err) {
+      this.logger.warn(
+        `No se pudo calcular 86: ${(err as Error)?.message ?? err}`,
+      );
+      return new Set<string>();
+    }
+  }
+
+  private applyOrderStock(
+    shop: Shop,
+    order: CustomerOrder,
+    direction: 'consume' | 'restock',
+  ): void {
+    const menus = normalizeShopMenus(shop.menu);
+    void this.stock
+      .applySaleStock(shop.id, menus, order.items ?? [], direction)
+      .catch((err) => {
+        this.logger.warn(
+          `No se pudo ${direction === 'restock' ? 'devolver' : 'descontar'} stock del pedido ${order.code}: ${(err as Error)?.message ?? err}`,
+        );
+      });
   }
 
   async pendingCount(user: AuthUser, shopId: string) {
@@ -1481,6 +1570,27 @@ export class CustomerOrdersService implements OnModuleInit {
     });
 
     const tables = this.aggregateClosedTables(sessions);
+    let coversFromReservations = 0;
+    if (shop.reservationsEnabled) {
+      try {
+        const seated = await this.reservations.find({
+          where: {
+            shopId,
+            businessDate: date as any,
+            status: ReservationStatus.SEATED,
+          },
+          take: 500,
+        });
+        coversFromReservations = seated.reduce(
+          (s, r) => s + Math.max(0, Number(r.partySize) || 0),
+          0,
+        );
+      } catch {
+        coversFromReservations = 0;
+      }
+    }
+    const coversSuggested =
+      tables.coversTotal > 0 ? tables.coversTotal : coversFromReservations || 0;
     await this.closeEmptyOpenTableSessions(shopId);
     const openTablesCount = await this.countOccupiedOpenTables(shopId);
 
@@ -1520,7 +1630,11 @@ export class CustomerOrdersService implements OnModuleInit {
             unitsSold: deliverateBucket.unitsSold,
           }
         : null,
-      tables,
+      tables: {
+        ...tables,
+        coversFromReservations,
+        coversSuggested,
+      },
       orderIds,
       orderingForceClosed: !!shop.orderingForceClosed,
       defaultChangeAmount: Number(shop.defaultChangeAmount) || 0,
@@ -1540,6 +1654,7 @@ export class CustomerOrdersService implements OnModuleInit {
       if (orderCount > 0) continue;
       session.status = TableSessionStatus.CLOSED;
       session.closedAt = new Date();
+      session.openSalonTableId = null;
       await this.tableSessions.save(session);
     }
   }
@@ -1701,135 +1816,175 @@ export class CustomerOrdersService implements OnModuleInit {
     dto: UpdateCustomerOrderStatusDto,
   ) {
     this.assertShopAccess(user, shopId);
-    const order = await this.orders.findOne({ where: { id, shopId } });
-    if (!order) throw new NotFoundException('Pedido no encontrado');
-
-    const next = dto.status;
-    const prev = order.status;
-    if (prev === CustomerOrderStatus.CANCELLED) {
-      throw new BadRequestException('El pedido está cancelado');
-    }
-    if (next === prev) return this.toDto(order);
-
-    this.assertAllowedStatusTransition(order.fulfillment, prev, next);
-
-    if (next === CustomerOrderStatus.COMPLETED && !order.paymentAccreditedAt) {
-      throw new BadRequestException(
-        'Acreditá el pago antes de completar el pedido',
+    const outcome = await this.orders.manager.transaction(async (manager) => {
+      const repo = manager.getRepository(CustomerOrder);
+      const order = await lockEntity(
+        manager,
+        CustomerOrder,
+        'o',
+        'o.id = :id AND o.shopId = :shopId',
+        { id, shopId },
       );
-    }
+      if (!order) throw new NotFoundException('Pedido no encontrado');
 
-    const flow: CustomerOrderStatus[] = [
-      CustomerOrderStatus.PENDING,
-      CustomerOrderStatus.ACCEPTED,
-      CustomerOrderStatus.PREPARING,
-      CustomerOrderStatus.READY,
-      CustomerOrderStatus.OUT_FOR_DELIVERY,
-      CustomerOrderStatus.COMPLETED,
-    ];
-    const prevRank = flow.indexOf(prev);
-    const nextRank = flow.indexOf(next);
-    const advancing =
-      next === CustomerOrderStatus.CANCELLED ||
-      (prevRank >= 0 && nextRank >= 0 && nextRank > prevRank);
+      const next = dto.status;
+      const prev = order.status;
+      if (prev === CustomerOrderStatus.CANCELLED) {
+        throw new BadRequestException('El pedido está cancelado');
+      }
+      if (next === prev) return { order, side: 'none' as const, prev, next };
 
-    const now = new Date();
-    order.status = next;
-    if (next === CustomerOrderStatus.ACCEPTED) {
-      order.acceptedAt = order.acceptedAt ?? now;
-    }
-    if (next === CustomerOrderStatus.PREPARING) {
-      order.preparingAt = order.preparingAt ?? now;
-    }
-    if (next === CustomerOrderStatus.READY) {
-      order.readyAt = order.readyAt ?? now;
-    }
-    if (next === CustomerOrderStatus.OUT_FOR_DELIVERY) {
-      order.outForDeliveryAt = order.outForDeliveryAt ?? now;
-    }
-    if (next === CustomerOrderStatus.COMPLETED) {
-      order.completedAt = now;
-    }
-    if (next === CustomerOrderStatus.CANCELLED) {
-      order.cancelledAt = now;
-    }
+      this.assertAllowedStatusTransition(order.fulfillment, prev, next);
 
-    // Al volver atrás, limpia marcas de etapas posteriores.
-    if (next !== CustomerOrderStatus.CANCELLED && nextRank >= 0) {
-      if (nextRank < flow.indexOf(CustomerOrderStatus.COMPLETED)) {
-        order.completedAt = null;
+      if (next === CustomerOrderStatus.COMPLETED && !order.paymentAccreditedAt) {
+        throw new BadRequestException(
+          'Acreditá el pago antes de completar el pedido',
+        );
       }
-      if (nextRank < flow.indexOf(CustomerOrderStatus.OUT_FOR_DELIVERY)) {
-        order.outForDeliveryAt = null;
-      }
-      if (nextRank < flow.indexOf(CustomerOrderStatus.READY)) {
-        order.readyAt = null;
-      }
-      if (nextRank < flow.indexOf(CustomerOrderStatus.PREPARING)) {
-        order.preparingAt = null;
-      }
-      if (nextRank < flow.indexOf(CustomerOrderStatus.ACCEPTED)) {
-        order.acceptedAt = null;
-      }
-      order.cancelledAt = null;
-    }
 
-    await this.orders.save(order);
+      const flow: CustomerOrderStatus[] = [
+        CustomerOrderStatus.PENDING,
+        CustomerOrderStatus.ACCEPTED,
+        CustomerOrderStatus.PREPARING,
+        CustomerOrderStatus.READY,
+        CustomerOrderStatus.OUT_FOR_DELIVERY,
+        CustomerOrderStatus.COMPLETED,
+      ];
+      const prevRank = flow.indexOf(prev);
+      const nextRank = flow.indexOf(next);
+      const advancing =
+        next === CustomerOrderStatus.CANCELLED ||
+        (prevRank >= 0 && nextRank >= 0 && nextRank > prevRank);
+
+      const now = new Date();
+      order.status = next;
+      if (next === CustomerOrderStatus.ACCEPTED) {
+        order.acceptedAt = order.acceptedAt ?? now;
+      }
+      if (next === CustomerOrderStatus.PREPARING) {
+        order.preparingAt = order.preparingAt ?? now;
+      }
+      if (next === CustomerOrderStatus.READY) {
+        order.readyAt = order.readyAt ?? now;
+      }
+      if (next === CustomerOrderStatus.OUT_FOR_DELIVERY) {
+        order.outForDeliveryAt = order.outForDeliveryAt ?? now;
+      }
+      if (next === CustomerOrderStatus.COMPLETED) {
+        order.completedAt = now;
+      }
+      if (next === CustomerOrderStatus.CANCELLED) {
+        order.cancelledAt = now;
+      }
+
+      if (next !== CustomerOrderStatus.CANCELLED && nextRank >= 0) {
+        if (nextRank < flow.indexOf(CustomerOrderStatus.COMPLETED)) {
+          order.completedAt = null;
+        }
+        if (nextRank < flow.indexOf(CustomerOrderStatus.OUT_FOR_DELIVERY)) {
+          order.outForDeliveryAt = null;
+        }
+        if (nextRank < flow.indexOf(CustomerOrderStatus.READY)) {
+          order.readyAt = null;
+        }
+        if (nextRank < flow.indexOf(CustomerOrderStatus.PREPARING)) {
+          order.preparingAt = null;
+        }
+        if (nextRank < flow.indexOf(CustomerOrderStatus.ACCEPTED)) {
+          order.acceptedAt = null;
+        }
+        order.cancelledAt = null;
+      }
+
+      await repo.save(order);
+      const printAccepted =
+        advancing &&
+        next === CustomerOrderStatus.ACCEPTED &&
+        prev === CustomerOrderStatus.PENDING;
+      const side =
+        next === CustomerOrderStatus.CANCELLED
+          ? ('cancel' as const)
+          : next === CustomerOrderStatus.READY
+            ? ('ready' as const)
+            : printAccepted
+              ? ('print' as const)
+              : ('none' as const);
+      return { order, side, prev, next };
+    });
+
     this.live.tick(shopId, 'customer-orders');
-    if (next === CustomerOrderStatus.CANCELLED) {
-      void this.integrations.cancelDeliverateForOrder(order).catch(() => undefined);
+    if (outcome.side === 'cancel') {
+      const shop = await this.shops.findOne({ where: { id: shopId } });
+      if (shop) void this.applyOrderStock(shop, outcome.order, 'restock');
+      void this.integrations.cancelDeliverateForOrder(outcome.order).catch(() => undefined);
     }
-    if (next === CustomerOrderStatus.READY) {
-      void this.integrations.markDeliverateKitchenReady(order).catch(() => undefined);
+    if (outcome.side === 'ready') {
+      void this.integrations.markDeliverateKitchenReady(outcome.order).catch(() => undefined);
     }
-    if (
-      advancing &&
-      next === CustomerOrderStatus.ACCEPTED &&
-      prev === CustomerOrderStatus.PENDING
-    ) {
+    if (outcome.side === 'print') {
       const shop = await this.shops.findOne({ where: { id: shopId } });
       if (shop) {
         void this.printAgent
-          .enqueueCustomerOrder(shop, order, 'ACCEPTED', { printCustomerTicket: false })
+          .enqueueCustomerOrder(shop, outcome.order, 'ACCEPTED', { printCustomerTicket: false })
           .catch(() => undefined);
       }
     }
-    return this.toDto(order);
+    return this.toDto(outcome.order);
   }
 
   async acreditPayment(user: AuthUser, shopId: string, id: string) {
     this.assertShopAccess(user, shopId);
-    const order = await this.orders.findOne({ where: { id, shopId } });
-    if (!order) throw new NotFoundException('Pedido no encontrado');
-    if (order.status === CustomerOrderStatus.CANCELLED) {
-      throw new BadRequestException('El pedido está cancelado');
-    }
-    if (order.paymentAccreditedAt) {
-      return this.toDto(order);
-    }
-    order.paymentAccreditedAt = new Date();
-    await this.orders.save(order);
+    const order = await this.orders.manager.transaction(async (manager) => {
+      const repo = manager.getRepository(CustomerOrder);
+      const row = await lockEntity(
+        manager,
+        CustomerOrder,
+        'o',
+        'o.id = :id AND o.shopId = :shopId',
+        { id, shopId },
+      );
+      if (!row) throw new NotFoundException('Pedido no encontrado');
+      if (row.status === CustomerOrderStatus.CANCELLED) {
+        throw new BadRequestException('El pedido está cancelado');
+      }
+      if (row.paymentAccreditedAt) {
+        return row;
+      }
+      row.paymentAccreditedAt = new Date();
+      await repo.save(row);
+      return row;
+    });
     this.live.tick(shopId, 'customer-orders');
     return this.toDto(order);
   }
 
   async desacreditPayment(user: AuthUser, shopId: string, id: string) {
     this.assertShopAccess(user, shopId);
-    const order = await this.orders.findOne({ where: { id, shopId } });
-    if (!order) throw new NotFoundException('Pedido no encontrado');
-    if (order.status === CustomerOrderStatus.CANCELLED) {
-      throw new BadRequestException('El pedido está cancelado');
-    }
-    if (order.status === CustomerOrderStatus.COMPLETED) {
-      throw new BadRequestException(
-        'Reabrí el pedido antes de desacreditar el pago',
+    const order = await this.orders.manager.transaction(async (manager) => {
+      const repo = manager.getRepository(CustomerOrder);
+      const row = await lockEntity(
+        manager,
+        CustomerOrder,
+        'o',
+        'o.id = :id AND o.shopId = :shopId',
+        { id, shopId },
       );
-    }
-    if (!order.paymentAccreditedAt) {
-      return this.toDto(order);
-    }
-    order.paymentAccreditedAt = null;
-    await this.orders.save(order);
+      if (!row) throw new NotFoundException('Pedido no encontrado');
+      if (row.status === CustomerOrderStatus.CANCELLED) {
+        throw new BadRequestException('El pedido está cancelado');
+      }
+      if (row.status === CustomerOrderStatus.COMPLETED) {
+        throw new BadRequestException(
+          'Reabrí el pedido antes de desacreditar el pago',
+        );
+      }
+      if (!row.paymentAccreditedAt) {
+        return row;
+      }
+      row.paymentAccreditedAt = null;
+      await repo.save(row);
+      return row;
+    });
     this.live.tick(shopId, 'customer-orders');
     return this.toDto(order);
   }

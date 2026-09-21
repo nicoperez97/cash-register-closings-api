@@ -61,7 +61,7 @@ export class PrintAgentController {
   ack(
     @Headers('authorization') authorization?: string,
     @Param('id') id?: string,
-    @Body() body?: { status?: string; error?: string | null },
+    @Body() body?: { status?: string; error?: string | null; printedKeys?: string[] },
   ) {
     return this.service
       .resolveShopFromToken(authorization)

@@ -16,10 +16,12 @@ import { AuthGuard } from '@nestjs/passport';
 import {
   IsArray,
   IsBoolean,
+  IsIn,
   IsNumber,
   IsOptional,
   IsString,
   IsUUID,
+  MaxLength,
   Min,
   MinLength,
   ValidateNested,
@@ -82,6 +84,21 @@ class AdjustQuantityDto {
   @ApiProperty({ description: '+1 o -1' })
   @IsNumber()
   delta: number;
+
+  @ApiPropertyOptional({
+    description: 'Obligatorio al restar: merma, cortesia, error u otro',
+    enum: ['merma', 'cortesia', 'error', 'otro'],
+  })
+  @IsOptional()
+  @IsString()
+  @IsIn(['merma', 'cortesia', 'error', 'otro'])
+  reason?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  note?: string | null;
 }
 
 class RestockProductsDto {
@@ -259,7 +276,15 @@ export class StockController {
     if (dto.delta !== 1 && dto.delta !== -1) {
       throw new BadRequestException('El ajuste debe ser +1 o -1');
     }
-    return this.stock.adjustQuantity(user, shopId, kind, id, dto.delta);
+    return this.stock.adjustQuantity(
+      user,
+      shopId,
+      kind,
+      id,
+      dto.delta,
+      dto.reason,
+      dto.note,
+    );
   }
 
   @Delete('products/:id')

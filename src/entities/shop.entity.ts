@@ -143,7 +143,7 @@ export class Shop extends BaseEntity {
   @Column({ type: 'tinyint', default: 0 })
   menuEnabled: boolean;
 
-  /** Al paso (sin mesas) vs restaurante (mesas vía reservas). */
+  /** @deprecated No usar. Pedidos, Comanda y Salón se prenden por separado. */
   @Column({ type: 'varchar', length: 20, default: ShopMode.RESTAURANTE })
   shopMode: ShopMode;
 
@@ -257,6 +257,13 @@ export class Shop extends BaseEntity {
 
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
   defaultChangeAmount: string;
+
+  /**
+   * Si |diferencia del cierre| >= este monto, el motivo es obligatorio.
+   * 0 = no pedir motivo.
+   */
+  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
+  differenceReasonMinAmount: string;
 
   /**
    * Horas por defecto al marcar asistencia en producción.
@@ -390,7 +397,10 @@ export class Shop extends BaseEntity {
   @Column({ type: 'varchar', length: 24, nullable: true })
   printAgentTokenPrefix?: string | null;
 
-  /** Token en claro para poder copiarlo después de generado. */
+  /**
+   * @deprecated Siempre null. El token se muestra una sola vez al generar.
+   * Columna conservada para no romper DBs viejas.
+   */
   @Column({ type: 'varchar', length: 120, nullable: true })
   printAgentToken?: string | null;
 

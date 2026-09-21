@@ -8,6 +8,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Matches,
   Max,
   MaxLength,
   Min,
@@ -205,6 +206,17 @@ export class CreateCustomerOrderDto {
   @IsNumber()
   @Min(0)
   discountFixed?: number | null;
+
+  /** Idempotencia: si se reenvía el mismo id en el local, se devuelve el pedido ya creado. */
+  @ApiPropertyOptional({
+    description: 'Idempotencia del mostrador (UUID). Si se reenvía, se devuelve el pedido ya creado.',
+  })
+  @IsOptional()
+  @IsString()
+  @MinLength(8)
+  @MaxLength(64)
+  @Matches(/^[A-Za-z0-9._-]+$/)
+  clientRequestId?: string | null;
 }
 
 export class UpdateCustomerOrderStatusDto {

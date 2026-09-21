@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { StockCategory } from '../../entities/stock-category.entity';
 import { StockProduct } from '../../entities/stock-product.entity';
+import { StockAdjustment } from '../../entities/stock-adjustment.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { ShopsModule } from '../shops/shops.module';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -10,7 +11,7 @@ import { StockService } from './stock.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([StockCategory, StockProduct, UserShop]),
+    TypeOrmModule.forFeature([StockCategory, StockProduct, StockAdjustment, UserShop]),
     ShopsModule,
     NotificationsModule,
   ],

@@ -26,6 +26,13 @@ export class TableSession extends BaseEntity {
   @Column({ type: 'varchar', length: 16, default: TableSessionStatus.OPEN })
   status: TableSessionStatus;
 
+  /**
+   * salonTableId mientras la mesa está OPEN; NULL al cerrar.
+   * El unique (shopId, openSalonTableId) impide dos sesiones abiertas en la misma mesa.
+   */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  openSalonTableId?: string | null;
+
   /** Cantidad de comensales al abrir la mesa. */
   @Column({ type: 'int', default: 2 })
   covers: number;

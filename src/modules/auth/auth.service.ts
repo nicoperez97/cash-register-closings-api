@@ -696,6 +696,7 @@ export class AuthService implements OnModuleInit {
         deliveryZones: normalizeDeliveryZones(s.deliveryZones),
         orderingEta: normalizeOrderingEta(s.orderingEta),
         defaultChangeAmount: Number(s.defaultChangeAmount),
+        differenceReasonMinAmount: Number(s.differenceReasonMinAmount) || 0,
         productionDefaultHours: Number(s.productionDefaultHours ?? 8) || 8,
         currency: s.currency,
         timezone: s.timezone,

@@ -9,6 +9,7 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
+import { isMysqlDuplicateKey } from '../../common/row-lock';
 import { isEntityActive } from '../../common/active.util';
 import { CustomerOrder } from '../../entities/customer-order.entity';
 import { SalonMapObject } from '../../entities/salon-map-object.entity';
@@ -198,46 +199,52 @@ export class DineInService implements OnModuleInit {
       throw new NotFoundException('Mesa no encontrada');
     }
 
-    const existing = await this.sessions.findOne({
-      where: {
-        shopId: shop.id,
-        salonTableId: table.id,
-        status: TableSessionStatus.OPEN,
-      },
-    });
-    if (existing) {
-      const orderCount = await this.orders.count({
-        where: { shopId: shop.id, tableSessionId: existing.id },
-      });
-      if (orderCount > 0) {
+    const existing = await this.sessions.manager.transaction(async (manager) => {
+      const repo = manager.getRepository(TableSession);
+      const open = await repo
+        .createQueryBuilder('s')
+        .setLock('pessimistic_write')
+        .where('s.shopId = :shopId', { shopId: shop.id })
+        .andWhere('s.salonTableId = :tableId', { tableId: table.id })
+        .andWhere('s.status = :st', { st: TableSessionStatus.OPEN })
+        .getOne();
+      if (open) {
+        const orderCount = await manager.getRepository(CustomerOrder).count({
+          where: { shopId: shop.id, tableSessionId: open.id },
+        });
+        if (orderCount > 0) {
+          throw new BadRequestException('Esa mesa ya está ocupada');
+        }
+        open.covers = covers;
+        open.waiterEmployeeId = null as any;
+        open.openSalonTableId = table.id;
+        await repo.save(open);
+        return open;
+      }
+      try {
+        return await repo.save(
+          repo.create({
+            shopId: shop.id,
+            salonTableId: table.id,
+            waiterEmployeeId: null as any,
+            status: TableSessionStatus.OPEN,
+            openSalonTableId: table.id,
+            covers,
+            customerTicketPrinted: false,
+            closedAt: null,
+            active: true,
+          }),
+        );
+      } catch (err) {
+        if (!isMysqlDuplicateKey(err)) throw err;
         throw new BadRequestException('Esa mesa ya está ocupada');
       }
-      existing.covers = covers;
-      existing.waiterEmployeeId = null as any;
-      await this.sessions.save(existing);
-      const token = await this.issueToken(shop, existing);
-      return {
-        token,
-        session: await this.sessionDetail(shop, existing),
-      };
-    }
+    });
 
-    const row = await this.sessions.save(
-      this.sessions.create({
-        shopId: shop.id,
-        salonTableId: table.id,
-        waiterEmployeeId: null as any,
-        status: TableSessionStatus.OPEN,
-        covers,
-        customerTicketPrinted: false,
-        closedAt: null,
-        active: true,
-      }),
-    );
-    const token = await this.issueToken(shop, row);
+    const token = await this.issueToken(shop, existing);
     return {
       token,
-      session: await this.sessionDetail(shop, row),
+      session: await this.sessionDetail(shop, existing),
     };
   }
 
@@ -270,6 +277,7 @@ export class DineInService implements OnModuleInit {
     if (session.status === TableSessionStatus.OPEN) {
       session.status = TableSessionStatus.CLOSED;
       session.closedAt = new Date();
+      session.openSalonTableId = null;
       await this.sessions.save(session);
     }
     return { ok: true };
@@ -296,37 +304,45 @@ export class DineInService implements OnModuleInit {
   ) {
     assertDineInShopSlug(guest, slug);
     const shop = await this.requireShop(slug);
-    const session = await this.sessions.findOne({
-      where: { id: guest.tableSessionId, shopId: shop.id },
-    });
-    if (!session) throw new NotFoundException('Sesión no encontrada');
-    if (session.status !== TableSessionStatus.OPEN) {
-      throw new BadRequestException('La mesa ya está cerrada');
-    }
-    if (session.salonTableId !== guest.salonTableId) {
-      throw new UnauthorizedException('Sesión inválida');
-    }
-    const table = await this.tables.findOne({
-      where: { id: session.salonTableId, shopId: shop.id },
-    });
-    if (!table) throw new NotFoundException('Mesa no encontrada');
+    return this.sessions.manager.transaction(async (manager) => {
+      const session = await manager
+        .getRepository(TableSession)
+        .createQueryBuilder('s')
+        .setLock('pessimistic_write')
+        .where('s.id = :id AND s.shopId = :shopId', {
+          id: guest.tableSessionId,
+          shopId: shop.id,
+        })
+        .getOne();
+      if (!session) throw new NotFoundException('Sesión no encontrada');
+      if (session.status !== TableSessionStatus.OPEN) {
+        throw new BadRequestException('La mesa ya está cerrada');
+      }
+      if (session.salonTableId !== guest.salonTableId) {
+        throw new UnauthorizedException('Sesión inválida');
+      }
+      const table = await this.tables.findOne({
+        where: { id: session.salonTableId, shopId: shop.id },
+      });
+      if (!table) throw new NotFoundException('Mesa no encontrada');
 
-    const order = await this.customerOrders.createTableOrder(shop, {
-      items: dto.items ?? [],
-      extras: dto.extras,
-      customerNotes: dto.customerNotes,
-      salonTableId: table.id,
-      tableSessionId: session.id,
-      waiterEmployeeId: null,
-      tableLabel: table.label,
-      waiterName: 'Cliente',
-      printKitchen: dto.printKitchen !== false,
-      printCustomerTicket: false,
-      response: 'guest',
-    });
+      const order = await this.customerOrders.createTableOrder(shop, {
+        items: dto.items ?? [],
+        extras: dto.extras,
+        customerNotes: dto.customerNotes,
+        salonTableId: table.id,
+        tableSessionId: session.id,
+        waiterEmployeeId: null,
+        tableLabel: table.label,
+        waiterName: 'Cliente',
+        printKitchen: dto.printKitchen !== false,
+        printCustomerTicket: false,
+        response: 'guest',
+      });
 
-    this.live.tick(shop.id, 'customer-orders');
-    return order;
+      this.live.tick(shop.id, 'customer-orders');
+      return order;
+    });
   }
 
   private async sessionDetail(shop: Shop, session: TableSession) {

@@ -102,6 +102,14 @@ export function nextCalendarDate(isoDate: string): string {
   return `${n.year}-${pad2(n.month)}-${pad2(n.day)}`;
 }
 
+/** Suma días calendario a YYYY-MM-DD (días negativos restan). */
+export function addCalendarDays(isoDate: string, days: number): string {
+  const [y, m, d] = String(isoDate).slice(0, 10).split('-').map(Number);
+  if (!y || !m || !d) return String(isoDate).slice(0, 10);
+  const n = shiftCalendarDay(y, m, d, Math.trunc(Number(days) || 0));
+  return `${n.year}-${pad2(n.month)}-${pad2(n.day)}`;
+}
+
 export function formatBusinessDayHint(
   businessDate: string,
   openingTime?: string | null,

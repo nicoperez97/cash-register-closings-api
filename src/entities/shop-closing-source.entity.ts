@@ -27,6 +27,10 @@ export class ShopClosingSource extends BaseEntity {
   @Column({ type: 'varchar', nullable: true })
   accountId?: string | null;
 
+  /** Días después del businessDate del cierre hasta la acreditación esperada (solo SETTLE_*). */
+  @Column({ type: 'int', default: 0 })
+  settlementLagDays: number;
+
   @Column({ type: 'int', default: 0 })
   sortOrder: number;
 

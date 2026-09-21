@@ -532,6 +532,14 @@ export class ShopsService implements OnModuleInit {
     } catch {
       // columna ya existe
     }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN differenceReasonMinAmount DECIMAL(12,2) NOT NULL DEFAULT 0.00
+      `);
+    } catch {
+      // columna ya existe
+    }
     await this.ensureDefaultShifts();
   }
 
@@ -813,7 +821,7 @@ export class ShopsService implements OnModuleInit {
             : 1,
         ),
         menuEnabled: dto.menuEnabled ?? false,
-        shopMode: normalizeShopMode(dto.shopMode),
+        shopMode: ShopMode.RESTAURANTE,
         onlineOrderingEnabled: dto.onlineOrderingEnabled ?? false,
         waiterOrderingEnabled: dto.waiterOrderingEnabled ?? false,
         orderingForceClosed: false,
@@ -829,6 +837,9 @@ export class ShopsService implements OnModuleInit {
         orderingExtras: normalizeOrderingExtras(dto.orderingExtras),
         discountPresets: normalizeDiscountPresets(dto.discountPresets),
         defaultChangeAmount: String(dto.defaultChangeAmount ?? 0),
+        differenceReasonMinAmount: String(
+          Math.max(0, Number(dto.differenceReasonMinAmount ?? 0) || 0),
+        ),
         productionDefaultHours: String(
           dto.productionDefaultHours !== undefined && dto.productionDefaultHours !== null
             ? Math.max(0, Number(dto.productionDefaultHours) || 0)
@@ -935,9 +946,6 @@ export class ShopsService implements OnModuleInit {
     if (dto.menuEnabled !== undefined) {
       shop.menuEnabled = dto.menuEnabled;
     }
-    if (dto.shopMode !== undefined) {
-      shop.shopMode = normalizeShopMode(dto.shopMode);
-    }
     if (dto.onlineOrderingEnabled !== undefined) {
       shop.onlineOrderingEnabled = !!dto.onlineOrderingEnabled;
     }
@@ -994,6 +1002,11 @@ export class ShopsService implements OnModuleInit {
     if (dto.active !== undefined) shop.active = isEntityActive(dto.active);
     if (dto.defaultChangeAmount !== undefined) {
       shop.defaultChangeAmount = String(dto.defaultChangeAmount);
+    }
+    if (dto.differenceReasonMinAmount !== undefined) {
+      shop.differenceReasonMinAmount = String(
+        Math.max(0, Number(dto.differenceReasonMinAmount) || 0),
+      );
     }
     if (dto.productionDefaultHours !== undefined) {
       shop.productionDefaultHours = String(
@@ -1133,7 +1146,6 @@ export class ShopsService implements OnModuleInit {
     this.assertOrderingCatalogManage(user, id);
     const shop = await this.shops.findOne({ where: { id } });
     if (!shop) throw new NotFoundException('Local no encontrado');
-    if (dto.shopMode !== undefined) shop.shopMode = normalizeShopMode(dto.shopMode);
     if (dto.onlineOrderingEnabled !== undefined) {
       shop.onlineOrderingEnabled = !!dto.onlineOrderingEnabled;
     }
@@ -1609,6 +1621,7 @@ export class ShopsService implements OnModuleInit {
       discountPresets: normalizeDiscountPresets(s.discountPresets),
       promos: normalizeShopPromos(s.promos),
       defaultChangeAmount: Number(s.defaultChangeAmount),
+      differenceReasonMinAmount: Number(s.differenceReasonMinAmount) || 0,
       productionDefaultHours: Number(s.productionDefaultHours ?? 8) || 8,
       logoUrl: s.logoUrl ?? null,
       accentColor: s.accentColor ?? null,
