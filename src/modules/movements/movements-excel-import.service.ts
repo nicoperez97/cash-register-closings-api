@@ -45,6 +45,7 @@ export type LedgerImportGemini = {
   accounts: Array<{ name: string; note: string }>;
   warnings: string[];
   message: string | null;
+  kindFixes: Array<{ rowNumber: number; kind: LedgerImportKind }>;
 };
 
 export type LedgerImportPreview = {
@@ -112,7 +113,7 @@ export class MovementsExcelImportService {
     info.addRow([`Local: ${shop.name}`]);
     info.addRow([]);
     info.addRow([
-      'Compatible con el Excel del contador: hoja "Movimientos" (Fecha, Cuenta Emisora, Cuenta Receptora, Importe $). No uses la hoja oculta de saldos acumulados.',
+      'Compatible con el Excel del contador: Fecha, Cuenta Emisora, Cuenta Receptora, Importe $, Concepto (p. ej. seguimiento de erogaciones e ingresos). La fila de títulos puede no ser la 1.',
     ]);
     info.addRow([
       'Columnas clave: Fecha, Cuenta Emisora, Cuenta Receptora, Descripción, Importe $, Concepto validado.',
@@ -131,7 +132,7 @@ export class MovementsExcelImportService {
     info.addRow([
       'Filas ya existentes (misma fecha, cuentas, monto y descripción) se omiten: podés subir el mismo Excel dos veces sin duplicar.',
     ]);
-    info.addRow(['No cambies los nombres de las columnas de la fila 1 en la hoja Movimientos.']);
+    info.addRow(['No cambies los nombres de las columnas (Fecha, Cuenta Emisora, Cuenta Receptora).']);
 
     const ws = wb.addWorksheet('Movimientos');
     ws.columns = TEMPLATE_HEADERS.map((header) => ({
@@ -273,7 +274,7 @@ export class MovementsExcelImportService {
     const drafts = await this.parseWorkbook(file);
     const items = await this.enrich(shopId, drafts, kind);
     const gemini = await this.analyzeWithGemini(items, file.originalname);
-    return { items, gemini };
+    return { items: this.applyKindFixes(items, gemini.kindFixes), gemini };
   }
 
   async commit(
@@ -284,9 +285,13 @@ export class MovementsExcelImportService {
     modules?: LedgerImportKind[],
     accountMap?: AccountImportMapping[],
     conceptMap?: ConceptImportMapping[],
+    kindFixes?: Array<{ rowNumber: number; kind: LedgerImportKind }>,
   ) {
     this.shops.assertShopAccess(user, shopId);
-    const items = await this.enrich(shopId, await this.parseWorkbook(file), kind);
+    const items = this.applyKindFixes(
+      await this.enrich(shopId, await this.parseWorkbook(file), kind),
+      kindFixes,
+    );
     const selected = this.normalizeModules(kind, modules);
     const valid = items.filter(
       (i) => i.valid && !i.alreadyExists && (!selected || selected.includes(i.detectedKind)),
@@ -366,6 +371,7 @@ export class MovementsExcelImportService {
           conceptById,
           conceptMapping,
           createdConcepts,
+          item.detectedKind,
         );
         conceptId = concept.id;
       }
@@ -439,11 +445,10 @@ export class MovementsExcelImportService {
       | 'error'
       | 'detectedKind'
     >>,
-    kind?: LedgerImportKind,
+    _kind?: LedgerImportKind,
   ): Promise<MovementImportItem[]> {
     const accounts = await this.accounts.find({ where: { shopId, active: true } });
     const concepts = await this.concepts.find({ where: { shopId, active: true } });
-    const byConcept = new Map(concepts.map((c) => [this.norm(c.name), c]));
 
     const dates = [...new Set(drafts.map((d) => d.businessDate).filter(Boolean))];
     const existingRows = dates.length
@@ -471,9 +476,7 @@ export class MovementsExcelImportService {
     return drafts.map((d) => {
       const from = this.findAccount(d.fromAccountName, accounts);
       const to = this.findAccount(d.toAccountName, accounts);
-      const concept = d.conceptName
-        ? byConcept.get(this.norm(d.conceptName))
-        : null;
+      const concept = d.conceptName ? this.findConcept(d.conceptName, concepts) : null;
       const errors: string[] = [];
       if (!d.businessDate) errors.push('Fecha inválida');
       if (!d.fromAccountName) errors.push('Falta cuenta emisora');
@@ -485,7 +488,11 @@ export class MovementsExcelImportService {
         errors.push('Emisora y receptora deben ser distintas');
       }
 
-      const detectedKind = this.classifyLedgerRow(d.fromAccountName, d.toAccountName);
+      const detectedKind = this.classifyLedgerRow(
+        d.fromAccountName,
+        d.toAccountName,
+        d.conceptName,
+      );
 
       const fp = this.movementFingerprint(d);
       const alreadyExists = existingFingerprints.has(fp) || seenInFile.has(fp);
@@ -518,10 +525,56 @@ export class MovementsExcelImportService {
     return v === 'ingreso' || v.includes('ingreso');
   }
 
-  private classifyLedgerRow(fromName: string, toName: string): LedgerImportKind {
-    if (this.isEgresoName(toName)) return 'expense';
-    if (this.isIngresoName(fromName)) return 'income';
+  private classifyLedgerRow(
+    fromName: string,
+    toName: string,
+    conceptName?: string | null,
+  ): LedgerImportKind {
+    const concept = this.norm(conceptName || '');
+    const transferConcept =
+      concept.includes('transferencia') ||
+      concept.includes('e/ cuentas') ||
+      concept.includes('entre cuentas') ||
+      concept.includes('pase e');
+    const toEg = this.isEgresoName(toName);
+    const fromIn = this.isIngresoName(fromName);
+    const fromEg = this.isEgresoName(fromName);
+    const toIn = this.isIngresoName(toName);
+    const bothOperational = !fromIn && !toEg && !fromEg && !toIn;
+
+    if (bothOperational) return 'transfer';
+    if (toEg && !fromIn) return 'expense';
+    if (fromIn && !toEg) return 'income';
+    if (fromIn && toEg) {
+      if (
+        concept.includes('ingreso') ||
+        concept.includes('cobro') ||
+        concept.includes('efectivo')
+      ) {
+        return 'income';
+      }
+      return 'expense';
+    }
+    if (transferConcept) return 'transfer';
     return 'transfer';
+  }
+
+  private applyKindFixes(
+    items: MovementImportItem[],
+    fixes?: Array<{ rowNumber: number; kind: LedgerImportKind }>,
+  ): MovementImportItem[] {
+    if (!fixes?.length) return items;
+    const allowed: LedgerImportKind[] = ['expense', 'income', 'transfer'];
+    const byRow = new Map<number, LedgerImportKind>();
+    for (const fix of fixes) {
+      if (!allowed.includes(fix.kind) || !(fix.rowNumber > 0)) continue;
+      byRow.set(fix.rowNumber, fix.kind);
+    }
+    if (!byRow.size) return items;
+    return items.map((item) => {
+      const next = byRow.get(item.rowNumber);
+      return next ? { ...item, detectedKind: next } : item;
+    });
   }
 
   private isSystemLedgerName(name: string): boolean {
@@ -539,6 +592,7 @@ export class MovementsExcelImportService {
       accounts: [],
       warnings: [],
       message: null,
+      kindFixes: [],
     };
     if (!this.gemini.isEnabled()) return empty;
     try {
@@ -555,6 +609,7 @@ export class MovementsExcelImportService {
         accounts: res.data.accounts,
         warnings: res.data.warnings,
         message: null,
+        kindFixes: res.data.kindFixes ?? [],
       };
     } catch {
       return { ...empty, message: 'No se pudo analizar el Excel con Gemini.' };
@@ -640,6 +695,43 @@ export class MovementsExcelImportService {
       rule: 'Saldo de cada cuenta operativa = entra - sale. Ingreso y Egreso no son cajas.',
       accounts: accountRows,
       topFlows,
+      samples: usable.slice(0, 8).concat(
+        usable.filter((i) => i.detectedKind === 'income').slice(0, 4),
+        usable.filter((i) => i.detectedKind === 'transfer').slice(0, 6),
+      ).slice(0, 18).map((i) => ({
+        rowNumber: i.rowNumber,
+        date: i.businessDate,
+        from: i.fromAccountName,
+        to: i.toAccountName,
+        concept: i.conceptName,
+        description: (i.description || '').slice(0, 80),
+        amount: round(n(i.amountUyu)),
+        kind: i.detectedKind,
+      })),
+      ambiguous: usable
+        .filter((i) => {
+          const c = this.norm(i.conceptName || '');
+          const looksTransfer =
+            c.includes('transferencia') ||
+            c.includes('e/ cuentas') ||
+            c.includes('entre cuentas') ||
+            c.includes('pase e');
+          const looksIncome = c.includes('ingreso') || c.includes('cobro');
+          const looksExpense =
+            c.includes('materia') || c.includes('gasto') || c.includes('sueldo');
+          if (looksTransfer && i.detectedKind !== 'transfer') return true;
+          if (looksIncome && i.detectedKind !== 'income') return true;
+          if (looksExpense && i.detectedKind === 'transfer') return true;
+          return false;
+        })
+        .slice(0, 12)
+        .map((i) => ({
+          rowNumber: i.rowNumber,
+          from: i.fromAccountName,
+          to: i.toAccountName,
+          concept: i.conceptName,
+          kind: i.detectedKind,
+        })),
     };
   }
 
@@ -745,6 +837,7 @@ export class MovementsExcelImportService {
     byId: Map<string, Concept>,
     mappingByExcel: Map<string, ConceptImportMapping>,
     createdConcepts: string[],
+    detectedKind?: LedgerImportKind,
   ): Promise<Concept> {
     const key = this.norm(excelName);
     const mapped = mappingByExcel.get(key);
@@ -763,7 +856,7 @@ export class MovementsExcelImportService {
         this.concepts.create({
           shopId,
           name: excelName.trim(),
-          kind: this.guessConceptKind(fromAccountName, toAccountName),
+          kind: this.guessConceptKind(fromAccountName, toAccountName, detectedKind),
           active: true,
           validated: true,
         }),
@@ -827,13 +920,13 @@ export class MovementsExcelImportService {
       );
     }
 
-    const headerRow = ws.getRow(1);
-    const colMap = this.mapHeaders(headerRow);
-    if (!colMap.businessDate) {
+    const header = this.findLedgerHeader(ws);
+    if (!header) {
       throw new BadRequestException(
-        'Falta la columna "Fecha". Usá la plantilla o el Excel del contador (hoja Movimientos).',
+        'Falta la columna "Fecha". Usá la plantilla o el Excel del contador (Fecha, Cuenta Emisora, Cuenta Receptora).',
       );
     }
+    const { headerRow, colMap } = header;
     if (!colMap.fromAccount || !colMap.toAccount) {
       throw new BadRequestException(
         'Faltan columnas "Cuenta Emisora" y/o "Cuenta Receptora".',
@@ -855,7 +948,7 @@ export class MovementsExcelImportService {
     }> = [];
 
     ws.eachRow({ includeEmpty: false }, (row, rowNumber) => {
-      if (rowNumber === 1) return;
+      if (rowNumber <= headerRow) return;
       const businessDate = this.parseDate(this.cell(row, colMap.businessDate));
       if (!businessDate) return;
       const fromAccountName = this.parseStr(this.cell(row, colMap.fromAccount)) ?? '';
@@ -894,6 +987,19 @@ export class MovementsExcelImportService {
       );
     }
     return drafts;
+  }
+
+  private findLedgerHeader(
+    ws: ExcelJS.Worksheet,
+  ): { headerRow: number; colMap: Record<string, number | undefined> } | null {
+    const max = Math.min(25, Number(ws.rowCount) || 25);
+    for (let r = 1; r <= max; r++) {
+      const colMap = this.mapHeaders(ws.getRow(r));
+      if (colMap.businessDate && colMap.fromAccount && colMap.toAccount) {
+        return { headerRow: r, colMap };
+      }
+    }
+    return null;
   }
 
   private mapHeaders(headerRow: ExcelJS.Row): Record<string, number | undefined> {
@@ -937,11 +1043,8 @@ export class MovementsExcelImportService {
         n.includes('instruccion')
       );
     };
-    const hasLedgerHeaders = (s: ExcelJS.Worksheet) => {
-      const map = this.mapHeaders(s.getRow(1));
-      return !!(map.businessDate && map.fromAccount && map.toAccount);
-    };
-    const preferred = ['movimientos', 'original completa movimientos'];
+    const hasLedgerHeaders = (s: ExcelJS.Worksheet) => !!this.findLedgerHeader(s);
+    const preferred = ['movimientos', 'original completa movimientos', 'sheet1'];
     for (const name of preferred) {
       const ws = wb.worksheets.find((s) => this.norm(s.name) === this.norm(name));
       if (ws && hasLedgerHeaders(ws)) return ws;
@@ -951,6 +1054,21 @@ export class MovementsExcelImportService {
     );
     if (visible) return visible;
     return wb.worksheets.find((s) => !skip(s) && hasLedgerHeaders(s));
+  }
+
+  private findConcept(name: string, concepts: Concept[]): Concept | undefined {
+    const key = this.norm(name);
+    if (!key) return undefined;
+    const exact = concepts.find((c) => this.norm(c.name) === key);
+    if (exact) return exact;
+    const stem = key.replace(/s$/, '');
+    const fuzzy = concepts.filter((c) => {
+      const nrm = this.norm(c.name);
+      const other = nrm.replace(/s$/, '');
+      return nrm === stem || nrm === `${stem}s` || other === stem || other === key;
+    });
+    if (fuzzy.length === 1) return fuzzy[0];
+    return undefined;
   }
 
   private findAccount(
@@ -1000,12 +1118,15 @@ export class MovementsExcelImportService {
     return LedgerAccountType.PARTNER;
   }
 
-  private guessConceptKind(from: string, to: string): ConceptKind {
-    const f = this.norm(from);
-    const t = this.norm(to);
-    if (t.includes('egreso') || f.includes('egreso')) return ConceptKind.EXPENSE;
-    if (f.includes('ingreso') || t.includes('ingreso')) return ConceptKind.INCOME;
-    return ConceptKind.TRANSFER;
+  private guessConceptKind(
+    from: string,
+    to: string,
+    detectedKind?: LedgerImportKind,
+  ): ConceptKind {
+    const k = detectedKind ?? this.classifyLedgerRow(from, to);
+    if (k === 'income') return ConceptKind.INCOME;
+    if (k === 'transfer') return ConceptKind.TRANSFER;
+    return ConceptKind.EXPENSE;
   }
 
   private makeCode(name: string): string {
@@ -1027,12 +1148,15 @@ export class MovementsExcelImportService {
   private parseDate(value: ExcelJS.CellValue | null): string | null {
     if (value == null || value === '') return null;
     if (value instanceof Date && !Number.isNaN(value.getTime())) {
-      return this.toIsoDate(value);
+      const y = value.getFullYear();
+      const m = String(value.getMonth() + 1).padStart(2, '0');
+      const day = String(value.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
     }
     if (typeof value === 'number') {
-      const excelEpoch = new Date(Date.UTC(1899, 11, 30));
-      const d = new Date(excelEpoch.getTime() + value * 86400000);
-      return this.toIsoDate(d);
+      const excelEpoch = Date.UTC(1899, 11, 30);
+      const d = new Date(excelEpoch + value * 86400000);
+      return d.toISOString().slice(0, 10);
     }
     if (typeof value === 'object' && value && 'result' in (value as any)) {
       return this.parseDate((value as any).result);

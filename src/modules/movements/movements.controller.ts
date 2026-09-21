@@ -408,6 +408,7 @@ export class MovementsController {
     @Body('commit') commitBody?: string | boolean,
     @Body('accountMap') accountMapBody?: string,
     @Body('conceptMap') conceptMapBody?: string,
+    @Body('kindFixes') kindFixesBody?: string,
   ) {
     if (!file) throw new BadRequestException('Adjuntá el Excel (.xlsx)');
     const doCommit =
@@ -442,8 +443,41 @@ export class MovementsController {
         throw new BadRequestException('El mapa de conceptos no es válido');
       }
     }
+    let kindFixes: Array<{ rowNumber: number; kind: 'expense' | 'income' | 'transfer' }> | undefined;
+    if (kindFixesBody) {
+      try {
+        const parsed = JSON.parse(kindFixesBody);
+        if (!Array.isArray(parsed)) {
+          throw new BadRequestException('Las correcciones de tipo no son válidas');
+        }
+        const allowed = new Set(['expense', 'income', 'transfer']);
+        kindFixes = parsed
+          .map((row: { rowNumber?: unknown; kind?: unknown }) => ({
+            rowNumber: Number(row?.rowNumber),
+            kind: String(row?.kind ?? '').trim(),
+          }))
+          .filter(
+            (row): row is { rowNumber: number; kind: 'expense' | 'income' | 'transfer' } =>
+              Number.isInteger(row.rowNumber) &&
+              row.rowNumber > 0 &&
+              allowed.has(row.kind),
+          );
+      } catch (err) {
+        if (err instanceof BadRequestException) throw err;
+        throw new BadRequestException('Las correcciones de tipo no son válidas');
+      }
+    }
     return doCommit
-      ? this.excelImport.commit(user, shopId, file, importKind, parsedModules, accountMap, conceptMap)
+      ? this.excelImport.commit(
+          user,
+          shopId,
+          file,
+          importKind,
+          parsedModules,
+          accountMap,
+          conceptMap,
+          kindFixes,
+        )
       : this.excelImport.preview(user, shopId, file, importKind);
   }
 
