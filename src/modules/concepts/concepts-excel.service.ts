@@ -5,6 +5,7 @@ import { ConceptKind } from '../../common/enums';
 import { ShopsService } from '../shops/shops.service';
 import { ConceptsService } from './concepts.service';
 import { inferConceptCategories, normalizeConceptCategories } from '../../common/concept-categories';
+import { conceptCategoryLabel, conceptKindLabel } from '../../common/labels.es';
 
 export interface ConceptImportItem {
   rowNumber: number;
@@ -13,6 +14,7 @@ export interface ConceptImportItem {
   kind: ConceptKind;
   categories: string[];
   validated: boolean;
+  active: boolean;
   exists: boolean;
   valid: boolean;
   error?: string;
@@ -28,15 +30,65 @@ export class ConceptsExcelService {
   async buildTemplate(user: AuthUser, shopId: string) {
     this.shops.assertShopAccess(user, shopId);
     const shop = await this.shops.findOne(user, shopId);
-    const wb = new ExcelJS.Workbook();
+    const { buffer } = await this.buildWorkbook(
+      shop.name,
+      [
+        ['Verdulería', 'Compra de frutas y verduras', 'Egreso', 'Proveedores, Movimientos', 'Sí', 'Sí'],
+        ['Alquiler', 'Alquiler del local', 'Egreso', 'Servicios, Movimientos', 'No', 'Sí'],
+        ['Sueldos', 'Haberes del mes', 'Egreso', 'Empleados, Movimientos', 'Sí', 'Sí'],
+      ],
+      {
+        title: 'Plantilla de conceptos',
+        intro:
+          'Completá la hoja "Conceptos" (una fila por concepto) y subila en Administración → Conceptos.',
+      },
+    );
+    return {
+      buffer,
+      filename: `plantilla-conceptos-${shop.slug || 'local'}.xlsx`,
+    };
+  }
 
+  async buildExport(user: AuthUser, shopId: string) {
+    this.shops.assertShopAccess(user, shopId);
+    const shop = await this.shops.findOne(user, shopId);
+    const current = await this.concepts.list(user, shopId, {
+      includeInactive: true,
+      includeUnvalidated: true,
+    });
+    const rows = current.map((c) => [
+      c.name,
+      c.description ?? '',
+      conceptKindLabel(c.kind),
+      (c.categories ?? []).map((cat) => conceptCategoryLabel(cat)).join(', '),
+      c.validated ? 'Sí' : 'No',
+      c.active ? 'Sí' : 'No',
+    ]);
+    const { buffer } = await this.buildWorkbook(shop.name, rows, {
+      title: 'Conceptos actuales',
+      intro: rows.length
+        ? `Este Excel tiene los ${rows.length} conceptos del local. Editá la hoja y subila con Importar Excel.`
+        : 'Este local no tiene conceptos. Completá la hoja o usá Descargar plantilla.',
+    });
+    return {
+      buffer,
+      filename: `conceptos-${shop.slug || 'local'}.xlsx`,
+    };
+  }
+
+  private async buildWorkbook(
+    shopName: string,
+    dataRows: Array<Array<string>>,
+    copy: { title: string; intro: string },
+  ) {
+    const wb = new ExcelJS.Workbook();
     const info = wb.addWorksheet('Instrucciones');
     info.getColumn(1).width = 110;
-    info.addRow(['Plantilla de conceptos']);
+    info.addRow([copy.title]);
     info.getRow(1).font = { bold: true, size: 13 };
-    info.addRow([`Local: ${shop.name}`]);
+    info.addRow([`Local: ${shopName}`]);
     info.addRow([]);
-    info.addRow(['Completá la hoja "Conceptos" (una fila por concepto) y subila en Administración → Conceptos.']);
+    info.addRow([copy.intro]);
     info.addRow(['Columnas:']);
     info.addRow(['· Nombre — obligatorio, único por local']);
     info.addRow(['· Descripción — opcional']);
@@ -45,8 +97,9 @@ export class ConceptsExcelService {
       '· Categorías — una o más, separadas por coma: Empleados, Servicios, Proveedores, Movimientos, Cierre, Otros',
     ]);
     info.addRow(['· Validado — Sí / No. Solo los validados aparecen al cargar movimientos y pagos.']);
+    info.addRow(['· Activo — Sí / No.']);
     info.addRow([]);
-    info.addRow(['Si el nombre ya existe, se actualiza descripción, tipo, categorías y validado.']);
+    info.addRow(['Si el nombre ya existe, se actualiza descripción, tipo, categorías, validado y activo.']);
 
     const ws = wb.addWorksheet('Conceptos');
     ws.columns = [
@@ -55,17 +108,12 @@ export class ConceptsExcelService {
       { header: 'Tipo', key: 'kind', width: 16 },
       { header: 'Categorías', key: 'categories', width: 36 },
       { header: 'Validado', key: 'validated', width: 12 },
+      { header: 'Activo', key: 'active', width: 12 },
     ];
     ws.getRow(1).font = { bold: true };
-    ws.addRow(['Verdulería', 'Compra de frutas y verduras', 'Egreso', 'Proveedores, Movimientos', 'Sí']);
-    ws.addRow(['Alquiler', 'Alquiler del local', 'Egreso', 'Servicios, Movimientos', 'No']);
-    ws.addRow(['Sueldos', 'Haberes del mes', 'Egreso', 'Empleados, Movimientos', 'Sí']);
-
+    for (const row of dataRows) ws.addRow(row);
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());
-    return {
-      buffer,
-      filename: `plantilla-conceptos-${shop.slug || 'local'}.xlsx`,
-    };
+    return { buffer };
   }
 
   async preview(user: AuthUser, shopId: string, file: Express.Multer.File) {
@@ -87,7 +135,7 @@ export class ConceptsExcelService {
           kind: item.kind,
           categories: item.categories,
           validated: item.validated,
-          active: true,
+          active: item.active,
         });
         updatedCount += 1;
       } else {
@@ -97,7 +145,7 @@ export class ConceptsExcelService {
           kind: item.kind,
           categories: item.categories,
           validated: item.validated,
-          active: true,
+          active: item.active,
         });
         byName.set(this.norm(created.name), {
           id: created.id,
@@ -142,6 +190,7 @@ export class ConceptsExcelService {
     const kindCol = col(['tipo', 'kind']);
     const catCol = col(['categor', 'category', 'categories']);
     const valCol = col(['validado', 'validated']);
+    const activeCol = col(['activo', 'active']);
     if (nameCol < 0) {
       throw new BadRequestException('Falta la columna Nombre');
     }
@@ -158,7 +207,8 @@ export class ConceptsExcelService {
       const kindRaw = kindCol > 0 ? this.cellStr(row.getCell(kindCol).value) : '';
       const catRaw = catCol > 0 ? this.cellStr(row.getCell(catCol).value) : '';
       const valRaw = valCol > 0 ? this.cellStr(row.getCell(valCol).value) : '';
-      if (!name && !description && !kindRaw && !catRaw && !valRaw) return;
+      const activeRaw = activeCol > 0 ? this.cellStr(row.getCell(activeCol).value) : '';
+      if (!name && !description && !kindRaw && !catRaw && !valRaw && !activeRaw) return;
 
       const kind = this.parseKind(kindRaw);
       const categories = catRaw
@@ -178,6 +228,7 @@ export class ConceptsExcelService {
         kind: kind ?? ConceptKind.EXPENSE,
         categories,
         validated: this.parseYes(valRaw),
+        active: activeCol > 0 ? this.parseYes(activeRaw, true) : true,
         exists: !!byName.get(key),
         valid: !error,
         error,
@@ -242,10 +293,11 @@ export class ConceptsExcelService {
     return null;
   }
 
-  private parseYes(raw: string): boolean {
+  private parseYes(raw: string, defaultYes = false): boolean {
     const s = this.norm(raw);
-    if (!s) return false;
-    return /^(si|s|yes|y|1|true|validado)$/.test(s);
+    if (!s) return defaultYes;
+    if (/^(no|n|0|false|inactivo)$/.test(s)) return false;
+    return /^(si|s|yes|y|1|true|validado|activo)$/.test(s) || defaultYes;
   }
 
   private cellStr(v: unknown): string {

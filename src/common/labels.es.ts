@@ -55,6 +55,7 @@ export function conceptCategoryLabel(category?: string | null): string {
     SERVICES: 'Servicios',
     SUPPLIERS: 'Proveedores',
     MOVEMENTS: 'Movimientos',
+    CLOSURE: 'Cierre',
     OTHERS: 'Otros',
   };
   return map[category ?? ''] ?? category ?? '';
