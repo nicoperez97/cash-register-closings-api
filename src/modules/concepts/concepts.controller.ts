@@ -135,12 +135,18 @@ export class ConceptsController {
     @Res() res: Response,
   ) {
     const { buffer, filename } = await this.excel.buildTemplate(user, shopId);
-    res.setHeader(
-      'Content-Type',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    );
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.send(buffer);
+    this.sendXlsx(res, buffer, filename);
+  }
+
+  @Get('export.xlsx')
+  @RequirePermissions('concepts.manage')
+  async exportExcel(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Res() res: Response,
+  ) {
+    const { buffer, filename } = await this.excel.buildExport(user, shopId);
+    this.sendXlsx(res, buffer, filename);
   }
 
   @Post('import-excel')
@@ -215,5 +221,14 @@ export class ConceptsController {
     @Param('id') id: string,
   ) {
     return this.concepts.remove(user, shopId, id);
+  }
+
+  private sendXlsx(res: Response, buffer: Buffer, filename: string) {
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
   }
 }
