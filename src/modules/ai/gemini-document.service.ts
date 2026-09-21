@@ -550,30 +550,36 @@ Reglas:
       findings: string[];
       accounts: Array<{ name: string; note: string }>;
       warnings: string[];
+      kindFixes: Array<{ rowNumber: number; kind: 'expense' | 'income' | 'transfer' }>;
     }>
   > {
     if (!this.isEnabled()) {
       return this.fail('disabled', 'Gemini no está configurado (falta GEMINI_API_KEY).');
     }
     const system = `Sos un analista del libro diario de un local gastronómico (Uruguay/Argentina).
-Te pasan un resumen numérico de un Excel de movimientos (cuenta emisora, receptora, importe).
+Te pasan un resumen de un Excel (cuenta emisora, receptora, concepto, importe) y el tipo ya detectado (kind).
 El saldo de cada cuenta operativa es lo que entra menos lo que sale.
 Las cuentas 1. Ingreso / 2. Egreso son origen y destino del libro, no cajas.
+Tipos:
+- expense: sale de una cuenta operativa hacia 2. Egreso (gasto).
+- income: entra a una cuenta operativa desde 1. Ingreso (ingreso).
+- transfer: pase entre dos cuentas operativas (cajas, MP, PVS, socios). No toca Ingreso/Egreso.
 Devolvé SOLO JSON:
-{"summary":"string","findings":["string"],"accounts":[{"name":"string","note":"string"}],"warnings":["string"]}
+{"summary":"string","findings":["string"],"accounts":[{"name":"string","note":"string"}],"warnings":["string"],"kindFixes":[{"rowNumber":1,"kind":"expense"}]}
 Reglas:
 - Español rioplatense, frases cortas, segunda persona, sin jerga.
 - summary: 2 a 4 oraciones. Decí si los números cierran y por qué una cuenta grande (p. ej. PVS) queda negativa o positiva.
 - findings: hasta 6 viñetas concretas, con montos si ayudan.
 - accounts: solo las cuentas que merecen una nota (máx 6).
 - warnings: rarezas (cuenta nueva, desbalance raro, PVS usado para gastos y divisiones a socios). Vacío si no hay.
-- No inventes filas. Usá solo el resumen.
-- No sugieras cambiar la fórmula del saldo.`;
+- kindFixes: SOLO filas de samples/ambiguous cuyo kind esté mal. rowNumber debe existir en el resumen. kind = expense|income|transfer. Vacío si está bien.
+- No inventes filas ni números de fila. No sugieras cambiar la fórmula del saldo.`;
     const data = await this.generateJson<{
       summary?: string;
       findings?: unknown;
       accounts?: unknown;
       warnings?: unknown;
+      kindFixes?: unknown;
     }>(
       [
         {
@@ -606,6 +612,18 @@ Reglas:
       })
       .filter((a) => a.name && a.note)
       .slice(0, 6);
+    const allowedKind = new Set(['expense', 'income', 'transfer']);
+    const kindFixes = (Array.isArray(data.data.kindFixes) ? data.data.kindFixes : [])
+      .map((raw) => {
+        const row = raw as { rowNumber?: unknown; kind?: unknown };
+        const rowNumber = Number(row?.rowNumber);
+        const kind = String(row?.kind ?? '').trim();
+        if (!Number.isInteger(rowNumber) || rowNumber < 1) return null;
+        if (!allowedKind.has(kind)) return null;
+        return { rowNumber, kind: kind as 'expense' | 'income' | 'transfer' };
+      })
+      .filter((x): x is { rowNumber: number; kind: 'expense' | 'income' | 'transfer' } => !!x)
+      .slice(0, 80);
     const summary = String(data.data.summary ?? '').trim().slice(0, 900);
     if (!summary) {
       return this.fail('empty', 'Gemini no devolvió un análisis del Excel.');
@@ -617,6 +635,7 @@ Reglas:
         findings: strList(data.data.findings, 6),
         accounts,
         warnings: strList(data.data.warnings, 4),
+        kindFixes,
       },
     };
   }
