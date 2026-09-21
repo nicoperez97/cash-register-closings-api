@@ -6,9 +6,10 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
 import { ClosingSourceAmount } from '../../entities/closing-source-amount.entity';
+import { ShopClosingSource } from '../../entities/shop-closing-source.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { Concept } from '../../entities/concept.entity';
 import { ShopsService } from '../shops/shops.service';
@@ -17,6 +18,8 @@ import { MovementsService } from '../movements/movements.service';
 import { ShopLiveService } from '../shop-live/shop-live.service';
 import { AuthUser } from '../../common/decorators';
 import { ClosingSourceKind, ConceptKind, LedgerAccountType } from '../../common/enums';
+import { accountCommissionOf } from '../../common/account-commission';
+import { addCalendarDays } from '../../common/business-date';
 import { SettleClosingSourcesDto } from './dto/settlement.dto';
 
 const n = (v?: number | string | null) => Number(v ?? 0);
@@ -47,6 +50,8 @@ export class SettlementsService implements OnModuleInit {
   constructor(
     @InjectRepository(ClosingSourceAmount)
     private readonly sourceAmounts: Repository<ClosingSourceAmount>,
+    @InjectRepository(ShopClosingSource)
+    private readonly catalogSources: Repository<ShopClosingSource>,
     @InjectRepository(LedgerAccount)
     private readonly accounts: Repository<LedgerAccount>,
     @InjectRepository(Concept)
@@ -109,7 +114,85 @@ export class SettlementsService implements OnModuleInit {
       .addOrderBy('c.businessDate', 'DESC')
       .getMany();
 
-    return rows.map((r) => this.toPendingDto(r));
+    const enrich = await this.buildEnrichment(shopId, rows);
+    return rows.map((r) => this.toPendingDto(r, enrich));
+  }
+
+  async receivablesSummary(user: AuthUser, shopId: string) {
+    this.shops.assertShopAccess(user, shopId);
+    const rows = await this.sourceAmounts
+      .createQueryBuilder('s')
+      .innerJoinAndSelect('s.closing', 'c')
+      .where('c.shopId = :shopId', { shopId })
+      .andWhere('c.active = true')
+      .andWhere('s.kind IN (:...kinds)', { kinds: SETTLE_KINDS })
+      .andWhere('s.settledAt IS NULL')
+      .andWhere('s.amount > 0')
+      .getMany();
+
+    const enrich = await this.buildEnrichment(shopId, rows);
+    const byKey = new Map<
+      string,
+      {
+        name: string;
+        kind: ClosingSourceKind;
+        count: number;
+        gross: number;
+        net: number;
+        earliestExpected: string | null;
+      }
+    >();
+
+    let totalGross = 0;
+    let totalNet = 0;
+
+    for (const r of rows) {
+      const dto = this.toPendingDto(r, enrich);
+      totalGross += dto.amount;
+      totalNet += dto.netEstimate;
+      const key = `${dto.name}::${dto.kind}`;
+      const existing = byKey.get(key);
+      if (existing) {
+        existing.count += 1;
+        existing.gross += dto.amount;
+        existing.net += dto.netEstimate;
+        if (
+          dto.expectedCreditDate &&
+          (!existing.earliestExpected || dto.expectedCreditDate < existing.earliestExpected)
+        ) {
+          existing.earliestExpected = dto.expectedCreditDate;
+        }
+      } else {
+        byKey.set(key, {
+          name: dto.name,
+          kind: dto.kind,
+          count: 1,
+          gross: dto.amount,
+          net: dto.netEstimate,
+          earliestExpected: dto.expectedCreditDate,
+        });
+      }
+    }
+
+    const byChannel = [...byKey.values()]
+      .map((c) => ({
+        ...c,
+        gross: Math.round(c.gross * 100) / 100,
+        net: Math.round(c.net * 100) / 100,
+      }))
+      .sort((a, b) => b.net - a.net || a.name.localeCompare(b.name, 'es'));
+
+    return {
+      totalGross: Math.round(totalGross * 100) / 100,
+      totalNet: Math.round(totalNet * 100) / 100,
+      count: rows.length,
+      earliestExpected:
+        byChannel
+          .map((c) => c.earliestExpected)
+          .filter((d): d is string => !!d)
+          .sort()[0] ?? null,
+      byChannel,
+    };
   }
 
   async listHistory(user: AuthUser, shopId: string) {
@@ -295,16 +378,92 @@ export class SettlementsService implements OnModuleInit {
     };
   }
 
-  private toPendingDto(r: ClosingSourceAmount) {
+  private async buildEnrichment(shopId: string, rows: ClosingSourceAmount[]) {
+    const sourceIds = [
+      ...new Set(rows.map((r) => r.sourceId).filter((id): id is string => !!id)),
+    ];
+    const catalog = sourceIds.length
+      ? await this.catalogSources.find({
+          where: { shopId, id: In(sourceIds) },
+          withDeleted: true,
+        })
+      : [];
+    const bySourceId = new Map(catalog.map((s) => [s.id, s]));
+
+    // Fallback por nombre si el sourceId se perdió o cambió.
+    const names = [...new Set(rows.map((r) => r.name.trim()).filter(Boolean))];
+    const byName =
+      names.length && catalog.length < names.length
+        ? await this.catalogSources.find({
+            where: { shopId, active: true },
+          })
+        : catalog;
+    const nameMap = new Map<string, ShopClosingSource>();
+    for (const s of byName) {
+      const key = s.name.trim().toLowerCase();
+      if (key && !nameMap.has(key)) nameMap.set(key, s);
+    }
+
+    const accountIds = [
+      ...new Set(
+        [...bySourceId.values(), ...nameMap.values()]
+          .map((s) => s.accountId)
+          .filter((id): id is string => !!id),
+      ),
+    ];
+    const accounts = accountIds.length
+      ? await this.accounts.find({
+          where: { shopId, id: In(accountIds) },
+          withDeleted: true,
+        })
+      : [];
+    const commissionByAccount = new Map(
+      accounts.map((a) => [a.id, Number(a.commissionPercent ?? 0) || 0]),
+    );
+
+    return { bySourceId, nameMap, commissionByAccount };
+  }
+
+  private resolveCatalog(
+    r: ClosingSourceAmount,
+    enrich: Awaited<ReturnType<SettlementsService['buildEnrichment']>>,
+  ): ShopClosingSource | null {
+    if (r.sourceId && enrich.bySourceId.has(r.sourceId)) {
+      return enrich.bySourceId.get(r.sourceId)!;
+    }
+    const key = r.name.trim().toLowerCase();
+    return key ? enrich.nameMap.get(key) ?? null : null;
+  }
+
+  private toPendingDto(
+    r: ClosingSourceAmount,
+    enrich?: Awaited<ReturnType<SettlementsService['buildEnrichment']>>,
+  ) {
+    const amount = n(r.amount);
+    const catalog = enrich ? this.resolveCatalog(r, enrich) : null;
+    const lag = Math.max(0, Math.min(90, Number(catalog?.settlementLagDays ?? 0) || 0));
+    const businessDate = r.closing?.businessDate ?? '';
+    const expectedCreditDate =
+      businessDate && lag >= 0 ? addCalendarDays(businessDate, lag) : businessDate || null;
+    const accountId = catalog?.accountId ?? null;
+    const commissionPercent =
+      accountId && enrich ? enrich.commissionByAccount.get(accountId) ?? 0 : 0;
+    const comm = accountCommissionOf(amount, commissionPercent);
+
     return {
       id: r.id,
       closingId: r.closingId,
-      businessDate: r.closing?.businessDate ?? '',
+      businessDate,
       sourceId: r.sourceId ?? null,
       name: r.name,
       kind: r.kind,
-      amount: n(r.amount),
+      amount,
       lines: sourceLinesOf(r.lines),
+      settlementLagDays: lag,
+      expectedCreditDate,
+      commissionPercent: comm.commissionPercent,
+      commissionAmount: comm.commissionAmount,
+      netEstimate: comm.netBalance,
     };
   }
 }

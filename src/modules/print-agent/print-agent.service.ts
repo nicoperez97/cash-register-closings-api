@@ -10,7 +10,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { createHash, randomBytes } from 'crypto';
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { AuthUser } from '../../common/decorators';
 import { GlobalRole } from '../../common/enums';
 import { isSuperAdmin } from '../../common/guards';
@@ -34,6 +34,71 @@ import { normalizeShopMenus, normalizeKitchenSectors, normalizeKitchenSectorIds 
 import { normalizeOrderingExtras } from '../../common/shop-ordering';
 
 type AgentShop = Pick<Shop, 'id' | 'name' | 'slug' | 'timezone' | 'printAgentTokenHash'>;
+
+const MAX_PRINTED_KEYS = 40;
+
+type KitchenPayloadItem = {
+  menuItemId: string | null;
+  name: string;
+  qty: number;
+  notes: string | null;
+  kind: string;
+  removedIngredients: string[];
+  attachedToMenuItemId: string | null;
+  extraId: string | null;
+  isEntrada: boolean;
+  mainFired: boolean;
+  combinesWithNames: string[];
+};
+
+function isExtraKind(kind: string): boolean {
+  return String(kind || '').toUpperCase() === 'EXTRA';
+}
+
+/** Filtra líneas de cocina para entradas o principales pendientes. */
+function filterKitchenPayloadItems(
+  items: KitchenPayloadItem[],
+  mode: 'ALL' | 'ENTRADAS' | 'MAINS_PENDING',
+): KitchenPayloadItem[] {
+  if (mode === 'ALL' || !items.length) return items;
+  const keepIds = new Set<string>();
+  for (const it of items) {
+    if (isExtraKind(it.kind)) continue;
+    const id = String(it.menuItemId || '').trim();
+    if (mode === 'ENTRADAS') {
+      if (it.isEntrada && id) keepIds.add(id);
+    } else if (!it.isEntrada && !it.mainFired && id) {
+      keepIds.add(id);
+    }
+  }
+  if (!keepIds.size) return [];
+  return items.filter((it) => {
+    if (isExtraKind(it.kind)) {
+      const parent = String(it.attachedToMenuItemId || '').trim();
+      return !!parent && keepIds.has(parent);
+    }
+    const id = String(it.menuItemId || '').trim();
+    return !!id && keepIds.has(id);
+  });
+}
+
+function mergePrintedKeys(
+  payload: Record<string, unknown> | null | undefined,
+  incoming?: unknown,
+): Record<string, unknown> {
+  const prev = Array.isArray(payload?.['printedKeys']) ? payload['printedKeys'] : [];
+  const next = Array.isArray(incoming) ? incoming : [];
+  const seen = new Set<string>();
+  const printedKeys: string[] = [];
+  for (const raw of [...prev, ...next]) {
+    const key = String(raw ?? '').trim().slice(0, 80);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    printedKeys.push(key);
+    if (printedKeys.length >= MAX_PRINTED_KEYS) break;
+  }
+  return { ...(payload && typeof payload === 'object' ? payload : {}), printedKeys };
+}
 
 export type PrintAgentInstallerOs = 'windows' | 'macos' | 'linux';
 
@@ -80,6 +145,11 @@ export type InstallerPublicItem = {
 export type InstallerPublicCatalog = {
   items: InstallerPublicItem[];
 };
+
+/** Cuántos jobs reserva cada poll. El agent los imprime en serie en el mismo tick. */
+const CLAIM_BATCH = 8;
+/** Si el agent se cae a mitad de impresión, el job vuelve a la cola. */
+const STALE_CLAIM_SECONDS = 180;
 
 const INSTALLER_DIR = 'platform';
 const INSTALLER_META = 'cierres-comandas-installer.meta.json';
@@ -201,23 +271,31 @@ export class PrintAgentService implements OnModuleInit {
           sourceId VARCHAR(80) NULL,
           copies INT NOT NULL DEFAULT 1,
           attempts INT NOT NULL DEFAULT 0,
+          claimToken VARCHAR(64) NULL,
+          claimedAt DATETIME(6) NULL,
           payload JSON NOT NULL,
           error VARCHAR(500) NULL,
           printedAt DATETIME(6) NULL,
           PRIMARY KEY (id),
           UNIQUE KEY idx_print_jobs_shop_source (shopId, sourceId),
-          KEY idx_print_jobs_shop_status (shopId, status, createdAt)
+          KEY idx_print_jobs_shop_status (shopId, status, createdAt),
+          KEY idx_print_jobs_claim_token (shopId, claimToken)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
       `);
     } catch {
       /* already exists / dialect */
     }
-    try {
-      await this.jobs.query(
-        `ALTER TABLE print_jobs ADD COLUMN attempts INT NOT NULL DEFAULT 0`,
-      );
-    } catch {
-      /* already exists */
+    for (const sql of [
+      `ALTER TABLE print_jobs ADD COLUMN attempts INT NOT NULL DEFAULT 0`,
+      `ALTER TABLE print_jobs ADD COLUMN claimToken VARCHAR(64) NULL`,
+      `ALTER TABLE print_jobs ADD COLUMN claimedAt DATETIME(6) NULL`,
+      `ALTER TABLE print_jobs ADD KEY idx_print_jobs_claim_token (shopId, claimToken)`,
+    ]) {
+      try {
+        await this.jobs.query(sql);
+      } catch {
+        /* already exists */
+      }
     }
     for (const sql of [
       `ALTER TABLE shops ADD COLUMN printAgentTokenHash VARCHAR(64) NULL`,
@@ -229,6 +307,27 @@ export class PrintAgentService implements OnModuleInit {
       } catch {
         /* already exists */
       }
+    }
+    try {
+      await this.shops.query(`
+        UPDATE shops
+        SET
+          printAgentTokenHash = SHA2(TRIM(printAgentToken), 256),
+          printAgentTokenPrefix = IFNULL(
+            NULLIF(printAgentTokenPrefix, ''),
+            CONCAT(LEFT(TRIM(printAgentToken), 10), '…')
+          )
+        WHERE printAgentToken IS NOT NULL
+          AND TRIM(printAgentToken) <> ''
+          AND (printAgentTokenHash IS NULL OR printAgentTokenHash = '')
+      `);
+    } catch {
+      /* columna ausente */
+    }
+    try {
+      await this.shops.query(`UPDATE shops SET printAgentToken = NULL WHERE printAgentToken IS NOT NULL`);
+    } catch {
+      /* columna ausente */
     }
   }
 
@@ -250,28 +349,9 @@ export class PrintAgentService implements OnModuleInit {
     const hash = this.hashToken(token);
     const shop = await this.shops.findOne({
       where: { printAgentTokenHash: hash, active: true as any },
-      select: [
-        'id',
-        'name',
-        'slug',
-        'timezone',
-        'printAgentTokenHash',
-        'printAgentToken',
-        'printAgentTokenPrefix',
-      ],
+      select: ['id', 'name', 'slug', 'timezone', 'printAgentTokenHash'],
     });
     if (!shop) throw new UnauthorizedException('Token de comandas inválido');
-    // Tokens viejos solo tenían hash: si el agent autentica, guardamos el claro para poder copiarlo.
-    if (!shop.printAgentToken?.trim()) {
-      try {
-        await this.shops.update(shop.id, {
-          printAgentToken: token,
-          printAgentTokenPrefix: shop.printAgentTokenPrefix || `${token.slice(0, 10)}…`,
-        });
-      } catch {
-        /* no bloquear el agent si falla el backfill */
-      }
-    }
     return shop;
   }
 
@@ -279,15 +359,14 @@ export class PrintAgentService implements OnModuleInit {
     this.shopsSvc.assertShopAccess(user, shopId);
     const shop = await this.shops.findOne({
       where: { id: shopId },
-      select: ['id', 'printAgentTokenPrefix', 'printAgentTokenHash', 'printAgentToken'],
+      select: ['id', 'printAgentTokenPrefix', 'printAgentTokenHash'],
     });
     if (!shop) throw new NotFoundException('Local no encontrado');
-    const token = shop.printAgentToken?.trim() || null;
     return {
       configured: !!shop.printAgentTokenHash,
       tokenPrefix: shop.printAgentTokenPrefix ?? null,
-      token,
-      canReveal: !!token,
+      token: null,
+      canReveal: false,
     };
   }
 
@@ -298,14 +377,14 @@ export class PrintAgentService implements OnModuleInit {
     const token = `pa_${randomBytes(24).toString('base64url')}`;
     shop.printAgentTokenHash = this.hashToken(token);
     shop.printAgentTokenPrefix = `${token.slice(0, 10)}…`;
-    shop.printAgentToken = token;
+    shop.printAgentToken = null;
     await this.shops.save(shop);
     return {
       token,
       tokenPrefix: shop.printAgentTokenPrefix,
       configured: true,
-      canReveal: true,
-      hint: 'Token listo. Podés copiarlo cuando quieras desde Dispositivos.',
+      canReveal: false,
+      hint: 'Copiá el token ahora y pegalo en Cierres-Comandas. Después no se puede ver: hay que regenerarlo.',
     };
   }
 
@@ -322,7 +401,10 @@ export class PrintAgentService implements OnModuleInit {
 
   async session(shop: AgentShop) {
     const pending = await this.jobs.count({
-      where: { shopId: shop.id, status: 'PENDING' as PrintJobStatus },
+      where: {
+        shopId: shop.id,
+        status: In(['PENDING', 'CLAIMED'] as PrintJobStatus[]),
+      },
     });
     return {
       shopId: shop.id,
@@ -425,10 +507,24 @@ export class PrintAgentService implements OnModuleInit {
   }
 
   async listPendingJobs(shop: AgentShop) {
+    await this.releaseStaleClaims(shop.id);
+    const claimToken = randomBytes(16).toString('hex');
+    await this.jobs.query(
+      `
+      UPDATE print_jobs
+      SET status = ?, claimToken = ?, claimedAt = NOW(6), updatedAt = NOW(6)
+      WHERE shopId = ?
+        AND status = ?
+        AND deletedAt IS NULL
+        AND active = 1
+      ORDER BY createdAt ASC
+      LIMIT ${CLAIM_BATCH}
+      `,
+      ['CLAIMED', claimToken, shop.id, 'PENDING'],
+    );
     const rows = await this.jobs.find({
-      where: { shopId: shop.id, status: 'PENDING' as PrintJobStatus },
+      where: { shopId: shop.id, status: 'CLAIMED' as PrintJobStatus, claimToken },
       order: { createdAt: 'ASC' },
-      take: 30,
     });
     return rows.map((j) => ({
       id: j.id,
@@ -439,10 +535,25 @@ export class PrintAgentService implements OnModuleInit {
     }));
   }
 
+  private async releaseStaleClaims(shopId: string) {
+    await this.jobs.query(
+      `
+      UPDATE print_jobs
+      SET status = ?, claimToken = NULL, claimedAt = NULL, updatedAt = NOW(6)
+      WHERE shopId = ?
+        AND status = ?
+        AND deletedAt IS NULL
+        AND claimedAt IS NOT NULL
+        AND claimedAt < DATE_SUB(NOW(6), INTERVAL ${STALE_CLAIM_SECONDS} SECOND)
+      `,
+      ['PENDING', shopId, 'CLAIMED'],
+    );
+  }
+
   async ackJob(
     shop: AgentShop,
     jobId: string,
-    body: { status?: string; error?: string | null },
+    body: { status?: string; error?: string | null; printedKeys?: string[] },
   ) {
     const job = await this.jobs.findOne({ where: { id: jobId, shopId: shop.id } });
     if (!job) throw new NotFoundException('Trabajo no encontrado');
@@ -450,11 +561,21 @@ export class PrintAgentService implements OnModuleInit {
     if (status !== 'PRINTED' && status !== 'FAILED') {
       throw new BadRequestException('status debe ser PRINTED o FAILED');
     }
+    job.payload = mergePrintedKeys(job.payload, body?.printedKeys);
+    if (job.status === 'PRINTED') {
+      return { id: job.id, status: job.status, attempts: job.attempts ?? 0 };
+    }
     if (status === 'PRINTED') {
       job.status = 'PRINTED';
       job.error = null;
       job.printedAt = new Date();
+      job.claimToken = null;
+      job.claimedAt = null;
       await this.jobs.save(job);
+      return { id: job.id, status: job.status, attempts: job.attempts ?? 0 };
+    }
+
+    if (job.status === 'FAILED') {
       return { id: job.id, status: job.status, attempts: job.attempts ?? 0 };
     }
 
@@ -464,7 +585,10 @@ export class PrintAgentService implements OnModuleInit {
     const attempts = Math.max(0, Number(job.attempts) || 0) + 1;
     job.attempts = attempts;
     job.error = msg;
-    // Hasta 3 intentos: vuelve a PENDING para que el agent reintente.
+    job.claimToken = null;
+    job.claimedAt = null;
+    // Hasta 3 intentos: vuelve a PENDING para que el agent reintente
+    // (las comanderas en payload.printedKeys no se vuelven a cortar).
     if (attempts < 3) {
       job.status = 'PENDING';
     } else {
@@ -505,6 +629,10 @@ export class PrintAgentService implements OnModuleInit {
       customerSourceSuffix?: string;
       /** Sufijo para reimprimir cocina (fuerza nuevo job). */
       kitchenSourceSuffix?: string;
+      /** Filtra ítems de cocina: ALL (default), solo entradas, o principales pendientes. */
+      kitchenItemsMode?: 'ALL' | 'ENTRADAS' | 'MAINS_PENDING';
+      /** Cabecera extra en ticket de cocina (ej. PRINCIPALES). */
+      kitchenBanner?: string | null;
     },
   ) {
     if (!shop.printAgentTokenHash) return null;
@@ -519,28 +647,32 @@ export class PrintAgentService implements OnModuleInit {
             : 'TAKE AWAY';
     const payment =
       order.paymentMethod === CustomerOrderPaymentMethod.TRANSFER ? 'Transferencia' : 'Efectivo';
-    const items = this.withKitchenSectorsOnItems(
-      shop,
-      (order.items ?? []).map((it) => ({
-        menuItemId: it.menuItemId ?? null,
-        name: it.name,
-        qty: it.qty,
-        notes: it.notes ?? null,
-        kind: it.kind || 'ITEM',
-        removedIngredients: it.removedIngredients ?? [],
-        attachedToMenuItemId: it.attachedToMenuItemId ?? null,
-        extraId: it.extraId ?? null,
-        isEntrada: !!it.isEntrada,
-        combinesWithNames: Array.isArray(it.combinesWithNames)
-          ? it.combinesWithNames.map((n) => String(n || '').trim()).filter(Boolean)
-          : [],
-      })),
-    );
+    const rawItems = (order.items ?? []).map((it) => ({
+      menuItemId: it.menuItemId ?? null,
+      name: it.name,
+      qty: it.qty,
+      notes: it.notes ?? null,
+      kind: it.kind || 'ITEM',
+      removedIngredients: it.removedIngredients ?? [],
+      attachedToMenuItemId: it.attachedToMenuItemId ?? null,
+      extraId: it.extraId ?? null,
+      isEntrada: !!it.isEntrada,
+      mainFired: !!it.mainFired,
+      combinesWithNames: Array.isArray(it.combinesWithNames)
+        ? it.combinesWithNames.map((n) => String(n || '').trim()).filter(Boolean)
+        : [],
+    }));
+    const filtered = filterKitchenPayloadItems(rawItems, opts?.kitchenItemsMode ?? 'ALL');
+    if ((opts?.kitchenItemsMode === 'ENTRADAS' || opts?.kitchenItemsMode === 'MAINS_PENDING') && !filtered.length) {
+      return null;
+    }
+    const items = this.withKitchenSectorsOnItems(shop, filtered);
     const phoneDigits = String(order.phone ?? '').replace(/\D/g, '');
     const phoneOk =
       phoneDigits.length >= 6 && !/^1+$/.test(phoneDigits) && phoneDigits !== '0000000000';
     const tableLabel = opts?.tableLabel?.trim() || null;
     const waiterName = opts?.waiterName?.trim() || null;
+    const banner = String(opts?.kitchenBanner ?? '').trim() || null;
     const base = {
       kind: 'CUSTOMER_ORDER' as const,
       shopName: shop.name,
@@ -565,6 +697,7 @@ export class PrintAgentService implements OnModuleInit {
       waiterName,
       salonTableId: order.salonTableId ?? null,
       tableSessionId: order.tableSessionId ?? null,
+      kitchenBanner: banner,
     };
 
     const printKitchen = opts?.printKitchen !== false;
@@ -573,10 +706,14 @@ export class PrintAgentService implements OnModuleInit {
       const kitchenSuffix = opts?.kitchenSourceSuffix
         ? `_${opts.kitchenSourceSuffix}`
         : '';
+      const modeSuffix =
+        opts?.kitchenItemsMode && opts.kitchenItemsMode !== 'ALL'
+          ? `_${opts.kitchenItemsMode.toLowerCase()}`
+          : '';
       kitchen = await this.enqueue({
         shopId: shop.id,
         kind: 'CUSTOMER_ORDER',
-        sourceId: `co_${order.id}_${reason}_kitchen${kitchenSuffix}`,
+        sourceId: `co_${order.id}_${reason}_kitchen${modeSuffix}${kitchenSuffix}`,
         copies: 1,
         payload: {
           ...base,
@@ -647,7 +784,7 @@ export class PrintAgentService implements OnModuleInit {
       }
       return { id: job.id, status: job.status, reused: false };
     }
-    if (existing && existing.status === 'PENDING') {
+    if (existing && (existing.status === 'PENDING' || existing.status === 'CLAIMED')) {
       return { id: existing.id, status: existing.status, reused: true };
     }
     const job = await this.enqueueCustomerOrder(shop, order, reason, {
@@ -768,6 +905,8 @@ export class PrintAgentService implements OnModuleInit {
         sourceId: input.sourceId,
         copies: Math.max(1, Math.min(5, input.copies || 1)),
         attempts: 0,
+        claimToken: null,
+        claimedAt: null,
         payload: input.payload,
         error: null,
         printedAt: null,

@@ -9,6 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { StockCategory } from '../../entities/stock-category.entity';
 import { StockProduct } from '../../entities/stock-product.entity';
+import { StockAdjustment, StockAdjustReason } from '../../entities/stock-adjustment.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { AuthUser } from '../../common/decorators';
 import { isEntityActive } from '../../common/active.util';
@@ -16,12 +17,18 @@ import { ShopsService } from '../shops/shops.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
   StockKind,
+  parseStockKind,
   stockAdminFlag,
   stockBelowType,
   stockLabel,
   stockSharedType,
 } from './stock-kind';
 import { formatNumber } from '../../common/format-money';
+import {
+  recipeDemandFromLines,
+  recipeMapByMenuItem,
+  type ShopMenuDoc,
+} from '../menu/menu-parse.util';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const qty = (v: number) => Math.max(0, Number(v) || 0).toFixed(2);
@@ -35,6 +42,8 @@ export class StockService implements OnModuleInit {
     private readonly categories: Repository<StockCategory>,
     @InjectRepository(StockProduct)
     private readonly products: Repository<StockProduct>,
+    @InjectRepository(StockAdjustment)
+    private readonly adjustments: Repository<StockAdjustment>,
     @InjectRepository(UserShop)
     private readonly userShops: Repository<UserShop>,
     private readonly shops: ShopsService,
@@ -115,6 +124,26 @@ export class StockService implements OnModuleInit {
       `);
     } catch {
       // columna ya existe
+    }
+    try {
+      await this.adjustments.query(`
+        CREATE TABLE IF NOT EXISTS stock_adjustments (
+          id CHAR(36) NOT NULL PRIMARY KEY,
+          shopId CHAR(36) NOT NULL,
+          productId CHAR(36) NOT NULL,
+          delta DECIMAL(12,2) NOT NULL,
+          reason VARCHAR(24) NOT NULL,
+          note VARCHAR(200) NULL,
+          userId CHAR(36) NULL,
+          createdAt DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+          updatedAt DATETIME(6) NULL,
+          deletedAt DATETIME(6) NULL,
+          active TINYINT(1) NOT NULL DEFAULT 1,
+          INDEX idx_stock_adjustments_shop_created (shopId, createdAt)
+        )
+      `);
+    } catch {
+      // ya existe
     }
     try {
       await this.categories.query(`
@@ -548,10 +577,16 @@ export class StockService implements OnModuleInit {
     kind: StockKind,
     id: string,
     delta: number,
+    reason?: string | null,
+    note?: string | null,
   ) {
     this.shops.assertShopAccess(user, shopId);
     if (delta !== 1 && delta !== -1) {
       throw new BadRequestException('El ajuste debe ser +1 o -1');
+    }
+    const parsedReason = this.parseAdjustReason(reason);
+    if (delta < 0 && !parsedReason) {
+      throw new BadRequestException('Indicá el motivo (merma, cortesía, error u otro)');
     }
     const row = await this.products.findOne({
       where: { id, shopId, kind },
@@ -568,6 +603,19 @@ export class StockService implements OnModuleInit {
     row.quantity = qty(after);
     await this.products.save(row);
 
+    if (delta < 0 && parsedReason) {
+      await this.adjustments.save(
+        this.adjustments.create({
+          shopId,
+          productId: row.id,
+          delta: qty(delta),
+          reason: parsedReason,
+          note: String(note ?? '').trim().slice(0, 200) || null,
+          userId: user.id ?? null,
+        }),
+      );
+    }
+
     const min = n(row.minQuantity);
     const crossedBelow = before >= min && after < min;
     if (crossedBelow) {
@@ -579,6 +627,95 @@ export class StockService implements OnModuleInit {
     }
 
     return this.productDto(row, category);
+  }
+
+  /** Ítems de carta que no se deben ofrecer: algún insumo en 0 o bajo el mínimo. */
+  async soldOutMenuItemIds(shopId: string, menus: ShopMenuDoc[]): Promise<Set<string>> {
+    const recipes = recipeMapByMenuItem(menus);
+    if (!recipes.size) return new Set();
+    const productIds = [
+      ...new Set([...recipes.values()].flatMap((r) => r.map((l) => l.stockProductId))),
+    ];
+    if (!productIds.length) return new Set();
+    const products = await this.products.find({
+      where: { shopId, id: In(productIds) },
+    });
+    const byId = new Map(products.map((p) => [p.id, p]));
+    const soldOut = new Set<string>();
+    for (const [itemId, recipe] of recipes) {
+      const missing = recipe.some((line) => !this.ingredientAvailable(byId.get(line.stockProductId)));
+      if (missing) soldOut.add(itemId);
+    }
+    return soldOut;
+  }
+
+  /**
+   * Baja (o devuelve) insumos según la receta de las líneas vendidas.
+   * No bloquea la venta si no alcanza: deja el stock en 0.
+   */
+  async applySaleStock(
+    shopId: string,
+    menus: ShopMenuDoc[],
+    lines: Array<{ menuItemId?: string; qty?: number; kind?: string | null }>,
+    direction: 'consume' | 'restock',
+  ): Promise<void> {
+    const demand = recipeDemandFromLines(menus, lines);
+    if (!demand.size) return;
+    const sign = direction === 'restock' ? 1 : -1;
+    const ids = [...demand.keys()];
+    const crossed: Array<{ row: StockProduct; after: number; min: number }> = [];
+    await this.products.manager.transaction(async (em) => {
+      const repo = em.getRepository(StockProduct);
+      const rows = await repo
+        .createQueryBuilder('p')
+        .setLock('pessimistic_write')
+        .where('p.shopId = :shopId', { shopId })
+        .andWhere('p.id IN (:...ids)', { ids })
+        .getMany();
+      for (const row of rows) {
+        const amount = demand.get(row.id) ?? 0;
+        if (!amount) continue;
+        const before = n(row.quantity);
+        const after = Math.max(0, before + sign * amount);
+        row.quantity = qty(after);
+        await repo.save(row);
+        const min = n(row.minQuantity);
+        if (sign < 0 && before >= min && after < min) {
+          crossed.push({ row, after, min });
+        }
+      }
+    });
+    for (const c of crossed) {
+      void this.notifyStockAdmins(
+        shopId,
+        parseStockKind(c.row.kind),
+        c.row,
+        undefined,
+        c.after,
+        c.min,
+      ).catch((err) => {
+        this.logger.warn(
+          `No se pudo notificar stock bajo: ${(err as Error)?.message ?? err}`,
+        );
+      });
+    }
+  }
+
+  private ingredientAvailable(row?: StockProduct | null): boolean {
+    if (!row || !isEntityActive(row.active)) return false;
+    const q = n(row.quantity);
+    const min = n(row.minQuantity);
+    if (q <= 0) return false;
+    if (min > 0 && q < min) return false;
+    return true;
+  }
+
+  private parseAdjustReason(raw?: string | null): StockAdjustReason | null {
+    const v = String(raw ?? '')
+      .trim()
+      .toLowerCase();
+    if (v === 'merma' || v === 'cortesia' || v === 'error' || v === 'otro') return v;
+    return null;
   }
 
   /** Suma o resta una cantidad (no limitado a ±1). */
@@ -673,7 +810,7 @@ export class StockService implements OnModuleInit {
     shopId: string,
     kind: StockKind,
     product: StockProduct,
-    category: StockCategory,
+    category: StockCategory | null | undefined,
     quantity: number,
     minQuantity: number,
   ) {

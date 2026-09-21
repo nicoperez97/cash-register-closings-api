@@ -18,6 +18,13 @@ export type ShopMenuItem = {
   kitchenSectorIds?: string[];
   /** @deprecated usar kitchenSectorIds */
   kitchenSectorId?: string | null;
+  /** Insumos de stock que se descuentan al vender este plato. */
+  recipe?: MenuItemRecipeLine[];
+};
+
+export type MenuItemRecipeLine = {
+  stockProductId: string;
+  qty: number;
 };
 
 /** Sectores del local (Cocina, Pizzería, Bar…). */
@@ -77,6 +84,69 @@ export function normalizeRemovableIngredients(raw: unknown): string[] {
     if (out.length >= 24) break;
   }
   return out;
+}
+
+/** Receta: insumos de stock por unidad de plato. */
+export function normalizeMenuRecipe(raw: unknown): MenuItemRecipeLine[] {
+  if (!Array.isArray(raw)) return [];
+  const out: MenuItemRecipeLine[] = [];
+  const seen = new Set<string>();
+  for (const row of raw) {
+    const rec = row as {
+      stockProductId?: unknown;
+      id?: unknown;
+      qty?: unknown;
+      quantity?: unknown;
+    };
+    const stockProductId = String(rec?.stockProductId ?? rec?.id ?? '')
+      .trim()
+      .slice(0, 40);
+    const qty = Number(rec?.qty ?? rec?.quantity ?? 0);
+    if (!stockProductId || !Number.isFinite(qty) || qty <= 0) continue;
+    if (seen.has(stockProductId)) continue;
+    seen.add(stockProductId);
+    out.push({ stockProductId, qty: Math.round(qty * 100) / 100 });
+    if (out.length >= 24) break;
+  }
+  return out;
+}
+
+export function recipeMapByMenuItem(
+  menus: ShopMenuDoc[],
+): Map<string, MenuItemRecipeLine[]> {
+  const map = new Map<string, MenuItemRecipeLine[]>();
+  for (const menu of menus) {
+    for (const sec of menu.sections ?? []) {
+      for (const it of sec.items ?? []) {
+        const id = String(it.id ?? '').trim();
+        const recipe = it.recipe ?? [];
+        if (id && recipe.length) map.set(id, recipe);
+      }
+    }
+  }
+  return map;
+}
+
+/** Agrega insumos a descontar/devolver según líneas vendidas. */
+export function recipeDemandFromLines(
+  menus: ShopMenuDoc[],
+  lines: Array<{ menuItemId?: string; qty?: number; kind?: string | null }>,
+): Map<string, number> {
+  const recipes = recipeMapByMenuItem(menus);
+  const demand = new Map<string, number>();
+  for (const line of lines) {
+    const kind = String(line.kind ?? 'ITEM').toUpperCase();
+    if (kind === 'EXTRA' || kind === 'PROMO') continue;
+    const menuItemId = String(line.menuItemId ?? '').trim();
+    const qty = Number(line.qty ?? 0);
+    if (!menuItemId || !Number.isFinite(qty) || qty <= 0) continue;
+    const recipe = recipes.get(menuItemId);
+    if (!recipe?.length) continue;
+    for (const rec of recipe) {
+      demand.set(rec.stockProductId, (demand.get(rec.stockProductId) ?? 0) + rec.qty * qty);
+    }
+  }
+  return demand;
 }
 
 function ensureDomPolyfills() {
@@ -320,6 +390,7 @@ export function normalizeShopMenu(raw?: ShopMenu | null): ShopMenu {
           (it as { removableIngredients?: unknown })?.removableIngredients,
         ),
         kitchenSectorIds,
+        recipe: normalizeMenuRecipe((it as { recipe?: unknown })?.recipe),
       });
     }
     sections.push({ name, items });

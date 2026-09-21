@@ -13,6 +13,7 @@ import { CustomerOrdersModule } from '../customer-orders/customer-orders.module'
 import { PrintAgentModule } from '../print-agent/print-agent.module';
 import { ShopLiveModule } from '../shop-live/shop-live.module';
 import { ShopsModule } from '../shops/shops.module';
+import { StockModule } from '../stock/stock.module';
 import { StaffComandaController } from './staff-comanda.controller';
 import { WaiterAuthGuard } from './waiter-auth';
 import { WaiterController } from './waiter.controller';
@@ -35,6 +36,7 @@ import { WaiterService } from './waiter.service';
     CustomerOrdersModule,
     PrintAgentModule,
     ShopLiveModule,
+    StockModule,
   ],
   controllers: [WaiterController, StaffComandaController],
   providers: [WaiterService, WaiterAuthGuard],

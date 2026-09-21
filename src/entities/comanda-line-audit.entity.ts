@@ -3,6 +3,24 @@ import { BaseEntity } from './base.entity';
 
 export type ComandaLineAuditAction = 'REMOVE' | 'QTY' | 'PRICE' | 'EDIT';
 
+/** Motivo al quitar o bajar cantidad en el ticket. */
+export type ComandaLineReason =
+  | 'cortesia'
+  | 'error'
+  | 'cambio_mesa'
+  | 'transfer'
+  | 'merma'
+  | 'otro';
+
+export const COMANDA_LINE_REASONS: ComandaLineReason[] = [
+  'cortesia',
+  'error',
+  'cambio_mesa',
+  'transfer',
+  'merma',
+  'otro',
+];
+
 export type ComandaLineAuditRelated = {
   name: string;
   qty: number;
@@ -78,4 +96,10 @@ export class ComandaLineAudit extends BaseEntity {
   /** El envío quedó vacío y se borró. */
   @Column({ type: 'tinyint', default: 0 })
   orderRemoved: boolean;
+
+  @Column({ type: 'varchar', length: 24, nullable: true })
+  reason?: ComandaLineReason | null;
+
+  @Column({ type: 'varchar', length: 200, nullable: true })
+  reasonNote?: string | null;
 }

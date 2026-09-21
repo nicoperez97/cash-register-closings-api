@@ -29,7 +29,6 @@ import {
   ClosingKind,
   ClosingStatus,
   ExpenseCategory,
-  ExtraLineType,
   GlobalRole,
   NotificationType,
 } from '../../common/enums';
@@ -45,11 +44,16 @@ import {
 import { resolveShopBusinessDate } from '../../common/business-date';
 import { CreateClosingDto, UpdateClosingDto } from './dto/closing.dto';
 import { OpenClosingDto } from './dto/open-closing.dto';
+import {
+  applyPosnetSums,
+  calcClosingTotals,
+  differenceReasonMissing,
+  extraIncomeFromLines,
+} from './closing-calc';
 import { applyClosingFilters, ClosingListFilters } from './closing-filters';
-import { ClosingPosnetAmount, sumPosnetsByType } from '../../common/posnet';
+import { ClosingPosnetAmount } from '../../common/posnet';
 import { CashWithdrawalsService } from './cash-withdrawals.service';
 import { ClosingStepFilesService } from './closing-step-files.service';
-import { missingRequiredClosingFiles } from './closing-required-files';
 import { TipsService } from '../tips/tips.service';
 
 const n = (v?: number | string | null) => Number(v ?? 0);
@@ -270,13 +274,9 @@ export class ClosingsService implements OnModuleInit {
     return account.id;
   }
 
+  /** Caja sistema − declarado. extraIncome = cuentas aparte / ajustes. */
   private calc(dto: Partial<CreateClosingDto>, extraIncome = 0) {
-    const calculated =
-      n(dto.cardAmount) + n(dto.cashAmount) + n(dto.mercadoPagoAmount) +
-      n(dto.deliveryAppsAmount) + n(dto.transferAmount) + n(dto.accountDniAmount) +
-      n(dto.otherAmount) + extraIncome;
-    const declared = dto.declaredTotal !== undefined ? n(dto.declaredTotal) : calculated;
-    return { calculatedTotal: calculated, declaredTotal: declared, difference: n(dto.posSystemAmount) - declared };
+    return calcClosingTotals(dto, extraIncome);
   }
 
   /**
@@ -285,19 +285,27 @@ export class ClosingsService implements OnModuleInit {
    * los montos cargados a mano.
    */
   private applyPosnetSums(dto: Partial<CreateClosingDto>): Partial<CreateClosingDto> {
-    if (dto.posnetAmounts === undefined) return dto;
-    if (dto.posnetAmounts === null || dto.posnetAmounts.length === 0) {
-      return { ...dto, posnetAmounts: dto.posnetAmounts ?? [] };
+    return applyPosnetSums(dto);
+  }
+
+  private resolveOpeningAmount(raw: number | undefined, fallback: number): number {
+    if (raw != null && Number.isFinite(Number(raw))) {
+      return Math.max(0, n(raw));
     }
-    const rows = dto.posnetAmounts as ClosingPosnetAmount[];
-    const sums = sumPosnetsByType(rows);
-    const hasType = (type: string) => rows.some((r) => r.type === type);
-    return {
-      ...dto,
-      ...(hasType('PVS') ? { cardAmount: sums.cardAmount } : {}),
-      ...(hasType('MERCADO_PAGO') ? { mercadoPagoAmount: sums.mercadoPagoAmount } : {}),
-      ...(hasType('CUENTA_DNI') ? { accountDniAmount: sums.accountDniAmount } : {}),
-    };
+    return Math.max(0, n(fallback));
+  }
+
+  private async assertDifferenceReason(
+    shopId: string,
+    difference: number,
+    reason?: string | null,
+  ) {
+    const shop = await this.shops.getShopEntity(shopId);
+    const min = Math.max(0, n(shop?.differenceReasonMinAmount));
+    if (!differenceReasonMissing(min, difference, reason)) return;
+    throw new BadRequestException(
+      `Indicá el motivo de la diferencia (a partir de ${formatMoney(min)}).`,
+    );
   }
 
   private normalizePosnetAmounts(
@@ -474,6 +482,48 @@ export class ClosingsService implements OnModuleInit {
     return this.toDto(row);
   }
 
+  async suggestedOpening(user: AuthUser, shopId: string) {
+    this.shops.assertShopAccess(user, shopId);
+    return this.resolveSuggestedOpening(shopId);
+  }
+
+  /**
+   * Lo dejado en el último cierre REGULAR enviado/bloqueado; si no hay, el cambio por defecto.
+   */
+  async resolveSuggestedOpening(shopId: string): Promise<{
+    amount: number;
+    source: 'previous' | 'default';
+    previousDate: string | null;
+    previousShiftName: string | null;
+  }> {
+    const last = await this.closings
+      .createQueryBuilder('c')
+      .where('c.shopId = :shopId', { shopId })
+      .andWhere('c.active = true')
+      .andWhere('c.status IN (:...statuses)', {
+        statuses: [ClosingStatus.SUBMITTED, ClosingStatus.LOCKED],
+      })
+      .andWhere('(c.kind IS NULL OR c.kind = :kind)', { kind: ClosingKind.REGULAR })
+      .orderBy('c.businessDate', 'DESC')
+      .addOrderBy('c.submittedAt', 'DESC')
+      .getOne();
+    if (last) {
+      return {
+        amount: Math.max(0, n(last.cashLeftInRegister)),
+        source: 'previous',
+        previousDate: last.businessDate,
+        previousShiftName: last.shiftName ?? null,
+      };
+    }
+    const shop = await this.shops.getShopEntity(shopId);
+    return {
+      amount: Math.max(0, n(shop?.defaultChangeAmount)),
+      source: 'default',
+      previousDate: null,
+      previousShiftName: null,
+    };
+  }
+
   async hasOpenDraft(shopId: string): Promise<boolean> {
     const row = await this.findOpenDraft(shopId);
     return !!row;
@@ -512,11 +562,12 @@ export class ClosingsService implements OnModuleInit {
       openingTime: shop.openingTime,
     });
     const dateKey = closingDateKey(businessDate, shift.id);
+    const suggested = await this.resolveSuggestedOpening(shopId);
+    const opening = this.resolveOpeningAmount(dto.cashOpeningAmount, suggested.amount);
     const exists = await this.closings.findOne({ where: { shopId, businessDateKey: dateKey } });
     if (exists) {
       if (exists.status === ClosingStatus.DRAFT) {
         // Misma caja (p.ej. carrera o getOpen desfasado): reutilizar.
-        const opening = Math.max(0, n(dto.cashOpeningAmount));
         exists.cashOpeningAmount = money(opening);
         exists.cashLeftInRegister = money(opening);
         exists.shiftId = shift.id;
@@ -537,7 +588,6 @@ export class ClosingsService implements OnModuleInit {
       await this.closings.save(exists);
     }
 
-    const opening = Math.max(0, n(dto.cashOpeningAmount));
     const closing = await this.closings.save(
       this.closings.create({
         shopId,
@@ -604,11 +654,10 @@ export class ClosingsService implements OnModuleInit {
     });
     const normalized = this.applyPosnetSums(dto);
     const posnetAmounts = this.normalizePosnetAmounts(normalized.posnetAmounts);
-    const incomeExtras = (normalized.extraLines ?? [])
-      .filter((e) => e.type === ExtraLineType.STUDENT_CASH || e.type === ExtraLineType.ADJUSTMENT)
-      .reduce((s, e) => s + n(e.amount), 0);
+    const incomeExtras = extraIncomeFromLines(normalized.extraLines);
     const sourceDeclared = await this.declaredFromSources(shopId, normalized);
     const totals = this.calc(normalized, incomeExtras + sourceDeclared);
+    await this.assertDifferenceReason(shopId, totals.difference, normalized.differenceReason);
     const withdrawn = await this.resolveWithdrawnBy(
       shopId,
       normalized.cashWithdrawnByUserId,
@@ -737,10 +786,7 @@ export class ClosingsService implements OnModuleInit {
       dto.posnetAmounts !== undefined
         ? this.normalizePosnetAmounts(merged.posnetAmounts)
         : row.posnetAmounts ?? null;
-    const incomeExtras = (merged.extraLines ?? row.extraLines ?? [])
-      .map((e: any) => ({ type: e.type, amount: n(e.amount) }))
-      .filter((e) => e.type === ExtraLineType.STUDENT_CASH || e.type === ExtraLineType.ADJUSTMENT)
-      .reduce((s, e) => s + e.amount, 0);
+    const incomeExtras = extraIncomeFromLines(merged.extraLines ?? row.extraLines);
     const sourceDeclared = await this.declaredFromSources(shopId, {
       sourceAmounts:
         merged.sourceAmounts ??
@@ -749,6 +795,7 @@ export class ClosingsService implements OnModuleInit {
           .map((s) => ({ sourceId: s.sourceId, amount: n(s.amount) })),
     });
     const totals = this.calc(merged, incomeExtras + sourceDeclared);
+    await this.assertDifferenceReason(shopId, totals.difference, merged.differenceReason);
     const withdrawn = await this.resolveWithdrawnBy(shopId, merged.cashWithdrawnByUserId, merged.cashWithdrawnByName, merged.cashWithdrawnByEmployeeId);
     const cashWithdrawnToAccountId = await this.resolveWithdrawnToAccount(
       shopId,
@@ -811,19 +858,6 @@ export class ClosingsService implements OnModuleInit {
     if (kind !== ClosingKind.EVENT) {
       await this.syncTipsFromClosing(user, shopId, row.id, merged);
     }
-    await this.assertRequiredStepFiles(user, shopId, row.id, {
-      posnetAmounts: posnetAmounts ?? [],
-      posSystemAmount: row.posSystemAmount,
-      cardAmount: row.cardAmount,
-      mercadoPagoAmount: row.mercadoPagoAmount,
-      accountDniAmount: row.accountDniAmount,
-      otherAmount: row.otherAmount,
-      sourceAmounts: (dto.sourceAmounts ??
-        row.sourceAmounts?.map((s) => ({
-          sourceId: s.sourceId,
-          amount: n(s.amount),
-        }))) as Array<{ sourceId?: string | null; amount?: number | null }>,
-    });
     if (wasDraft && kind !== ClosingKind.EVENT) {
       await this.shops.setOrderingOpen(shopId, false).catch((err) => {
         this.logger.warn(
@@ -900,18 +934,6 @@ export class ClosingsService implements OnModuleInit {
       relations: ['expenses', 'extraLines', 'sourceAmounts'],
     });
     if (!row) throw new NotFoundException('Cierre no encontrado');
-    await this.assertRequiredStepFiles(user, shopId, row.id, {
-      posnetAmounts: row.posnetAmounts ?? [],
-      posSystemAmount: row.posSystemAmount,
-      cardAmount: row.cardAmount,
-      mercadoPagoAmount: row.mercadoPagoAmount,
-      accountDniAmount: row.accountDniAmount,
-      otherAmount: row.otherAmount,
-      sourceAmounts: row.sourceAmounts?.map((s) => ({
-        sourceId: s.sourceId,
-        amount: n(s.amount),
-      })),
-    });
     row.status = ClosingStatus.LOCKED;
     await this.closings.save(row);
     await this.syncMovements(row.id);
@@ -1116,42 +1138,5 @@ export class ClosingsService implements OnModuleInit {
         closingId: closing.id,
       })),
     );
-  }
-
-  private async assertRequiredStepFiles(
-    user: AuthUser,
-    shopId: string,
-    closingId: string,
-    snapshot: {
-      posnetAmounts: Array<{
-        posnetId: string;
-        type?: string | null;
-        name?: string | null;
-        amount?: number | string | null;
-      }>;
-      posSystemAmount?: number | string | null;
-      cardAmount?: number | string | null;
-      mercadoPagoAmount?: number | string | null;
-      accountDniAmount?: number | string | null;
-      otherAmount?: number | string | null;
-      sourceAmounts?: Array<{
-        sourceId?: string | null;
-        name?: string | null;
-        amount?: number | string | null;
-      }>;
-    },
-  ) {
-    const link = await this.userShops.findOne({ where: { userId: user.id, shopId } });
-    if (!link?.requireClosingFiles) return;
-    const shop = await this.shopRepo.findOne({ where: { id: shopId } });
-    const files = await this.stepFiles.listForClosing(closingId);
-    const missing = missingRequiredClosingFiles({
-      ...snapshot,
-      shopPosnets: (shop?.posnets ?? []).map((p) => ({ id: p.id, type: p.type })),
-      files,
-    });
-    if (missing.length) {
-      throw new BadRequestException(`Falta archivo en ${missing.join(', ')}`);
-    }
   }
 }

@@ -25,6 +25,12 @@ export class SettlementsController {
     return this.settlements.listPending(user, shopId);
   }
 
+  @Get('receivables-summary')
+  @RequirePermissions('settlements.read')
+  receivablesSummary(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
+    return this.settlements.receivablesSummary(user, shopId);
+  }
+
   @Get('history')
   @RequirePermissions('settlements.read')
   listHistory(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {

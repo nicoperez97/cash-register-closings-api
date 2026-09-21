@@ -45,18 +45,27 @@ export type CustomerOrderLine = {
   isEntrada?: boolean;
   /** Otros platos del envío con los que combina (texto en comanda). */
   combinesWithNames?: string[];
+  /** Principales ya disparados a cocina (fire). */
+  mainFired?: boolean;
 };
 
 @Entity({ name: 'customer_orders' })
 @Index('idx_customer_orders_shop_created', ['shopId', 'createdAt'])
 @Index('idx_customer_orders_shop_code', ['shopId', 'code'], { unique: true })
 @Index('idx_customer_orders_shop_status', ['shopId', 'status'])
+@Index('idx_customer_orders_shop_client_req', ['shopId', 'clientRequestId'], {
+  unique: true,
+})
 export class CustomerOrder extends BaseEntity {
   @Column()
   shopId: string;
 
   @Column({ type: 'varchar', length: 12 })
   code: string;
+
+  /** Idempotencia del POS/outbox: reenviar el mismo id no duplica el pedido. */
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  clientRequestId?: string | null;
 
   @Column({ type: 'varchar', length: 24, default: CustomerOrderStatus.PENDING })
   status: CustomerOrderStatus;

@@ -219,6 +219,17 @@ export class ClosingsController {
     return this.closings.getOpen(user, shopId);
   }
 
+  @Get('suggested-opening')
+  @RequireAnyPermissions(
+    'closings.read',
+    'closings.create',
+    'customerOrders.read',
+    'orderingCatalog.manage',
+  )
+  suggestedOpening(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
+    return this.closings.suggestedOpening(user, shopId);
+  }
+
   @Post('open')
   @RequireAnyPermissions('closings.create', 'orderingCatalog.manage', 'customerOrders.manage')
   openRegister(

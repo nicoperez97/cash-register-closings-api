@@ -163,7 +163,11 @@ export class CreateClosingDto {
   @IsArray()
   tipAllocations?: Array<{ employeeId: string; amount: number; delivered?: boolean }>;
   @ApiPropertyOptional() @IsOptional() @IsNumber() declaredTotal?: number;
-  @ApiPropertyOptional() @IsOptional() @IsString() differenceReason?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  differenceReason?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() evidenceUrl?: string;
   @ApiPropertyOptional({ enum: ClosingStatus })

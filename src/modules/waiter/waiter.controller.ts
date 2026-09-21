@@ -208,6 +208,21 @@ class PatchSessionLineDto {
   @IsOptional()
   @IsBoolean()
   remove?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Motivo obligatorio al quitar o bajar cantidad',
+    enum: ['cortesia', 'error', 'cambio_mesa', 'transfer', 'merma', 'otro'],
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(24)
+  reason?: string | null;
+
+  @ApiPropertyOptional({ description: 'Nota del motivo' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  reasonNote?: string | null;
 }
 
 class WaiterOrderPromoDto {
@@ -430,7 +445,20 @@ export class WaiterController {
       qty: dto.qty,
       unitPrice: dto.unitPrice,
       remove: dto.remove,
+      reason: dto.reason,
+      reasonNote: dto.reasonNote,
     });
+  }
+
+  @Public()
+  @UseGuards(WaiterAuthGuard)
+  @Post('sessions/:id/fire-mains')
+  fireSessionMains(
+    @Param('slug') slug: string,
+    @CurrentWaiter() waiter: WaiterAuthPayload,
+    @Param('id') id: string,
+  ) {
+    return this.waiter.fireSessionMains(slug, waiter, id);
   }
 
   @Public()

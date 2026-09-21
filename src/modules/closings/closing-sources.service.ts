@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
@@ -16,8 +17,20 @@ import {
   UpsertShopClosingSourceDto,
 } from './dto/closing-source.dto';
 
+const SETTLE_KINDS = new Set<ClosingSourceKind>([
+  ClosingSourceKind.SETTLE_CASH,
+  ClosingSourceKind.SETTLE_ACCOUNT,
+]);
+
+function normalizeLagDays(raw: unknown, kind: ClosingSourceKind): number {
+  if (!SETTLE_KINDS.has(kind)) return 0;
+  const n = Math.round(Number(raw ?? 0));
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.min(90, n);
+}
+
 @Injectable()
-export class ClosingSourcesService {
+export class ClosingSourcesService implements OnModuleInit {
   constructor(
     @InjectRepository(ShopClosingSource)
     private readonly sources: Repository<ShopClosingSource>,
@@ -25,6 +38,16 @@ export class ClosingSourcesService {
     private readonly accounts: Repository<LedgerAccount>,
     private readonly shops: ShopsService,
   ) {}
+
+  async onModuleInit() {
+    try {
+      await this.sources.query(
+        `ALTER TABLE shop_closing_sources ADD COLUMN settlementLagDays INT NOT NULL DEFAULT 0`,
+      );
+    } catch {
+      /* already exists */
+    }
+  }
 
   async list(user: AuthUser, shopId: string, activeOnly = false) {
     this.shops.assertShopAccess(user, shopId);
@@ -64,6 +87,7 @@ export class ClosingSourcesService {
         includeInDeclared: !!dto.includeInDeclared,
         kind,
         accountId,
+        settlementLagDays: normalizeLagDays(dto.settlementLagDays, kind),
         sortOrder: dto.sortOrder ?? Number(maxSort?.max ?? 0) + 1,
         active: dto.active !== false,
       }),
@@ -88,6 +112,12 @@ export class ClosingSourcesService {
     const kind = dto.kind ?? row.kind;
     if (dto.accountId !== undefined || dto.kind !== undefined) {
       row.accountId = await this.resolveAccount(shopId, kind, dto.accountId ?? row.accountId);
+    }
+    if (dto.settlementLagDays !== undefined || dto.kind !== undefined) {
+      row.settlementLagDays = normalizeLagDays(
+        dto.settlementLagDays !== undefined ? dto.settlementLagDays : row.settlementLagDays,
+        kind,
+      );
     }
     await this.sources.save(row);
     return this.toDto(row, await this.accountName(shopId, row.accountId));
@@ -139,6 +169,7 @@ export class ClosingSourcesService {
       kind: r.kind,
       accountId: r.accountId ?? null,
       accountName: accountName ?? r.account?.name ?? null,
+      settlementLagDays: Number(r.settlementLagDays ?? 0) || 0,
       sortOrder: r.sortOrder,
       active: !!r.active,
     };
