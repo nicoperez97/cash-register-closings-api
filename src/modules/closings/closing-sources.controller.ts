@@ -16,7 +16,6 @@ import {
   CurrentUser,
   AuthUser,
   RequireAnyPermissions,
-  RequirePermissions,
 } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import {
@@ -49,7 +48,7 @@ export class ClosingSourcesController {
   }
 
   @Post()
-  @RequirePermissions('shops.manage')
+  @RequireAnyPermissions('shopConfig.manage', 'shops.manage')
   create(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -59,7 +58,7 @@ export class ClosingSourcesController {
   }
 
   @Patch(':id')
-  @RequirePermissions('shops.manage')
+  @RequireAnyPermissions('shopConfig.manage', 'shops.manage')
   update(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -70,7 +69,7 @@ export class ClosingSourcesController {
   }
 
   @Delete(':id')
-  @RequirePermissions('shops.manage')
+  @RequireAnyPermissions('shopConfig.manage', 'shops.manage')
   remove(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
