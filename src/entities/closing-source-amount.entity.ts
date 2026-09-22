@@ -9,7 +9,8 @@ import {
 import { CashClosing } from './cash-closing.entity';
 import { ShopClosingSource } from './shop-closing-source.entity';
 import { LedgerAccount } from './ledger-account.entity';
-import { ClosingSourceKind } from '../common/enums';
+import { ClosingSourceKind, ClosingSourceRole } from '../common/enums';
+import { SourcePosnetAmount } from '../common/posnet';
 
 @Entity({ name: 'closing_source_amounts' })
 @Index('IDX_closing_source_amounts_closing', ['closingId'])
@@ -37,6 +38,13 @@ export class ClosingSourceAmount {
   })
   kind: ClosingSourceKind;
 
+  @Column({
+    type: 'enum',
+    enum: ClosingSourceRole,
+    default: ClosingSourceRole.STANDARD,
+  })
+  role: ClosingSourceRole;
+
   @Column({ type: 'varchar', nullable: true })
   accountId?: string | null;
 
@@ -46,6 +54,10 @@ export class ClosingSourceAmount {
   /** Desglose opcional; `amount` es la suma. */
   @Column({ type: 'json', nullable: true })
   lines?: number[] | null;
+
+  /** Montos por posnet de esta cuenta; si hay, `amount` es la suma. */
+  @Column({ type: 'json', nullable: true })
+  posnetAmounts?: SourcePosnetAmount[] | null;
 
   @Column({ type: 'datetime', precision: 6, nullable: true })
   settledAt?: Date | null;

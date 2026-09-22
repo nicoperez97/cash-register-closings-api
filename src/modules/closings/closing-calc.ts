@@ -23,7 +23,7 @@ export type ClosingCalcResult = {
   difference: number;
 };
 
-/** calculated = canales + extraIncome; difference = caja sistema − declarado. */
+/** calculated = canales + extraIncome; difference = declarado − caja sistema. */
 export function calcClosingTotals(dto: ClosingCalcInput, extraIncome = 0): ClosingCalcResult {
   const calculated =
     closingNum(dto.cardAmount) +
@@ -38,7 +38,7 @@ export function calcClosingTotals(dto: ClosingCalcInput, extraIncome = 0): Closi
   return {
     calculatedTotal: calculated,
     declaredTotal: declared,
-    difference: closingNum(dto.posSystemAmount) - declared,
+    difference: declared - closingNum(dto.posSystemAmount),
   };
 }
 

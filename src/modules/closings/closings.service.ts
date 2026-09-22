@@ -72,9 +72,28 @@ function sourceLinesOf(raw?: unknown): number[] {
   return value.map((v) => n(v)).filter((v) => v > 0);
 }
 
-function sourceAmountOf(row: { amount?: number | string | null; lines?: unknown }): number {
+function sourceAmountOf(row: {
+  amount?: number | string | null;
+  lines?: unknown;
+  posnetAmounts?: Array<{ amount?: number | string | null }> | null;
+}): number {
+  const posnets = Array.isArray(row.posnetAmounts) ? row.posnetAmounts : [];
+  if (posnets.length) {
+    return posnets.reduce((sum, p) => sum + n(p.amount), 0);
+  }
   const lines = sourceLinesOf(row.lines);
   return lines.length ? lines.reduce((sum, v) => sum + v, 0) : n(row.amount);
+}
+
+function normalizeSourcePosnetAmounts(
+  raw?: Array<{ posnetId?: string; name?: string; amount?: number | string | null }> | null,
+): Array<{ posnetId: string; name: string; amount: number }> | null {
+  if (!Array.isArray(raw) || !raw.length) return null;
+  return raw.map((row) => ({
+    posnetId: String(row.posnetId ?? ''),
+    name: String(row.name ?? '').trim() || 'Posnet',
+    amount: n(row.amount),
+  }));
 }
 
 function isEventKind(kind?: string | null): boolean {
@@ -201,6 +220,23 @@ export class ClosingsService implements OnModuleInit {
       }
     } catch (err) {
       this.logger.warn(`No se pudo migrar signo de diferencia v3: ${(err as Error)?.message}`);
+    }
+    // Una sola vez: signo declarado − caja sistema (v4).
+    try {
+      const rows: Array<{ c: number | string }> = await this.closings.query(
+        `SELECT COUNT(*) AS c FROM app_meta WHERE metaKey = 'difference_formula_v4'`,
+      );
+      const already = Number(rows?.[0]?.c ?? 0) > 0;
+      if (!already) {
+        await this.closings.query(`
+          INSERT INTO app_meta (metaKey, metaValue, updatedAt)
+          VALUES ('difference_formula_v4', '1', NOW(6))
+        `);
+        await this.closings.query(`UPDATE cash_closings SET difference = -difference`);
+        this.logger.log('Migradas diferencias de cierre al signo declarado − caja sistema');
+      }
+    } catch (err) {
+      this.logger.warn(`No se pudo migrar signo de diferencia v4: ${(err as Error)?.message}`);
     }
     try {
       await this.closings.query(`
@@ -399,9 +435,15 @@ export class ClosingsService implements OnModuleInit {
         name: s.name,
         includeInDeclared: !!s.includeInDeclared,
         kind: s.kind,
+        role: s.role ?? 'STANDARD',
         accountId: s.accountId ?? null,
         amount: n(s.amount),
         lines: sourceLinesOf(s.lines),
+        posnetAmounts: (s.posnetAmounts ?? []).map((p) => ({
+          posnetId: p.posnetId,
+          name: p.name,
+          amount: n(p.amount),
+        })),
       })),
       stepFiles: extras?.stepFiles ?? [],
     };
@@ -425,7 +467,7 @@ export class ClosingsService implements OnModuleInit {
     let extra = 0;
     for (const row of rows) {
       const src = byId.get(row.sourceId);
-      if (src?.includeInDeclared) extra += sourceAmountOf(row);
+      if (src?.includeInDeclared && src.role !== 'CASH') extra += sourceAmountOf(row);
     }
     return extra;
   }
@@ -1039,16 +1081,19 @@ export class ClosingsService implements OnModuleInit {
           const src = byId.get(row.sourceId);
           if (!src) return null;
           const lines = sourceLinesOf(row.lines);
-          const amount = sourceAmountOf(row);
+          const posnetAmounts = normalizeSourcePosnetAmounts(row.posnetAmounts);
+          const amount = sourceAmountOf({ ...row, lines, posnetAmounts });
           const settled = settledBySourceId.get(src.id);
           if (settled) {
             incomingSettledIds.add(settled.id);
             settled.name = src.name;
             settled.includeInDeclared = !!src.includeInDeclared;
             settled.kind = src.kind;
+            settled.role = src.role ?? settled.role;
             settled.accountId = src.accountId ?? null;
             settled.amount = money(amount);
             settled.lines = lines.length ? lines : null;
+            settled.posnetAmounts = posnetAmounts;
             return settled;
           }
           return this.sourceAmounts.create({
@@ -1057,9 +1102,11 @@ export class ClosingsService implements OnModuleInit {
             name: src.name,
             includeInDeclared: !!src.includeInDeclared,
             kind: src.kind,
+            role: src.role,
             accountId: src.accountId ?? null,
             amount: money(amount),
             lines: lines.length ? lines : null,
+            posnetAmounts,
           });
         })
         .filter((r): r is NonNullable<typeof r> => !!r);

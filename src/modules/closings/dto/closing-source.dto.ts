@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsArray,
   IsBoolean,
@@ -13,8 +13,37 @@ import {
   Min,
   MinLength,
   ValidateIf,
+  ValidateNested,
 } from 'class-validator';
 import { ClosingSourceKind } from '../../../common/enums';
+
+export class SourcePosnetDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  id?: string;
+
+  @ApiProperty()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(80)
+  name: string;
+}
+
+export class SourcePosnetAmountDto {
+  @ApiProperty()
+  @IsString()
+  posnetId: string;
+
+  @ApiProperty()
+  @IsString()
+  name: string;
+
+  @ApiProperty()
+  @IsNumber()
+  @Min(0)
+  amount: number;
+}
 
 export class UpsertShopClosingSourceDto {
   @ApiProperty()
@@ -54,6 +83,13 @@ export class UpsertShopClosingSourceDto {
   @IsNumber()
   sortOrder?: number;
 
+  @ApiPropertyOptional({ type: [SourcePosnetDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => SourcePosnetDto)
+  posnets?: SourcePosnetDto[];
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsBoolean()
@@ -67,7 +103,7 @@ export class ClosingSourceAmountDto {
   @IsUUID()
   sourceId: string;
 
-  @ApiPropertyOptional({ description: 'Total; si hay lines, se usa la suma' })
+  @ApiPropertyOptional({ description: 'Total; si hay lines o posnetAmounts, se usa la suma' })
   @IsOptional()
   @IsNumber()
   @Min(0)
@@ -78,4 +114,11 @@ export class ClosingSourceAmountDto {
   @IsArray()
   @IsNumber({}, { each: true })
   lines?: number[];
+
+  @ApiPropertyOptional({ type: [SourcePosnetAmountDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => SourcePosnetAmountDto)
+  posnetAmounts?: SourcePosnetAmountDto[];
 }

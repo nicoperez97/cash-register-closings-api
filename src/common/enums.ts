@@ -190,6 +190,12 @@ export enum ClosingSourceKind {
   RECORD_ONLY = 'RECORD_ONLY',
 }
 
+/** Rol de la cuenta del local en el cierre. CASH = efectivo (sistema, no borrable). */
+export enum ClosingSourceRole {
+  STANDARD = 'STANDARD',
+  CASH = 'CASH',
+}
+
 export enum LedgerAccountType {
   PARTNER = 'PARTNER',
   CHANNEL = 'CHANNEL',

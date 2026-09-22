@@ -10,6 +10,7 @@ import { CashPendingWithdrawal } from '../../entities/cash-pending-withdrawal.en
 import {
   LinkedPaymentMethod,
   ClosingSourceKind,
+  ClosingSourceRole,
   LedgerAccountType,
   CashPendingWithdrawalStatus,
 } from '../../common/enums';
@@ -17,6 +18,7 @@ import { EXPENSE_CATEGORY_TO_CONCEPT, findCashDrawerAccount } from '../../common
 import { CatalogSeedService } from '../../common/catalog-seed.service';
 import { resolveShopBusinessDate } from '../../common/business-date';
 import { isLiveClosingMovement } from './movement-query.util';
+import { ShopClosingSource } from '../../entities/shop-closing-source.entity';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
@@ -34,6 +36,8 @@ export class ClosingMovementsSyncService {
     private readonly shops: Repository<Shop>,
     @InjectRepository(CashPendingWithdrawal)
     private readonly pendingWithdrawals: Repository<CashPendingWithdrawal>,
+    @InjectRepository(ShopClosingSource)
+    private readonly closingSources: Repository<ShopClosingSource>,
     private readonly catalogSeed: CatalogSeedService,
   ) {}
 
@@ -46,19 +50,11 @@ export class ClosingMovementsSyncService {
   async syncFromClosing(closing: CashClosing) {
     await this.movements.delete({ closingId: closing.id });
 
-    // Solo asegura INGRESO/EGRESO; los canales salen de «Depósito del cierre».
     await this.catalogSeed.ensureShopCatalogs(closing.shopId);
 
     const accounts = await this.accounts.find({ where: { shopId: closing.shopId } });
     if (!accounts.length) return;
     const byCode = new Map(accounts.map((a) => [a.code, a]));
-
-    // Un medio → la cuenta activa configurada en depósitos (linkedPaymentMethod).
-    const byMethod = new Map<string, LedgerAccount>();
-    for (const a of accounts) {
-      if (!a.active || !a.linkedPaymentMethod) continue;
-      byMethod.set(a.linkedPaymentMethod, a);
-    }
 
     const ingreso = byCode.get('INGRESO');
     const egreso = byCode.get('EGRESO');
@@ -76,74 +72,42 @@ export class ClosingMovementsSyncService {
     const shop = await this.shops.findOne({ where: { id: closing.shopId } });
     const withdrawalDate = await this.resolveWithdrawalBusinessDate(closing, shop);
 
-    const pushIncome = (
-      method: LinkedPaymentMethod,
-      amount: number,
-      label: string,
-      conceptName: string,
-    ) => {
-      if (amount <= 0) return;
-      const channel = byMethod.get(method);
-      // Sin cuenta destino en «Depósito del cierre» → no inventar canal.
-      if (!channel) return;
+    const ingresoAccount = ingreso;
+
+    // Efectivo del día → cuenta destino de la cuenta del local CASH (o fallback drawer).
+    const cashSourceCfg = await this.closingSources.findOne({
+      where: { shopId: closing.shopId, role: ClosingSourceRole.CASH, active: true },
+    });
+    let cashDest =
+      (cashSourceCfg?.accountId
+        ? accounts.find((a) => a.id === cashSourceCfg.accountId)
+        : null) ??
+      accounts.find((a) => a.active && a.linkedPaymentMethod === LinkedPaymentMethod.CASH) ??
+      findCashDrawerAccount(accounts) ??
+      accounts.find((a) => a.active && a.code === 'EFECTIVO') ??
+      null;
+    if (n(closing.cashAmount) > 0 && cashDest) {
       rows.push({
         shopId: closing.shopId,
         businessDate: date,
-        fromAccountId: ingreso.id,
-        toAccountId: channel.id,
-        description: label,
-        amountUyu: money(amount),
-        conceptId: findConcept(conceptName),
+        fromAccountId: ingresoAccount.id,
+        toAccountId: cashDest.id,
+        description: 'Efectivo del día',
+        amountUyu: money(n(closing.cashAmount)),
+        conceptId: findConcept('EFECTIVO ingreso'),
         closingId: closing.id,
         invoiced: false,
         active: true,
       });
-    };
-
-    pushIncome(
-      LinkedPaymentMethod.CASH,
-      n(closing.cashAmount),
-      'Efectivo del día',
-      'EFECTIVO ingreso',
-    );
-    pushIncome(
-      LinkedPaymentMethod.CARD,
-      n(closing.cardAmount),
-      'PVS / Tarjeta',
-      'Cobro',
-    );
-    pushIncome(
-      LinkedPaymentMethod.MERCADO_PAGO,
-      n(closing.mercadoPagoAmount),
-      'Mercado Pago',
-      'Cobro',
-    );
-    pushIncome(
-      LinkedPaymentMethod.DELIVERY,
-      n(closing.deliveryAppsAmount),
-      'Delivery',
-      'Cobro',
-    );
-    pushIncome(
-      LinkedPaymentMethod.TRANSFER,
-      n(closing.transferAmount),
-      'Transferencia',
-      'Cobro',
-    );
-    pushIncome(
-      LinkedPaymentMethod.ACCOUNT_DNI,
-      n(closing.accountDniAmount),
-      'Cuenta DNI',
-      'Cobro',
-    );
-    if (n(closing.otherAmount) > 0) {
-      pushIncome(LinkedPaymentMethod.OTHER, n(closing.otherAmount), 'Otros ingresos', 'Ingreso');
     }
 
-    const ingresoAccount = ingreso;
-    for (const src of closing.sourceAmounts ?? []) {
+    // Cuentas del local (OWN_ACCOUNT): un asiento por source con monto > 0.
+    // Compat legacy: si aún hay montos en columnas canal y no hay sourceAmounts, usar linkedPaymentMethod.
+    const sourceRows = closing.sourceAmounts ?? [];
+    for (const src of sourceRows) {
       const amount = n(src.amount);
       if (amount <= 0) continue;
+      if (String(src.role ?? '') === 'CASH') continue;
       if (src.kind !== ClosingSourceKind.OWN_ACCOUNT || !src.accountId) continue;
       const dest = accounts.find((a) => a.id === src.accountId);
       if (!dest) continue;
@@ -161,7 +125,82 @@ export class ClosingMovementsSyncService {
       });
     }
 
-    const cashChannel = byMethod.get(LinkedPaymentMethod.CASH) ?? null;
+    // Legacy: columnas canal / other cuando no hay sourceAmounts (cierres históricos).
+    if (!sourceRows.length) {
+      const byMethod = new Map<string, LedgerAccount>();
+      for (const a of accounts) {
+        if (!a.active || !a.linkedPaymentMethod) continue;
+        byMethod.set(a.linkedPaymentMethod, a);
+      }
+      const pushIncome = (
+        method: LinkedPaymentMethod,
+        amount: number,
+        label: string,
+        conceptName: string,
+      ) => {
+        if (amount <= 0) return;
+        const channel = byMethod.get(method);
+        if (!channel) return;
+        rows.push({
+          shopId: closing.shopId,
+          businessDate: date,
+          fromAccountId: ingreso.id,
+          toAccountId: channel.id,
+          description: label,
+          amountUyu: money(amount),
+          conceptId: findConcept(conceptName),
+          closingId: closing.id,
+          invoiced: false,
+          active: true,
+        });
+      };
+      pushIncome(LinkedPaymentMethod.CARD, n(closing.cardAmount), 'PVS / Tarjeta', 'Cobro');
+      pushIncome(
+        LinkedPaymentMethod.MERCADO_PAGO,
+        n(closing.mercadoPagoAmount),
+        'Mercado Pago',
+        'Cobro',
+      );
+      pushIncome(LinkedPaymentMethod.DELIVERY, n(closing.deliveryAppsAmount), 'Delivery', 'Cobro');
+      pushIncome(LinkedPaymentMethod.TRANSFER, n(closing.transferAmount), 'Transferencia', 'Cobro');
+      pushIncome(
+        LinkedPaymentMethod.ACCOUNT_DNI,
+        n(closing.accountDniAmount),
+        'Cuenta DNI',
+        'Cobro',
+      );
+      if (n(closing.otherAmount) > 0) {
+        pushIncome(LinkedPaymentMethod.OTHER, n(closing.otherAmount), 'Otros ingresos', 'Ingreso');
+      }
+    } else if (n(closing.otherAmount) > 0) {
+      // Cobros libres no-CASH: asiento si hay cuenta "Otros" OWN_ACCOUNT o linked OTHER.
+      const otros = sourceRows.find(
+        (s) =>
+          s.kind === ClosingSourceKind.OWN_ACCOUNT &&
+          s.accountId &&
+          /otros/i.test(s.name),
+      );
+      const dest =
+        (otros?.accountId ? accounts.find((a) => a.id === otros.accountId) : null) ??
+        accounts.find((a) => a.active && a.linkedPaymentMethod === LinkedPaymentMethod.OTHER) ??
+        null;
+      if (dest) {
+        rows.push({
+          shopId: closing.shopId,
+          businessDate: date,
+          fromAccountId: ingresoAccount.id,
+          toAccountId: dest.id,
+          description: 'Otros ingresos',
+          amountUyu: money(n(closing.otherAmount)),
+          conceptId: findConcept('Ingreso'),
+          closingId: closing.id,
+          invoiced: false,
+          active: true,
+        });
+      }
+    }
+
+    const cashChannel = cashDest;
     const cashDrawer = findCashDrawerAccount(accounts) ?? cashChannel;
 
     // Efectivo Caja → cuenta de quien se lo lleva (PARTNER).
@@ -332,8 +371,18 @@ export class ClosingMovementsSyncService {
       relations: ['sourceAmounts'],
       order: { businessDate: 'ASC' },
     });
+    const cashSourceCfg = await this.closingSources.findOne({
+      where: { shopId, role: ClosingSourceRole.CASH, active: true },
+    });
+    const cashDest =
+      (cashSourceCfg?.accountId
+        ? accounts.find((a) => a.id === cashSourceCfg.accountId)
+        : null) ??
+      accounts.find((a) => a.active && a.linkedPaymentMethod === LinkedPaymentMethod.CASH) ??
+      findCashDrawerAccount(accounts) ??
+      null;
     const expected = ingreso
-      ? this.expectedIncomes(closings, accounts, ingreso)
+      ? this.expectedIncomes(closings, accounts, ingreso, cashDest)
       : [];
 
     const existing = await this.movements.find({
@@ -466,6 +515,7 @@ export class ClosingMovementsSyncService {
     closings: CashClosing[],
     accounts: LedgerAccount[],
     ingreso: LedgerAccount,
+    cashDest: LedgerAccount | null,
   ) {
     const byMethod = new Map<string, LedgerAccount>();
     for (const a of accounts) {
@@ -503,25 +553,33 @@ export class ClosingMovementsSyncService {
       });
     };
     for (const closing of closings) {
-      push(closing, LinkedPaymentMethod.CASH, n(closing.cashAmount), 'Efectivo del día');
-      push(closing, LinkedPaymentMethod.CARD, n(closing.cardAmount), 'PVS / Tarjeta');
-      push(
-        closing,
-        LinkedPaymentMethod.MERCADO_PAGO,
-        n(closing.mercadoPagoAmount),
-        'Mercado Pago',
-      );
-      push(closing, LinkedPaymentMethod.DELIVERY, n(closing.deliveryAppsAmount), 'Delivery');
-      push(closing, LinkedPaymentMethod.TRANSFER, n(closing.transferAmount), 'Transferencia');
-      push(closing, LinkedPaymentMethod.ACCOUNT_DNI, n(closing.accountDniAmount), 'Cuenta DNI');
-      push(closing, LinkedPaymentMethod.OTHER, n(closing.otherAmount), 'Otros ingresos');
-      for (const src of closing.sourceAmounts ?? []) {
-        const amount = n(src.amount);
-        if (!(amount > 0) || src.kind !== ClosingSourceKind.OWN_ACCOUNT || !src.accountId) {
-          continue;
+      push(closing, null, n(closing.cashAmount), 'Efectivo del día', cashDest);
+      const sourceRows = closing.sourceAmounts ?? [];
+      if (!sourceRows.length) {
+        push(closing, LinkedPaymentMethod.CARD, n(closing.cardAmount), 'PVS / Tarjeta');
+        push(
+          closing,
+          LinkedPaymentMethod.MERCADO_PAGO,
+          n(closing.mercadoPagoAmount),
+          'Mercado Pago',
+        );
+        push(closing, LinkedPaymentMethod.DELIVERY, n(closing.deliveryAppsAmount), 'Delivery');
+        push(closing, LinkedPaymentMethod.TRANSFER, n(closing.transferAmount), 'Transferencia');
+        push(closing, LinkedPaymentMethod.ACCOUNT_DNI, n(closing.accountDniAmount), 'Cuenta DNI');
+        push(closing, LinkedPaymentMethod.OTHER, n(closing.otherAmount), 'Otros ingresos');
+      } else {
+        for (const src of sourceRows) {
+          const amount = n(src.amount);
+          if (!(amount > 0) || src.kind !== ClosingSourceKind.OWN_ACCOUNT || !src.accountId) {
+            continue;
+          }
+          if (String(src.role ?? '') === 'CASH') continue;
+          const dest = accounts.find((a) => a.id === src.accountId) ?? null;
+          push(closing, null, amount, src.name, dest);
         }
-        const dest = accounts.find((a) => a.id === src.accountId) ?? null;
-        push(closing, null, amount, src.name, dest);
+        if (n(closing.otherAmount) > 0) {
+          push(closing, LinkedPaymentMethod.OTHER, n(closing.otherAmount), 'Otros ingresos');
+        }
       }
     }
     return rows;

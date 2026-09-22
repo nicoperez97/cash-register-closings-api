@@ -18,7 +18,7 @@ describe('calcClosingTotals', () => {
     });
     expect(r.calculatedTotal).toBe(100_000);
     expect(r.declaredTotal).toBe(99_000);
-    expect(r.difference).toBe(1_000);
+    expect(r.difference).toBe(-1_000);
   });
 
   it('si no hay declarado, el calculado es el declarado', () => {
@@ -32,13 +32,13 @@ describe('calcClosingTotals', () => {
     expect(r.difference).toBe(0);
   });
 
-  it('faltante: caja sistema menor que lo declarado', () => {
+  it('sobrante: declarado mayor que caja sistema', () => {
     const r = calcClosingTotals({
       posSystemAmount: 90_000,
       cashAmount: 100_000,
       declaredTotal: 100_000,
     });
-    expect(r.difference).toBe(-10_000);
+    expect(r.difference).toBe(10_000);
   });
 
   it('suma extraIncome (cuentas aparte / ajustes)', () => {
