@@ -1341,24 +1341,26 @@ export class ShopsService implements OnModuleInit {
   }
 
   private normalizePosnets(
-    raw?: Array<{ id?: string; name: string; type: PosnetType | string }> | null,
+    raw?: Array<{ id?: string; name: string; type?: PosnetType | string }> | null,
   ): ShopPosnet[] | null {
     if (raw == null) return null;
     if (!Array.isArray(raw)) {
       throw new BadRequestException('posnets inválido');
     }
+    // Vacío = posnets migrados a cuentas del local.
+    if (!raw.length) return [];
     const out: ShopPosnet[] = [];
     for (const row of raw) {
       const name = String(row?.name ?? '').trim();
       const type = String(row?.type ?? '').trim() as PosnetType;
       if (!name) throw new BadRequestException('Cada posnet necesita un nombre');
-      if (!POSNET_TYPES.has(type)) {
+      if (type && !POSNET_TYPES.has(type)) {
         throw new BadRequestException(`Tipo de posnet inválido: ${row?.type}`);
       }
       out.push({
         id: String(row?.id ?? '').trim() || randomUUID(),
         name,
-        type,
+        ...(type ? { type } : {}),
       });
     }
     return out;

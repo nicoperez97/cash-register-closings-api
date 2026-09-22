@@ -17,7 +17,7 @@ export const SYSTEM_LEDGER_ACCOUNTS: Array<{
 
 /**
  * Catálogo inicial al crear un local.
- * Los canales NO traen linkedPaymentMethod: eso se configura en «Depósito del cierre».
+ * Los canales NO traen linkedPaymentMethod: el destino del cierre se configura en «Cuentas del local».
  */
 export const DEFAULT_LEDGER_ACCOUNTS: Array<{
   name: string;

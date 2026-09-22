@@ -390,7 +390,7 @@ export class CreateShopDto {
 
   @ApiPropertyOptional({
     description:
-      'Si |caja sistema − declarado| llega a este monto, el motivo de diferencia es obligatorio. 0 = no pedir.',
+      'Si |declarado − caja sistema| llega a este monto, el motivo de diferencia es obligatorio. 0 = no pedir.',
   })
   @IsOptional()
   @IsNumber()

@@ -2,9 +2,10 @@ import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 import { BaseEntity } from './base.entity';
 import { Shop } from './shop.entity';
 import { LedgerAccount } from './ledger-account.entity';
-import { ClosingSourceKind } from '../common/enums';
+import { ClosingSourceKind, ClosingSourceRole } from '../common/enums';
+import { SourcePosnet } from '../common/posnet';
 
-/** Fuente extra configurable por local (Pedidos Ya, delivery, Ualá…). */
+/** Cuenta del local para el cierre (PVS, MP, Pedidos Ya, Efectivo…). */
 @Entity({ name: 'shop_closing_sources' })
 @Index('IDX_shop_closing_sources_shop', ['shopId'])
 export class ShopClosingSource extends BaseEntity {
@@ -24,8 +25,19 @@ export class ShopClosingSource extends BaseEntity {
   })
   kind: ClosingSourceKind;
 
+  @Column({
+    type: 'enum',
+    enum: ClosingSourceRole,
+    default: ClosingSourceRole.STANDARD,
+  })
+  role: ClosingSourceRole;
+
   @Column({ type: 'varchar', nullable: true })
   accountId?: string | null;
+
+  /** Terminales de cobro de esta cuenta (aparecen en el cierre). */
+  @Column({ type: 'json', nullable: true })
+  posnets?: SourcePosnet[] | null;
 
   /** Días después del businessDate del cierre hasta la acreditación esperada (solo SETTLE_*). */
   @Column({ type: 'int', default: 0 })

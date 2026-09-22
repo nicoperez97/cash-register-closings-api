@@ -32,7 +32,14 @@ export class ClosingSourcesController {
   constructor(private readonly sources: ClosingSourcesService) {}
 
   @Get()
-  @RequireAnyPermissions('closings.read', 'shops.manage')
+  @RequireAnyPermissions(
+    'closings.read',
+    'closings.create',
+    'closings.update',
+    'shops.manage',
+    'shopConfig.read',
+    'shopConfig.manage',
+  )
   list(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
