@@ -30,6 +30,24 @@ export class GeminiDocumentService {
     return this.config.get<string>('gemini.model') || 'gemini-3.6-flash';
   }
 
+  private fallbackModels(): string[] {
+    const list = this.config.get<string[]>('gemini.fallbackModels');
+    return Array.isArray(list) ? list : ['gemini-2.5-flash', 'gemini-2.0-flash'];
+  }
+
+  private modelChain(): string[] {
+    const primary = this.model();
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const m of [primary, ...this.fallbackModels()]) {
+      const id = (m || '').trim();
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      out.push(id);
+    }
+    return out;
+  }
+
   private apiKey(): string {
     return this.config.get<string>('gemini.apiKey') || '';
   }
@@ -47,6 +65,22 @@ export class GeminiDocumentService {
       t.includes('rate limit') ||
       t.includes('rate_limit')
     );
+  }
+
+  /** 503 / alta demanda / errores transitorios del servidor. */
+  private isTransientError(status: number, body: string): boolean {
+    if (status === 503 || status === 500 || status === 408 || status === 429) return true;
+    const t = body.toLowerCase();
+    return (
+      t.includes('unavailable') ||
+      t.includes('high demand') ||
+      t.includes('overloaded') ||
+      t.includes('try again')
+    );
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   private filePart(file: Express.Multer.File): InlinePart | TextPart | null {
@@ -80,16 +114,16 @@ export class GeminiDocumentService {
     };
   }
 
-  private async generateJson<T>(
+  private async generateJsonOnce<T>(
+    model: string,
     parts: Array<TextPart | InlinePart>,
     system: string,
-    timeoutMs = 55_000,
-  ): Promise<GeminiResult<T>> {
+    timeoutMs: number,
+  ): Promise<
+    | { ok: true; data: T }
+    | { ok: false; kind: 'quota' | 'not_found' | 'transient' | 'error' | 'empty'; detail: string }
+  > {
     const key = this.apiKey();
-    if (!key) {
-      return this.fail('disabled', 'Gemini no está configurado (falta GEMINI_API_KEY).');
-    }
-    const model = this.model();
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -109,43 +143,122 @@ export class GeminiDocumentService {
       });
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
-        this.logger.warn(`Gemini HTTP ${res.status}: ${errText.slice(0, 240)}`);
-        if (this.isQuotaError(res.status, errText)) {
-          return this.fail(
-            'quota',
-            'Se agotó la cuota diaria de Gemini. Se usó el parseo local.',
-          );
+        this.logger.warn(`Gemini HTTP ${res.status} (${model}): ${errText.slice(0, 240)}`);
+        if (this.isQuotaError(res.status, errText) && res.status !== 503) {
+          // 429 a veces es transient; si el cuerpo habla de high demand → transient.
+          if (this.isTransientError(res.status, errText) && !/quota|daily/i.test(errText)) {
+            return { ok: false, kind: 'transient', detail: errText };
+          }
+          return { ok: false, kind: 'quota', detail: errText };
         }
         if (res.status === 404 || /no longer available|not found/i.test(errText)) {
-          return this.fail(
-            'error',
-            `El modelo Gemini configurado no está disponible. Probá GEMINI_MODEL=gemini-3.6-flash. Se usó el parseo local.`,
-          );
+          return { ok: false, kind: 'not_found', detail: errText };
         }
-        return this.fail('error', 'Gemini no respondió bien. Se usó el parseo local.');
+        if (this.isTransientError(res.status, errText)) {
+          return { ok: false, kind: 'transient', detail: errText };
+        }
+        return { ok: false, kind: 'error', detail: errText };
       }
       const body = (await res.json()) as {
         candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
       };
       const text = body.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
       if (!text.trim()) {
-        return this.fail('empty', 'Gemini no devolvió datos. Se usó el parseo local.');
+        return { ok: false, kind: 'empty', detail: 'empty response' };
       }
       try {
         return { ok: true, data: JSON.parse(text) as T };
       } catch {
-        return this.fail('empty', 'Gemini devolvió un JSON inválido. Se usó el parseo local.');
+        return { ok: false, kind: 'empty', detail: 'invalid json' };
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.logger.warn(`Gemini falló: ${msg}`);
       if (/abort/i.test(msg)) {
-        return this.fail('error', 'Gemini tardó demasiado. Se usó el parseo local.');
+        return { ok: false, kind: 'transient', detail: msg };
       }
-      return this.fail('error', 'No se pudo contactar Gemini. Se usó el parseo local.');
+      return { ok: false, kind: 'transient', detail: msg };
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  private async generateJson<T>(
+    parts: Array<TextPart | InlinePart>,
+    system: string,
+    timeoutMs = 55_000,
+  ): Promise<GeminiResult<T>> {
+    const key = this.apiKey();
+    if (!key) {
+      return this.fail('disabled', 'Gemini no está configurado (falta GEMINI_API_KEY).');
+    }
+
+    const models = this.modelChain();
+    const maxAttemptsPerModel = 3;
+    let lastKind: 'quota' | 'not_found' | 'transient' | 'error' | 'empty' = 'error';
+
+    for (let mi = 0; mi < models.length; mi++) {
+      const model = models[mi];
+      for (let attempt = 1; attempt <= maxAttemptsPerModel; attempt++) {
+        const attemptTimeout = Math.min(
+          timeoutMs,
+          Math.max(12_000, timeoutMs - attempt * 4_000),
+        );
+        const res = await this.generateJsonOnce<T>(model, parts, system, attemptTimeout);
+        if (res.ok) {
+          if (mi > 0 || attempt > 1) {
+            this.logger.log(`Gemini OK con ${model} (intento ${attempt})`);
+          }
+          return { ok: true, data: res.data };
+        }
+        lastKind = res.kind;
+
+        if (res.kind === 'quota') {
+          return this.fail(
+            'quota',
+            'Se agotó la cuota diaria de Gemini. Se usó el parseo local.',
+          );
+        }
+        if (res.kind === 'not_found') {
+          // Probar siguiente modelo sin esperar.
+          break;
+        }
+        if (res.kind === 'empty' || res.kind === 'error') {
+          // No reintentar respuestas “definitivas”; pasar al siguiente modelo.
+          break;
+        }
+
+        // transient (503 / high demand / abort): backoff + jitter, luego otro modelo.
+        if (attempt < maxAttemptsPerModel) {
+          const base = 800 * Math.pow(2, attempt - 1);
+          const jitter = Math.floor(Math.random() * 400);
+          const delay = Math.min(6_000, base + jitter);
+          this.logger.warn(
+            `Gemini ocupado (${model}), reintento ${attempt + 1}/${maxAttemptsPerModel} en ${delay}ms`,
+          );
+          await this.sleep(delay);
+          continue;
+        }
+        if (mi < models.length - 1) {
+          this.logger.warn(
+            `Gemini sigue ocupado en ${model}; probando fallback ${models[mi + 1]}`,
+          );
+        }
+      }
+    }
+
+    if (lastKind === 'empty') {
+      return this.fail('empty', 'Gemini no devolvió datos. Se usó el parseo local.');
+    }
+    if (lastKind === 'not_found') {
+      return this.fail(
+        'error',
+        `El modelo Gemini configurado no está disponible. Probá GEMINI_MODEL=gemini-2.5-flash. Se usó el parseo local.`,
+      );
+    }
+    return this.fail(
+      'error',
+      'Gemini está con alta demanda. Se reintentó y se usó el parseo local.',
+    );
   }
 
   async parseMenu(
