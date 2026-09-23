@@ -510,7 +510,8 @@ export class SalesProductsAnalyticsService {
         { q: `%${q.trim()}%` },
       );
     }
-    return qb.getMany();
+    const rows = await qb.getMany();
+    return rows.map((p) => ({ ...p, active: !!p.active }));
   }
 
   /** Completa catálogo a partir de líneas ya importadas (migraciones / datos legacy). */

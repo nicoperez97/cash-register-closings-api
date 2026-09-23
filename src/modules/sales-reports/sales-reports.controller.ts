@@ -23,6 +23,7 @@ import {
   ApiPropertyOptional,
   ApiTags,
 } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 import {
   IsBoolean,
   IsNumber,
@@ -42,13 +43,25 @@ import {
 } from './sales-products-analytics.service';
 import { PosCatalogService } from './pos-catalog.service';
 
+/** Acepta true/false y 1/0 (MySQL tinyint / clientes que reenvían el GET). */
+function toOptionalBoolean({ value }: { value: unknown }): unknown {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (value === true || value === 1 || value === '1' || value === 'true') return true;
+  if (value === false || value === 0 || value === '0' || value === 'false') return false;
+  return value;
+}
+
 class UpdatePosProductDto {
   @ApiPropertyOptional() @IsOptional() @IsString() productName?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsString() category?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsString() subcategory?: string | null;
   @ApiPropertyOptional() @IsOptional() @ValidateIf((_, v) => v != null) @IsUUID() categoryId?: string | null;
   @ApiPropertyOptional() @IsOptional() @ValidateIf((_, v) => v != null) @IsUUID() subcategoryId?: string | null;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(toOptionalBoolean)
+  @IsBoolean()
+  active?: boolean;
 }
 
 class CreateCategoryDto {
@@ -61,7 +74,11 @@ class UpdateCategoryDto {
   @ApiPropertyOptional() @IsOptional() @IsString() @MinLength(1) name?: string;
   @ApiPropertyOptional() @IsOptional() @IsNumber() sortOrder?: number;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string | null;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(toOptionalBoolean)
+  @IsBoolean()
+  active?: boolean;
 }
 
 class CreateSubcategoryDto {
@@ -76,7 +93,11 @@ class UpdateSubcategoryDto {
   @ApiPropertyOptional() @IsOptional() @IsString() @MinLength(1) name?: string;
   @ApiPropertyOptional() @IsOptional() @IsNumber() sortOrder?: number;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string | null;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(toOptionalBoolean)
+  @IsBoolean()
+  active?: boolean;
 }
 
 @ApiTags('sales-reports')
