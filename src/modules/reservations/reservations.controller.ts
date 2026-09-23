@@ -34,6 +34,7 @@ import { ReservationArea, ReservationStatus } from '../../entities/reservation.e
 import { WaitingListStatus } from '../../entities/waiting-list-entry.entity';
 import { ReservationsService } from './reservations.service';
 import { ReservationRequestsService } from './reservation-requests.service';
+import { ToBoolean } from '../../common/boolean.util';
 
 class CreateReservationDto {
   @ApiPropertyOptional() @IsOptional() @IsString() businessDate?: string;
@@ -230,7 +231,7 @@ class DecideReservationRequestDto {
 
 class SetReservationSignupDto {
   @ApiProperty()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   enabled: boolean;
 }
 
@@ -255,25 +256,25 @@ class ReservationPublicFormDto {
     description: 'Si es true, el cliente tiene que elegir un horario (cuando hay turnos).',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   timeRequired?: boolean;
 }
 
 class SetReservationTimeRequiredDto {
   @ApiProperty()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   required: boolean;
 }
 
 class SetReservationAreasDto {
   @ApiPropertyOptional()
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   inside?: boolean;
 
   @ApiPropertyOptional()
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   outside?: boolean;
 }
 
@@ -334,19 +335,19 @@ class UpsertDayNoticeDto {
   })
   @IsOptional()
   @ValidateIf((_, v) => v !== null)
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   signupEnabled?: boolean | null;
 
   @ApiPropertyOptional({ nullable: true, description: 'NULL hereda; false desactiva adentro.' })
   @IsOptional()
   @ValidateIf((_, v) => v !== null)
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   insideEnabled?: boolean | null;
 
   @ApiPropertyOptional({ nullable: true, description: 'NULL hereda; false desactiva afuera.' })
   @IsOptional()
   @ValidateIf((_, v) => v !== null)
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   outsideEnabled?: boolean | null;
 
   @ApiPropertyOptional({
@@ -415,7 +416,7 @@ class UpsertDayNoticeDto {
   })
   @IsOptional()
   @ValidateIf((_, v) => v !== null)
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   timeRequired?: boolean | null;
 }
 

@@ -15,6 +15,7 @@ import { Response } from 'express';
 import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { PayrollService } from './payroll.service';
+import { ToBoolean } from '../../common/boolean.util';
 
 class PayrollRangeDto {
   @ApiProperty({ example: '2026-08-01' })
@@ -40,7 +41,7 @@ class PayrollRangeDto {
     description: 'Si true, genera una línea por empleado y turno',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   splitByShift?: boolean;
 }
 

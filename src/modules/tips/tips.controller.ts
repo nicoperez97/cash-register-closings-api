@@ -25,6 +25,7 @@ import { Type } from 'class-transformer';
 import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { TipsService } from './tips.service';
+import { ToBoolean } from '../../common/boolean.util';
 
 class TipAllocationDto {
   @ApiProperty()
@@ -38,7 +39,7 @@ class TipAllocationDto {
 
   @ApiPropertyOptional()
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   delivered?: boolean;
 }
 
@@ -91,7 +92,7 @@ class UpsertTipDayDto {
 
 class SetDeliveredDto {
   @ApiProperty()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   delivered: boolean;
 }
 

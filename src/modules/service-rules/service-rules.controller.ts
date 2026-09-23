@@ -40,6 +40,7 @@ import { CurrentUser, AuthUser, RequirePermissions, Public } from '../../common/
 import { PermissionsGuard } from '../../common/guards';
 import { ServiceRulePhase } from '../../common/enums';
 import { ServiceRulesService } from './service-rules.service';
+import { ToBoolean } from '../../common/boolean.util';
 
 const rulesUpload = FileInterceptor('file', {
   storage: memoryStorage(),
@@ -54,7 +55,7 @@ class CreateCategoryDto {
 class UpdateCategoryDto {
   @ApiPropertyOptional() @IsOptional() @IsString() @MinLength(1) name?: string;
   @ApiPropertyOptional() @IsOptional() @IsInt() sortOrder?: number;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() active?: boolean;
 }
 
 class CreateRuleDto {
@@ -76,7 +77,7 @@ class UpdateRuleDto {
   @ApiPropertyOptional() @IsOptional() @IsString() @MinLength(1) title?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() @MinLength(1) body?: string;
   @ApiPropertyOptional() @IsOptional() @IsInt() sortOrder?: number;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() active?: boolean;
 }
 
 class ImportRuleDto {

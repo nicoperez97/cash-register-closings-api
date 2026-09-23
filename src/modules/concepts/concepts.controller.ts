@@ -31,6 +31,7 @@ import { ConceptCategory, ConceptKind } from '../../common/enums';
 import { ConceptsService } from './concepts.service';
 import { ConceptsExcelService } from './concepts-excel.service';
 import { isPaymentConceptScope } from '../../common/concept-categories';
+import { ToBoolean } from '../../common/boolean.util';
 
 class CreateConceptDto {
   @ApiProperty() @IsString() @MinLength(1) name: string;
@@ -44,8 +45,8 @@ class CreateConceptDto {
   @IsArray()
   @IsEnum(ConceptCategory, { each: true })
   categories?: ConceptCategory[];
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() validated?: boolean;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() validated?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() active?: boolean;
 }
 
 class UpdateConceptDto {
@@ -60,8 +61,8 @@ class UpdateConceptDto {
   @IsArray()
   @IsEnum(ConceptCategory, { each: true })
   categories?: ConceptCategory[];
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() validated?: boolean;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() validated?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() active?: boolean;
 }
 
 class UnifyConceptsDto {

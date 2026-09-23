@@ -17,20 +17,21 @@ import type { Response } from 'express';
 import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { CommissionsService } from './commissions.service';
+import { ToBoolean } from '../../common/boolean.util';
 
 class CreateCommissionRuleDto {
   @ApiProperty() @IsUUID() employeeId: string;
   @ApiProperty() @IsString() @MinLength(1) category: string;
   @ApiProperty() @IsNumber() @Min(0) ratePercent: number;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string | null;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() active?: boolean;
 }
 
 class UpdateCommissionRuleDto {
   @ApiPropertyOptional() @IsOptional() @IsString() @MinLength(1) category?: string;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) ratePercent?: number;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string | null;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() active?: boolean;
 }
 
 @ApiTags('commissions')

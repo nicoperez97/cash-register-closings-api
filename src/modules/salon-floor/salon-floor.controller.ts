@@ -16,9 +16,10 @@ import {
   MinLength,
   ValidateNested,
 } from 'class-validator';
-import { Transform, Type } from 'class-transformer';
+import { Type } from 'class-transformer';
 import { AuthUser, CurrentUser, RequireAnyPermissions, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
+import { ToBoolean } from '../../common/boolean.util';
 import { SalonArea } from '../../entities/salon-table.entity';
 import { SalonFloorService } from './salon-floor.service';
 
@@ -170,7 +171,7 @@ class ReplaceSalonRulesDto {
 class ApplyFromReservationsDto {
   @ApiPropertyOptional()
   @IsOptional()
-  @Transform(({ value }) => value === true || value === 'true')
+  @ToBoolean()
   @IsBoolean()
   onlyIfEmpty?: boolean;
 }

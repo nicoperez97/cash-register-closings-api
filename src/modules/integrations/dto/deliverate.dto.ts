@@ -16,6 +16,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { ClosingSourceKind } from '../../../common/enums';
+import { ToBoolean } from '../../../common/boolean.util';
 
 export class DeliverateWorkingDayDto {
   @ApiProperty({ description: '0=domingo … 6=sábado' })
@@ -33,7 +34,7 @@ export class DeliverateWorkingDayDto {
 export class UpsertDeliverateConfigDto {
   @ApiPropertyOptional()
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   enabled?: boolean;
 
   @ApiPropertyOptional()
@@ -152,7 +153,7 @@ export class UpsertDeliverateConfigDto {
 
   @ApiPropertyOptional()
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   testMode?: boolean;
 
   /**
@@ -168,13 +169,13 @@ export class UpsertDeliverateConfigDto {
   /** Si true: authenticate + upsertApiKey (webhook). */
   @ApiPropertyOptional()
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   connect?: boolean;
 
   /** Si true: createIntegrationShop en Deliverate. */
   @ApiPropertyOptional()
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   createShop?: boolean;
 
   /** Cuenta del local para el cierre (fuentes extra). */
@@ -190,7 +191,7 @@ export class UpsertDeliverateConfigDto {
 
   @ApiPropertyOptional()
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   closingIncludeInDeclared?: boolean;
 
   /** Medio de pago de pedidos que impactan en la fuente Deliverate del cierre. */

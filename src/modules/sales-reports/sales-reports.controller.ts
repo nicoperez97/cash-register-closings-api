@@ -23,7 +23,6 @@ import {
   ApiPropertyOptional,
   ApiTags,
 } from '@nestjs/swagger';
-import { Transform } from 'class-transformer';
 import {
   IsBoolean,
   IsNumber,
@@ -34,6 +33,7 @@ import {
   ValidateIf,
 } from 'class-validator';
 import type { Response } from 'express';
+import { ToBoolean } from '../../common/boolean.util';
 import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { SalesReportImportService } from './sales-report-import.service';
@@ -42,13 +42,36 @@ import {
   SalesProductsAnalyticsService,
 } from './sales-products-analytics.service';
 import { PosCatalogService } from './pos-catalog.service';
+import type { SalesReportProductLabelOverride } from './sales-report-import.service';
 
-/** Acepta true/false y 1/0 (MySQL tinyint / clientes que reenvían el GET). */
-function toOptionalBoolean({ value }: { value: unknown }): unknown {
-  if (value === undefined || value === null || value === '') return undefined;
-  if (value === true || value === 1 || value === '1' || value === 'true') return true;
-  if (value === false || value === 0 || value === '0' || value === 'false') return false;
-  return value;
+function parseProductLabelsBody(raw?: string): SalesReportProductLabelOverride[] | null {
+  if (raw == null || String(raw).trim() === '') return null;
+  try {
+    const parsed = JSON.parse(String(raw)) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    const out: SalesReportProductLabelOverride[] = [];
+    for (const row of parsed) {
+      const r = row as Record<string, unknown>;
+      const productCode = String(r?.productCode ?? '').trim();
+      if (!productCode) continue;
+      out.push({
+        productCode,
+        productName:
+          r.productName == null || r.productName === ''
+            ? null
+            : String(r.productName).trim(),
+        category:
+          r.category == null || r.category === '' ? null : String(r.category).trim(),
+        subcategory:
+          r.subcategory == null || r.subcategory === ''
+            ? null
+            : String(r.subcategory).trim(),
+      });
+    }
+    return out.length ? out : null;
+  } catch {
+    throw new BadRequestException('productLabels debe ser JSON válido');
+  }
 }
 
 class UpdatePosProductDto {
@@ -59,7 +82,7 @@ class UpdatePosProductDto {
   @ApiPropertyOptional() @IsOptional() @ValidateIf((_, v) => v != null) @IsUUID() subcategoryId?: string | null;
   @ApiPropertyOptional()
   @IsOptional()
-  @Transform(toOptionalBoolean)
+  @ToBoolean()
   @IsBoolean()
   active?: boolean;
 }
@@ -76,7 +99,7 @@ class UpdateCategoryDto {
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string | null;
   @ApiPropertyOptional()
   @IsOptional()
-  @Transform(toOptionalBoolean)
+  @ToBoolean()
   @IsBoolean()
   active?: boolean;
 }
@@ -95,7 +118,7 @@ class UpdateSubcategoryDto {
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string | null;
   @ApiPropertyOptional()
   @IsOptional()
-  @Transform(toOptionalBoolean)
+  @ToBoolean()
   @IsBoolean()
   active?: boolean;
 }
@@ -117,7 +140,13 @@ export class SalesReportsController {
   @ApiBody({
     schema: {
       type: 'object',
-      properties: { file: { type: 'string', format: 'binary' } },
+      properties: {
+        file: { type: 'string', format: 'binary' },
+        productLabels: {
+          type: 'string',
+          description: 'JSON: [{ productCode, productName?, category?, subcategory? }]',
+        },
+      },
     },
   })
   @UseInterceptors(FileInterceptor('file'))
@@ -125,11 +154,13 @@ export class SalesReportsController {
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
     @UploadedFile() file: Express.Multer.File,
+    @Body('productLabels') productLabelsRaw?: string,
     @Query('commit') commit?: string,
   ) {
     const doCommit = commit === 'true' || commit === '1';
+    const productLabels = doCommit ? parseProductLabelsBody(productLabelsRaw) : null;
     return doCommit
-      ? this.imports.commit(user, shopId, file)
+      ? this.imports.commit(user, shopId, file, productLabels)
       : this.imports.preview(user, shopId, file);
   }
 

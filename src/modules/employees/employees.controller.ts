@@ -31,6 +31,7 @@ import { CurrentUser, AuthUser, RequirePermissions, RequireAnyPermissions } from
 import { PermissionsGuard } from '../../common/guards';
 import { EmployeeJobRole, EmployeeType } from '../../entities/employee.entity';
 import { EmployeesService } from './employees.service';
+import { ToBoolean } from '../../common/boolean.util';
 
 class ShiftAssignmentDto {
   @ApiProperty()
@@ -80,11 +81,11 @@ class CreateEmployeeDto {
   shiftAssignments?: ShiftAssignmentDto[] | null;
   @ApiPropertyOptional({ description: 'Si cuenta para el presentismo semanal' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   countsForAttendanceBonus?: boolean;
   @ApiPropertyOptional({ description: 'Si produce comida (asistencia en producción)' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   producesFood?: boolean;
   @ApiPropertyOptional({
     enum: EmployeeJobRole,
@@ -142,7 +143,7 @@ class CreateEmployeeDto {
   @IsString()
   @Matches(/^\d{4,6}$/)
   waiterPin?: string | null;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() active?: boolean;
 }
 
 class UpdateEmployeeDto {
@@ -162,11 +163,11 @@ class UpdateEmployeeDto {
   shiftAssignments?: ShiftAssignmentDto[] | null;
   @ApiPropertyOptional({ description: 'Si cuenta para el presentismo semanal' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   countsForAttendanceBonus?: boolean;
   @ApiPropertyOptional()
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   producesFood?: boolean;
   @ApiPropertyOptional({
     enum: EmployeeJobRole,
@@ -206,7 +207,7 @@ class UpdateEmployeeDto {
   @IsString()
   @Matches(/^\d{4,6}$/)
   waiterPin?: string | null;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() active?: boolean;
 }
 
 @ApiTags('employees')

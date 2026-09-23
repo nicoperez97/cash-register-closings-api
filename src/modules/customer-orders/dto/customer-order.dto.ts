@@ -23,6 +23,7 @@ import {
   CustomerOrderPaymentMethod,
   CustomerOrderStatus,
 } from '../../../entities/customer-order.entity';
+import { ToBoolean } from '../../../common/boolean.util';
 
 export class CreateCustomerOrderItemDto {
   @ApiProperty()
@@ -54,7 +55,7 @@ export class CreateCustomerOrderItemDto {
 
   @ApiPropertyOptional({ description: 'Marcar como entrada en comanda de cocina' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   isEntrada?: boolean;
 
   @ApiPropertyOptional({
@@ -134,7 +135,7 @@ export class CreateCustomerOrderDto {
     description: 'Solo mostrador: imprimir ticket del cliente (default true)',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   printCustomerTicket?: boolean;
 
   @ApiPropertyOptional()

@@ -24,6 +24,7 @@ import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorato
 import { PermissionsGuard } from '../../common/guards';
 import { VacationPersonType } from '../../entities/vacation.entity';
 import { VacationsService } from './vacations.service';
+import { ToBoolean } from '../../common/boolean.util';
 
 class CreateVacationDto {
   @ApiProperty({ enum: VacationPersonType })
@@ -50,7 +51,7 @@ class CreateVacationDto {
 
   @ApiPropertyOptional({ default: true, description: 'Sin goce de sueldo' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   unpaid?: boolean;
 
   @ApiPropertyOptional()
@@ -83,7 +84,7 @@ class UpdateVacationDto {
 
   @ApiPropertyOptional({ description: 'Sin goce de sueldo' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   unpaid?: boolean;
 
   @ApiPropertyOptional()

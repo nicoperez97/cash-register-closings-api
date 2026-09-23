@@ -16,6 +16,7 @@ import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorato
 import { PermissionsGuard } from '../../common/guards';
 import { ShortageLevel } from '../../common/enums';
 import { ShortagesService } from './shortages.service';
+import { ToBoolean } from '../../common/boolean.util';
 
 class CreateShortageDto {
   @ApiProperty() @IsString() @MinLength(1) name: string;
@@ -23,7 +24,7 @@ class CreateShortageDto {
   @IsEnum(ShortageLevel)
   level: ShortageLevel;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string | null;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() active?: boolean;
 }
 
 class UpdateShortageDto {
@@ -33,7 +34,7 @@ class UpdateShortageDto {
   @IsEnum(ShortageLevel)
   level?: ShortageLevel;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string | null;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() active?: boolean;
 }
 
 @ApiTags('shortages')

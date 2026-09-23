@@ -30,6 +30,7 @@ import { CurrentUser, AuthUser, RequireAnyPermissions, RequirePermissions } from
 import { PermissionsGuard } from '../../common/guards';
 import { LedgerAccountType, LinkedPaymentMethod } from '../../common/enums';
 import { AccountsService } from './accounts.service';
+import { ToBoolean } from '../../common/boolean.util';
 
 class CreateAccountDto {
   @ApiProperty() @IsString() @MinLength(1) name: string;
@@ -52,28 +53,28 @@ class CreateAccountDto {
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
   @IsUUID()
   userId?: string | null;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() active?: boolean;
   @ApiPropertyOptional({
     description: 'Si es true, no aparece en “Quién se lo lleva” del cierre',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   hideFromCashWithdraw?: boolean;
   @ApiPropertyOptional({ description: 'Si es false, no aparece al cargar un gasto' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   listInExpenses?: boolean;
   @ApiPropertyOptional({ description: 'Si es false, no aparece al cargar un ingreso' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   listInIncomes?: boolean;
   @ApiPropertyOptional({ description: 'Si es false, no aparece en movimientos entre cuentas' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   listInTransfers?: boolean;
   @ApiPropertyOptional({ description: 'Si es false, no aparece en el panel de Saldos' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   listInBalances?: boolean;
   @ApiPropertyOptional({ description: 'Saldo inicial. Se suma al saldo de movimientos.' })
   @IsOptional()
@@ -115,26 +116,26 @@ class UpdateAccountDto {
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
   @IsUUID()
   userId?: string | null;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() active?: boolean;
   @ApiPropertyOptional()
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   hideFromCashWithdraw?: boolean;
   @ApiPropertyOptional()
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   listInExpenses?: boolean;
   @ApiPropertyOptional()
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   listInIncomes?: boolean;
   @ApiPropertyOptional()
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   listInTransfers?: boolean;
   @ApiPropertyOptional({ description: 'Si es false, no aparece en el panel de Saldos' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   listInBalances?: boolean;
   @ApiPropertyOptional({ description: 'Saldo inicial. Se suma al saldo de movimientos.' })
   @IsOptional()
