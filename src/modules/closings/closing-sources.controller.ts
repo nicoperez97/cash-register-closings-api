@@ -38,6 +38,9 @@ export class ClosingSourcesController {
     'shops.manage',
     'shopConfig.read',
     'shopConfig.manage',
+    'expenses.read',
+    'accountTransfers.read',
+    'incomes.read',
   )
   list(
     @CurrentUser() user: AuthUser,

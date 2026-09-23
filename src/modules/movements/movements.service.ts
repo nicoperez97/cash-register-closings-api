@@ -1326,6 +1326,8 @@ export class MovementsService implements OnModuleInit {
       {
         accountId: string;
         name: string;
+        code: string;
+        linkedPaymentMethod: string | null;
         type: string;
         income: number;
         expense: number;
@@ -1338,6 +1340,8 @@ export class MovementsService implements OnModuleInit {
       bal.set(a.id, {
         accountId: a.id,
         name: a.name,
+        code: a.code ?? '',
+        linkedPaymentMethod: a.linkedPaymentMethod ?? null,
         type: a.type,
         income: 0,
         expense: 0,
@@ -1382,6 +1386,8 @@ export class MovementsService implements OnModuleInit {
         return {
           accountId: a.accountId,
           name: a.name,
+          code: a.code,
+          linkedPaymentMethod: a.linkedPaymentMethod,
           type: a.type,
           income: a.income,
           expense: a.expense,
