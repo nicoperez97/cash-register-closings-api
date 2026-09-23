@@ -47,6 +47,7 @@ import { OpenClosingDto } from './dto/open-closing.dto';
 import {
   applyPosnetSums,
   calcClosingTotals,
+  expensesTotalFrom,
   differenceReasonMissing,
   extraIncomeFromLines,
 } from './closing-calc';
@@ -310,9 +311,9 @@ export class ClosingsService implements OnModuleInit {
     return account.id;
   }
 
-  /** Caja sistema − declarado. extraIncome = cuentas aparte / ajustes. */
-  private calc(dto: Partial<CreateClosingDto>, extraIncome = 0) {
-    return calcClosingTotals(dto, extraIncome);
+  /** Declarado − caja sistema. extraIncome = cuentas aparte / ajustes; egresos se suman al bruto. */
+  private calc(dto: Partial<CreateClosingDto>, extraIncome = 0, expensesTotal = 0) {
+    return calcClosingTotals(dto, extraIncome, expensesTotal);
   }
 
   /**
@@ -698,7 +699,8 @@ export class ClosingsService implements OnModuleInit {
     const posnetAmounts = this.normalizePosnetAmounts(normalized.posnetAmounts);
     const incomeExtras = extraIncomeFromLines(normalized.extraLines);
     const sourceDeclared = await this.declaredFromSources(shopId, normalized);
-    const totals = this.calc(normalized, incomeExtras + sourceDeclared);
+    const expensesTotal = expensesTotalFrom(normalized.expenses);
+    const totals = this.calc(normalized, incomeExtras + sourceDeclared, expensesTotal);
     await this.assertDifferenceReason(shopId, totals.difference, normalized.differenceReason);
     const withdrawn = await this.resolveWithdrawnBy(
       shopId,
@@ -836,7 +838,11 @@ export class ClosingsService implements OnModuleInit {
           ?.filter((s): s is typeof s & { sourceId: string } => !!s.sourceId)
           .map((s) => ({ sourceId: s.sourceId, amount: n(s.amount) })),
     });
-    const totals = this.calc(merged, incomeExtras + sourceDeclared);
+    const expensesTotal = expensesTotalFrom(
+      merged.expenses ??
+        row.expenses?.map((e) => ({ amount: e.amount })),
+    );
+    const totals = this.calc(merged, incomeExtras + sourceDeclared, expensesTotal);
     await this.assertDifferenceReason(shopId, totals.difference, merged.differenceReason);
     const withdrawn = await this.resolveWithdrawnBy(shopId, merged.cashWithdrawnByUserId, merged.cashWithdrawnByName, merged.cashWithdrawnByEmployeeId);
     const cashWithdrawnToAccountId = await this.resolveWithdrawnToAccount(
