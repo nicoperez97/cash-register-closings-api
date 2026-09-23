@@ -37,6 +37,7 @@ import { CurrentUser, AuthUser, RequirePermissions, Public } from '../../common/
 import { PermissionsGuard } from '../../common/guards';
 import { AttendanceService } from './attendance.service';
 import { AttendanceExcelImportService } from './attendance-excel-import.service';
+import { ToBoolean } from '../../common/boolean.util';
 
 class UpsertAttendanceDto {
   @ApiProperty() @IsUUID() employeeId: string;
@@ -45,8 +46,8 @@ class UpsertAttendanceDto {
   @IsOptional()
   @IsString()
   shiftId?: string | null;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() isPresent?: boolean;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() isHoliday?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() isPresent?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() isHoliday?: boolean;
   @ApiPropertyOptional({ example: '18:00' })
   @IsOptional()
   @IsString()

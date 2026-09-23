@@ -24,6 +24,7 @@ import { PosnetType } from '../../../common/posnet';
 import { ConceptCategory } from '../../../common/enums';
 import { DEFAULT_PAYMENT_CONCEPT_CATEGORIES } from '../../../common/concept-categories';
 import { ShopMode } from '../../../common/shop-ordering';
+import { ToBoolean } from '../../../common/boolean.util';
 
 export class PaymentConceptCategoriesDto {
   @ApiPropertyOptional({ enum: ConceptCategory, isArray: true })
@@ -119,27 +120,27 @@ export class CreateShopDto {
 
   @ApiPropertyOptional()
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   coversEnabled?: boolean;
 
   @ApiPropertyOptional({ description: 'Habilita el módulo de reservas en este local' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   reservationsEnabled?: boolean;
 
   @ApiPropertyOptional({ description: 'Habilita el formulario público de reservas' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   reservationSignupEnabled?: boolean;
 
   @ApiPropertyOptional({ description: 'Habilita reservas en el sector adentro' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   reservationInsideEnabled?: boolean;
 
   @ApiPropertyOptional({ description: 'Habilita reservas en el sector afuera' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   reservationOutsideEnabled?: boolean;
 
   @ApiPropertyOptional({
@@ -180,22 +181,22 @@ export class CreateShopDto {
 
   @ApiPropertyOptional({ description: 'Habilita el módulo de lista de espera en este local' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   waitingListEnabled?: boolean;
 
   @ApiPropertyOptional({ description: 'Habilita el módulo de propinas en este local' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   tipsEnabled?: boolean;
 
   @ApiPropertyOptional({ description: 'Pantalla pública de presentismo para el personal' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   publicAttendanceEnabled?: boolean;
 
   @ApiPropertyOptional({ description: 'Página pública de normas pre/post servicio' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   publicServiceRulesEnabled?: boolean;
 
   @ApiPropertyOptional({
@@ -224,7 +225,7 @@ export class CreateShopDto {
     description: 'Si es true, el presentismo de servicio usa entrada/salida y extras',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   serviceAttendanceWithHours?: boolean;
 
   @ApiPropertyOptional({
@@ -238,7 +239,7 @@ export class CreateShopDto {
 
   @ApiPropertyOptional({ description: 'Carta pública del local' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   menuEnabled?: boolean;
 
   @ApiPropertyOptional({
@@ -252,29 +253,29 @@ export class CreateShopDto {
 
   @ApiPropertyOptional({ description: 'Pedidos online (take away / delivery)' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   onlineOrderingEnabled?: boolean;
 
   @ApiPropertyOptional({ description: 'Comanda de mozos (/mozo/:slug)' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   waiterOrderingEnabled?: boolean;
 
   @ApiPropertyOptional({
     description: 'Cierra la página pública aunque el horario diga abierto',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   orderingForceClosed?: boolean;
 
   @ApiPropertyOptional()
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   takeawayEnabled?: boolean;
 
   @ApiPropertyOptional()
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   deliveryEnabled?: boolean;
 
   @ApiPropertyOptional({
@@ -504,7 +505,7 @@ export class CreateShopDto {
 
   @ApiPropertyOptional({ description: 'Si es false, no se envían mails de este local' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   emailNotificationsEnabled?: boolean;
 
   @ApiPropertyOptional({
@@ -608,6 +609,6 @@ export class CreateShopDto {
 export class UpdateShopDto extends PartialType(CreateShopDto) {
   @ApiPropertyOptional()
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   active?: boolean;
 }

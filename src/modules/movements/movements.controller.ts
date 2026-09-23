@@ -49,6 +49,7 @@ import { PermissionsGuard } from '../../common/guards';
 import { MovementsService } from './movements.service';
 import { MovementsExcelImportService } from './movements-excel-import.service';
 import { MulterExceptionFilter } from '../../common/filters/multer-exception.filter';
+import { ToBoolean } from '../../common/boolean.util';
 
 class CreateMovementDto {
   @ApiProperty() @IsDateString() businessDate: string;
@@ -77,10 +78,10 @@ class CreateMovementDto {
   @ApiPropertyOptional() @IsOptional() @IsNumber() usdRate?: number | null;
   @ApiPropertyOptional() @IsOptional() @IsNumber() amountUsd?: number | null;
   @ApiPropertyOptional() @IsOptional() @IsUUID() conceptId?: string | null;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() invoiced?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() invoiced?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsString() invoiceNumber?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsUUID() employeeId?: string | null;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() notifyAdmins?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() notifyAdmins?: boolean;
   @ApiPropertyOptional({ enum: ['cash', 'transfer', 'card'] })
   @IsOptional()
   @IsIn(['cash', 'transfer', 'card'])
@@ -91,7 +92,7 @@ class CreateMovementDto {
   kind?: 'expense' | 'income' | 'transfer';
   @ApiPropertyOptional({ description: 'Si true, el destino es la cuenta Dividendos del local.' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   isDividend?: boolean;
 
   @ApiPropertyOptional({
@@ -159,7 +160,7 @@ class UpdateMovementDto {
   @ApiPropertyOptional() @IsOptional() @IsNumber() usdRate?: number | null;
   @ApiPropertyOptional() @IsOptional() @IsNumber() amountUsd?: number | null;
   @ApiPropertyOptional() @IsOptional() conceptId?: string | null;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() invoiced?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() invoiced?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsString() invoiceNumber?: string | null;
   @ApiPropertyOptional() @IsOptional() employeeId?: string | null;
   @ApiPropertyOptional({ enum: ['expense', 'income', 'transfer'] })
@@ -170,7 +171,7 @@ class UpdateMovementDto {
   @IsOptional()
   @IsIn(['cash', 'transfer', 'card'])
   paymentMethod?: 'cash' | 'transfer' | 'card' | null;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() notifyAdmins?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() notifyAdmins?: boolean;
   @ApiPropertyOptional({ type: [String] })
   @IsOptional()
   @IsArray()
@@ -179,7 +180,7 @@ class UpdateMovementDto {
 
   @ApiPropertyOptional({ description: 'Si true, el destino es la cuenta Dividendos del local.' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   isDividend?: boolean;
 
   @ApiPropertyOptional({

@@ -34,6 +34,7 @@ import { PermissionsGuard } from '../../common/guards';
 import { GlobalRole } from '../../common/enums';
 import { UsersService } from './users.service';
 import { ProfileService } from '../profile/profile.service';
+import { ToBoolean } from '../../common/boolean.util';
 
 class CreateUserDto {
   @ApiProperty() @IsString() @MinLength(2) fullName: string;
@@ -59,7 +60,7 @@ class CreateUserDto {
     description: 'Legacy: si true, oculta en “Quién se lo lleva” (preferir visibility)',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   hideFromCashWithdraw?: boolean;
   @ApiPropertyOptional({
     description:
@@ -74,31 +75,31 @@ class CreateUserDto {
     description: 'Si es true, recibe alertas cuando el stock de alimentos baja del mínimo',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   isStockAdmin?: boolean;
   @ApiPropertyOptional({
     description: 'Si es true, recibe alertas cuando el stock de bebidas baja del mínimo',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   isBeverageStockAdmin?: boolean;
   @ApiPropertyOptional({
     description: 'Si es true, recibe notificaciones y mails del módulo Faltantes',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   isShortageAdmin?: boolean;
   @ApiPropertyOptional({
     description: 'Si es true, recibe notificaciones y mails de solicitudes de reserva',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   isReservationAdmin?: boolean;
   @ApiPropertyOptional({
     description: 'Si es true, recibe notificaciones de pedidos online',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   isCustomerOrdersAdmin?: boolean;
   @ApiPropertyOptional({
     description:
@@ -122,19 +123,19 @@ class CreateUserDto {
     description: 'Si es true, puede editar y borrar gastos (solo lo asigna un super admin)',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   canEditExpenses?: boolean;
   @ApiPropertyOptional({
     description: 'Si es true, puede editar y borrar pagos (solo lo asigna un super admin)',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   canEditPayments?: boolean;
   @ApiPropertyOptional({
     description: 'Si es true, en el cierre hay que adjuntar archivo cuando el campo tiene monto',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   requireClosingFiles?: boolean;
   @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() phone?: string | null;
   @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() bankAlias?: string | null;
@@ -146,7 +147,7 @@ class UpdateUserDto {
   @ApiPropertyOptional() @IsOptional() @IsEmail() email?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() @MinLength(4) password?: string;
   @ApiPropertyOptional({ enum: GlobalRole }) @IsOptional() @IsEnum(GlobalRole) globalRole?: GlobalRole;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() active?: boolean;
   @ApiPropertyOptional({ type: [String] }) @IsOptional() shopIds?: string[];
   @ApiPropertyOptional({ enum: GlobalRole }) @IsOptional() @IsEnum(GlobalRole) shopRole?: GlobalRole;
   @ApiPropertyOptional({ type: 'object', additionalProperties: { type: 'string' } })
@@ -166,7 +167,7 @@ class UpdateUserDto {
     description: 'Legacy: si true, oculta en “Quién se lo lleva” (preferir visibility)',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   hideFromCashWithdraw?: boolean;
   @ApiPropertyOptional({
     description:
@@ -181,31 +182,31 @@ class UpdateUserDto {
     description: 'Si es true, recibe alertas cuando el stock de alimentos baja del mínimo',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   isStockAdmin?: boolean;
   @ApiPropertyOptional({
     description: 'Si es true, recibe alertas cuando el stock de bebidas baja del mínimo',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   isBeverageStockAdmin?: boolean;
   @ApiPropertyOptional({
     description: 'Si es true, recibe notificaciones y mails del módulo Faltantes',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   isShortageAdmin?: boolean;
   @ApiPropertyOptional({
     description: 'Si es true, recibe notificaciones y mails de solicitudes de reserva',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   isReservationAdmin?: boolean;
   @ApiPropertyOptional({
     description: 'Si es true, recibe notificaciones de pedidos online',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   isCustomerOrdersAdmin?: boolean;
   @ApiPropertyOptional({
     description:
@@ -229,19 +230,19 @@ class UpdateUserDto {
     description: 'Si es true, puede editar y borrar gastos (solo lo asigna un super admin)',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   canEditExpenses?: boolean;
   @ApiPropertyOptional({
     description: 'Si es true, puede editar y borrar pagos (solo lo asigna un super admin)',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   canEditPayments?: boolean;
   @ApiPropertyOptional({
     description: 'Si es true, en el cierre hay que adjuntar archivo cuando el campo tiene monto',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   requireClosingFiles?: boolean;
   @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() phone?: string | null;
   @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() bankAlias?: string | null;

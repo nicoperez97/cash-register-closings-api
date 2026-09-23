@@ -16,6 +16,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { ClosingSourceKind } from '../../../common/enums';
+import { ToBoolean } from '../../../common/boolean.util';
 
 export class SourcePosnetDto {
   @ApiPropertyOptional()
@@ -54,7 +55,7 @@ export class UpsertShopClosingSourceDto {
 
   @ApiPropertyOptional()
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   includeInDeclared?: boolean;
 
   @ApiPropertyOptional({ enum: ClosingSourceKind })
@@ -92,7 +93,7 @@ export class UpsertShopClosingSourceDto {
 
   @ApiPropertyOptional()
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   active?: boolean;
 }
 

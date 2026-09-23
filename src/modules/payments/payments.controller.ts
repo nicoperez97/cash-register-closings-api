@@ -43,6 +43,7 @@ import { NotifyTargetsDto } from '../../common/dto/notify-targets.dto';
 import { CurrentUser, AuthUser, RequireAnyPermissions, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { PaymentsService } from './payments.service';
+import { ToBoolean } from '../../common/boolean.util';
 
 class CreatePaymentDto {
   @ApiPropertyOptional() @IsOptional() @IsString() title?: string | null;
@@ -110,7 +111,7 @@ class CreatePaymentDto {
     description: 'Si true, al abonar el movimiento va a Dividendos (socio anotado, sin sumar saldo).',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   isDividend?: boolean;
   @ApiPropertyOptional({ enum: ['cash', 'transfer', 'card', 'other'] })
   @IsOptional()
@@ -215,7 +216,7 @@ class UpdatePaymentDto {
     description: 'Si true, al abonar el movimiento va a Dividendos (socio anotado, sin sumar saldo).',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   isDividend?: boolean;
   @ApiPropertyOptional({ enum: ['cash', 'transfer', 'card', 'other'] })
   @IsOptional()
@@ -265,7 +266,7 @@ class UpdatePaymentDto {
   @IsNumber()
   @Min(0)
   invoiceOtherTaxesAmount?: number | null;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() notifyAdmins?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() notifyAdmins?: boolean;
   @ApiPropertyOptional({ type: [String] })
   @IsOptional()
   @IsArray()

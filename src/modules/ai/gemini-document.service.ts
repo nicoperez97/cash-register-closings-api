@@ -639,4 +639,97 @@ Reglas:
       },
     };
   }
+
+  /**
+   * Sugiere rubro/subrubro (y nombre limpio) para platos POS sin etiqueta clara.
+   * Digest: { categories, products: [{ productCode, productName }] }.
+   */
+  async suggestPosProductLabels(digest: unknown): Promise<
+    GeminiResult<{
+      labels: Array<{
+        productCode: string;
+        productName?: string | null;
+        category: string;
+        subcategory?: string | null;
+      }>;
+      warnings: string[];
+    }>
+  > {
+    if (!this.isEnabled()) {
+      return this.fail('disabled', 'Gemini no está configurado (falta GEMINI_API_KEY).');
+    }
+    const system = `Sos un experto en carta y POS de un local gastronómico (Uruguay/Argentina).
+Te pasan platos del reporte de ventas (código + nombre) y la lista de rubros del local.
+Devolvé SOLO JSON:
+{"labels":[{"productCode":"string","productName":"string|null","category":"string","subcategory":"string|null"}],"warnings":["string"]}
+Reglas:
+- Solo incluí platos que necesitan rubro o cuyo nombre conviene normalizar.
+- productCode debe coincidir exactamente con el del digest.
+- category: preferí un rubro de la lista del local; si no encaja, usá uno estándar: COMIDA, PIZZA, BEBIDAS, VINOS, EVENTO CASA TOMADA.
+- subcategory: opcional (cepas en vinos, Pastas, etc.). null si no aplica.
+- productName: solo si el nombre del POS está mal o incompleto; si no, omitilo o null.
+- No inventes códigos. Máximo 120 labels. warnings: hasta 4 frases cortas en español rioplatense.`;
+    const data = await this.generateJson<{
+      labels?: unknown;
+      warnings?: unknown;
+    }>(
+      [
+        {
+          text: `Platos y rubros a clasificar:\n${JSON.stringify(digest).slice(0, 16000)}`,
+        },
+      ],
+      system,
+      28_000,
+    );
+    if (!data.ok) {
+      return this.fail(
+        data.reason,
+        data.message.replace(/\s*Se usó el parseo local\.?/gi, '').trim() || data.message,
+      );
+    }
+    const labels = (Array.isArray(data.data.labels) ? data.data.labels : [])
+      .map((raw) => {
+        const row = raw as {
+          productCode?: unknown;
+          productName?: unknown;
+          category?: unknown;
+          subcategory?: unknown;
+        };
+        const productCode = String(row?.productCode ?? '').trim();
+        const category = String(row?.category ?? '').trim();
+        if (!productCode || !category) return null;
+        const productNameRaw = row?.productName;
+        const productName =
+          productNameRaw == null || productNameRaw === ''
+            ? null
+            : String(productNameRaw).trim().slice(0, 255) || null;
+        const subcategoryRaw = row?.subcategory;
+        const subcategory =
+          subcategoryRaw == null || subcategoryRaw === ''
+            ? null
+            : String(subcategoryRaw).trim().slice(0, 128) || null;
+        return {
+          productCode: productCode.slice(0, 64),
+          productName,
+          category: category.slice(0, 128),
+          subcategory,
+        };
+      })
+      .filter(
+        (
+          x,
+        ): x is {
+          productCode: string;
+          productName: string | null;
+          category: string;
+          subcategory: string | null;
+        } => !!x,
+      )
+      .slice(0, 120);
+    const warnings = (Array.isArray(data.data.warnings) ? data.data.warnings : [])
+      .map((x) => String(x ?? '').trim())
+      .filter(Boolean)
+      .slice(0, 4);
+    return { ok: true, data: { labels, warnings } };
+  }
 }

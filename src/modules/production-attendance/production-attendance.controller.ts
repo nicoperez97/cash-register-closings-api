@@ -37,11 +37,12 @@ import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorato
 import { PermissionsGuard } from '../../common/guards';
 import { ProductionAttendanceService } from './production-attendance.service';
 import { ProductionAttendanceExcelImportService } from './production-attendance-excel-import.service';
+import { ToBoolean } from '../../common/boolean.util';
 
 class UpsertProductionAttendanceDto {
   @ApiProperty() @IsUUID() employeeId: string;
   @ApiProperty() @IsDateString() date: string;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() isPresent?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() isPresent?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) hours?: number;
 }
 
@@ -55,7 +56,7 @@ class BulkProductionAttendanceDto {
 
 class UpsertMyProductionAttendanceDto {
   @ApiProperty() @IsDateString() date: string;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() isPresent?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() isPresent?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) hours?: number;
 }
 

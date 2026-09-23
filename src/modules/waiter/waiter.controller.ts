@@ -24,6 +24,7 @@ import {
   WaiterAuthPayload,
 } from './waiter-auth';
 import { WaiterService } from './waiter.service';
+import { ToBoolean } from '../../common/boolean.util';
 
 class WaiterLoginDto {
   @ApiProperty({ example: '1234' })
@@ -62,7 +63,7 @@ class WaiterOrderItemDto {
 
   @ApiPropertyOptional({ description: 'Marcar como entrada en comanda de cocina' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   isEntrada?: boolean;
 
   @ApiPropertyOptional({
@@ -206,7 +207,7 @@ class PatchSessionLineDto {
 
   @ApiPropertyOptional({ description: 'Quitar la línea (extra o ítem)' })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   remove?: boolean;
 
   @ApiPropertyOptional({
@@ -294,12 +295,12 @@ class CreateSessionOrderDto {
 
   @ApiPropertyOptional({ default: true })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   printKitchen?: boolean;
 
   @ApiPropertyOptional({ default: false })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   printCustomerTicket?: boolean;
 }
 

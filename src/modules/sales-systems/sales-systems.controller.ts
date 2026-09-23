@@ -15,6 +15,7 @@ import { IsBoolean, IsOptional, IsString, MinLength } from 'class-validator';
 import { RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { SalesSystemsService } from './sales-systems.service';
+import { ToBoolean } from '../../common/boolean.util';
 
 class CreateSalesSystemDto {
   @ApiProperty({ example: 'RESTOSOFT' })
@@ -34,7 +35,7 @@ class CreateSalesSystemDto {
 
   @ApiPropertyOptional()
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   active?: boolean;
 }
 
@@ -59,7 +60,7 @@ class UpdateSalesSystemDto {
 
   @ApiPropertyOptional()
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   active?: boolean;
 }
 

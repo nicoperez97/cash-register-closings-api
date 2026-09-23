@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import * as ExcelJS from 'exceljs';
 import { AuthUser } from '../../common/decorators';
 import { PosProduct } from '../../entities/pos-product.entity';
+import { PosCategory } from '../../entities/pos-category.entity';
 import { PosSaleTicketLine } from '../../entities/pos-sale-ticket-line.entity';
 import { ShopsService } from '../shops/shops.service';
 import {
@@ -618,9 +619,31 @@ export class SalesProductsAnalyticsService {
   async upsertFromLines(
     shopId: string,
     items: Array<{ productCode: string | null; productName: string | null }>,
+    overrides?: Array<{
+      productCode: string;
+      productName?: string | null;
+      category?: string | null;
+      subcategory?: string | null;
+    }> | null,
   ): Promise<Map<string, { category: string | null; subcategory: string | null }>> {
     const map = new Map<string, { category: string | null; subcategory: string | null }>();
     const byCode = new Map<string, { productCode: string; productName: string | null }>();
+    const overrideByCode = new Map<
+      string,
+      {
+        productCode: string;
+        productName?: string | null;
+        category?: string | null;
+        subcategory?: string | null;
+      }
+    >();
+    for (const o of overrides ?? []) {
+      const c = String(o.productCode ?? '').trim();
+      if (!c) continue;
+      const normalized =
+        /^\d+\.0+$/.test(c) ? String(parseInt(c, 10)) : c.replace(/\.0+$/, '');
+      overrideByCode.set(normalized, { ...o, productCode: normalized });
+    }
 
     for (const item of items) {
       const code = (item.productCode || item.productName || '').trim();
@@ -680,22 +703,48 @@ export class SalesProductsAnalyticsService {
     }
     const existingByCode = new Map(existing.map((p) => [p.productCode, p]));
 
+    const categoryRows = await this.products.manager.getRepository(PosCategory).find({
+      where: { shopId, active: true },
+    });
+    const categoryIdByName = new Map(
+      categoryRows.map((c) => [c.name.trim().toUpperCase(), c.id]),
+    );
+
     const toSave: PosProduct[] = [];
     for (const [code, meta] of byCode) {
+      const ov = overrideByCode.get(code);
       let row = existingByCode.get(code);
       if (row) {
         let dirty = false;
-        if (meta.productName && meta.productName !== row.productName) {
-          row.productName = meta.productName;
-          dirty = true;
-        }
-        // Completar rubro/subrubro solo si falta y podemos identificarlo (vinos: con cepa).
-        if (!row.category || (row.category === 'VINOS' && !row.subcategory)) {
-          const labels = resolveNewLabels(code, meta.productName ?? row.productName ?? null);
-          if (labels.category && (labels.category !== 'VINOS' || labels.subcategory)) {
-            row.category = labels.category;
-            row.subcategory = labels.subcategory;
+        if (ov) {
+          if (ov.productName != null && ov.productName !== row.productName) {
+            row.productName = ov.productName.trim() || row.productName;
             dirty = true;
+          }
+          if (ov.category !== undefined) {
+            row.category = ov.category?.trim() || null;
+            row.categoryId = row.category
+              ? (categoryIdByName.get(row.category.toUpperCase()) ?? null)
+              : null;
+            dirty = true;
+          }
+          if (ov.subcategory !== undefined) {
+            row.subcategory = ov.subcategory?.trim() || null;
+            dirty = true;
+          }
+        } else {
+          if (meta.productName && meta.productName !== row.productName) {
+            row.productName = meta.productName;
+            dirty = true;
+          }
+          // Completar rubro/subrubro solo si falta y podemos identificarlo (vinos: con cepa).
+          if (!row.category || (row.category === 'VINOS' && !row.subcategory)) {
+            const labels = resolveNewLabels(code, meta.productName ?? row.productName ?? null);
+            if (labels.category && (labels.category !== 'VINOS' || labels.subcategory)) {
+              row.category = labels.category;
+              row.subcategory = labels.subcategory;
+              dirty = true;
+            }
           }
         }
         if (dirty) toSave.push(row);
@@ -704,13 +753,22 @@ export class SalesProductsAnalyticsService {
           subcategory: row.subcategory ?? null,
         });
       } else {
-        const labels = resolveNewLabels(code, meta.productName);
+        const labels = ov
+          ? {
+              category: ov.category?.trim() || null,
+              subcategory: ov.subcategory?.trim() || null,
+            }
+          : resolveNewLabels(code, meta.productName);
+        const productName = ov?.productName?.trim() || meta.productName;
         row = this.products.create({
           shopId,
           productCode: code,
-          productName: meta.productName,
+          productName,
           category: labels.category,
           subcategory: labels.subcategory,
+          categoryId: labels.category
+            ? (categoryIdByName.get(labels.category.toUpperCase()) ?? null)
+            : null,
           active: true,
         });
         toSave.push(row);

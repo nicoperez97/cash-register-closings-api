@@ -16,6 +16,7 @@ import {
 import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { PartnerSplitsService } from './partner-splits.service';
+import { ToBoolean } from '../../common/boolean.util';
 
 class ChannelLeaveDto {
   @ApiProperty()
@@ -82,7 +83,7 @@ class PartnerCompleteDto {
   toAccountId?: string;
 
   @ApiProperty()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   complete: boolean;
 }
 
@@ -135,7 +136,7 @@ class EqualizeDto {
       'Si true y hay sobrante sin socio que reciba, envía el exceso de cada socio a Dividendos.',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   sendSurplusToDividends?: boolean;
 
   @ApiPropertyOptional({
@@ -143,7 +144,7 @@ class EqualizeDto {
       'Si true y los saldos ya coinciden con el objetivo, envía el saldo de cada socio a Dividendos (sale del pool del local).',
   })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   sendBalancedToDividends?: boolean;
 }
 

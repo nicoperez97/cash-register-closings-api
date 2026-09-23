@@ -37,6 +37,7 @@ import {
   stockManagePermission,
   stockReadPermission,
 } from './stock-kind';
+import { ToBoolean } from '../../common/boolean.util';
 
 class NewCategoryInlineDto {
   @ApiProperty() @IsString() @MinLength(1) name: string;
@@ -44,12 +45,12 @@ class NewCategoryInlineDto {
 
 class CreateCategoryDto {
   @ApiProperty() @IsString() @MinLength(1) name: string;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() active?: boolean;
 }
 
 class UpdateCategoryDto {
   @ApiPropertyOptional() @IsOptional() @IsString() @MinLength(1) name?: string;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() active?: boolean;
 }
 
 class CreateProductDto {
@@ -63,7 +64,7 @@ class CreateProductDto {
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) quantity?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) minQuantity?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) maxQuantity?: number;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() active?: boolean;
 }
 
 class UpdateProductDto {
@@ -77,7 +78,7 @@ class UpdateProductDto {
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) quantity?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) minQuantity?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) maxQuantity?: number;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() active?: boolean;
 }
 
 class AdjustQuantityDto {

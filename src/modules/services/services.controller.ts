@@ -15,6 +15,7 @@ import { IsBoolean, IsOptional, IsString, MinLength } from 'class-validator';
 import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { ServicesService } from './services.service';
+import { ToBoolean } from '../../common/boolean.util';
 
 class CreateServiceDto {
   @ApiProperty() @IsString() @MinLength(1) name: string;
@@ -31,7 +32,7 @@ class CreateServiceDto {
   @IsString()
   bankAlias?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string | null;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() active?: boolean;
 }
 
 class UpdateServiceDto {
@@ -49,7 +50,7 @@ class UpdateServiceDto {
   @IsString()
   bankAlias?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string | null;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() active?: boolean;
+  @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() active?: boolean;
 }
 
 @ApiTags('services')

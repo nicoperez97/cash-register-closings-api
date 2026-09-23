@@ -23,6 +23,7 @@ import {
   DineInAuthPayload,
 } from './dine-in-auth';
 import { DineInService } from './dine-in.service';
+import { ToBoolean } from '../../common/boolean.util';
 
 class OpenDineInSessionDto {
   @ApiProperty()
@@ -111,7 +112,7 @@ class CreateDineInOrderDto {
 
   @ApiPropertyOptional({ default: true })
   @IsOptional()
-  @IsBoolean()
+  @ToBoolean() @IsBoolean()
   printKitchen?: boolean;
 }
 
