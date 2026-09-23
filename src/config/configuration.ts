@@ -56,6 +56,11 @@ export default () => {
     gemini: {
       apiKey: (env.GEMINI_API_KEY ?? '').trim(),
       model: (env.GEMINI_MODEL ?? 'gemini-3.6-flash').trim() || 'gemini-3.6-flash',
+      /** Modelos a probar si el principal responde 503/alta demanda (coma-separados). */
+      fallbackModels: (env.GEMINI_FALLBACK_MODELS ?? 'gemini-2.5-flash,gemini-2.0-flash')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
     },
     /**
      * Google Sign-In (opcional). Mismo Client ID (tipo Web) en front y API.
