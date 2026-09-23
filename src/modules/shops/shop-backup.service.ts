@@ -954,6 +954,17 @@ export class ShopBackupService {
     if (v === null || v === undefined || v === '') return 'NULL';
     if (typeof v === 'number' && Number.isFinite(v)) return String(v);
     if (typeof v === 'boolean') return v ? '1' : '0';
+    if (v instanceof Date) {
+      const s = this.toMysqlDateTime(v).replace(/\\/g, '\\\\').replace(/'/g, "''");
+      return `'${s}'`;
+    }
+    if (typeof v === 'string') {
+      const asDt = this.coerceMysqlDateTime(v);
+      if (asDt != null) {
+        const s = asDt.replace(/\\/g, '\\\\').replace(/'/g, "''");
+        return `'${s}'`;
+      }
+    }
     const s = String(v).replace(/\\/g, '\\\\').replace(/'/g, "''");
     return `'${s}'`;
   }
@@ -1619,7 +1630,8 @@ export class ShopBackupService {
   private normalizeDumpRow(r: Record<string, unknown>): Row {
     const out: Row = {};
     for (const [k, v] of Object.entries(r)) {
-      if (v instanceof Date) out[k] = v.toISOString();
+      // MySQL DATETIME no acepta ISO con "T"/"Z" en INSERT crudo al restaurar.
+      if (v instanceof Date) out[k] = this.toMysqlDateTime(v);
       else if (Buffer.isBuffer(v)) out[k] = v.toString('utf8');
       else if (v && typeof v === 'object') out[k] = JSON.stringify(v);
       else out[k] = v ?? '';
@@ -1907,6 +1919,40 @@ export class ShopBackupService {
   private sqlValue(v: unknown): unknown {
     if (v === null || v === undefined || v === '') return null;
     if (typeof v === 'boolean') return v ? 1 : 0;
+    if (v instanceof Date) return this.toMysqlDateTime(v);
+    if (typeof v === 'string') {
+      const asDt = this.coerceMysqlDateTime(v);
+      if (asDt != null) return asDt;
+    }
     return v;
+  }
+
+  /**
+   * Convierte ISO (`2026-09-22T15:23:04.786Z`) u otros strings de fecha a
+   * `YYYY-MM-DD HH:MM:SS.ffffff` (MySQL DATETIME). Si no parece datetime, null.
+   */
+  private coerceMysqlDateTime(raw: string): string | null {
+    const s = String(raw ?? '').trim();
+    if (!s) return null;
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d{1,6})?$/.test(s)) {
+      return s.includes('.') ? s.padEnd(26, '0').slice(0, 26) : s;
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    // ISO 8601 / Excel-ish con T o zona
+    if (!/^\d{4}-\d{2}-\d{2}T/.test(s) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) {
+      return null;
+    }
+    const d = new Date(s);
+    if (Number.isNaN(d.getTime())) return null;
+    return this.toMysqlDateTime(d);
+  }
+
+  private toMysqlDateTime(d: Date): string {
+    const pad = (n: number, w = 2) => String(n).padStart(w, '0');
+    return (
+      `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ` +
+      `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}.` +
+      `${pad(d.getUTCMilliseconds(), 3)}000`
+    );
   }
 }
