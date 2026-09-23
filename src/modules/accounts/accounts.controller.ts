@@ -212,6 +212,7 @@ export class AccountsController {
   @RequireAnyPermissions(
     'expenses.read',
     'accountTransfers.read',
+    'incomes.read',
     'movements.read',
     'accounts.manage',
     'closings.read',
