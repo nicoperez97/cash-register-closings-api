@@ -181,17 +181,10 @@ export class ShopBackupService {
       throw new BadRequestException(`Versión de backup no soportada: ${meta.version}`);
     }
     const metaShopId = String(meta.shopId ?? '');
-    if (metaShopId && metaShopId !== shopId) {
-      if (!force) {
-        throw new BadRequestException(
-          `El backup es del local ${meta.slug || metaShopId}, no de este. Usá force=1 para forzar.`,
-        );
-      }
-      if (meta.slug && String(meta.slug) !== shop.slug) {
-        throw new BadRequestException(
-          `No se puede forzar: el slug del backup (${meta.slug}) no coincide con ${shop.slug}`,
-        );
-      }
+    if (metaShopId && metaShopId !== shopId && !force) {
+      throw new BadRequestException(
+        `El backup es del local ${meta.slug || metaShopId}, no de este. Usá force=1 para forzar.`,
+      );
     }
 
     let modules: BackupModuleId[] | 'all' = 'all';
@@ -209,6 +202,7 @@ export class ShopBackupService {
     try {
       await this.purgeShopDataWithManager(qr.manager, shopId, modules);
       await this.importFromWorkbook(qr.manager, shopId, user.id, wb);
+      await this.rebuildCashPendingFromClosings(qr.manager, shopId);
       await qr.commitTransaction();
     } catch (err) {
       await qr.rollbackTransaction();
@@ -685,6 +679,8 @@ export class ShopBackupService {
           id: l.id,
           periodId: l.periodId,
           employeeId: l.employeeId,
+          shiftId: l.shiftId ?? '',
+          shiftName: l.shiftName ?? '',
           daysWorked: l.daysWorked,
           hoursWorked: l.hoursWorked,
           holidayDays: l.holidayDays,
@@ -1157,15 +1153,25 @@ export class ShopBackupService {
       );
     }
 
+    const payrollLineKeys = new Set<string>();
     for (const r of this.readRowsSheet(wb, 'payroll_lines')) {
       const periodId = mapId(String(r.periodId));
       const employeeId = mapId(String(r.employeeId));
       if (!periodId || !employeeId) continue;
+      let shiftId = String(r.shiftId ?? '').trim();
+      const key = `${periodId}\0${employeeId}\0${shiftId}`;
+      if (payrollLineKeys.has(key)) {
+        // Dump viejo sin columna shiftId: varias líneas del mismo empleado colapsaban a ''.
+        shiftId = `imp-${String(r.id ?? randomUUID()).replace(/-/g, '').slice(0, 32)}`;
+      }
+      payrollLineKeys.add(`${periodId}\0${employeeId}\0${shiftId}`);
       await manager.getRepository(PayrollLine).save(
         manager.getRepository(PayrollLine).create({
           id: newId(String(r.id)),
           periodId,
           employeeId,
+          shiftId,
+          shiftName: this.emptyToNull(r.shiftName),
           daysWorked: String(r.daysWorked ?? '0'),
           hoursWorked: String(r.hoursWorked ?? '0'),
           holidayDays: String(r.holidayDays ?? '0'),
@@ -1588,10 +1594,21 @@ export class ShopBackupService {
   }
 
   private async dumpShopTable(table: string, shopId: string, extra = ''): Promise<Row[]> {
+    const soft = await this.tableHasDeletedAt(table);
+    const deletedClause = soft ? ' AND deletedAt IS NULL' : '';
     const sql = extra
-      ? `SELECT * FROM \`${table}\` WHERE shopId = ? AND (${extra})`
-      : `SELECT * FROM \`${table}\` WHERE shopId = ?`;
+      ? `SELECT * FROM \`${table}\` WHERE shopId = ?${deletedClause} AND (${extra})`
+      : `SELECT * FROM \`${table}\` WHERE shopId = ?${deletedClause}`;
     return this.dumpSql(sql, [shopId]);
+  }
+
+  private async tableHasDeletedAt(table: string): Promise<boolean> {
+    const rows = (await this.dataSource.query(
+      `SELECT COUNT(*) AS c FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = 'deletedAt'`,
+      [table],
+    )) as Array<{ c: number }>;
+    return Number(rows?.[0]?.c ?? 0) > 0;
   }
 
   private async dumpSql(sql: string, params: unknown[]): Promise<Row[]> {
@@ -1617,6 +1634,9 @@ export class ShopBackupService {
     wb: ExcelJS.Workbook,
     map: Map<string, string>,
   ) {
+    const existingUserIds = new Set(
+      (await this.users.find({ select: ['id'] })).map((u) => u.id),
+    );
     const remap = (oldId: string | null | undefined) => {
       if (!oldId) return null;
       return map.get(oldId) ?? null;
@@ -1658,6 +1678,15 @@ export class ShopBackupService {
       'service_rules',
       'payments',
     ];
+    /** FKs a entidades remapeadas en este dump. Si no hay map, se anulan (opcionales) o se salta la fila. */
+    const requiredFkByTable: Partial<Record<BackupSheetName, string[]>> = {
+      cash_pending_withdrawals: ['closingId'],
+      cash_pending_withdrawal_offsets: ['pendingId'],
+      closing_source_amounts: ['closingId', 'sourceId'],
+      order_lines: ['orderId'],
+      tip_allocations: ['tipDayId'],
+      salon_tables: ['sectorId'],
+    };
     const fkCols = [
       'accountId',
       'fromAccountId',
@@ -1679,19 +1708,52 @@ export class ShopBackupService {
       'sourceId',
       'reservationId',
       'supervisorEmployeeId',
+      'sectorId',
+      'importId',
+      'ticketId',
     ];
+    const userFkCols = ['pickedByUserId', 'confirmedByUserId', 'settledByUserId', 'createdByUserId', 'userId'];
+    const errors: string[] = [];
+    let inserted = 0;
+    let skipped = 0;
+
     for (const table of tables) {
       const rows = this.readRowsSheet(wb, table);
+      const required = new Set(requiredFkByTable[table] ?? []);
       for (const r of rows) {
         const row: Record<string, unknown> = { ...r };
         if (row.id) row.id = ensureId(String(r.id));
         if ('shopId' in row) row.shopId = shopId;
+        row.deletedAt = null;
+        if ('active' in row) row.active = this.toBool(row.active, true) ? 1 : 0;
+
+        let skip = false;
         for (const col of fkCols) {
-          if (row[col] != null && String(row[col]) !== '') {
-            const mapped = remap(String(row[col]));
-            if (mapped) row[col] = mapped;
+          if (row[col] == null || String(row[col]) === '') continue;
+          const mapped = remap(String(row[col]));
+          if (mapped) {
+            row[col] = mapped;
+            continue;
+          }
+          if (required.has(col)) {
+            skip = true;
+            break;
+          }
+          row[col] = null;
+        }
+        if (skip) {
+          skipped += 1;
+          continue;
+        }
+
+        for (const col of userFkCols) {
+          if (row[col] == null || String(row[col]) === '') continue;
+          const uid = String(row[col]);
+          if (!existingUserIds.has(uid)) {
+            row[col] = col === 'createdByUserId' ? actorUserId : null;
           }
         }
+
         if (table === 'partner_split_configs') {
           row.partnerAccountIds = this.remapJsonIds(row.partnerAccountIds, map);
           row.channelLeaves = this.remapChannelLeaves(row.channelLeaves, map);
@@ -1705,12 +1767,112 @@ export class ShopBackupService {
             sql,
             cols.map((c) => this.sqlValue(row[c])),
           );
-        } catch {
-          // tabla o columna ausente en dumps viejos
+          inserted += 1;
+        } catch (err) {
+          skipped += 1;
+          const msg = (err as Error)?.message ?? String(err);
+          if (errors.length < 8) {
+            errors.push(`${table}: ${msg.slice(0, 180)}`);
+          }
         }
       }
     }
-    void actorUserId;
+
+    if (errors.length && inserted === 0 && skipped > 0) {
+      throw new BadRequestException(
+        `No se pudo importar datos auxiliares (${skipped} filas). ${errors[0]}`,
+      );
+    }
+    if (errors.length) {
+      // Restore parcial de hojas extra: no abortar si lo principal ya entró.
+      // Los errores quedan en el mensaje vía logger del caller si hace falta.
+    }
+    void skipped;
+    void inserted;
+  }
+
+  /**
+   * Tras importar: asegura filas en A Retirar según cierres (el Excel a veces
+   * no trae cash_pending_withdrawals o fallan FKs de usuarios de prod).
+   */
+  private async rebuildCashPendingFromClosings(manager: any, shopId: string) {
+    const closings = (await manager.query(
+      `SELECT id, businessDate, cashWithdrawn, cashAmount, cashLeftInRegister,
+              cashPendingPickup, cashWithdrawnByUserId, cashWithdrawnByEmployeeId,
+              cashWithdrawnByName
+       FROM cash_closings
+       WHERE shopId = ? AND deletedAt IS NULL AND active = 1`,
+      [shopId],
+    )) as Array<{
+      id: string;
+      businessDate: string;
+      cashWithdrawn: string | number;
+      cashAmount: string | number;
+      cashLeftInRegister: string | number;
+      cashPendingPickup: string | number;
+      cashWithdrawnByUserId: string | null;
+      cashWithdrawnByEmployeeId: string | null;
+      cashWithdrawnByName: string | null;
+    }>;
+
+    for (const c of closings) {
+      const hasWho = !!(
+        c.cashWithdrawnByUserId ||
+        c.cashWithdrawnByEmployeeId ||
+        String(c.cashWithdrawnByName ?? '').trim()
+      );
+      const withdrawn = Number(c.cashWithdrawn ?? 0);
+      const computed =
+        withdrawn > 0
+          ? withdrawn
+          : Math.max(0, Number(c.cashAmount ?? 0) - Number(c.cashLeftInRegister ?? 0));
+      // Preferí el pendiente declarado en el cierre si viene en el dump.
+      const declared = Number(c.cashPendingPickup ?? 0);
+      const amount = declared > 0.009 ? declared : computed;
+
+      const existing = (await manager.query(
+        `SELECT id, status FROM cash_pending_withdrawals
+         WHERE closingId = ? AND deletedAt IS NULL AND active = 1`,
+        [c.id],
+      )) as Array<{ id: string; status: string }>;
+      const hasPicked = existing.some((r) => r.status === 'PICKED');
+      const pending = existing.find((r) => r.status === 'PENDING');
+
+      if (hasPicked || hasWho || amount <= 0.009) {
+        if (pending) {
+          await manager.query(
+            `UPDATE cash_pending_withdrawals
+             SET active = 0, deletedAt = NOW(6) WHERE id = ?`,
+            [pending.id],
+          );
+        }
+        await manager.query(
+          `UPDATE cash_closings SET cashPendingPickup = '0.00' WHERE id = ? AND cashPendingPickup <> '0.00'`,
+          [c.id],
+        );
+        continue;
+      }
+
+      const amt = amount.toFixed(2);
+      if (pending) {
+        await manager.query(
+          `UPDATE cash_pending_withdrawals
+           SET amount = ?, businessDate = ?, status = 'PENDING' WHERE id = ?`,
+          [amt, c.businessDate, pending.id],
+        );
+      } else {
+        await manager.query(
+          `INSERT INTO cash_pending_withdrawals
+           (id, createdAt, updatedAt, active, shopId, closingId, businessDate, amount, status)
+           VALUES (?, NOW(6), NOW(6), 1, ?, ?, ?, ?, 'PENDING')`,
+          [randomUUID(), shopId, c.id, c.businessDate, amt],
+        );
+      }
+      await manager.query(`UPDATE cash_closings SET cashPendingPickup = ? WHERE id = ?`, [
+        amt,
+        c.id,
+      ]);
+    }
   }
 
   private remapJsonIds(raw: unknown, map: Map<string, string>): string {

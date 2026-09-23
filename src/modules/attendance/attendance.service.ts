@@ -65,7 +65,12 @@ export class AttendanceService implements OnModuleInit {
     } catch {
       // ya existe
     }
-    await this.backfillAttendanceShifts();
+    await this.backfillAttendanceShifts().catch((err) => {
+      // No tumbar el API: dumps viejos pueden traer presentismo duplicado sin turno.
+      console.warn(
+        `[AttendanceService] No se pudo backfill de turnos: ${(err as Error)?.message ?? err}`,
+      );
+    });
     try {
       await this.days.query(`
         CREATE INDEX IDX_attendance_days_employeeId ON attendance_days (employeeId)
@@ -104,11 +109,48 @@ export class AttendanceService implements OnModuleInit {
       const shifts = normalizeShopShifts(shop.shifts, shop.openingTime);
       const shift = shifts[0];
       if (!shift) continue;
+
+      // Si ya hay fila con ese turno el mismo día, descarto las vacías (dumps / migraciones).
+      await this.days.query(
+        `
+        UPDATE attendance_days a
+        INNER JOIN attendance_days b
+          ON b.employeeId = a.employeeId
+          AND b.date = a.date
+          AND b.shiftId = ?
+          AND b.id <> a.id
+          AND b.deletedAt IS NULL
+        SET a.active = 0, a.deletedAt = NOW(6)
+        WHERE a.shopId = ?
+          AND (a.shiftId IS NULL OR a.shiftId = '')
+          AND a.deletedAt IS NULL
+        `,
+        [shift.id, shop.id],
+      );
+
+      // Varias vacías mismo empleado+día: dejo la más vieja.
+      await this.days.query(
+        `
+        UPDATE attendance_days a
+        INNER JOIN attendance_days b
+          ON b.employeeId = a.employeeId
+          AND b.date = a.date
+          AND (b.shiftId IS NULL OR b.shiftId = '')
+          AND b.createdAt < a.createdAt
+          AND b.deletedAt IS NULL
+        SET a.active = 0, a.deletedAt = NOW(6)
+        WHERE a.shopId = ?
+          AND (a.shiftId IS NULL OR a.shiftId = '')
+          AND a.deletedAt IS NULL
+        `,
+        [shop.id],
+      );
+
       await this.days.query(
         `
         UPDATE attendance_days
         SET shiftId = ?
-        WHERE shopId = ? AND (shiftId IS NULL OR shiftId = '')
+        WHERE shopId = ? AND (shiftId IS NULL OR shiftId = '') AND deletedAt IS NULL
         `,
         [shift.id, shop.id],
       );

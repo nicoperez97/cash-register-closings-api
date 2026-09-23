@@ -182,6 +182,27 @@ export class CashWithdrawalsService implements OnModuleInit {
   async listPending(user: AuthUser, shopId: string) {
     this.shops.assertShopAccess(user, shopId);
     const view = await this.computePendingView(shopId);
+    const closingIds = [
+      ...new Set([
+        ...view.items.map((i) => i.closingId),
+      ]),
+    ];
+    const closingRows = closingIds.length
+      ? await this.closings.find({
+          where: { id: In(closingIds), shopId },
+          select: ['id', 'shiftId', 'shiftName', 'kind', 'eventName'],
+        })
+      : [];
+    const byClosing = new Map(closingRows.map((c) => [c.id, c]));
+    const withShift = (closingId: string) => {
+      const c = byClosing.get(closingId);
+      return {
+        shiftId: c?.shiftId ?? null,
+        shiftName: c?.shiftName?.trim() || null,
+        kind: c?.kind ?? null,
+        eventName: c?.eventName?.trim() || null,
+      };
+    };
     return {
       items: view.items
         .filter((i) => i.remainingAmount > 0.009)
@@ -196,6 +217,7 @@ export class CashWithdrawalsService implements OnModuleInit {
           deductedAmount: i.deductedAmount,
           status: i.status,
           createdAt: i.createdAt,
+          ...withShift(i.closingId),
         })),
       covered: view.items
         .filter((i) => i.remainingAmount <= 0.009)
@@ -206,6 +228,7 @@ export class CashWithdrawalsService implements OnModuleInit {
           businessDate: i.businessDate,
           originalAmount: i.originalAmount,
           deductedAmount: i.deductedAmount,
+          ...withShift(i.closingId),
         })),
       cashExpenses: view.cashExpenses,
       expensesTotal: view.expensesTotal,
@@ -244,10 +267,22 @@ export class CashWithdrawalsService implements OnModuleInit {
         closingId: string;
         businessDate: string;
         amount: number;
+        shiftId: string | null;
+        shiftName: string | null;
+        kind: string | null;
+        eventName: string | null;
       }>;
     };
 
     const fromAccountName = await this.cashDrawerAccountName(shopId);
+    const closingIds = [...new Set(rows.map((r) => r.closingId))];
+    const closingRows = closingIds.length
+      ? await this.closings.find({
+          where: { id: In(closingIds), shopId },
+          select: ['id', 'shiftId', 'shiftName', 'kind', 'eventName'],
+        })
+      : [];
+    const byClosing = new Map(closingRows.map((c) => [c.id, c]));
     const groups = new Map<string, Group>();
     for (const r of rows) {
       const pickedAtIso = r.pickedAt ? new Date(r.pickedAt).toISOString() : '';
@@ -255,11 +290,16 @@ export class CashWithdrawalsService implements OnModuleInit {
         r.pickBatchId ||
         [pickedAtIso, r.pickedByUserId ?? '', r.pickedToAccountId ?? ''].join('|');
       const existing = groups.get(key);
+      const closing = byClosing.get(r.closingId);
       const item = {
         id: r.id,
         closingId: r.closingId,
         businessDate: r.businessDate,
         amount: n(r.amount),
+        shiftId: closing?.shiftId ?? null,
+        shiftName: closing?.shiftName?.trim() || null,
+        kind: closing?.kind ?? null,
+        eventName: closing?.eventName?.trim() || null,
       };
       if (existing) {
         existing.items.push(item);

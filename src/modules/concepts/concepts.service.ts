@@ -18,6 +18,7 @@ import {
   normalizeConceptCategories,
   normalizePaymentConceptCategories,
   conceptMatchesCategories,
+  withClosureForSuppliers,
   type PaymentConceptScope,
 } from '../../common/concept-categories';
 
@@ -46,9 +47,18 @@ export class ConceptsService implements OnModuleInit {
 
   private async backfillCategories() {
     const rows = await this.concepts.find();
-    const pending = rows.filter((r) => !Array.isArray(r.categories) || !r.categories.length);
-    for (const row of pending) {
-      row.categories = inferConceptCategories(row.name);
+    for (const row of rows) {
+      let cats =
+        Array.isArray(row.categories) && row.categories.length
+          ? normalizeConceptCategories(row.categories)
+          : inferConceptCategories(row.name);
+      cats = withClosureForSuppliers(cats);
+      const prev = JSON.stringify(
+        Array.isArray(row.categories) ? [...row.categories].sort() : [],
+      );
+      const next = JSON.stringify([...cats].sort());
+      if (prev === next) continue;
+      row.categories = cats;
       await this.concepts.save(row);
     }
   }
@@ -60,7 +70,7 @@ export class ConceptsService implements OnModuleInit {
       name: c.name,
       description: c.description ?? null,
       kind: c.kind,
-      categories: normalizeConceptCategories(c.categories),
+      categories: withClosureForSuppliers(normalizeConceptCategories(c.categories)),
       validated: !!c.validated,
       active: !!c.active,
     };
@@ -118,10 +128,11 @@ export class ConceptsService implements OnModuleInit {
         name,
         description: this.emptyToNull(dto.description),
         kind: dto.kind ?? ConceptKind.EXPENSE,
-        categories:
+        categories: withClosureForSuppliers(
           dto.categories !== undefined
             ? normalizeConceptCategories(dto.categories)
             : inferConceptCategories(name),
+        ),
         validated: dto.validated ?? true,
         active: dto.active ?? true,
       }),
@@ -157,7 +168,7 @@ export class ConceptsService implements OnModuleInit {
     if (dto.description !== undefined) row.description = this.emptyToNull(dto.description);
     if (dto.kind !== undefined) row.kind = dto.kind;
     if (dto.categories !== undefined) {
-      row.categories = normalizeConceptCategories(dto.categories);
+      row.categories = withClosureForSuppliers(normalizeConceptCategories(dto.categories));
     }
     if (dto.validated !== undefined) row.validated = dto.validated;
     if (dto.active !== undefined) row.active = dto.active;
@@ -227,10 +238,11 @@ export class ConceptsService implements OnModuleInit {
         target = clash;
       } else {
         const kind = dto.kind ?? sources[0]?.kind ?? ConceptKind.EXPENSE;
-        const categories =
+        const categories = withClosureForSuppliers(
           dto.categories !== undefined
             ? normalizeConceptCategories(dto.categories)
-            : normalizeConceptCategories(sources[0]?.categories) || inferConceptCategories(name);
+            : normalizeConceptCategories(sources[0]?.categories) || inferConceptCategories(name),
+        );
         target = await this.concepts.save(
           this.concepts.create({
             shopId,
