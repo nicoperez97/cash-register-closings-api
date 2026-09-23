@@ -7,6 +7,7 @@ import {
   Put,
   Post,
   Res,
+  StreamableFile,
   UploadedFile,
   UseGuards,
   UseInterceptors,
@@ -150,6 +151,39 @@ export class MenuController {
   ) {
     return this.menus.clearSourceFile(user, shopId, menuId);
   }
+
+  @Get(':menuId/source')
+  @RequireAnyPermissions('shops.manage', 'orderingCatalog.manage', 'customerOrders.manage')
+  async adminSourceFile(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('menuId') menuId: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { stream, fileName, mime } = await this.menus.adminSourceFile(user, shopId, menuId);
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(fileName)}"`);
+    res.setHeader('Cache-Control', 'private, max-age=60');
+    return stream;
+  }
+
+  @Get(':menuId/priced.pdf')
+  @RequireAnyPermissions('shops.manage', 'orderingCatalog.manage')
+  async pricedPdf(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('menuId') menuId: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { bytes, fileName } = await this.menus.adminPricedPdf(user, shopId, menuId);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${encodeURIComponent(fileName)}"`,
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    return new StreamableFile(Buffer.from(bytes));
+  }
 }
 
 @ApiTags('public-menu')
@@ -169,6 +203,23 @@ export class PublicMenuController {
     res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(fileName)}"`);
     res.setHeader('Cache-Control', 'public, max-age=300');
     return stream;
+  }
+
+  @Public()
+  @Get(':slug/menu/:menuSlug/priced.pdf')
+  async publicPricedPdf(
+    @Param('slug') slug: string,
+    @Param('menuSlug') menuSlug: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { bytes, fileName } = await this.menus.publicPricedPdf(slug, menuSlug);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${encodeURIComponent(fileName)}"`,
+    );
+    res.setHeader('Cache-Control', 'public, max-age=60');
+    return new StreamableFile(Buffer.from(bytes));
   }
 
   @Public()

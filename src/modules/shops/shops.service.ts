@@ -540,7 +540,34 @@ export class ShopsService implements OnModuleInit {
     } catch {
       // columna ya existe
     }
+    // Ya no hay @ManyToOne salesSystem: dropear FK huérfana de sync viejo y limpiar UUIDs
+    // de dumps de otro entorno (si no, shops.save() revienta en cualquier patch).
+    await this.dropSalesSystemFkIfPresent();
+    await this.healOrphanSalesSystemId();
     await this.ensureDefaultShifts();
+  }
+
+  private async dropSalesSystemFkIfPresent() {
+    try {
+      const fks = (await this.shops.query(`
+        SELECT CONSTRAINT_NAME AS name
+        FROM information_schema.KEY_COLUMN_USAGE
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'shops'
+          AND COLUMN_NAME = 'salesSystemId'
+          AND REFERENCED_TABLE_NAME IS NOT NULL
+      `)) as Array<{ name: string }>;
+      for (const { name } of fks) {
+        if (!name) continue;
+        try {
+          await this.shops.query(`ALTER TABLE shops DROP FOREIGN KEY \`${name}\``);
+        } catch {
+          // ya no existe
+        }
+      }
+    } catch {
+      // information_schema / permisos
+    }
   }
 
   private async ensureDefaultShifts() {
@@ -554,7 +581,7 @@ export class ShopsService implements OnModuleInit {
       if (same) continue;
       shop.shifts = next;
       shop.openingTime = opening;
-      await this.shops.save(shop);
+      await this.saveShop(shop);
     }
   }
 
@@ -630,6 +657,70 @@ export class ShopsService implements OnModuleInit {
       return;
     }
     throw new ForbiddenException('Sin permiso para el catálogo de pedidos online');
+  }
+
+  /** salesSystemId de un dump sin fila en sales_systems rompe cualquier shops.save(). */
+  private async healOrphanSalesSystemId(shopId?: string) {
+    if (shopId) {
+      await this.shops.query(
+        `UPDATE shops s
+         LEFT JOIN sales_systems ss ON ss.id = s.salesSystemId
+         SET s.salesSystemId = NULL
+         WHERE s.id = ? AND s.salesSystemId IS NOT NULL AND ss.id IS NULL`,
+        [shopId],
+      );
+      return;
+    }
+    await this.shops.query(
+      `UPDATE shops s
+       LEFT JOIN sales_systems ss ON ss.id = s.salesSystemId
+       SET s.salesSystemId = NULL
+       WHERE s.salesSystemId IS NOT NULL AND ss.id IS NULL`,
+    );
+  }
+
+  private async resolveValidSalesSystemId(
+    raw: string | null | undefined,
+  ): Promise<string | null> {
+    const sid = String(raw ?? '').trim();
+    if (!sid) return null;
+    const rows = (await this.shops.query(
+      `SELECT id FROM sales_systems WHERE id = ? LIMIT 1`,
+      [sid],
+    )) as Array<{ id: string }>;
+    return rows?.length ? sid : null;
+  }
+
+  /**
+   * Limpia FK huérfana en DB y en la entidad cargada.
+   * Si solo se limpia la DB, TypeORM.save(shop) vuelve a escribir el UUID viejo en memoria.
+   */
+  private async prepareShopForSave(shop: Shop): Promise<void> {
+    if (shop.id) await this.healOrphanSalesSystemId(shop.id);
+    shop.salesSystemId = await this.resolveValidSalesSystemId(shop.salesSystemId);
+  }
+
+  private async saveShop(shop: Shop): Promise<Shop> {
+    await this.prepareShopForSave(shop);
+    try {
+      const saved = await this.shops.save(shop);
+      if (saved.id) await this.healOrphanSalesSystemId(saved.id);
+      return saved;
+    } catch (err: unknown) {
+      const msg = String(
+        (err as { sqlMessage?: string; message?: string })?.sqlMessage ??
+          (err as { message?: string })?.message ??
+          err,
+      );
+      if (!msg.includes('salesSystemId') && !msg.includes('FK_47d770')) throw err;
+      shop.salesSystemId = null;
+      if (shop.id) {
+        await this.shops.query(`UPDATE shops SET salesSystemId = NULL WHERE id = ?`, [shop.id]);
+      }
+      const saved = await this.shops.save(shop);
+      if (saved.id) await this.healOrphanSalesSystemId(saved.id);
+      return saved;
+    }
   }
 
   async mine(user: AuthUser) {
@@ -1080,7 +1171,7 @@ export class ShopsService implements OnModuleInit {
         : null;
     }
 
-    await this.shops.save(shop);
+    await this.saveShop(shop);
     if (smtpPasswordPatch !== undefined) {
       // Solo actualizar si vino null (borrar) o string no vacío
       if (smtpPasswordPatch === null || smtpPasswordPatch) {
@@ -1231,7 +1322,7 @@ export class ShopsService implements OnModuleInit {
       }
       shop.menu = { menus };
     }
-    await this.shops.save(shop);
+    await this.saveShop(shop);
     return this.toDto(shop, { emailSmtpConfigured: await this.hasSmtpPassword(id) });
   }
 
@@ -1285,7 +1376,7 @@ export class ShopsService implements OnModuleInit {
     const shop = await this.shops.findOne({ where: { id: shopId } });
     if (!shop) throw new NotFoundException('Local no encontrado');
     this.applyOrderingOpenState(shop, open);
-    await this.shops.save(shop);
+    await this.saveShop(shop);
   }
 
   /**
@@ -1298,14 +1389,14 @@ export class ShopsService implements OnModuleInit {
     if (!openedAt || Number.isNaN(openedAt.getTime())) {
       // Locales viejos abiertos sin marca: seed para poder auto-cerrar al fin del turno.
       shop.orderingOpenedAt = new Date();
-      await this.shops.save(shop);
+      await this.saveShop(shop);
       return false;
     }
     const shifts = normalizeShopShifts(shop.shifts, shop.openingTime);
     if (!shiftClosedBetween(openedAt, new Date(), shifts, shop.timezone)) return false;
     shop.orderingForceClosed = true;
     shop.orderingOpenedAt = null;
-    await this.shops.save(shop);
+    await this.saveShop(shop);
     return true;
   }
 
@@ -1493,7 +1584,7 @@ export class ShopsService implements OnModuleInit {
       mime: file.mimetype,
     });
     shop.logoUrl = saved.relativePath;
-    await this.shops.save(shop);
+    await this.saveShop(shop);
     return this.toDto(shop, {
       emailSmtpConfigured: await this.hasSmtpPassword(shop.id),
     });

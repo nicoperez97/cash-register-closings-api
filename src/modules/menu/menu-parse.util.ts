@@ -40,6 +40,20 @@ export type ShopMenuSection = {
   items: ShopMenuItem[];
 };
 
+/** Caja de precio sobre la carta física PDF (coords PDF, origen abajo-izquierda, pt). */
+export type MenuPriceSlot = {
+  id: string;
+  itemId: string;
+  page: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fontSize?: number;
+  align?: 'left' | 'center' | 'right';
+  color?: string;
+};
+
 export type ShopMenu = {
   id?: string;
   slug?: string;
@@ -49,6 +63,8 @@ export type ShopMenu = {
   sourceFile?: string | null;
   sourceFileName?: string | null;
   sourceMime?: string | null;
+  /** Slots de precio sobre el PDF físico (solo aplica si source es PDF). */
+  priceSlots?: MenuPriceSlot[];
   sections: ShopMenuSection[];
 };
 
@@ -352,12 +368,71 @@ export function normalizeKitchenSectorIds(raw: unknown): string[] {
   return out;
 }
 
+function newPriceSlotId(): string {
+  return `ps_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function parseHexColor(raw: unknown): string | undefined {
+  const s = String(raw ?? '').trim();
+  if (/^#?[0-9a-f]{6}$/i.test(s)) return s.startsWith('#') ? s.toLowerCase() : `#${s.toLowerCase()}`;
+  return undefined;
+}
+
+/** Normaliza cajas de precio sobre el PDF físico. */
+export function normalizeMenuPriceSlots(raw: unknown): MenuPriceSlot[] {
+  if (!Array.isArray(raw)) return [];
+  const out: MenuPriceSlot[] = [];
+  const used = new Set<string>();
+  for (const row of raw.slice(0, 200)) {
+    if (!row || typeof row !== 'object') continue;
+    const r = row as Record<string, unknown>;
+    const itemId = String(r.itemId ?? '').trim().slice(0, 40);
+    const page = Math.max(0, Math.floor(Number(r.page) || 0));
+    const x = Number(r.x);
+    const y = Number(r.y);
+    const width = Number(r.width);
+    const height = Number(r.height);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    if (!Number.isFinite(width) || width < 4) continue;
+    if (!Number.isFinite(height) || height < 4) continue;
+    let id = String(r.id ?? '').trim().slice(0, 40);
+    if (!id || used.has(id)) id = newPriceSlotId();
+    used.add(id);
+    const fontSizeRaw = Number(r.fontSize);
+    const fontSize =
+      Number.isFinite(fontSizeRaw) && fontSizeRaw >= 6 && fontSizeRaw <= 96
+        ? Math.round(fontSizeRaw * 10) / 10
+        : undefined;
+    const alignRaw = String(r.align ?? '').trim().toLowerCase();
+    const align =
+      alignRaw === 'left' || alignRaw === 'right' || alignRaw === 'center'
+        ? (alignRaw as MenuPriceSlot['align'])
+        : undefined;
+    out.push({
+      id,
+      itemId,
+      page,
+      x: Math.round(x * 100) / 100,
+      y: Math.round(y * 100) / 100,
+      width: Math.round(width * 100) / 100,
+      height: Math.round(height * 100) / 100,
+      ...(fontSize != null ? { fontSize } : {}),
+      ...(align ? { align } : {}),
+      ...(parseHexColor(r.color) ? { color: parseHexColor(r.color) } : {}),
+    });
+  }
+  return out;
+}
+
 export function normalizeShopMenu(raw?: ShopMenu | null): ShopMenu {
   const title = String(raw?.title ?? '').trim().slice(0, 80) || null;
   const note = String(raw?.note ?? '').trim().slice(0, 500) || null;
   const sourceFile = String(raw?.sourceFile ?? '').trim().replace(/\\/g, '/').slice(0, 200) || null;
   const sourceFileName = String(raw?.sourceFileName ?? '').trim().slice(0, 120) || null;
   const sourceMime = String(raw?.sourceMime ?? '').trim().slice(0, 80) || null;
+  const priceSlots = normalizeMenuPriceSlots(
+    (raw as { priceSlots?: unknown } | null | undefined)?.priceSlots,
+  );
   const sections: ShopMenuSection[] = [];
   const usedItemIds = new Set<string>();
   for (const sec of raw?.sections ?? []) {
@@ -395,7 +470,7 @@ export function normalizeShopMenu(raw?: ShopMenu | null): ShopMenu {
     }
     sections.push({ name, items });
   }
-  return { title, note, sourceFile, sourceFileName, sourceMime, sections };
+  return { title, note, sourceFile, sourceFileName, sourceMime, priceSlots, sections };
 }
 
 export function menuParseScore(menu: ShopMenu): number {
@@ -448,6 +523,7 @@ export function normalizeShopMenus(raw?: unknown): ShopMenuDoc[] {
       sourceFile: content.sourceFile,
       sourceFileName: content.sourceFileName,
       sourceMime: content.sourceMime,
+      priceSlots: content.priceSlots,
       sections: content.sections,
     });
   }
@@ -464,6 +540,7 @@ export function emptyShopMenu(partial?: Partial<ShopMenu>): ShopMenuDoc {
     sourceFile: partial?.sourceFile ?? null,
     sourceFileName: partial?.sourceFileName ?? null,
     sourceMime: partial?.sourceMime ?? null,
+    priceSlots: partial?.priceSlots ?? [],
     sections: partial?.sections ?? [],
   };
 }
