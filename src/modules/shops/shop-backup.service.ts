@@ -2118,6 +2118,17 @@ export class ShopBackupService {
       const mapped = map.get(String(src.cashWithdrawalConceptId));
       src.cashWithdrawalConceptId = mapped ?? null;
     }
+    // salesSystemId del dump puede ser de otro entorno: no romper FK al restaurar.
+    if (src.salesSystemId != null && String(src.salesSystemId).trim() !== '') {
+      const sid = String(src.salesSystemId).trim();
+      const rows = (await manager.query(
+        `SELECT id FROM sales_systems WHERE id = ? LIMIT 1`,
+        [sid],
+      )) as Array<{ id: string }>;
+      if (!rows?.length) src.salesSystemId = null;
+    } else {
+      src.salesSystemId = null;
+    }
     if (src.tablePaymentMethods != null) {
       src.tablePaymentMethods = this.remapAccountIdInJsonArray(src.tablePaymentMethods, map);
     }

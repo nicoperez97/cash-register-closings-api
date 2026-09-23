@@ -1,8 +1,7 @@
-import { Column, Entity, JoinColumn, ManyToOne, OneToMany } from 'typeorm';
+import { Column, Entity, OneToMany } from 'typeorm';
 import { BaseEntity } from './base.entity';
 import { UserShop } from './user-shop.entity';
 import { CashClosing } from './cash-closing.entity';
-import { SalesSystem } from './sales-system.entity';
 import { ShopPosnet } from '../common/posnet';
 import { ShopShift } from '../common/shop-shifts';
 import {
@@ -328,7 +327,11 @@ export class Shop extends BaseEntity {
   @Column({ type: 'simple-json', nullable: true })
   emailMessageTemplates?: Record<string, { subject?: string; body?: string }> | null;
 
-  /** Sistema de ventas / POS del local (Restosoft, etc.). */
+  /**
+   * Sistema de ventas / POS del local (Restosoft, etc.).
+   * Solo columna (sin @ManyToOne): el JoinColumn duplicado hacía que TypeORM
+   * reescribiera un UUID huérfano de dump aunque prepareShopForSave lo anulara.
+   */
   @Column({ type: 'uuid', nullable: true })
   salesSystemId?: string | null;
 
@@ -403,10 +406,6 @@ export class Shop extends BaseEntity {
    */
   @Column({ type: 'varchar', length: 120, nullable: true })
   printAgentToken?: string | null;
-
-  @ManyToOne(() => SalesSystem, { nullable: true, onDelete: 'SET NULL' })
-  @JoinColumn({ name: 'salesSystemId' })
-  salesSystem?: SalesSystem | null;
 
   @OneToMany(() => UserShop, (us) => us.shop)
   userShops?: UserShop[];

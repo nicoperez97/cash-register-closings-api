@@ -22,7 +22,9 @@ import {
   parseMenuFile,
   ShopMenu,
   ShopMenuDoc,
+  ShopMenuItem,
 } from './menu-parse.util';
+import { buildPricedMenuPdf } from './menu-priced-pdf';
 import { isPromoInSchedule, normalizeShopPromos, type ShopPromo } from '../../common/shop-promos';
 
 @Injectable()
@@ -35,6 +37,47 @@ export class MenuService {
 
   private readMenus(shop: Shop): ShopMenuDoc[] {
     return normalizeShopMenus(shop.menu);
+  }
+
+  /**
+   * Persiste solo columnas de carta/promos con SQL puntual.
+   * Evita shopsRepo.save()/update() que reescriben FKs huérfanas (salesSystemId de un dump).
+   */
+  private async persistShopColumns(
+    shopId: string,
+    patch: Partial<Pick<Shop, 'menu' | 'kitchenSectors' | 'promos'>>,
+  ) {
+    await this.healOrphanSalesSystemId(shopId);
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    if (patch.menu !== undefined) {
+      sets.push('`menu` = ?');
+      params.push(JSON.stringify(patch.menu));
+    }
+    if (patch.kitchenSectors !== undefined) {
+      sets.push('`kitchenSectors` = ?');
+      params.push(
+        patch.kitchenSectors == null ? null : JSON.stringify(patch.kitchenSectors),
+      );
+    }
+    if (patch.promos !== undefined) {
+      sets.push('`promos` = ?');
+      params.push(patch.promos == null ? null : JSON.stringify(patch.promos));
+    }
+    if (!sets.length) return;
+    params.push(shopId);
+    await this.shopsRepo.query(`UPDATE shops SET ${sets.join(', ')} WHERE id = ?`, params);
+  }
+
+  /** Limpia salesSystemId si apunta a un sistema que no existe (post-dump). */
+  private async healOrphanSalesSystemId(shopId: string) {
+    await this.shopsRepo.query(
+      `UPDATE shops s
+       LEFT JOIN sales_systems ss ON ss.id = s.salesSystemId
+       SET s.salesSystemId = NULL
+       WHERE s.id = ? AND s.salesSystemId IS NOT NULL AND ss.id IS NULL`,
+      [shopId],
+    );
   }
 
   private sanitizeSourceFile(raw: string | null | undefined, shopId: string): string | null {
@@ -153,7 +196,7 @@ export class MenuService {
     if (!shop) throw new NotFoundException('Local no encontrado');
     const raw = Array.isArray(body) ? body : body?.promos;
     shop.promos = normalizeShopPromos(raw);
-    await this.shopsRepo.save(shop);
+    await this.persistShopColumns(shopId, { promos: shop.promos });
     return { promos: normalizeShopPromos(shop.promos) };
   }
 
@@ -175,6 +218,7 @@ export class MenuService {
       : { menus: [body as ShopMenu] };
     const menus = normalizeShopMenus(asStore).map((m) => this.withSafeSource(m, shopId));
     shop.menu = { menus };
+    const patch: Partial<Pick<Shop, 'menu' | 'kitchenSectors'>> = { menu: shop.menu };
     if (
       body &&
       typeof body === 'object' &&
@@ -183,8 +227,9 @@ export class MenuService {
       shop.kitchenSectors = normalizeKitchenSectors(
         (body as { kitchenSectors: unknown }).kitchenSectors,
       );
+      patch.kitchenSectors = shop.kitchenSectors;
     }
-    await this.shopsRepo.save(shop);
+    await this.persistShopColumns(shopId, patch);
     const keepFiles = new Set(menus.map((m) => m.sourceFile).filter((p): p is string => !!p));
     for (const file of previousFiles) {
       if (!keepFiles.has(file)) deleteUploadIfExists(file);
@@ -327,7 +372,7 @@ export class MenuService {
       sourceMime: String(file.mimetype || '').slice(0, 80) || null,
     };
     shop.menu = { menus };
-    await this.shopsRepo.save(shop);
+    await this.persistShopColumns(shopId, { menu: shop.menu });
     return {
       enabled: !!shop.menuEnabled,
       slug: shop.slug,
@@ -353,9 +398,10 @@ export class MenuService {
       sourceFile: null,
       sourceFileName: null,
       sourceMime: null,
+      priceSlots: [],
     };
     shop.menu = { menus };
-    await this.shopsRepo.save(shop);
+    await this.persistShopColumns(shopId, { menu: shop.menu });
     return {
       enabled: !!shop.menuEnabled,
       slug: shop.slug,
@@ -416,7 +462,7 @@ export class MenuService {
       imageUrl: saved.relativePath,
     };
     shop.menu = { menus };
-    await this.shopsRepo.save(shop);
+    await this.persistShopColumns(shopId, { menu: shop.menu });
     return {
       enabled: !!shop.menuEnabled,
       slug: shop.slug,
@@ -444,7 +490,7 @@ export class MenuService {
     }
     if (!cleared) throw new NotFoundException('Ítem no encontrado');
     shop.menu = { menus };
-    await this.shopsRepo.save(shop);
+    await this.persistShopColumns(shopId, { menu: shop.menu });
     return {
       enabled: !!shop.menuEnabled,
       slug: shop.slug,
@@ -563,5 +609,86 @@ export class MenuService {
       fileName,
       mime,
     };
+  }
+
+  private itemsById(menu: ShopMenuDoc): Map<string, ShopMenuItem> {
+    const map = new Map<string, ShopMenuItem>();
+    for (const sec of menu.sections ?? []) {
+      for (const it of sec.items ?? []) {
+        const id = String(it.id ?? '').trim();
+        if (id) map.set(id, it);
+      }
+    }
+    return map;
+  }
+
+  async adminSourceFile(user: AuthUser, shopId: string, menuId: string) {
+    this.shops.assertOrderingCatalogManage(user, shopId);
+    const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    const menu = this.readMenus(shop)
+      .map((m) => this.withSafeSource(m, shopId))
+      .find((m) => m.id === menuId);
+    if (!menu) throw new NotFoundException('Carta no encontrada');
+    const path = this.sanitizeSourceFile(menu.sourceFile, shopId);
+    const abs = resolveUploadPath(path);
+    if (!abs) throw new NotFoundException('Archivo no encontrado');
+    const fileName = menu.sourceFileName || `carta${extname(abs) || '.pdf'}`;
+    const mime =
+      menu.sourceMime ||
+      (extname(abs).toLowerCase() === '.pdf' ? 'application/pdf' : 'application/octet-stream');
+    return {
+      stream: new StreamableFile(createReadStream(abs)),
+      fileName,
+      mime,
+    };
+  }
+
+  private async buildPricedPdfForMenu(shopId: string, menu: ShopMenuDoc) {
+    const path = this.sanitizeSourceFile(menu.sourceFile, shopId);
+    const abs = resolveUploadPath(path);
+    if (!abs) throw new BadRequestException('Esta carta no tiene archivo físico PDF');
+    const kind = this.sourceKind(menu.sourceMime, menu.sourceFileName || menu.sourceFile);
+    if (kind !== 'pdf') {
+      throw new BadRequestException('Los precios sobre carta solo aplican a un PDF físico');
+    }
+    const slots = menu.priceSlots ?? [];
+    if (!slots.length) {
+      throw new BadRequestException('Marcá al menos una caja de precio en la carta física');
+    }
+    const bytes = readFileSync(abs);
+    const pdf = await buildPricedMenuPdf({
+      sourceBytes: bytes,
+      slots,
+      itemsById: this.itemsById(menu),
+    });
+    const base = String(menu.sourceFileName || menu.title || 'carta')
+      .replace(/\.pdf$/i, '')
+      .replace(/[^\w\-áéíóúüñÁÉÍÓÚÜÑ .]+/g, '')
+      .trim()
+      .slice(0, 80);
+    return {
+      bytes: pdf,
+      fileName: `${base || 'carta'}-precios.pdf`,
+    };
+  }
+
+  /** PDF físico con precios vivos (admin). */
+  async adminPricedPdf(user: AuthUser, shopId: string, menuId: string) {
+    this.shops.assertOrderingCatalogManage(user, shopId);
+    const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    const menus = this.readMenus(shop).map((m) => this.withSafeSource(m, shopId));
+    const menu = menus.find((m) => m.id === menuId);
+    if (!menu) throw new NotFoundException('Carta no encontrada');
+    return this.buildPricedPdfForMenu(shopId, menu);
+  }
+
+  /** PDF físico con precios vivos (público). */
+  async publicPricedPdf(slug: string, menuSlug: string) {
+    const shop = await this.shops.findActiveBySlug(String(slug ?? '').trim().toLowerCase());
+    if (!shop) throw new NotFoundException('Archivo no encontrado');
+    const selected = this.resolvePublished(shop, menuSlug);
+    return this.buildPricedPdfForMenu(shop.id, this.withSafeSource(selected, shop.id));
   }
 }
