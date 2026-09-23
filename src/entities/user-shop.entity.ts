@@ -76,7 +76,7 @@ export class UserShop {
 
   /**
    * Nivel por sección de Configuración del local: none | read | manage.
-   * Keys: identidad, operacion, pedidos, comanda, dispositivos, menu, avanzado.
+   * Keys: identidad, operacion, pedidos, comanda, comanderas, dispositivos, menu, avanzado.
    */
   @Column({ type: 'json', nullable: true })
   shopConfigVisibility?: Record<string, string> | null;

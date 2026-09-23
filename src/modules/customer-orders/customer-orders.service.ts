@@ -1062,7 +1062,7 @@ export class CustomerOrdersService implements OnModuleInit {
             print = {
               kitchenQueued: false,
               kitchenWarning:
-                'Comanda no encolada: configurá el Print agent en Dispositivos.',
+                'Comanda no encolada: configurá el Print agent en Comanderas.',
             };
           }
           const kitchenJob = await this.printAgent.enqueueCustomerOrder(shop, order, 'TABLE', {

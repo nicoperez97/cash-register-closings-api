@@ -112,7 +112,7 @@ class CreateUserDto {
   orderingConfigVisibility?: Record<string, string> | null;
   @ApiPropertyOptional({
     description:
-      'Nivel por sección de Configuración del local (none | read | manage). Keys: identidad, operacion, pedidos, comanda, dispositivos, menu, avanzado',
+      'Nivel por sección de Configuración del local (none | read | manage). Keys: identidad, operacion, pedidos, comanda, comanderas, dispositivos, menu, avanzado',
     type: 'object',
     additionalProperties: { type: 'string' },
   })
@@ -219,7 +219,7 @@ class UpdateUserDto {
   orderingConfigVisibility?: Record<string, string> | null;
   @ApiPropertyOptional({
     description:
-      'Nivel por sección de Configuración del local (none | read | manage). Keys: identidad, operacion, pedidos, comanda, dispositivos, menu, avanzado',
+      'Nivel por sección de Configuración del local (none | read | manage). Keys: identidad, operacion, pedidos, comanda, comanderas, dispositivos, menu, avanzado',
     type: 'object',
     additionalProperties: { type: 'string' },
   })

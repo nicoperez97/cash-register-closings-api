@@ -1265,7 +1265,7 @@ export class WaiterService implements OnModuleInit {
       }
       if (!printedOrders && !shop.printAgentTokenHash) {
         throw new BadRequestException(
-          'Print agent no configurado. Configuralo en Dispositivos.',
+          'Print agent no configurado. Configuralo en Comanderas.',
         );
       }
       return printedOrders;
