@@ -13,6 +13,7 @@ export type BackupModuleGroup =
 export type BackupModuleId =
   | 'catalog'
   | 'concepts'
+  | 'shopConfig'
   | 'closings'
   | 'cashWithdrawals'
   | 'settlements'
@@ -30,6 +31,7 @@ export type BackupModuleId =
   | 'reservations'
   | 'waitingList'
   | 'salon'
+  | 'customerOrders'
   | 'stock'
   | 'beverageStock'
   | 'shortages'
@@ -45,6 +47,9 @@ export type BackupModuleId =
   | 'serviceRules';
 
 export type BackupSheetName =
+  | 'shop'
+  | 'user_shops'
+  | 'shop_integrations'
   | 'ledger_accounts'
   | 'ledger_account_users'
   | 'concepts'
@@ -53,20 +58,24 @@ export type BackupSheetName =
   | 'pos_products'
   | 'employees'
   | 'employee_commission_rules'
+  | 'employee_salary_history'
   | 'attendance_days'
   | 'production_attendance_days'
+  | 'vacations'
   | 'payroll_periods'
   | 'payroll_lines'
   | 'cash_closings'
   | 'closing_expenses'
   | 'closing_extra_lines'
   | 'closing_source_amounts'
+  | 'closing_step_files'
   | 'shop_closing_sources'
   | 'cash_pending_withdrawals'
   | 'cash_pending_withdrawal_offsets'
   | 'movements'
   | 'payments'
   | 'partner_split_configs'
+  | 'partner_split_runs'
   | 'suppliers'
   | 'services'
   | 'reservations'
@@ -77,8 +86,12 @@ export type BackupSheetName =
   | 'salon_tables'
   | 'salon_map_objects'
   | 'salon_area_rules'
+  | 'table_sessions'
+  | 'customer_orders'
+  | 'comanda_line_audits'
   | 'stock_categories'
   | 'stock_products'
+  | 'stock_adjustments'
   | 'shortages'
   | 'orders'
   | 'order_lines'
@@ -96,9 +109,15 @@ export type BackupSheetName =
 export type BackupPurgeStep =
   | 'tip_allocations'
   | 'tip_days'
+  | 'comanda_line_audits'
+  | 'customer_orders'
+  | 'table_sessions'
+  | 'print_jobs'
   | 'order_lines'
   | 'orders'
   | 'shortages'
+  | 'stock_adjustments_food'
+  | 'stock_adjustments_beverage'
   | 'stock_products_food'
   | 'stock_products_beverage'
   | 'stock_categories_food'
@@ -115,6 +134,8 @@ export type BackupPurgeStep =
   | 'service_rule_categories'
   | 'reimbursements'
   | 'production_attendance_days'
+  | 'vacations'
+  | 'employee_salary_history'
   | 'candidates'
   | 'cash_pending_withdrawal_offsets'
   | 'cash_pending_withdrawals'
@@ -122,6 +143,8 @@ export type BackupPurgeStep =
   | 'closing_step_files'
   | 'settlement_fields'
   | 'shop_closing_sources'
+  | 'shop_integrations'
+  | 'partner_split_runs'
   | 'partner_split_configs'
   | 'payments_suppliers'
   | 'payments_services'
@@ -149,6 +172,7 @@ export type BackupPurgeStep =
   | 'pos_categories'
   | 'concepts'
   | 'ledger_accounts'
+  | 'user_shops'
   | 'employees';
 
 export interface BackupModuleDef {
@@ -181,6 +205,7 @@ export const BACKUP_MODULES: BackupModuleDef[] = [
       'closing_expenses',
       'closing_extra_lines',
       'closing_source_amounts',
+      'closing_step_files',
       'shop_closing_sources',
     ],
     purgeSteps: [
@@ -226,6 +251,14 @@ export const BACKUP_MODULES: BackupModuleDef[] = [
     alsoClears: [],
   },
   {
+    id: 'customerOrders',
+    label: 'Comandas / pedidos mesa',
+    group: 'operacion',
+    sheets: ['table_sessions', 'customer_orders', 'comanda_line_audits'],
+    purgeSteps: ['comanda_line_audits', 'customer_orders', 'table_sessions', 'print_jobs'],
+    alsoClears: [],
+  },
+  {
     id: 'expenses',
     label: 'Gastos',
     group: 'cuentas',
@@ -253,8 +286,8 @@ export const BACKUP_MODULES: BackupModuleDef[] = [
     id: 'partnerSplits',
     label: 'División de socios',
     group: 'cuentas',
-    sheets: ['partner_split_configs'],
-    purgeSteps: ['partner_split_configs'],
+    sheets: ['partner_split_configs', 'partner_split_runs'],
+    purgeSteps: ['partner_split_runs', 'partner_split_configs'],
     alsoClears: [],
   },
   {
@@ -319,22 +352,26 @@ export const BACKUP_MODULES: BackupModuleDef[] = [
     group: 'salon',
     sheets: ['salon_sectors', 'salon_tables', 'salon_map_objects', 'salon_area_rules'],
     purgeSteps: ['salon_map_objects', 'salon_tables', 'salon_sectors', 'salon_area_rules'],
-    alsoClears: [],
+    alsoClears: ['customerOrders'],
   },
   {
     id: 'stock',
     label: 'Stock alimentos',
     group: 'stock',
-    sheets: ['stock_categories', 'stock_products'],
-    purgeSteps: ['stock_products_food', 'stock_categories_food'],
+    sheets: ['stock_categories', 'stock_products', 'stock_adjustments'],
+    purgeSteps: ['stock_adjustments_food', 'stock_products_food', 'stock_categories_food'],
     alsoClears: [],
   },
   {
     id: 'beverageStock',
     label: 'Stock bebidas',
     group: 'stock',
-    sheets: ['stock_categories', 'stock_products'],
-    purgeSteps: ['stock_products_beverage', 'stock_categories_beverage'],
+    sheets: ['stock_categories', 'stock_products', 'stock_adjustments'],
+    purgeSteps: [
+      'stock_adjustments_beverage',
+      'stock_products_beverage',
+      'stock_categories_beverage',
+    ],
     alsoClears: [],
   },
   {
@@ -357,8 +394,8 @@ export const BACKUP_MODULES: BackupModuleDef[] = [
     id: 'staff',
     label: 'Empleados',
     group: 'personal',
-    sheets: ['employees'],
-    purgeSteps: ['employees'],
+    sheets: ['employees', 'vacations', 'employee_salary_history'],
+    purgeSteps: ['vacations', 'employee_salary_history', 'employees'],
     alsoClears: [
       'attendance',
       'productionAttendance',
@@ -477,14 +514,31 @@ export const BACKUP_MODULES: BackupModuleDef[] = [
       'paymentsEmployees',
     ],
   },
+  {
+    id: 'shopConfig',
+    label: 'Config del local',
+    group: 'config',
+    // Sin purgeSteps: un reset sin restore no debe borrar usuarios ni integraciones.
+    // En restore, importExtraSheets borra y reinserta user_shops / shop_integrations
+    // cuando esas hojas vienen en el Excel; importShopConfig actualiza la fila shops.
+    sheets: ['shop', 'user_shops', 'shop_integrations'],
+    purgeSteps: [],
+    alsoClears: [],
+  },
 ];
 
 export const PURGE_STEP_ORDER: BackupPurgeStep[] = [
   'tip_allocations',
   'tip_days',
+  'comanda_line_audits',
+  'customer_orders',
+  'table_sessions',
+  'print_jobs',
   'order_lines',
   'orders',
   'shortages',
+  'stock_adjustments_food',
+  'stock_adjustments_beverage',
   'stock_products_food',
   'stock_products_beverage',
   'stock_categories_food',
@@ -501,6 +555,8 @@ export const PURGE_STEP_ORDER: BackupPurgeStep[] = [
   'service_rule_categories',
   'reimbursements',
   'production_attendance_days',
+  'vacations',
+  'employee_salary_history',
   'candidates',
   'cash_pending_withdrawal_offsets',
   'cash_pending_withdrawals',
@@ -516,6 +572,7 @@ export const PURGE_STEP_ORDER: BackupPurgeStep[] = [
   'payments_services',
   'payments_employees',
   'payments',
+  'partner_split_runs',
   'partner_split_configs',
   'settlement_fields',
   'closing_step_files',
@@ -526,6 +583,7 @@ export const PURGE_STEP_ORDER: BackupPurgeStep[] = [
   'closing_expenses',
   'closing_extra_lines',
   'cash_closings',
+  'shop_integrations',
   'shop_closing_sources',
   'suppliers',
   'services',
@@ -535,6 +593,7 @@ export const PURGE_STEP_ORDER: BackupPurgeStep[] = [
   'pos_categories',
   'concepts',
   'ledger_accounts',
+  'user_shops',
   'employees',
 ];
 
