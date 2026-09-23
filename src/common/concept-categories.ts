@@ -37,6 +37,17 @@ export function normalizeConceptCategories(
   return next.length ? next : fallback;
 }
 
+/** Proveedores también sirven como egreso del cierre de caja. */
+export function withClosureForSuppliers(categories: ConceptCategory[]): ConceptCategory[] {
+  if (
+    categories.includes(ConceptCategory.SUPPLIERS) &&
+    !categories.includes(ConceptCategory.CLOSURE)
+  ) {
+    return [...categories, ConceptCategory.CLOSURE];
+  }
+  return categories;
+}
+
 export function normalizePaymentConceptCategories(
   raw?: unknown,
 ): PaymentConceptCategoriesMap {
@@ -95,6 +106,7 @@ export function inferConceptCategories(name: string): ConceptCategory[] {
     )
   ) {
     cats.add(ConceptCategory.SUPPLIERS);
+    cats.add(ConceptCategory.CLOSURE);
   }
   if (/(otro|varios)/.test(n)) cats.add(ConceptCategory.OTHERS);
   return [...cats];
