@@ -9,6 +9,7 @@ export type ClosingCalcInput = {
   posSystemAmount?: number | string | null;
   cardAmount?: number | string | null;
   cashAmount?: number | string | null;
+  cashOpeningAmount?: number | string | null;
   mercadoPagoAmount?: number | string | null;
   deliveryAppsAmount?: number | string | null;
   transferAmount?: number | string | null;
@@ -23,18 +24,58 @@ export type ClosingCalcResult = {
   difference: number;
 };
 
-/** calculated = canales + extraIncome; difference = declarado − caja sistema. */
-export function calcClosingTotals(dto: ClosingCalcInput, extraIncome = 0): ClosingCalcResult {
+/** Suma de egresos del cierre (el recuento de efectivo ya viene neto de estos). */
+export function expensesTotalFrom(
+  expenses?: Array<{ amount?: number | string | null }> | null,
+): number {
+  return (expenses ?? []).reduce((sum, e) => sum + closingNum(e.amount), 0);
+}
+
+/**
+ * Recaudación en efectivo del día =
+ * efectivo total (cierre) − efectivo de apertura + gastos en efectivo.
+ */
+export function cashDayCollection(
+  cashAmount?: number | string | null,
+  cashOpeningAmount?: number | string | null,
+  expensesTotal = 0,
+): number {
+  return (
+    closingNum(cashAmount) - closingNum(cashOpeningAmount) + closingNum(expensesTotal)
+  );
+}
+
+/**
+ * calculated = recaudación efectivo + otros canales + extraIncome;
+ * declared: si el cliente manda total con “contado” (sin restar apertura ni sumar egresos),
+ * se ajusta a la misma recaudación; si no, = calculated.
+ * difference = declarado − caja sistema.
+ */
+export function calcClosingTotals(
+  dto: ClosingCalcInput,
+  extraIncome = 0,
+  expensesTotal = 0,
+): ClosingCalcResult {
+  const cashCollected = cashDayCollection(
+    dto.cashAmount,
+    dto.cashOpeningAmount,
+    expensesTotal,
+  );
   const calculated =
     closingNum(dto.cardAmount) +
-    closingNum(dto.cashAmount) +
+    cashCollected +
     closingNum(dto.mercadoPagoAmount) +
     closingNum(dto.deliveryAppsAmount) +
     closingNum(dto.transferAmount) +
     closingNum(dto.accountDniAmount) +
     closingNum(dto.otherAmount) +
     extraIncome;
-  const declared = dto.declaredTotal !== undefined ? closingNum(dto.declaredTotal) : calculated;
+  let declared = calculated;
+  if (dto.declaredTotal !== undefined) {
+    // Cliente suele mandar contado + canales (sin −apertura +egresos).
+    declared =
+      closingNum(dto.declaredTotal) + (cashCollected - closingNum(dto.cashAmount));
+  }
   return {
     calculatedTotal: calculated,
     declaredTotal: declared,

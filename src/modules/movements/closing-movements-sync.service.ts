@@ -86,14 +86,18 @@ export class ClosingMovementsSyncService {
       findCashDrawerAccount(accounts) ??
       accounts.find((a) => a.active && a.code === 'EFECTIVO') ??
       null;
-    if (n(closing.cashAmount) > 0 && cashDest) {
+    // Recaudación = contado − apertura + egresos (el arqueo ya viene neto de gastos).
+    const expensesTotal = (closing.expenses ?? []).reduce((s, e) => s + n(e.amount), 0);
+    const cashIncome =
+      n(closing.cashAmount) - n(closing.cashOpeningAmount) + expensesTotal;
+    if (cashIncome > 0 && cashDest) {
       rows.push({
         shopId: closing.shopId,
         businessDate: date,
         fromAccountId: ingresoAccount.id,
         toAccountId: cashDest.id,
         description: 'Efectivo del día',
-        amountUyu: money(n(closing.cashAmount)),
+        amountUyu: money(cashIncome),
         conceptId: findConcept('EFECTIVO ingreso'),
         closingId: closing.id,
         invoiced: false,
@@ -218,11 +222,11 @@ export class ClosingMovementsSyncService {
       if (partner) partnerDestId = partner.id;
     }
 
-    const expensesTotal = (closing.expenses ?? []).reduce((s, e) => s + n(e.amount), 0);
+    // A retirar = contado − cambio (los egresos ya salieron antes del recuento).
     const cashTake =
       n(closing.cashWithdrawn) > 0
         ? n(closing.cashWithdrawn)
-        : Math.max(0, n(closing.cashAmount) - n(closing.cashLeftInRegister) - expensesTotal);
+        : Math.max(0, n(closing.cashAmount) - n(closing.cashLeftInRegister));
 
     if (cashDrawer && partnerDestId && cashTake > 0) {
       rows.push({
@@ -368,7 +372,7 @@ export class ClosingMovementsSyncService {
     const ingreso = byCode.get('INGRESO');
     const closings = await this.closings.find({
       where: { shopId },
-      relations: ['sourceAmounts'],
+      relations: ['sourceAmounts', 'expenses'],
       order: { businessDate: 'ASC' },
     });
     const cashSourceCfg = await this.closingSources.findOne({
@@ -553,7 +557,10 @@ export class ClosingMovementsSyncService {
       });
     };
     for (const closing of closings) {
-      push(closing, null, n(closing.cashAmount), 'Efectivo del día', cashDest);
+      const expensesTotal = (closing.expenses ?? []).reduce((s, e) => s + n(e.amount), 0);
+      const cashIncome =
+        n(closing.cashAmount) - n(closing.cashOpeningAmount) + expensesTotal;
+      push(closing, null, cashIncome, 'Efectivo del día', cashDest);
       const sourceRows = closing.sourceAmounts ?? [];
       if (!sourceRows.length) {
         push(closing, LinkedPaymentMethod.CARD, n(closing.cardAmount), 'PVS / Tarjeta');

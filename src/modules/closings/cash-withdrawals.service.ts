@@ -86,16 +86,15 @@ export class CashWithdrawalsService implements OnModuleInit {
     }
   }
 
-  /** Monto a retirar según reglas del cierre (retiro explícito o efectivo − cambio − egresos). */
+  /** Monto a retirar: retiro explícito o efectivo contado − lo dejado en caja. */
   computeCashTake(closing: CashClosing): number {
-    const expensesTotal = (closing.expenses ?? []).reduce((s, e) => s + n(e.amount), 0);
     if (n(closing.cashWithdrawn) > 0) return n(closing.cashWithdrawn);
     return Math.max(0, n(closing.cashAmount) - n(closing.cashLeftInRegister));
   }
 
   /**
    * Tras guardar un cierre: crea/actualiza pendiente si no hay destinatario y hay monto;
-   * cancela el pendiente si ya hay quién o el monto es 0.
+   * cancela el pendiente si ya hay quién, el monto es 0, o el efectivo ya se retiró en A Retirar.
    */
   async syncFromClosing(closing: CashClosing): Promise<void> {
     const hasWho = !!(closing.cashWithdrawnByUserId || closing.cashWithdrawnByEmployeeId);
@@ -107,12 +106,29 @@ export class CashWithdrawalsService implements OnModuleInit {
         active: true,
       },
     });
+    const alreadyPicked = await this.pending.findOne({
+      where: {
+        closingId: closing.id,
+        status: CashPendingWithdrawalStatus.PICKED,
+        active: true,
+      },
+    });
+
+    // Ya retirado desde A Retirar: no recrear pendiente aunque el cierre se edite sin "quién".
+    if (alreadyPicked) {
+      if (existing) {
+        await this.deactivatePending(existing);
+      }
+      if (n(closing.cashPendingPickup) !== 0) {
+        closing.cashPendingPickup = money(0);
+        await this.closings.save(closing);
+      }
+      return;
+    }
 
     if (hasWho || amount <= 0) {
       if (existing) {
-        existing.active = false;
-        await this.pending.save(existing);
-        await this.pending.softRemove(existing);
+        await this.deactivatePending(existing);
       }
       if (!hasWho && n(closing.cashPendingPickup) !== 0) {
         closing.cashPendingPickup = money(0);
@@ -153,10 +169,14 @@ export class CashWithdrawalsService implements OnModuleInit {
       },
     });
     for (const row of rows) {
-      row.active = false;
-      await this.pending.save(row);
-      await this.pending.softRemove(row);
+      await this.deactivatePending(row);
     }
+  }
+
+  private async deactivatePending(row: CashPendingWithdrawal): Promise<void> {
+    row.active = false;
+    await this.pending.save(row);
+    await this.pending.softRemove(row);
   }
 
   async listPending(user: AuthUser, shopId: string) {
@@ -401,7 +421,7 @@ export class CashWithdrawalsService implements OnModuleInit {
     shopId: string,
     opts?: { includeExpenses?: boolean; purgeStaleOffsets?: boolean },
   ) {
-    const pending = await this.pending.find({
+    let pending = await this.pending.find({
       where: {
         shopId,
         status: CashPendingWithdrawalStatus.PENDING,
@@ -409,6 +429,40 @@ export class CashWithdrawalsService implements OnModuleInit {
       },
       order: { businessDate: 'ASC', createdAt: 'ASC' },
     });
+
+    // Huérfanos: PENDING recreado tras un PICKED del mismo cierre (p. ej. editar sin destinatario).
+    if (pending.length) {
+      const closingIds = [...new Set(pending.map((p) => p.closingId))];
+      const picked = await this.pending.find({
+        where: {
+          shopId,
+          closingId: In(closingIds),
+          status: CashPendingWithdrawalStatus.PICKED,
+          active: true,
+        },
+      });
+      const pickedClosingIds = new Set(picked.map((p) => p.closingId));
+      if (pickedClosingIds.size) {
+        const orphans = pending.filter((p) => pickedClosingIds.has(p.closingId));
+        for (const row of orphans) {
+          await this.deactivatePending(row);
+        }
+        pending = pending.filter((p) => !pickedClosingIds.has(p.closingId));
+        if (orphans.length) {
+          const orphanClosingIds = [...new Set(orphans.map((o) => o.closingId))];
+          for (const closingId of orphanClosingIds) {
+            const closing = await this.closings.findOne({
+              where: { id: closingId, shopId, active: true },
+            });
+            if (closing && n(closing.cashPendingPickup) !== 0) {
+              closing.cashPendingPickup = money(0);
+              await this.closings.save(closing);
+            }
+          }
+          this.live.tick(shopId, 'inbox');
+        }
+      }
+    }
 
     const savedOffsets = await this.offsets.find({ where: { shopId } });
     const cashIds = await this.cashDrawerAccountIds(shopId);

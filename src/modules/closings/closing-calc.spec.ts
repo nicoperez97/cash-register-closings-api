@@ -49,6 +49,45 @@ describe('calcClosingTotals', () => {
     expect(r.calculatedTotal).toBe(12_000);
     expect(r.difference).toBe(0);
   });
+
+  it('suma egresos al calculado y al declarado (recuento neto)', () => {
+    const r = calcClosingTotals(
+      {
+        posSystemAmount: 310_000,
+        cashAmount: 300_000,
+        declaredTotal: 300_000,
+      },
+      0,
+      10_000,
+    );
+    expect(r.calculatedTotal).toBe(310_000);
+    expect(r.declaredTotal).toBe(310_000);
+    expect(r.difference).toBe(0);
+  });
+
+  it('sin declarado explícito, egresos igual suman al bruto', () => {
+    const r = calcClosingTotals({ posSystemAmount: 310_000, cashAmount: 300_000 }, 0, 10_000);
+    expect(r.calculatedTotal).toBe(310_000);
+    expect(r.declaredTotal).toBe(310_000);
+    expect(r.difference).toBe(0);
+  });
+
+  it('recaudación = contado − apertura + egresos', () => {
+    const r = calcClosingTotals(
+      {
+        posSystemAmount: 260_000,
+        cashAmount: 300_000,
+        cashOpeningAmount: 50_000,
+        declaredTotal: 300_000,
+      },
+      0,
+      10_000,
+    );
+    // 300 − 50 + 10 = 260
+    expect(r.calculatedTotal).toBe(260_000);
+    expect(r.declaredTotal).toBe(260_000);
+    expect(r.difference).toBe(0);
+  });
 });
 
 describe('extraIncomeFromLines', () => {
