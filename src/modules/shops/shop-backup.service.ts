@@ -46,7 +46,9 @@ import {
   sheetsForModules,
 } from './shop-backup-modules';
 
-const BACKUP_VERSION = '1';
+const BACKUP_VERSION = '2';
+/** Versiones de Excel aceptadas al restaurar (v1 sin shopConfig / hojas nuevas). */
+const SUPPORTED_BACKUP_VERSIONS = new Set(['1', '2']);
 
 type Row = Record<string, unknown>;
 
@@ -177,7 +179,7 @@ export class ShopBackupService {
     }
 
     const meta = this.readKvSheet(wb, '_meta');
-    if (meta.version && String(meta.version) !== BACKUP_VERSION) {
+    if (meta.version && !SUPPORTED_BACKUP_VERSIONS.has(String(meta.version))) {
       throw new BadRequestException(`Versión de backup no soportada: ${meta.version}`);
     }
     const metaShopId = String(meta.shopId ?? '');
@@ -196,13 +198,26 @@ export class ShopBackupService {
       }
     }
 
+    // Dumps v1 no traían shopConfig / customerOrders: no purgar esas tablas al restaurar.
+    if (String(meta.version || '1') === '1') {
+      const exclude = new Set<BackupModuleId>(['shopConfig', 'customerOrders']);
+      if (modules === 'all') {
+        modules = expandBackupModules('all').filter((id) => !exclude.has(id));
+      } else {
+        modules = modules.filter((id) => !exclude.has(id));
+      }
+    }
+
     const qr = this.dataSource.createQueryRunner();
     await qr.connect();
     await qr.startTransaction();
     try {
       await this.purgeShopDataWithManager(qr.manager, shopId, modules);
       await this.importFromWorkbook(qr.manager, shopId, user.id, wb);
-      await this.rebuildCashPendingFromClosings(qr.manager, shopId);
+      // Si el dump ya trae A Retirar, no regenerar: dump→purge→restore debe quedar idéntico.
+      if (!wb.getWorksheet('cash_pending_withdrawals')) {
+        await this.rebuildCashPendingFromClosings(qr.manager, shopId);
+      }
       await qr.commitTransaction();
     } catch (err) {
       await qr.rollbackTransaction();
@@ -444,6 +459,83 @@ export class ShopBackupService {
       case 'services':
         await run(`DELETE FROM services WHERE shopId = ?`);
         return;
+      case 'comanda_line_audits':
+        try {
+          await run(`DELETE FROM comanda_line_audits WHERE shopId = ?`);
+        } catch {
+          // tabla todavía no existe
+        }
+        return;
+      case 'customer_orders':
+        try {
+          await run(`DELETE FROM customer_orders WHERE shopId = ?`);
+        } catch {
+          // tabla todavía no existe
+        }
+        return;
+      case 'table_sessions':
+        try {
+          await run(`DELETE FROM table_sessions WHERE shopId = ?`);
+        } catch {
+          // tabla todavía no existe
+        }
+        return;
+      case 'print_jobs':
+        try {
+          await run(`DELETE FROM print_jobs WHERE shopId = ?`);
+        } catch {
+          // tabla todavía no existe
+        }
+        return;
+      case 'stock_adjustments_food':
+        try {
+          await run(
+            `DELETE sa FROM stock_adjustments sa INNER JOIN stock_products p ON sa.productId = p.id WHERE sa.shopId = ? AND p.kind = 'food'`,
+          );
+        } catch {
+          // tabla todavía no existe
+        }
+        return;
+      case 'stock_adjustments_beverage':
+        try {
+          await run(
+            `DELETE sa FROM stock_adjustments sa INNER JOIN stock_products p ON sa.productId = p.id WHERE sa.shopId = ? AND p.kind = 'beverage'`,
+          );
+        } catch {
+          // tabla todavía no existe
+        }
+        return;
+      case 'vacations':
+        try {
+          await run(`DELETE FROM vacations WHERE shopId = ?`);
+        } catch {
+          // tabla todavía no existe
+        }
+        return;
+      case 'employee_salary_history':
+        try {
+          await run(`DELETE FROM employee_salary_history WHERE shopId = ?`);
+        } catch {
+          // tabla todavía no existe
+        }
+        return;
+      case 'partner_split_runs':
+        try {
+          await run(`DELETE FROM partner_split_runs WHERE shopId = ?`);
+        } catch {
+          // tabla todavía no existe
+        }
+        return;
+      case 'shop_integrations':
+        try {
+          await run(`DELETE FROM shop_integrations WHERE shopId = ?`);
+        } catch {
+          // tabla todavía no existe
+        }
+        return;
+      case 'user_shops':
+        await run(`DELETE FROM user_shops WHERE shopId = ?`);
+        return;
       default:
         return;
     }
@@ -604,6 +696,18 @@ export class ShopBackupService {
           userId: e.userId ?? '',
           hireDate: e.hireDate ?? '',
           notes: e.notes ?? '',
+          type: e.type ?? 'FIXED',
+          jobRoles: e.jobRoles != null ? JSON.stringify(e.jobRoles) : '',
+          shiftAssignments:
+            e.shiftAssignments != null ? JSON.stringify(e.shiftAssignments) : '',
+          countsForAttendanceBonus: e.countsForAttendanceBonus === false ? 0 : 1,
+          producesFood: e.producesFood ? 1 : 0,
+          supervisorEmployeeId: e.supervisorEmployeeId ?? '',
+          bankAlias: e.bankAlias ?? '',
+          serviceCheckIn: e.serviceCheckIn ?? '',
+          serviceCheckOut: e.serviceCheckOut ?? '',
+          waiterPinHash: e.waiterPinHash ?? '',
+          waiterPinPrefix: e.waiterPinPrefix ?? '',
           active: e.active ? 1 : 0,
         })),
       );
@@ -636,8 +740,11 @@ export class ShopBackupService {
           id: a.id,
           employeeId: a.employeeId,
           date: a.date,
+          shiftId: a.shiftId ?? '',
           isHoliday: a.isHoliday ? 1 : 0,
           isPresent: a.isPresent ? 1 : 0,
+          checkInAt: a.checkInAt ?? '',
+          checkOutAt: a.checkOutAt ?? '',
           overtimeHours: a.overtimeHours,
           active: a.active ? 1 : 0,
         })),
@@ -808,6 +915,9 @@ export class ShopBackupService {
           closingId: m.closingId ?? '',
           employeeId: m.employeeId ?? '',
           paymentMethod: m.paymentMethod ?? '',
+          receiptFilePath: m.receiptFilePath ?? '',
+          receiptFileName: m.receiptFileName ?? '',
+          receiptFileMime: m.receiptFileMime ?? '',
           active: m.active ? 1 : 0,
         })),
       );
@@ -1106,9 +1216,30 @@ export class ShopBackupService {
           userId: userId && existingUserIds.has(userId) ? userId : null,
           hireDate: this.emptyToNull(r.hireDate),
           notes: this.emptyToNull(r.notes),
+          type: (String(r.type ?? 'FIXED') === 'ROTATING' ? 'ROTATING' : 'FIXED') as any,
+          jobRoles: this.parseJsonField(r.jobRoles) as any,
+          shiftAssignments: this.parseJsonField(r.shiftAssignments) as any,
+          countsForAttendanceBonus: this.toBool(r.countsForAttendanceBonus, true),
+          producesFood: this.toBool(r.producesFood, false),
+          supervisorEmployeeId: null,
+          bankAlias: this.emptyToNull(r.bankAlias),
+          serviceCheckIn: this.emptyToNull(r.serviceCheckIn),
+          serviceCheckOut: this.emptyToNull(r.serviceCheckOut),
+          waiterPinHash: this.emptyToNull(r.waiterPinHash),
+          waiterPinPrefix: this.emptyToNull(r.waiterPinPrefix),
           active: this.toBool(r.active, true),
         }),
       );
+    }
+    // Segunda pasada: supervisorEmployeeId ya está en el map.
+    for (const r of this.readRowsSheet(wb, 'employees')) {
+      const empId = mapId(String(r.id));
+      const supervisorId = mapId(this.emptyToNull(r.supervisorEmployeeId) ?? undefined);
+      if (!empId || !supervisorId) continue;
+      await manager.query(`UPDATE employees SET supervisorEmployeeId = ? WHERE id = ?`, [
+        supervisorId,
+        empId,
+      ]);
     }
 
     for (const r of this.readRowsSheet(wb, 'employee_commission_rules')) {
@@ -1136,8 +1267,11 @@ export class ShopBackupService {
           shopId,
           employeeId,
           date: String(r.date ?? '').slice(0, 10),
+          shiftId: this.emptyToNull(r.shiftId),
           isHoliday: this.toBool(r.isHoliday, false),
           isPresent: this.toBool(r.isPresent, false),
+          checkInAt: this.emptyToNull(r.checkInAt),
+          checkOutAt: this.emptyToNull(r.checkOutAt),
           overtimeHours: String(r.overtimeHours ?? '0'),
           active: this.toBool(r.active, true),
         }),
@@ -1223,9 +1357,11 @@ export class ShopBackupService {
           transferAmount: String(r.transferAmount ?? '0'),
           accountDniAmount: String(r.accountDniAmount ?? '0'),
           otherAmount: String(r.otherAmount ?? '0'),
+          posnetAmounts: this.parseJsonField(r.posnetAmounts) as any,
           unitsSold: this.emptyToNull(r.unitsSold) != null ? Number(r.unitsSold) : null,
           coversCount: this.emptyToNull(r.coversCount) != null ? Number(r.coversCount) : null,
           averageTicket: this.emptyToNull(r.averageTicket),
+          cashOpeningAmount: String(r.cashOpeningAmount ?? '0'),
           cashLeftInRegister: String(r.cashLeftInRegister ?? '0'),
           cashPendingPickup: String(r.cashPendingPickup ?? '0'),
           cashWithdrawn: String(r.cashWithdrawn ?? '0'),
@@ -1235,6 +1371,9 @@ export class ShopBackupService {
           })(),
           cashWithdrawnByEmployeeId: mapId(this.emptyToNull(r.cashWithdrawnByEmployeeId) ?? undefined),
           cashWithdrawnByName: this.emptyToNull(r.cashWithdrawnByName),
+          cashWithdrawnToAccountId: mapId(
+            this.emptyToNull(r.cashWithdrawnToAccountId) ?? undefined,
+          ),
           tipsAmount: String(r.tipsAmount ?? '0'),
           declaredTotal: String(r.declaredTotal ?? '0'),
           calculatedTotal: String(r.calculatedTotal ?? '0'),
@@ -1305,6 +1444,9 @@ export class ShopBackupService {
           closingId: mapId(this.emptyToNull(r.closingId) ?? undefined),
           employeeId: mapId(this.emptyToNull(r.employeeId) ?? undefined),
           paymentMethod: this.emptyToNull(r.paymentMethod),
+          receiptFilePath: this.emptyToNull(r.receiptFilePath),
+          receiptFileName: this.emptyToNull(r.receiptFileName),
+          receiptFileMime: this.emptyToNull(r.receiptFileMime),
           active: this.toBool(r.active, true),
         }),
       );
@@ -1394,6 +1536,7 @@ export class ShopBackupService {
     }
 
     await this.importExtraSheets(manager, shopId, actorUserId, wb, map);
+    await this.importShopConfig(manager, shopId, wb, map, existingUserIds);
   }
 
   private closingToRow(c: CashClosing): Row {
@@ -1413,15 +1556,18 @@ export class ShopBackupService {
       transferAmount: c.transferAmount,
       accountDniAmount: c.accountDniAmount,
       otherAmount: c.otherAmount,
+      posnetAmounts: c.posnetAmounts != null ? JSON.stringify(c.posnetAmounts) : '',
       unitsSold: c.unitsSold ?? '',
       coversCount: c.coversCount ?? '',
       averageTicket: c.averageTicket ?? '',
+      cashOpeningAmount: c.cashOpeningAmount ?? '0',
       cashLeftInRegister: c.cashLeftInRegister,
       cashPendingPickup: c.cashPendingPickup,
       cashWithdrawn: c.cashWithdrawn,
       cashWithdrawnByUserId: c.cashWithdrawnByUserId ?? '',
       cashWithdrawnByEmployeeId: c.cashWithdrawnByEmployeeId ?? '',
       cashWithdrawnByName: c.cashWithdrawnByName ?? '',
+      cashWithdrawnToAccountId: c.cashWithdrawnToAccountId ?? '',
       tipsAmount: c.tipsAmount,
       declaredTotal: c.declaredTotal,
       calculatedTotal: c.calculatedTotal,
@@ -1492,7 +1638,7 @@ export class ShopBackupService {
         let val: unknown = row.getCell(col).value;
         if (val && typeof val === 'object' && 'text' in (val as any)) val = (val as any).text;
         if (val && typeof val === 'object' && 'result' in (val as any)) val = (val as any).result;
-        if (val instanceof Date) val = val.toISOString().slice(0, 10);
+        if (val instanceof Date) val = this.toMysqlDateTime(val);
         obj[key] = val ?? '';
         if (val !== null && val !== undefined && String(val) !== '') any = true;
       }
@@ -1556,6 +1702,13 @@ export class ShopBackupService {
       put('payments', await dump('payments', extra));
     }
     if (sheetSet.has('partner_split_configs')) put('partner_split_configs', await dump('partner_split_configs'));
+    if (sheetSet.has('partner_split_runs')) {
+      try {
+        put('partner_split_runs', await dump('partner_split_runs'));
+      } catch {
+        put('partner_split_runs', []);
+      }
+    }
     if (sheetSet.has('suppliers')) put('suppliers', await dump('suppliers'));
     if (sheetSet.has('services')) put('services', await dump('services'));
     if (sheetSet.has('reservations')) put('reservations', await dump('reservations'));
@@ -1568,7 +1721,28 @@ export class ShopBackupService {
     if (sheetSet.has('salon_tables')) put('salon_tables', await dump('salon_tables'));
     if (sheetSet.has('salon_map_objects')) put('salon_map_objects', await dump('salon_map_objects'));
     if (sheetSet.has('salon_area_rules')) put('salon_area_rules', await dump('salon_area_rules'));
-    if (sheetSet.has('stock_categories') || sheetSet.has('stock_products')) {
+    if (sheetSet.has('table_sessions')) {
+      try {
+        put('table_sessions', await dump('table_sessions'));
+      } catch {
+        put('table_sessions', []);
+      }
+    }
+    if (sheetSet.has('customer_orders')) {
+      try {
+        put('customer_orders', await dump('customer_orders'));
+      } catch {
+        put('customer_orders', []);
+      }
+    }
+    if (sheetSet.has('comanda_line_audits')) {
+      try {
+        put('comanda_line_audits', await dump('comanda_line_audits'));
+      } catch {
+        put('comanda_line_audits', []);
+      }
+    }
+    if (sheetSet.has('stock_categories') || sheetSet.has('stock_products') || sheetSet.has('stock_adjustments')) {
       const kinds: string[] = [];
       if (has('stock')) kinds.push('food');
       if (has('beverageStock')) kinds.push('beverage');
@@ -1580,6 +1754,22 @@ export class ShopBackupService {
       if (sheetSet.has('stock_products')) {
         put('stock_products', await dump('stock_products', kindSql));
       }
+      if (sheetSet.has('stock_adjustments')) {
+        try {
+          if (kinds.length === 1) {
+            put(
+              'stock_adjustments',
+              await dumpVia(
+                `SELECT a.* FROM stock_adjustments a INNER JOIN stock_products p ON a.productId = p.id WHERE a.shopId = ? AND p.kind = '${kinds[0]}'`,
+              ),
+            );
+          } else {
+            put('stock_adjustments', await dump('stock_adjustments'));
+          }
+        } catch {
+          put('stock_adjustments', []);
+        }
+      }
     }
     if (sheetSet.has('shortages')) put('shortages', await dump('shortages'));
     if (sheetSet.has('orders')) put('orders', await dump('orders'));
@@ -1587,6 +1777,20 @@ export class ShopBackupService {
     if (sheetSet.has('candidates')) put('candidates', await dump('candidates'));
     if (sheetSet.has('production_attendance_days')) {
       put('production_attendance_days', await dump('production_attendance_days'));
+    }
+    if (sheetSet.has('vacations')) {
+      try {
+        put('vacations', await dump('vacations'));
+      } catch {
+        put('vacations', []);
+      }
+    }
+    if (sheetSet.has('employee_salary_history')) {
+      try {
+        put('employee_salary_history', await dump('employee_salary_history'));
+      } catch {
+        put('employee_salary_history', []);
+      }
     }
     if (sheetSet.has('tip_days')) put('tip_days', await dump('tip_days'));
     if (sheetSet.has('tip_allocations')) {
@@ -1602,6 +1806,31 @@ export class ShopBackupService {
       put('service_rule_categories', await dump('service_rule_categories'));
     }
     if (sheetSet.has('service_rules')) put('service_rules', await dump('service_rules'));
+    if (sheetSet.has('closing_step_files')) {
+      try {
+        put(
+          'closing_step_files',
+          await dumpVia(
+            `SELECT f.* FROM closing_step_files f INNER JOIN cash_closings c ON f.closingId = c.id WHERE c.shopId = ?`,
+          ),
+        );
+      } catch {
+        put('closing_step_files', []);
+      }
+    }
+    if (sheetSet.has('shop')) {
+      put('shop', await this.dumpSql(`SELECT * FROM shops WHERE id = ?`, [shopId]));
+    }
+    if (sheetSet.has('shop_integrations')) {
+      try {
+        put('shop_integrations', await dump('shop_integrations'));
+      } catch {
+        put('shop_integrations', []);
+      }
+    }
+    if (sheetSet.has('user_shops')) {
+      put('user_shops', await dump('user_shops'));
+    }
   }
 
   private async dumpShopTable(table: string, shopId: string, extra = ''): Promise<Row[]> {
@@ -1668,27 +1897,37 @@ export class ShopBackupService {
       'suppliers',
       'services',
       'partner_split_configs',
+      'partner_split_runs',
       'salon_sectors',
       'salon_tables',
       'salon_map_objects',
       'salon_area_rules',
+      'table_sessions',
+      'customer_orders',
+      'comanda_line_audits',
       'reservations',
       'reservation_day_notices',
       'reservation_requests',
       'waiting_list_entries',
       'stock_categories',
       'stock_products',
+      'stock_adjustments',
       'shortages',
       'orders',
       'order_lines',
       'candidates',
       'production_attendance_days',
+      'vacations',
+      'employee_salary_history',
       'tip_days',
       'tip_allocations',
       'reimbursements',
       'service_rule_categories',
       'service_rules',
+      'closing_step_files',
       'payments',
+      'shop_integrations',
+      'user_shops',
     ];
     /** FKs a entidades remapeadas en este dump. Si no hay map, se anulan (opcionales) o se salta la fila. */
     const requiredFkByTable: Partial<Record<BackupSheetName, string[]>> = {
@@ -1698,6 +1937,11 @@ export class ShopBackupService {
       order_lines: ['orderId'],
       tip_allocations: ['tipDayId'],
       salon_tables: ['sectorId'],
+      table_sessions: ['salonTableId'],
+      stock_adjustments: ['productId'],
+      employee_salary_history: ['employeeId'],
+      closing_step_files: ['closingId'],
+      comanda_line_audits: ['tableSessionId'],
     };
     const fkCols = [
       'accountId',
@@ -1709,6 +1953,7 @@ export class ShopBackupService {
       'employeeId',
       'closingId',
       'movementId',
+      'settlementMovementId',
       'supplierId',
       'serviceId',
       'categoryId',
@@ -1723,21 +1968,58 @@ export class ShopBackupService {
       'sectorId',
       'importId',
       'ticketId',
+      'waiterEmployeeId',
+      'salonTableId',
+      'openSalonTableId',
+      'tableSessionId',
+      'customerOrderId',
+      'partnerAccountId',
+      'closingAccountId',
+      'closingSourceId',
+      'paymentAccountId',
+      'actorEmployeeId',
     ];
-    const userFkCols = ['pickedByUserId', 'confirmedByUserId', 'settledByUserId', 'createdByUserId', 'userId'];
+    const userFkCols = [
+      'pickedByUserId',
+      'confirmedByUserId',
+      'settledByUserId',
+      'createdByUserId',
+      'userId',
+      'payerUserId',
+      'validatorUserId',
+      'validatedByUserId',
+      'appliedByUserId',
+    ];
     const errors: string[] = [];
     let inserted = 0;
     let skipped = 0;
 
     for (const table of tables) {
       const rows = this.readRowsSheet(wb, table);
+      // Hojas de membresía/integración: si vienen en el Excel, reemplazar el estado del local.
+      if (
+        (table === 'user_shops' || table === 'shop_integrations') &&
+        wb.getWorksheet(table)
+      ) {
+        await manager.query(`DELETE FROM \`${table}\` WHERE shopId = ?`, [shopId]);
+      }
       const required = new Set(requiredFkByTable[table] ?? []);
       for (const r of rows) {
         const row: Record<string, unknown> = { ...r };
         if (row.id) row.id = ensureId(String(r.id));
         if ('shopId' in row) row.shopId = shopId;
-        row.deletedAt = null;
+        if ('deletedAt' in row) row.deletedAt = null;
         if ('active' in row) row.active = this.toBool(row.active, true) ? 1 : 0;
+
+        if (table === 'user_shops') {
+          const uid = String(r.userId ?? '');
+          if (!uid || !existingUserIds.has(uid)) {
+            skipped += 1;
+            continue;
+          }
+          row.userId = uid;
+          row.shopId = shopId;
+        }
 
         let skip = false;
         for (const col of fkCols) {
@@ -1759,6 +2041,7 @@ export class ShopBackupService {
         }
 
         for (const col of userFkCols) {
+          if (table === 'user_shops' && col === 'userId') continue;
           if (row[col] == null || String(row[col]) === '') continue;
           const uid = String(row[col]);
           if (!existingUserIds.has(uid)) {
@@ -1769,6 +2052,15 @@ export class ShopBackupService {
         if (table === 'partner_split_configs') {
           row.partnerAccountIds = this.remapJsonIds(row.partnerAccountIds, map);
           row.channelLeaves = this.remapChannelLeaves(row.channelLeaves, map);
+        }
+        if (table === 'partner_split_runs' && row.snapshot != null) {
+          row.snapshot = this.remapIdsInJsonTree(row.snapshot, map);
+        }
+        if (
+          (table === 'table_sessions' || table === 'customer_orders') &&
+          row.payments != null
+        ) {
+          row.payments = this.remapPaymentsJson(row.payments, map);
         }
         const cols = Object.keys(row).filter((k) => row[k] !== undefined);
         if (!cols.length) continue;
@@ -1801,6 +2093,173 @@ export class ShopBackupService {
     }
     void skipped;
     void inserted;
+  }
+
+  /**
+   * Actualiza la fila `shops` del destino con la config del dump (sin cambiar id).
+   * Solo si existe la hoja `shop` (módulo shopConfig / dump completo).
+   */
+  private async importShopConfig(
+    manager: any,
+    shopId: string,
+    wb: ExcelJS.Workbook,
+    map: Map<string, string>,
+    existingUserIds: Set<string>,
+  ) {
+    const rows = this.readRowsSheet(wb, 'shop');
+    if (!rows.length) return;
+    const src = { ...rows[0]! };
+    delete src.id;
+    delete src.createdAt;
+    delete src.updatedAt;
+    delete src.deletedAt;
+
+    if (src.cashWithdrawalConceptId != null && String(src.cashWithdrawalConceptId) !== '') {
+      const mapped = map.get(String(src.cashWithdrawalConceptId));
+      src.cashWithdrawalConceptId = mapped ?? null;
+    }
+    if (src.tablePaymentMethods != null) {
+      src.tablePaymentMethods = this.remapAccountIdInJsonArray(src.tablePaymentMethods, map);
+    }
+    if (src.orderingPayments != null) {
+      src.orderingPayments = this.remapOrderingPayments(src.orderingPayments, map);
+    }
+    if (src.promos != null) {
+      src.promos = this.remapAccountIdInJsonArray(src.promos, map);
+    }
+    if (src.emailNotificationUserIds != null) {
+      src.emailNotificationUserIds = this.filterExistingUserIdsJson(
+        src.emailNotificationUserIds,
+        existingUserIds,
+      );
+    }
+
+    const cols = Object.keys(src).filter((k) => src[k] !== undefined);
+    if (!cols.length) return;
+    const sets = cols.map((c) => `\`${c}\` = ?`).join(', ');
+    await manager.query(
+      `UPDATE shops SET ${sets} WHERE id = ?`,
+      [...cols.map((c) => this.sqlValue(src[c])), shopId],
+    );
+  }
+
+  private parseJsonField(raw: unknown): unknown {
+    if (raw == null || raw === '') return null;
+    if (typeof raw === 'object') return raw;
+    const s = String(raw).trim();
+    if (!s) return null;
+    try {
+      return JSON.parse(s);
+    } catch {
+      return null;
+    }
+  }
+
+  private remapAccountIdInJsonArray(raw: unknown, map: Map<string, string>): string {
+    let items: Array<Record<string, unknown>> = [];
+    if (typeof raw === 'string' && raw.trim()) {
+      try {
+        items = JSON.parse(raw);
+      } catch {
+        items = [];
+      }
+    } else if (Array.isArray(raw)) items = raw as Array<Record<string, unknown>>;
+    return JSON.stringify(
+      items.map((i) => {
+        if (!i || typeof i !== 'object') return i;
+        const accountId = i.accountId != null ? String(i.accountId) : '';
+        if (!accountId) return i;
+        return { ...i, accountId: map.get(accountId) ?? accountId };
+      }),
+    );
+  }
+
+  /** Remapea `orderingPayments.items[].accountId` (objeto, no array plano). */
+  private remapOrderingPayments(raw: unknown, map: Map<string, string>): string {
+    let obj: Record<string, unknown> = {};
+    if (typeof raw === 'string' && raw.trim()) {
+      try {
+        obj = JSON.parse(raw);
+      } catch {
+        return typeof raw === 'string' ? raw : JSON.stringify(raw ?? null);
+      }
+    } else if (raw && typeof raw === 'object') {
+      obj = { ...(raw as Record<string, unknown>) };
+    } else {
+      return JSON.stringify(raw ?? null);
+    }
+    if (Array.isArray(obj.items)) {
+      obj.items = (obj.items as Array<Record<string, unknown>>).map((i) => {
+        if (!i || typeof i !== 'object') return i;
+        const accountId = i.accountId != null ? String(i.accountId) : '';
+        if (!accountId) return i;
+        return { ...i, accountId: map.get(accountId) ?? accountId };
+      });
+    }
+    return JSON.stringify(obj);
+  }
+
+  /** Remapea UUIDs conocidos dentro de un JSON (snapshots, etc.). */
+  private remapIdsInJsonTree(raw: unknown, map: Map<string, string>): string {
+    const uuidRe =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    const walk = (v: unknown): unknown => {
+      if (Array.isArray(v)) return v.map(walk);
+      if (v && typeof v === 'object') {
+        const out: Record<string, unknown> = {};
+        for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+          out[k] = walk(val);
+        }
+        return out;
+      }
+      if (typeof v === 'string' && uuidRe.test(v) && map.has(v)) return map.get(v)!;
+      return v;
+    };
+    let root: unknown = raw;
+    if (typeof raw === 'string' && raw.trim()) {
+      try {
+        root = JSON.parse(raw);
+      } catch {
+        return raw;
+      }
+    }
+    return JSON.stringify(walk(root));
+  }
+
+  private remapPaymentsJson(raw: unknown, map: Map<string, string>): string {
+    let items: Array<Record<string, unknown>> = [];
+    if (typeof raw === 'string' && raw.trim()) {
+      try {
+        items = JSON.parse(raw);
+      } catch {
+        items = [];
+      }
+    } else if (Array.isArray(raw)) items = raw as Array<Record<string, unknown>>;
+    return JSON.stringify(
+      items.map((i) => {
+        if (!i || typeof i !== 'object') return i;
+        const out = { ...i };
+        for (const key of ['accountId', 'paymentAccountId']) {
+          if (out[key] != null && String(out[key]) !== '') {
+            const id = String(out[key]);
+            out[key] = map.get(id) ?? id;
+          }
+        }
+        return out;
+      }),
+    );
+  }
+
+  private filterExistingUserIdsJson(raw: unknown, existing: Set<string>): string {
+    let ids: string[] = [];
+    if (typeof raw === 'string' && raw.trim()) {
+      try {
+        ids = JSON.parse(raw);
+      } catch {
+        ids = [];
+      }
+    } else if (Array.isArray(raw)) ids = raw.map(String);
+    return JSON.stringify(ids.filter((id) => existing.has(id)));
   }
 
   /**
