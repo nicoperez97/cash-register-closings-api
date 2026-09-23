@@ -232,6 +232,137 @@ function installerUrlDisplayName(downloadUrl: string, os: PrintAgentInstallerOs)
   return `Cierres-Comandas-${os}`;
 }
 
+function isGoogleDriveHost(hostname: string): boolean {
+  const host = hostname.replace(/^www\./, '');
+  return (
+    host === 'drive.google.com' ||
+    host === 'docs.google.com' ||
+    host.endsWith('.googleusercontent.com')
+  );
+}
+
+function extractDriveConfirmToken(html: string): string | null {
+  const patterns = [
+    /confirm=([0-9A-Za-z_-]+)/,
+    /name="confirm"\s+value="([^"]+)"/,
+    /"confirm"\s*,\s*"([0-9A-Za-z_-]+)"/,
+  ];
+  for (const re of patterns) {
+    const m = html.match(re);
+    if (m?.[1] && m[1] !== 't') return m[1];
+  }
+  return null;
+}
+
+function extractDriveWarningCookie(setCookie: string | null): string | null {
+  if (!setCookie) return null;
+  const m = setCookie.match(/download_warning[^=]*=([^;]+)/i);
+  return m?.[1]?.trim() || null;
+}
+
+/**
+ * Baja el instalador desde un link (p.ej. Google Drive).
+ * Drive en archivos grandes muestra un HTML de “aviso de virus”; sin el confirm
+ * el navegador guarda HTML como .exe y Windows dice que no se puede ejecutar.
+ */
+async function fetchInstallerFromUrl(
+  downloadUrl: string,
+  fileNameHint: string,
+): Promise<{ buffer: Buffer; fileName: string; contentType: string }> {
+  const maxBytes = 180 * 1024 * 1024;
+  let url = downloadUrl;
+  let cookieHeader: string | undefined;
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const res = await fetch(url, {
+      redirect: 'follow',
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+      },
+    });
+    if (!res.ok) {
+      throw new BadRequestException(
+        `No se pudo bajar el instalador desde el link (HTTP ${res.status}). Probá subir el archivo en Locales.`,
+      );
+    }
+
+    const contentType = (res.headers.get('content-type') || '').toLowerCase();
+    const contentLength = Number(res.headers.get('content-length') || 0);
+    if (contentLength > maxBytes) {
+      throw new BadRequestException('El instalador supera el tamaño máximo (180 MB)');
+    }
+
+    const setCookie = res.headers.get('set-cookie');
+    const warning = extractDriveWarningCookie(setCookie);
+    if (warning) {
+      cookieHeader = cookieHeader
+        ? `${cookieHeader}; download_warning=${warning}`
+        : `download_warning=${warning}`;
+    }
+
+    if (contentType.includes('text/html')) {
+      const html = await res.text();
+      let parsed: URL;
+      try {
+        parsed = new URL(url);
+      } catch {
+        throw new BadRequestException('Link de instalador inválido');
+      }
+      if (!isGoogleDriveHost(parsed.hostname)) {
+        throw new BadRequestException(
+          'El link no devolvió un archivo. Subí el instalador como archivo en Locales.',
+        );
+      }
+      const fileId = parsed.searchParams.get('id');
+      const confirm =
+        extractDriveConfirmToken(html) ||
+        warning ||
+        't';
+      if (!fileId) {
+        throw new BadRequestException(
+          'No se pudo resolver el archivo de Google Drive. Subí el instalador como archivo en Locales.',
+        );
+      }
+      url = `https://drive.google.com/uc?export=download&id=${encodeURIComponent(fileId)}&confirm=${encodeURIComponent(confirm)}`;
+      continue;
+    }
+
+    const ab = await res.arrayBuffer();
+    if (ab.byteLength < 1024) {
+      throw new BadRequestException(
+        'La descarga del instalador quedó vacía. Subí el archivo en Locales.',
+      );
+    }
+    if (ab.byteLength > maxBytes) {
+      throw new BadRequestException('El instalador supera el tamaño máximo (180 MB)');
+    }
+    const buffer = Buffer.from(ab);
+    // MZ = PE Windows; ZIP/DMG también suelen empezar distinto de HTML.
+    const head = buffer.subarray(0, 15).toString('utf8').toLowerCase();
+    if (head.includes('<!doctype') || head.includes('<html')) {
+      throw new BadRequestException(
+        'Google Drive devolvió una página en vez del .exe. Subí el instalador como archivo en Locales.',
+      );
+    }
+    const disposition = res.headers.get('content-disposition') || '';
+    const fromHeader = disposition.match(/filename\*?=(?:UTF-8''|")?([^";]+)/i)?.[1];
+    const fileName = decodeURIComponent(
+      (fromHeader || fileNameHint || 'Cierres-Comandas-windows.exe').replace(/["']/g, ''),
+    ).slice(0, 180);
+    return {
+      buffer,
+      fileName,
+      contentType: contentType || 'application/octet-stream',
+    };
+  }
+
+  throw new BadRequestException(
+    'No se pudo bajar el instalador desde el link. Subí el archivo en Locales.',
+  );
+}
+
 function installerExt(originalName: string): string {
   const name = originalName.toLowerCase();
   if (name.endsWith('.tar.gz')) return '.tar.gz';
@@ -371,7 +502,8 @@ export class PrintAgentService implements OnModuleInit {
   }
 
   async generateToken(user: AuthUser, shopId: string) {
-    this.shopsSvc.assertShopManage(user, shopId);
+    // Ver o Todo en Comanderas: el cajero puede regenerar para pegar en el exe.
+    this.shopsSvc.assertShopAccess(user, shopId);
     const shop = await this.shops.findOne({ where: { id: shopId } });
     if (!shop) throw new NotFoundException('Local no encontrado');
     const token = `pa_${randomBytes(24).toString('base64url')}`;
@@ -762,7 +894,7 @@ export class PrintAgentService implements OnModuleInit {
   ) {
     if (!shop.printAgentTokenHash) {
       throw new BadRequestException(
-        'Print agent no configurado. Configuralo en Dispositivos.',
+        'Print agent no configurado. Configuralo en Comanderas.',
       );
     }
     const reason = opts?.reason ?? 'TABLE';
@@ -1185,31 +1317,37 @@ export class PrintAgentService implements OnModuleInit {
   }
 
   async downloadInstallerForShop(user: AuthUser, shopId: string, osRaw?: string) {
-    this.shopsSvc.assertShopManage(user, shopId);
+    this.shopsSvc.assertShopAccess(user, shopId);
     return this.resolveInstallerDownload(osRaw);
   }
 
-  downloadInstallerAdmin(user: AuthUser, osRaw?: string) {
+  async downloadInstallerAdmin(user: AuthUser, osRaw?: string) {
     this.assertSuperAdmin(user);
     return this.resolveInstallerDownload(osRaw);
   }
 
-  private resolveInstallerDownload(osRaw?: string): {
+  private async resolveInstallerDownload(osRaw?: string): Promise<{
     kind: 'file';
     buffer: Buffer;
     fileName: string;
     contentType: string;
-  } | {
-    kind: 'url';
-    url: string;
-  } {
+  }> {
     const os = normalizeInstallerOs(osRaw);
     if (!os) throw new BadRequestException('Indicá el sistema operativo');
     const meta = this.findInstallerEntry(os);
     if (!meta) throw new NotFoundException(`Todavía no hay instalador para ${os}`);
     if (meta.source === 'url' && meta.downloadUrl) {
       const url = normalizeInstallerDownloadUrl(meta.downloadUrl) || meta.downloadUrl;
-      return { kind: 'url', url };
+      const fetched = await fetchInstallerFromUrl(
+        url,
+        meta.originalName || `Cierres-Comandas-${os}`,
+      );
+      return {
+        kind: 'file',
+        buffer: fetched.buffer,
+        fileName: fetched.fileName,
+        contentType: fetched.contentType,
+      };
     }
     const abs = resolveUploadPath(meta.relativePath);
     if (!abs) throw new NotFoundException(`Todavía no hay instalador para ${os}`);

@@ -7,6 +7,7 @@ export type ShopConfigVisibilityKey =
   | 'operacion'
   | 'pedidos'
   | 'comanda'
+  | 'comanderas'
   | 'dispositivos'
   | 'menu'
   | 'carta'
@@ -20,6 +21,7 @@ export const SHOP_CONFIG_VISIBILITY_KEYS: ShopConfigVisibilityKey[] = [
   'operacion',
   'pedidos',
   'comanda',
+  'comanderas',
   'dispositivos',
   'menu',
   'carta',
@@ -43,6 +45,7 @@ export function defaultShopConfigVisibility(): ShopConfigVisibility {
     operacion: 'manage',
     pedidos: 'manage',
     comanda: 'manage',
+    comanderas: 'manage',
     dispositivos: 'manage',
     menu: 'manage',
     carta: 'manage',
@@ -66,6 +69,10 @@ export function normalizeShopConfigVisibility(
   if (!raw || typeof raw !== 'object') return base;
   for (const key of SHOP_CONFIG_VISIBILITY_KEYS) {
     if (raw[key] !== undefined) base[key] = coerceShopConfigLevel(raw[key]);
+  }
+  // Antes el token vivía en Operación: si no hay clave nueva, heredar ese nivel.
+  if (raw.comanderas === undefined && raw.operacion !== undefined) {
+    base.comanderas = coerceShopConfigLevel(raw.operacion);
   }
   return base;
 }

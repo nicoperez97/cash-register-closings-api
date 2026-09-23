@@ -95,11 +95,7 @@ export class PrintAgentController {
     @Query('os') os?: string,
   ) {
     await this.service.resolveShopFromToken(authorization);
-    const file = this.service.downloadInstallerForAgent(os);
-    if (file.kind === 'url') {
-      res.redirect(302, file.url);
-      return;
-    }
+    const file = await this.service.downloadInstallerForAgent(os);
     res.setHeader('Content-Type', file.contentType);
     res.setHeader(
       'Content-Disposition',
@@ -123,7 +119,7 @@ export class ShopPrintAgentController {
   }
 
   @Post('token')
-  @RequireAnyPermissions('shopConfig.manage', 'shops.manage')
+  @RequireAnyPermissions('shopConfig.read', 'shopConfig.manage', 'shops.manage')
   generate(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
     return this.service.generateToken(user, shopId);
   }
@@ -149,10 +145,6 @@ export class ShopPrintAgentController {
     @Res() res: Response,
   ) {
     const file = await this.service.downloadInstallerForShop(user, shopId, os);
-    if (file.kind === 'url') {
-      res.redirect(302, file.url);
-      return;
-    }
     res.setHeader('Content-Type', file.contentType);
     res.setHeader(
       'Content-Disposition',
@@ -175,16 +167,12 @@ export class AdminPrintAgentInstallerController {
   }
 
   @Get(':os/download')
-  download(
+  async download(
     @CurrentUser() user: AuthUser,
     @Param('os') os: string,
     @Res() res: Response,
   ) {
-    const file = this.service.downloadInstallerAdmin(user, os);
-    if (file.kind === 'url') {
-      res.redirect(302, file.url);
-      return;
-    }
+    const file = await this.service.downloadInstallerAdmin(user, os);
     res.setHeader('Content-Type', file.contentType);
     res.setHeader(
       'Content-Disposition',
