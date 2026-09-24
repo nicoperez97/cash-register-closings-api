@@ -4,6 +4,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   Param,
   Patch,
   Post,
@@ -214,6 +215,7 @@ export class ClosingsController {
   }
 
   @Get('open')
+  @Header('Cache-Control', 'no-store')
   @RequireAnyPermissions(
     'closings.read',
     'closings.create',
@@ -229,6 +231,7 @@ export class ClosingsController {
   }
 
   @Get('suggested-opening')
+  @Header('Cache-Control', 'no-store')
   @RequireAnyPermissions(
     'closings.read',
     'closings.create',
