@@ -214,7 +214,14 @@ export class ClosingsController {
   }
 
   @Get('open')
-  @RequireAnyPermissions('closings.read', 'customerOrders.read', 'orderingCatalog.manage')
+  @RequireAnyPermissions(
+    'closings.read',
+    'customerOrders.read',
+    'orderingCatalog.manage',
+    'expenses.read',
+    'accountTransfers.read',
+    'incomes.read',
+  )
   getOpen(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
     return this.closings.getOpen(user, shopId);
   }
@@ -225,6 +232,9 @@ export class ClosingsController {
     'closings.create',
     'customerOrders.read',
     'orderingCatalog.manage',
+    'expenses.read',
+    'accountTransfers.read',
+    'incomes.read',
   )
   suggestedOpening(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
     return this.closings.suggestedOpening(user, shopId);
