@@ -216,7 +216,9 @@ export class ClosingsController {
   @Get('open')
   @RequireAnyPermissions(
     'closings.read',
+    'closings.create',
     'customerOrders.read',
+    'customerOrders.manage',
     'orderingCatalog.manage',
     'expenses.read',
     'accountTransfers.read',
@@ -231,6 +233,7 @@ export class ClosingsController {
     'closings.read',
     'closings.create',
     'customerOrders.read',
+    'customerOrders.manage',
     'orderingCatalog.manage',
     'expenses.read',
     'accountTransfers.read',

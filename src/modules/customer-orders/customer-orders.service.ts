@@ -213,6 +213,8 @@ export class CustomerOrdersService implements OnModuleInit {
       `ALTER TABLE customer_orders ADD COLUMN externalId VARCHAR(80) NULL`,
       `ALTER TABLE customer_orders ADD COLUMN externalMeta TEXT NULL`,
       `ALTER TABLE customer_orders ADD COLUMN clientRequestId VARCHAR(64) NULL`,
+      `ALTER TABLE customer_orders ADD COLUMN paymentMethodId VARCHAR(40) NULL`,
+      `ALTER TABLE customer_orders ADD COLUMN paymentMethodName VARCHAR(80) NULL`,
     ]) {
       try {
         await this.orders.query(sql);
@@ -308,6 +310,8 @@ export class CustomerOrdersService implements OnModuleInit {
       deliveryZoneId: o.deliveryZoneId ?? null,
       deliveryZoneName: o.deliveryZoneName ?? null,
       paymentMethod: o.paymentMethod,
+      paymentMethodId: o.paymentMethodId ?? null,
+      paymentMethodName: o.paymentMethodName ?? null,
       cashAmount: o.cashAmount == null ? null : Number(o.cashAmount),
       paymentAccreditedAt: o.paymentAccreditedAt ?? null,
       customerNotes: o.customerNotes ?? null,
@@ -357,6 +361,8 @@ export class CustomerOrdersService implements OnModuleInit {
       firstName: full.firstName,
       lastName: full.lastName,
       paymentMethod: full.paymentMethod,
+      paymentMethodId: full.paymentMethodId,
+      paymentMethodName: full.paymentMethodName,
       deliveryZoneName: full.deliveryZoneName,
       address: full.address,
       createdAt: full.createdAt,
@@ -723,14 +729,28 @@ export class CustomerOrdersService implements OnModuleInit {
       throw new BadRequestException('Medio de pago no disponible');
     }
     let paymentMethod = dto.paymentMethod;
+    let paymentMethodId: string | null = payItem?.id ?? (payId || null);
+    let paymentMethodName: string | null = payItem?.name?.trim() || null;
     if (payItem) {
       const kind = classifyPaymentMethodKind(payItem.id, payItem.name);
       paymentMethod =
         kind === 'TRANSFER'
           ? CustomerOrderPaymentMethod.TRANSFER
-          : CustomerOrderPaymentMethod.CASH;
-    } else if (!isTable && !payments.methods?.includes(dto.paymentMethod)) {
-      throw new BadRequestException('Medio de pago no disponible');
+          : kind === 'CARD'
+            ? CustomerOrderPaymentMethod.CARD
+            : CustomerOrderPaymentMethod.CASH;
+      paymentMethodName = payItem.name.trim().slice(0, 80) || null;
+    } else if (!isTable && !payItem) {
+      const allowed = new Set(
+        (payments.methods ?? []).map((m) => String(m).toUpperCase()),
+      );
+      allowed.add('CARD');
+      if (!allowed.has(String(dto.paymentMethod).toUpperCase())) {
+        throw new BadRequestException('Medio de pago no disponible');
+      }
+      if (dto.paymentMethod === CustomerOrderPaymentMethod.CARD) {
+        paymentMethod = CustomerOrderPaymentMethod.CARD;
+      }
     }
 
     const catalog = this.menuItemIndex(shop);
@@ -1010,6 +1030,8 @@ export class CustomerOrdersService implements OnModuleInit {
           deliveryZoneId,
           deliveryZoneName,
           paymentMethod: isTable ? CustomerOrderPaymentMethod.CASH : paymentMethod,
+          paymentMethodId: isTable ? null : paymentMethodId,
+          paymentMethodName: isTable ? null : paymentMethodName,
           cashAmount: isTable
             ? total.toFixed(2)
             : cashAmountValue != null
@@ -1226,11 +1248,22 @@ export class CustomerOrdersService implements OnModuleInit {
       });
       const onlyCompleted =
         statuses.length === 1 && statuses[0] === CustomerOrderStatus.COMPLETED;
+      const onlyCancelled =
+        statuses.length === 1 && statuses[0] === CustomerOrderStatus.CANCELLED;
       if (onlyCompleted) {
         qb.andWhere(
           new Brackets((b) => {
             b.where('o.completedAt >= :from AND o.completedAt < :to').orWhere(
               '(o.completedAt IS NULL AND o.createdAt >= :from AND o.createdAt < :to)',
+            );
+          }),
+          { from: range.from, to: range.to },
+        );
+      } else if (onlyCancelled) {
+        qb.andWhere(
+          new Brackets((b) => {
+            b.where('o.cancelledAt >= :from AND o.cancelledAt < :to').orWhere(
+              '(o.cancelledAt IS NULL AND o.createdAt >= :from AND o.createdAt < :to)',
             );
           }),
           { from: range.from, to: range.to },
@@ -1495,6 +1528,7 @@ export class CustomerOrdersService implements OnModuleInit {
 
     let cashTotal = 0;
     let transferTotal = 0;
+    let cardTotal = 0;
     let unitsSold = 0;
     let openCount = 0;
     const orderIds: string[] = [];
@@ -1502,6 +1536,20 @@ export class CustomerOrdersService implements OnModuleInit {
     const deliverateHint = await this.integrations.getDeliverateClosingHint(shopId);
     const deliverateBucket = emptyBucket();
     let deliverateMatchedAmount = 0;
+
+    const payCatalog = normalizeOrderingPayments(shop.orderingPayments);
+    const payItemById = new Map(
+      (payCatalog?.items ?? []).map((i) => [String(i.id), i] as const),
+    );
+    type PayAgg = {
+      paymentMethodId: string;
+      paymentMethodName: string;
+      accountId: string | null;
+      kind: 'CASH' | 'TRANSFER' | 'CARD';
+      amount: number;
+      orderCount: number;
+    };
+    const byPayMethod = new Map<string, PayAgg>();
 
     const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -1517,6 +1565,7 @@ export class CustomerOrdersService implements OnModuleInit {
       const total = Number(row.total) || 0;
       const fulfillment = String(row.fulfillment || 'TAKEAWAY');
       const isTransfer = row.paymentMethod === CustomerOrderPaymentMethod.TRANSFER;
+      const isCard = row.paymentMethod === CustomerOrderPaymentMethod.CARD;
       const isDeliverate =
         fulfillment === CustomerOrderFulfillment.DELIVERY &&
         String(row.externalSource ?? '').toLowerCase() === 'deliverate';
@@ -1526,7 +1575,7 @@ export class CustomerOrdersService implements OnModuleInit {
         !!isDeliverate &&
         !!deliverateHint &&
         ((deliverateHint.paymentMethod === 'TRANSFER' && isTransfer) ||
-          (deliverateHint.paymentMethod === 'CASH' && !isTransfer));
+          (deliverateHint.paymentMethod === 'CASH' && !isTransfer && !isCard));
 
       if (isDeliverate && deliverateHint) {
         deliverateBucket.orderCount += 1;
@@ -1541,10 +1590,48 @@ export class CustomerOrdersService implements OnModuleInit {
       if (isTransfer) {
         transferTotal += total;
         if (!matchesDeliverateClosing) bucket.transferTotal += total;
+      } else if (isCard) {
+        cardTotal += total;
       } else {
         cashTotal += total;
         if (!matchesDeliverateClosing) bucket.cashTotal += total;
       }
+
+      if (!matchesDeliverateClosing && total > 0) {
+        const catalogItem = row.paymentMethodId
+          ? payItemById.get(String(row.paymentMethodId))
+          : null;
+        const name =
+          String(row.paymentMethodName ?? '').trim() ||
+          catalogItem?.name?.trim() ||
+          (isTransfer ? 'Transferencia' : isCard ? 'Tarjeta' : 'Efectivo');
+        const id =
+          String(row.paymentMethodId ?? '').trim() ||
+          catalogItem?.id ||
+          (isTransfer ? 'op_transfer' : isCard ? 'op_card' : 'op_cash');
+        const kind: 'CASH' | 'TRANSFER' | 'CARD' = isTransfer
+          ? 'TRANSFER'
+          : isCard
+            ? 'CARD'
+            : catalogItem
+              ? classifyPaymentMethodKind(catalogItem.id, catalogItem.name)
+              : classifyPaymentMethodKind(id, name);
+        const accountId = catalogItem?.accountId ?? null;
+        const prev = byPayMethod.get(id) ?? {
+          paymentMethodId: id,
+          paymentMethodName: name,
+          accountId,
+          kind,
+          amount: 0,
+          orderCount: 0,
+        };
+        prev.amount = round2(prev.amount + total);
+        prev.orderCount += 1;
+        if (!prev.accountId && accountId) prev.accountId = accountId;
+        if (!prev.paymentMethodName && name) prev.paymentMethodName = name;
+        byPayMethod.set(id, prev);
+      }
+
       for (const line of row.items ?? []) {
         const qty = Math.max(0, Number(line.qty) || 0);
         unitsSold += qty;
@@ -1569,7 +1656,10 @@ export class CustomerOrdersService implements OnModuleInit {
       unitsSold: b.unitsSold,
     });
 
-    const tables = this.aggregateClosedTables(sessions);
+    const tables = this.aggregateClosedTables(
+      sessions,
+      normalizeTablePaymentMethods(shop.tablePaymentMethods),
+    );
     let coversFromReservations = 0;
     if (shop.reservationsEnabled) {
       try {
@@ -1608,16 +1698,23 @@ export class CustomerOrdersService implements OnModuleInit {
       completedCount: orderIds.length,
       cashTotal: round2(cashTotal),
       transferTotal: round2(transferTotal),
+      cardTotal: round2(cardTotal),
       /** Efectivo de pedidos + mesas (sin Deliverate a fuente aparte). */
       cashDeclaredTotal: round2(cashTotal + tables.cashTotal),
       transferDeclaredTotal: round2(transferTotal + tables.transferTotal),
-      total: round2(cashTotal + transferTotal + tables.ticketTotal + deliverateMatchedAmount),
+      cardDeclaredTotal: round2(cardTotal + tables.cardTotal),
+      total: round2(
+        cashTotal + transferTotal + cardTotal + tables.ticketTotal + deliverateMatchedAmount,
+      ),
       unitsSold,
       byFulfillment: {
         TAKEAWAY: mapBucket(byFulfillment.TAKEAWAY),
         DELIVERY: mapBucket(byFulfillment.DELIVERY),
         COUNTER: mapBucket(byFulfillment.COUNTER),
       },
+      paymentsByMethod: [...byPayMethod.values()]
+        .filter((p) => p.amount > 0)
+        .sort((a, b) => a.paymentMethodName.localeCompare(b.paymentMethodName, 'es')),
       deliverate: deliverateHint
         ? {
             closingSourceId: deliverateHint.closingSourceId,
@@ -1676,11 +1773,21 @@ export class CustomerOrdersService implements OnModuleInit {
     return n;
   }
 
-  private aggregateClosedTables(sessions: TableSession[]) {
+  private aggregateClosedTables(
+    sessions: TableSession[],
+    tablePays: Array<{ id: string; name: string; accountId?: string | null }> = [],
+  ) {
     const round2 = (n: number) => Math.round(n * 100) / 100;
+    const payById = new Map(tablePays.map((p) => [p.id, p] as const));
     const byMethod = new Map<
       string,
-      { paymentMethodId: string; paymentMethodName: string; amount: number; kind: string }
+      {
+        paymentMethodId: string;
+        paymentMethodName: string;
+        accountId: string | null;
+        amount: number;
+        kind: 'CASH' | 'TRANSFER' | 'CARD';
+      }
     >();
     let coversTotal = 0;
     let ticketTotal = 0;
@@ -1700,6 +1807,8 @@ export class CustomerOrdersService implements OnModuleInit {
               {
                 paymentMethodId: s.paymentMethodId,
                 paymentMethodName: s.paymentMethodName || 'Pago',
+                paymentAccountId: s.paymentAccountId ?? null,
+                kind: undefined as 'CASH' | 'CARD' | 'TRANSFER' | undefined,
                 amount: (Number(s.ticketTotal) || 0) + tip,
               },
             ]
@@ -1710,6 +1819,7 @@ export class CustomerOrdersService implements OnModuleInit {
           ? Math.max(0, Number(s.ticketTotal) || 0)
           : Math.max(0, paidSum - tip);
       ticketTotal += ticket;
+      // La propina queda en tipTotal (paso Propinas del cierre); los medios solo llevan el ticket.
       const scale = paidSum > 0 ? ticket / paidSum : 0;
 
       for (const p of paid) {
@@ -1718,15 +1828,37 @@ export class CustomerOrdersService implements OnModuleInit {
         const net = round2(gross * scale);
         if (net <= 0) continue;
         const id = String(p.paymentMethodId || '').trim() || 'unknown';
-        const name = String(p.paymentMethodName || 'Pago').trim() || 'Pago';
-        const kind = classifyTablePaymentKind(id, name);
+        const catalog = payById.get(id);
+        const name =
+          String(p.paymentMethodName || catalog?.name || 'Pago').trim() || 'Pago';
+        const rawKind = String((p as { kind?: string }).kind ?? '')
+          .trim()
+          .toUpperCase();
+        const kind: 'CASH' | 'TRANSFER' | 'CARD' =
+          rawKind === 'CARD' || rawKind === 'TRANSFER' || rawKind === 'CASH'
+            ? rawKind
+            : classifyTablePaymentKind(id, name);
+        // Preferir snapshot al cerrar; si no hay, catálogo vivo.
+        const accountId =
+          String((p as { paymentAccountId?: string | null }).paymentAccountId ?? '').trim() ||
+          (s.paymentMethodId === id
+            ? String(s.paymentAccountId ?? '').trim()
+            : '') ||
+          catalog?.accountId ||
+          null;
         const prev = byMethod.get(id) ?? {
           paymentMethodId: id,
           paymentMethodName: name,
+          accountId,
           amount: 0,
           kind,
         };
         prev.amount = round2(prev.amount + net);
+        if (!prev.accountId && accountId) prev.accountId = accountId;
+        // Si el snapshot trae kind, no pisarlo con el del primer agregado vacío.
+        if (rawKind === 'CARD' || rawKind === 'TRANSFER' || rawKind === 'CASH') {
+          prev.kind = rawKind;
+        }
         byMethod.set(id, prev);
         if (kind === 'TRANSFER') transferTotal += net;
         else if (kind === 'CARD') cardTotal += net;

@@ -81,13 +81,15 @@ export class TableSession extends BaseEntity {
 
   /**
    * Pagos al cerrar (puede ser más de uno).
-   * [{ paymentMethodId, paymentMethodName, paymentAccountId?, amount }]
+   * [{ paymentMethodId, paymentMethodName, paymentAccountId?, kind?, amount }]
    */
   @Column({ type: 'json', nullable: true })
   payments?: Array<{
     paymentMethodId: string;
     paymentMethodName: string;
     paymentAccountId?: string | null;
+    /** CASH | CARD | TRANSFER — snapshot al cerrar. */
+    kind?: 'CASH' | 'CARD' | 'TRANSFER' | null;
     amount: number;
   }> | null;
 
