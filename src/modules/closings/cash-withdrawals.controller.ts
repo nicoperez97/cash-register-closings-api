@@ -2,7 +2,7 @@ import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { CashWithdrawalsService } from './cash-withdrawals.service';
-import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
+import { CurrentUser, AuthUser, RequirePermissions, RequireAnyPermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { PickCashWithdrawalsDto } from './dto/cash-withdrawal.dto';
 
@@ -20,7 +20,12 @@ export class CashWithdrawalsController {
   }
 
   @Get('pending')
-  @RequirePermissions('cashWithdrawals.read')
+  @RequireAnyPermissions(
+    'cashWithdrawals.read',
+    'expenses.read',
+    'accountTransfers.read',
+    'incomes.read',
+  )
   listPending(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
     return this.withdrawals.listPending(user, shopId);
   }
