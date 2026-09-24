@@ -552,6 +552,7 @@ export class ClosingsService implements OnModuleInit {
       .addOrderBy('c.submittedAt', 'DESC')
       .getOne();
     if (last) {
+      // 0 / vacío en “dejado en caja” → apertura sugerida 0 (no el cambio por defecto).
       return {
         amount: Math.max(0, n(last.cashLeftInRegister)),
         source: 'previous',
