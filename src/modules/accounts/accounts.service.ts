@@ -442,6 +442,30 @@ export class AccountsService implements OnModuleInit {
     };
   }
 
+  /** Saldo de una cuenta del local (uso interno entre módulos). */
+  async balanceAmount(shopId: string, accountId: string): Promise<number | null> {
+    const row = await this.accountBalance(shopId, accountId);
+    return row?.balance ?? null;
+  }
+
+  async accountBalance(
+    shopId: string,
+    accountId: string,
+  ): Promise<{ balance: number; name: string } | null> {
+    const row = await this.accounts.findOne({ where: { id: accountId, shopId } });
+    if (!row) return null;
+    const balance = await this.computeBalance(shopId, accountId, n(row.openingBalance));
+    return { balance, name: row.name };
+  }
+
+  /** Cuentas activas del local (uso interno). */
+  async listActiveAccounts(shopId: string): Promise<LedgerAccount[]> {
+    return this.accounts.find({
+      where: { shopId, active: true },
+      order: { name: 'ASC' },
+    });
+  }
+
   async remove(
     user: AuthUser,
     shopId: string,

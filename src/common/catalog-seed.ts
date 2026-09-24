@@ -141,7 +141,12 @@ function accountNameKey(name: string): string {
 
 /** Cuenta física de caja (código EFECTIVO / nombre Efectivo Caja), no el depósito del cierre. */
 export function findCashDrawerAccount<
-  T extends { name: string; code?: string | null; active?: boolean | number | null },
+  T extends {
+    name: string;
+    code?: string | null;
+    active?: boolean | number | null;
+    linkedPaymentMethod?: string | null;
+  },
 >(accounts: T[]): T | null {
   const usable = accounts.filter(
     (a) => a.active === undefined || a.active === null || !!a.active,
@@ -150,6 +155,8 @@ export function findCashDrawerAccount<
   return (
     pool.find((a) => String(a.code ?? '').toUpperCase() === 'EFECTIVO') ??
     pool.find((a) => accountNameKey(a.name) === 'efectivo caja') ??
+    pool.find((a) => String(a.linkedPaymentMethod ?? '').toLowerCase() === 'cash') ??
+    pool.find((a) => accountNameKey(a.name) === 'efectivo') ??
     null
   );
 }

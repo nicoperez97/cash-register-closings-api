@@ -778,7 +778,12 @@ export class PrintAgentService implements OnModuleInit {
             ? 'DELIVERY'
             : 'TAKE AWAY';
     const payment =
-      order.paymentMethod === CustomerOrderPaymentMethod.TRANSFER ? 'Transferencia' : 'Efectivo';
+      order.paymentMethodName?.trim() ||
+      (order.paymentMethod === CustomerOrderPaymentMethod.TRANSFER
+        ? 'Transferencia'
+        : order.paymentMethod === CustomerOrderPaymentMethod.CARD
+          ? 'Tarjeta'
+          : 'Efectivo');
     const rawItems = (order.items ?? []).map((it) => ({
       menuItemId: it.menuItemId ?? null,
       name: it.name,

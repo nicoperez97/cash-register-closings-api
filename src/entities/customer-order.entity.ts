@@ -24,6 +24,8 @@ export enum CustomerOrderFulfillment {
 export enum CustomerOrderPaymentMethod {
   CASH = 'CASH',
   TRANSFER = 'TRANSFER',
+  /** Tarjeta / PVS / posnet (no es efectivo ni transferencia). */
+  CARD = 'CARD',
 }
 
 export type CustomerOrderLine = {
@@ -136,6 +138,14 @@ export class CustomerOrder extends BaseEntity {
 
   @Column({ type: 'varchar', length: 16 })
   paymentMethod: CustomerOrderPaymentMethod;
+
+  /** Id del medio configurado en Pedidos (orderingPayments.items). */
+  @Column({ type: 'varchar', length: 40, nullable: true })
+  paymentMethodId?: string | null;
+
+  /** Nombre del medio al momento del pedido (ej. PVS). */
+  @Column({ type: 'varchar', length: 80, nullable: true })
+  paymentMethodName?: string | null;
 
   @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
   cashAmount?: string | null;

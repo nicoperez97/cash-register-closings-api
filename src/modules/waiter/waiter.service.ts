@@ -43,6 +43,7 @@ import {
 } from './waiter-auth';
 import {
   normalizeTablePaymentMethods,
+  classifyPaymentMethodKind,
   resolveWaiterCapProfile,
   type WaiterCapProfile,
 } from '../../common/shop-ordering';
@@ -1672,6 +1673,7 @@ export class WaiterService implements OnModuleInit {
       paymentMethodId: string;
       paymentMethodName: string;
       paymentAccountId: string | null;
+      kind: 'CASH' | 'CARD' | 'TRANSFER';
       amount: number;
     }> = [];
     for (const row of rawPayments) {
@@ -1683,6 +1685,7 @@ export class WaiterService implements OnModuleInit {
         paymentMethodId: method.id,
         paymentMethodName: method.name,
         paymentAccountId: method.accountId ?? null,
+        kind: classifyPaymentMethodKind(method.id, method.name),
         amount: row.amount,
       });
     }
@@ -2041,6 +2044,7 @@ export class WaiterService implements OnModuleInit {
             paymentMethodId: p.paymentMethodId,
             paymentMethodName: p.paymentMethodName,
             paymentAccountId: p.paymentAccountId ?? null,
+            kind: p.kind ?? null,
             amount: Number(p.amount) || 0,
           }))
         : session.paymentMethodId
@@ -2049,6 +2053,7 @@ export class WaiterService implements OnModuleInit {
                 paymentMethodId: session.paymentMethodId,
                 paymentMethodName: session.paymentMethodName ?? '',
                 paymentAccountId: session.paymentAccountId ?? null,
+                kind: null as 'CASH' | 'CARD' | 'TRANSFER' | null,
                 amount:
                   session.ticketTotal == null
                     ? subtotal

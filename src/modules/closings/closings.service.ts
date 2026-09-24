@@ -27,6 +27,7 @@ import { AuthUser } from '../../common/decorators';
 import { assertCanViewClosingsList } from '../../common/guards';
 import {
   ClosingKind,
+  ClosingSourceRole,
   ClosingStatus,
   ExpenseCategory,
   GlobalRole,
@@ -36,6 +37,7 @@ import { isGlobalAdmin } from '../../common/guards';
 import { isEntityActive } from '../../common/active.util';
 import { closingDateKey, closingEventDateKey, markDeletedUnique } from '../../common/soft-delete.util';
 import { formatMoney } from '../../common/format-money';
+import { findCashDrawerAccount } from '../../common/catalog-seed';
 import {
   findShopShift,
   normalizeShopShifts,
@@ -531,37 +533,53 @@ export class ClosingsService implements OnModuleInit {
   }
 
   /**
-   * Lo dejado en el último cierre REGULAR enviado/bloqueado; si no hay, el cambio por defecto.
+   * Saldo de la cuenta de efectivo de sistema (Cuentas del local · rol CASH).
+   * Si no hay cuenta vinculada, cae al cambio por defecto del local.
    */
   async resolveSuggestedOpening(shopId: string): Promise<{
     amount: number;
-    source: 'previous' | 'default';
+    source: 'account' | 'default';
+    accountName: string | null;
     previousDate: string | null;
     previousShiftName: string | null;
   }> {
-    const last = await this.closings
-      .createQueryBuilder('c')
-      .where('c.shopId = :shopId', { shopId })
-      .andWhere('c.active = true')
-      .andWhere('c.status IN (:...statuses)', {
-        statuses: [ClosingStatus.SUBMITTED, ClosingStatus.LOCKED],
-      })
-      .andWhere('(c.kind IS NULL OR c.kind = :kind)', { kind: ClosingKind.REGULAR })
-      .orderBy('c.businessDate', 'DESC')
-      .addOrderBy('c.submittedAt', 'DESC')
-      .getOne();
-    if (last) {
-      return {
-        amount: Math.max(0, n(last.cashLeftInRegister)),
-        source: 'previous',
-        previousDate: last.businessDate,
-        previousShiftName: last.shiftName ?? null,
-      };
+    const cashSrc = await this.sources.findOne({
+      where: { shopId, role: ClosingSourceRole.CASH, active: true },
+    });
+    const fromSourceId = String(cashSrc?.accountId ?? '').trim() || null;
+    if (fromSourceId) {
+      const row = await this.accounts.accountBalance(shopId, fromSourceId);
+      if (row) {
+        return {
+          amount: Math.max(0, row.balance),
+          source: 'account',
+          accountName: row.name?.trim() || cashSrc?.name?.trim() || 'Efectivo',
+          previousDate: null,
+          previousShiftName: null,
+        };
+      }
     }
+
+    const accounts = await this.accounts.listActiveAccounts(shopId);
+    const drawer = findCashDrawerAccount(accounts);
+    if (drawer) {
+      const row = await this.accounts.accountBalance(shopId, drawer.id);
+      if (row) {
+        return {
+          amount: Math.max(0, row.balance),
+          source: 'account',
+          accountName: row.name?.trim() || 'Efectivo',
+          previousDate: null,
+          previousShiftName: null,
+        };
+      }
+    }
+
     const shop = await this.shops.getShopEntity(shopId);
     return {
       amount: Math.max(0, n(shop?.defaultChangeAmount)),
       source: 'default',
+      accountName: null,
       previousDate: null,
       previousShiftName: null,
     };
