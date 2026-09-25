@@ -393,10 +393,16 @@ export class ReportsService {
     });
     const tagged = rows.map((r) => {
       const kind = this.inferMovementKind(r);
+      const deleted = !!(r as { conceptDeleted?: boolean }).conceptDeleted;
+      const baseName = (r.conceptName ?? '').trim();
       return {
         ...r,
         kind,
-        conceptName: r.conceptName?.trim() || 'Sin concepto',
+        conceptName: !r.conceptId
+          ? 'Sin concepto'
+          : deleted
+            ? `${baseName || 'Concepto'} (eliminado)`
+            : baseName || 'Sin concepto',
       };
     });
 

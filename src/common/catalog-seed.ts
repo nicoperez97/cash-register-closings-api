@@ -4,7 +4,7 @@ import {
   LinkedPaymentMethod,
 } from './enums';
 
-/** Solo sistema: se aseguran en cada sync de cierre (no canales ni socios). */
+/** Solo sistema: Ingreso / Egreso. La división de socios usa Egreso + concepto (configurable). */
 export const SYSTEM_LEDGER_ACCOUNTS: Array<{
   name: string;
   code: string;
@@ -12,7 +12,6 @@ export const SYSTEM_LEDGER_ACCOUNTS: Array<{
 }> = [
   { name: '1. Ingreso', code: 'INGRESO', type: LedgerAccountType.SYSTEM },
   { name: '2. Egreso', code: 'EGRESO', type: LedgerAccountType.SYSTEM },
-  { name: 'Dividendos', code: 'DIVIDENDOS', type: LedgerAccountType.DIVIDENDS },
 ];
 
 /**
@@ -48,6 +47,7 @@ export const DEFAULT_CONCEPTS: Array<{ name: string; kind: ConceptKind }> = [
   { name: 'Aporte de capital', kind: ConceptKind.INCOME },
   { name: 'Rendimientos financieros', kind: ConceptKind.INCOME },
   { name: 'Transferencia e/ cuentas', kind: ConceptKind.TRANSFER },
+  { name: 'División', kind: ConceptKind.EXPENSE },
 
   // Compras gastronómicas (rubros habituales)
   { name: 'Verdulería', kind: ConceptKind.EXPENSE },

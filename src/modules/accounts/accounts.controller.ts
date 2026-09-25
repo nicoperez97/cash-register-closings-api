@@ -203,7 +203,7 @@ class PaymentDepositsDto {
 
 class PartnerDividendConfigDto {
   @ApiPropertyOptional({
-    description: 'Cuenta destino de Equilibrar / Es dividendo. null = Dividendos.',
+    description: 'Cuenta destino de Equilibrar / Es dividendo. null = Egreso.',
     nullable: true,
   })
   @IsOptional()
@@ -212,7 +212,7 @@ class PartnerDividendConfigDto {
   partnerDividendAccountId?: string | null;
 
   @ApiPropertyOptional({
-    description: 'Concepto de división / dividendos. null = sin concepto.',
+    description: 'Concepto de división / dividendos. null = División.',
     nullable: true,
   })
   @IsOptional()

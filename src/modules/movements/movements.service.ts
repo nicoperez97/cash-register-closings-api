@@ -39,6 +39,7 @@ import { StreamableFile } from '@nestjs/common';
 import * as ExcelJS from 'exceljs';
 import { accountCommissionOf } from '../../common/account-commission';
 import { formatMoney } from '../../common/format-money';
+import { displaySoftDeletedLabel } from '../../common/soft-delete.util';
 import { excludeDeletedClosingMovements } from './movement-query.util';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
@@ -191,7 +192,9 @@ export class MovementsService implements OnModuleInit {
     const source = m.closingId ? 'closing' : payment ? 'payment' : 'manual';
     const toType = m.toAccount?.type ?? null;
     const isDividend =
-      !!payment?.isDividend || toType === LedgerAccountType.DIVIDENDS;
+      !!payment?.isDividend ||
+      toType === LedgerAccountType.DIVIDENDS ||
+      !!m.beneficiaryAccountId;
     const beneficiaryAccountId =
       m.beneficiaryAccountId ??
       (payment?.isDividend ? (payment.toAccountId ?? null) : null);
@@ -213,8 +216,16 @@ export class MovementsService implements OnModuleInit {
       usdRate: m.usdRate != null ? n(m.usdRate) : null,
       amountUsd: m.amountUsd != null ? n(m.amountUsd) : null,
       conceptId: m.conceptId ?? null,
-      conceptName: m.concept?.name ?? null,
+      conceptName: m.concept
+        ? displaySoftDeletedLabel(m.concept.name)
+        : m.conceptId
+          ? 'Concepto eliminado'
+          : null,
       conceptKind: m.concept?.kind ?? null,
+      conceptDeleted: !!(
+        m.conceptId &&
+        (!m.concept || m.concept.deletedAt || m.concept.active === false)
+      ),
       invoiced: !!m.invoiced,
       invoiceNumber: m.invoiceNumber ?? null,
       closingId: m.closingId ?? null,
@@ -445,7 +456,13 @@ export class MovementsService implements OnModuleInit {
         qb.andWhere('m.toAccountId = :toAccountId', { toAccountId: filters.toAccountId });
       }
     }
-    if (filters.conceptId) {
+    if (filters.conceptId === '__none') {
+      qb.andWhere('m.conceptId IS NULL');
+    } else if (filters.conceptId === '__deleted') {
+      // Soft-delete: el join no trae el concepto → concept.id IS NULL.
+      qb.andWhere('m.conceptId IS NOT NULL');
+      qb.andWhere('(concept.id IS NULL OR concept.active = false)');
+    } else if (filters.conceptId) {
       qb.andWhere('m.conceptId = :conceptId', { conceptId: filters.conceptId });
     }
     if (filters.closingId) {
@@ -536,6 +553,7 @@ export class MovementsService implements OnModuleInit {
       .addOrderBy('m.createdAt', 'DESC')
       .take(2500);
     const rows = await qb.getMany();
+    await this.attachConceptsIncludingDeleted(shopId, rows);
     const paymentLinks = await this.paymentLinksForMovements(
       shopId,
       rows.map((r) => r.id),
@@ -603,8 +621,34 @@ export class MovementsService implements OnModuleInit {
     }
     qb.orderBy('m.businessDate', 'ASC');
     const rows = await qb.getMany();
+    await this.attachConceptsIncludingDeleted(shopId, rows);
 
-    // Si el concepto fue archivado (soft-delete), el join no lo trae: recuperar nombre.
+    return rows.map((m) => {
+      const concept = m.concept;
+      const conceptDeleted = !!(
+        m.conceptId &&
+        (!concept || concept.deletedAt || concept.active === false)
+      );
+      return {
+        id: m.id,
+        businessDate: m.businessDate,
+        amountUyu: n(m.amountUyu),
+        conceptId: m.conceptId ?? null,
+        conceptName: concept
+          ? displaySoftDeletedLabel(concept.name)
+          : m.conceptId
+            ? 'Concepto eliminado'
+            : null,
+        conceptKind: concept?.kind ?? null,
+        conceptDeleted,
+        fromAccountName: m.fromAccount?.name ?? null,
+        toAccountName: m.toAccount?.name ?? null,
+      };
+    });
+  }
+
+  /** Recupera conceptos soft-deleted para mostrar nombre (sin sufijo __DELETED__). */
+  private async attachConceptsIncludingDeleted(shopId: string, rows: Movement[]) {
     const missingIds = [
       ...new Set(
         rows
@@ -612,28 +656,18 @@ export class MovementsService implements OnModuleInit {
           .map((m) => String(m.conceptId)),
       ),
     ];
-    const archivedById = new Map<string, Concept>();
-    if (missingIds.length) {
-      const archived = await this.concepts.find({
-        where: { id: In(missingIds), shopId },
-        withDeleted: true,
-      });
-      for (const c of archived) archivedById.set(c.id, c);
-    }
-
-    return rows.map((m) => {
-      const concept = m.concept ?? (m.conceptId ? archivedById.get(m.conceptId) : null);
-      return {
-        id: m.id,
-        businessDate: m.businessDate,
-        amountUyu: n(m.amountUyu),
-        conceptId: m.conceptId ?? null,
-        conceptName: concept?.name ?? null,
-        conceptKind: concept?.kind ?? null,
-        fromAccountName: m.fromAccount?.name ?? null,
-        toAccountName: m.toAccount?.name ?? null,
-      };
+    if (!missingIds.length) return;
+    const archived = await this.concepts.find({
+      where: { id: In(missingIds), shopId },
+      withDeleted: true,
     });
+    const byId = new Map(archived.map((c) => [c.id, c]));
+    for (const m of rows) {
+      if (m.conceptId && !m.concept) {
+        const c = byId.get(String(m.conceptId));
+        if (c) m.concept = c;
+      }
+    }
   }
 
   private async paymentLinksForMovements(
@@ -1321,11 +1355,6 @@ export class MovementsService implements OnModuleInit {
     if (filters.from) qb.andWhere('m.businessDate >= :from', { from: filters.from });
     if (filters.to) qb.andWhere('m.businessDate <= :to', { to: filters.to });
     const rows = await qb.getMany();
-    try {
-      await this.catalogSeed.ensureDividendsAccount(shopId);
-    } catch {
-      // best-effort
-    }
     let accounts: LedgerAccount[];
     if (scopeAll) {
       accounts = await this.accounts.find({

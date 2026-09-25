@@ -30,3 +30,11 @@ export function markDeletedUnique(
   const maxBase = Math.max(1, maxLen - suffix.length);
   return `${clean.slice(0, maxBase)}${suffix}`;
 }
+
+/** Quita el sufijo `__DELETED__…` para mostrar el nombre original. */
+export function displaySoftDeletedLabel(value?: string | null): string | null {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  const cleaned = raw.replace(/__DELETED__[0-9a-f]{8}$/i, '').trim();
+  return cleaned || raw;
+}

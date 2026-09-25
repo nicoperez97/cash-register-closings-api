@@ -219,7 +219,6 @@ export class AccountsService implements OnModuleInit {
     }
     try {
       await this.catalogSeed.ensureShopCatalogs(shopId);
-      await this.catalogSeed.ensureDividendsAccount(shopId);
     } catch {
       // seed best-effort
     }
@@ -235,7 +234,7 @@ export class AccountsService implements OnModuleInit {
     this.assertOpeningBalanceAllowed(user, dto.openingBalance, 0);
     if (dto.type === LedgerAccountType.DIVIDENDS) {
       throw new BadRequestException(
-        'La cuenta Dividendos es única por local y se crea sola (no se agrega a mano)',
+        'El tipo Dividendos ya no se usa: la división va a Egreso con concepto. Elegí otro tipo.',
       );
     }
     const code = dto.code.trim().toUpperCase();
@@ -304,12 +303,9 @@ export class AccountsService implements OnModuleInit {
       row.code = code;
     }
     if (dto.type !== undefined) {
-      if (row.type === LedgerAccountType.DIVIDENDS && dto.type !== LedgerAccountType.DIVIDENDS) {
-        throw new BadRequestException('No se puede cambiar el tipo de la cuenta Dividendos');
-      }
-      if (dto.type === LedgerAccountType.DIVIDENDS && row.type !== LedgerAccountType.DIVIDENDS) {
+      if (dto.type === LedgerAccountType.DIVIDENDS) {
         throw new BadRequestException(
-          'La cuenta Dividendos es única por local y se crea sola (no se cambia a mano)',
+          'El tipo Dividendos ya no se usa: la división va a Egreso con concepto.',
         );
       }
       row.type = dto.type;
@@ -420,10 +416,12 @@ export class AccountsService implements OnModuleInit {
         if (!found) {
           throw new BadRequestException('Cuenta destino de división inválida');
         }
-        if (
-          found.type === LedgerAccountType.SYSTEM &&
-          String(found.code ?? '').toUpperCase() !== 'EGRESO'
-        ) {
+        if (found.type === LedgerAccountType.SUPPLIER || found.type === LedgerAccountType.SERVICE) {
+          throw new BadRequestException(
+            'La cuenta destino de división no puede ser proveedor ni servicio',
+          );
+        }
+        if (found.type === LedgerAccountType.SYSTEM && !this.isEgresoAccount(found)) {
           throw new BadRequestException(
             'De las cuentas de sistema solo podés elegir Egreso como destino de división',
           );
@@ -452,6 +450,27 @@ export class AccountsService implements OnModuleInit {
       partnerDividendAccountId: shop.partnerDividendAccountId ?? null,
       partnerDividendConceptId: shop.partnerDividendConceptId ?? null,
     };
+  }
+
+  private isEgresoAccount(account: {
+    type?: string | null;
+    code?: string | null;
+    name?: string | null;
+  }) {
+    const code = String(account.code ?? '')
+      .trim()
+      .toUpperCase();
+    const name = String(account.name ?? '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+    if (code === 'EGRESO' || code.endsWith('_EGRESO') || code.endsWith('-EGRESO')) {
+      return true;
+    }
+    return (
+      account.type === LedgerAccountType.SYSTEM &&
+      /(^|[^a-z])egreso([^a-z]|$)/.test(name)
+    );
   }
 
   /** Quita el medio de todas las cuentas del local (opcionalmente excepto una). */
@@ -530,8 +549,8 @@ export class AccountsService implements OnModuleInit {
     this.shops.assertShopAccess(user, shopId);
     const row = await this.accounts.findOne({ where: { id, shopId } });
     if (!row) throw new NotFoundException('Cuenta no encontrada');
-    if (row.type === LedgerAccountType.SYSTEM || row.type === LedgerAccountType.DIVIDENDS) {
-      throw new BadRequestException('No se pueden eliminar cuentas de sistema ni Dividendos');
+    if (row.type === LedgerAccountType.SYSTEM) {
+      throw new BadRequestException('No se pueden eliminar cuentas de sistema');
     }
 
     const balance = await this.computeBalance(shopId, id, n(row.openingBalance));

@@ -612,7 +612,7 @@ export class ShopsService implements OnModuleInit {
 
   /**
    * Destino de Equilibrar / Es dividendo / enviar a dividendos.
-   * Cuenta: config del local o Dividendos. Concepto: config o null.
+   * Cuenta: config del local o Egreso. Concepto: config del local o "División".
    */
   async resolvePartnerDividendTarget(shopId: string): Promise<{
     accountId: string;
@@ -631,7 +631,7 @@ export class ShopsService implements OnModuleInit {
       });
     }
     if (!account) {
-      account = await this.catalogSeed.ensureDividendsAccount(shopId);
+      account = await this.catalogSeed.ensureEgresoAccount(shopId);
     }
     let conceptId = shop?.partnerDividendConceptId?.trim() || null;
     if (conceptId) {
@@ -640,7 +640,28 @@ export class ShopsService implements OnModuleInit {
       });
       if (!concept) conceptId = null;
     }
+    if (!conceptId) {
+      conceptId = (await this.catalogSeed.ensureDivisionConcept(shopId)).id;
+    }
     return { accountId: account.id, accountName: account.name, conceptId };
+  }
+
+  /** Egreso del local (código EGRESO o nombre). */
+  isEgresoAccount(account: { type?: string | null; code?: string | null; name?: string | null }) {
+    const code = String(account.code ?? '')
+      .trim()
+      .toUpperCase();
+    const name = String(account.name ?? '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+    if (code === 'EGRESO' || code.endsWith('_EGRESO') || code.endsWith('-EGRESO')) {
+      return true;
+    }
+    return (
+      account.type === LedgerAccountType.SYSTEM &&
+      /(^|[^a-z])egreso([^a-z]|$)/.test(name)
+    );
   }
 
   async assertReservationsEnabled(shopId: string) {
@@ -1213,10 +1234,12 @@ export class ShopsService implements OnModuleInit {
         if (!found) {
           throw new BadRequestException('Cuenta destino de división inválida');
         }
-        if (
-          found.type === LedgerAccountType.SYSTEM &&
-          String(found.code ?? '').toUpperCase() !== 'EGRESO'
-        ) {
+        if (found.type === LedgerAccountType.SUPPLIER || found.type === LedgerAccountType.SERVICE) {
+          throw new BadRequestException(
+            'La cuenta destino de división no puede ser proveedor ni servicio',
+          );
+        }
+        if (found.type === LedgerAccountType.SYSTEM && !this.isEgresoAccount(found)) {
           throw new BadRequestException(
             'De las cuentas de sistema solo podés elegir Egreso como destino de división',
           );

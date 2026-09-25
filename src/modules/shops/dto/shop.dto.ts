@@ -555,7 +555,7 @@ export class CreateShopDto {
 
   @ApiPropertyOptional({
     description:
-      'Cuenta destino de Equilibrar / Es dividendo / enviar a dividendos. null = cuenta Dividendos del local.',
+      'Cuenta destino de Equilibrar / Es dividendo / enviar a dividendos. null = Egreso del local.',
     nullable: true,
   })
   @IsOptional()
@@ -565,7 +565,7 @@ export class CreateShopDto {
 
   @ApiPropertyOptional({
     description:
-      'Concepto de movimientos y pagos de división de socios / dividendos. null = sin concepto.',
+      'Concepto de movimientos y pagos de división de socios / dividendos. null = División.',
     nullable: true,
   })
   @IsOptional()
