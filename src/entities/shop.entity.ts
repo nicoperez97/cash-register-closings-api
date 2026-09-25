@@ -358,14 +358,14 @@ export class Shop extends BaseEntity {
 
   /**
    * Cuenta destino de divisiones/dividendos (Equilibrar, “Es dividendo”, enviar a dividendos).
-   * null = cuenta Dividendos del local (código DIVIDENDOS).
+   * null = Egreso del local.
    */
   @Column({ type: 'varchar', length: 36, nullable: true })
   partnerDividendAccountId?: string | null;
 
   /**
    * Concepto de movimientos/pagos de división de socios y dividendos.
-   * null = sin concepto.
+   * null = concepto División (se asegura al usarlo).
    */
   @Column({ type: 'varchar', length: 36, nullable: true })
   partnerDividendConceptId?: string | null;

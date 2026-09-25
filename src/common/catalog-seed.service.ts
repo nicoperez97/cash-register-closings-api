@@ -8,7 +8,7 @@ import {
   DEFAULT_LEDGER_ACCOUNTS,
   SYSTEM_LEDGER_ACCOUNTS,
 } from './catalog-seed';
-import { LedgerAccountType } from './enums';
+import { ConceptKind, LedgerAccountType } from './enums';
 import { inferConceptCategories } from './concept-categories';
 
 @Injectable()
@@ -33,12 +33,11 @@ export class CatalogSeedService {
           code: a.code,
           type: a.type,
           linkedPaymentMethod: null,
-          hideFromCashWithdraw: a.type === LedgerAccountType.DIVIDENDS,
-          listInExpenses: a.type !== LedgerAccountType.DIVIDENDS,
-          listInIncomes: a.type !== LedgerAccountType.DIVIDENDS,
+          hideFromCashWithdraw: false,
+          listInExpenses: true,
+          listInIncomes: true,
           listInTransfers: true,
-          // Dividendos: plata personal del socio, ya no disponible para el local → fuera de Saldos.
-          listInBalances: a.type !== LedgerAccountType.DIVIDENDS,
+          listInBalances: true,
           active: true,
         }),
       );
@@ -46,29 +45,58 @@ export class CatalogSeedService {
     await this.ensureConcepts(shopId);
   }
 
-  /** Cuenta Dividendos del local (una sola). La crea si falta. */
-  async ensureDividendsAccount(shopId: string): Promise<LedgerAccount> {
+  /** Cuenta Egreso del local (destino default de división de socios). */
+  async ensureEgresoAccount(shopId: string): Promise<LedgerAccount> {
     await this.ensureShopCatalogs(shopId);
     const byCode = await this.accounts.findOne({
-      where: { shopId, code: 'DIVIDENDOS', active: true },
+      where: { shopId, code: 'EGRESO', active: true },
     });
-    const row =
-      byCode ??
-      (await this.accounts.findOne({
-        where: { shopId, type: LedgerAccountType.DIVIDENDS, active: true },
-      }));
-    if (!row) {
-      throw new Error(`No se pudo asegurar la cuenta Dividendos del local ${shopId}`);
-    }
-    // Fuera de Saldos: esa plata ya no es del local.
-    if (Number(row.listInBalances ?? 1) !== 0) {
-      row.listInBalances = false;
-      row.hideFromCashWithdraw = true;
-      row.listInExpenses = false;
-      row.listInIncomes = false;
-      await this.accounts.save(row);
-    }
-    return row;
+    if (byCode) return byCode;
+    const byName = await this.accounts
+      .createQueryBuilder('a')
+      .where('a.shopId = :shopId', { shopId })
+      .andWhere('a.active = true')
+      .andWhere('a.type = :type', { type: LedgerAccountType.SYSTEM })
+      .andWhere('LOWER(a.name) LIKE :name', { name: '%egreso%' })
+      .getOne();
+    if (byName) return byName;
+    throw new Error(`No se pudo asegurar la cuenta Egreso del local ${shopId}`);
+  }
+
+  /**
+   * @deprecated La división usa Egreso + concepto. Se mantiene por compatibilidad
+   * de imports: resuelve a Egreso.
+   */
+  async ensureDividendsAccount(shopId: string): Promise<LedgerAccount> {
+    return this.ensureEgresoAccount(shopId);
+  }
+
+  /** Concepto "División" (egreso) para movimientos de división de socios. */
+  async ensureDivisionConcept(shopId: string): Promise<Concept> {
+    await this.ensureConcepts(shopId);
+    const existing = await this.concepts.findOne({
+      where: { shopId, name: 'División', active: true },
+    });
+    if (existing) return existing;
+    const alt = await this.concepts
+      .createQueryBuilder('c')
+      .where('c.shopId = :shopId', { shopId })
+      .andWhere('c.active = true')
+      .andWhere('LOWER(c.name) IN (:...names)', {
+        names: ['división', 'division', 'división de socios', 'division de socios'],
+      })
+      .getOne();
+    if (alt) return alt;
+    return this.concepts.save(
+      this.concepts.create({
+        shopId,
+        name: 'División',
+        kind: ConceptKind.EXPENSE,
+        categories: inferConceptCategories('División'),
+        active: true,
+        validated: true,
+      }),
+    );
   }
 
   /** Catálogo completo al crear un local (sin vincular medios de pago). */
@@ -82,12 +110,11 @@ export class CatalogSeedService {
           code: a.code,
           type: a.type,
           linkedPaymentMethod: null,
-          hideFromCashWithdraw: a.type === LedgerAccountType.DIVIDENDS,
-          listInExpenses: a.type !== LedgerAccountType.DIVIDENDS,
-          listInIncomes: a.type !== LedgerAccountType.DIVIDENDS,
+          hideFromCashWithdraw: false,
+          listInExpenses: true,
+          listInIncomes: true,
           listInTransfers: true,
-          // Dividendos: plata personal del socio, ya no disponible para el local → fuera de Saldos.
-          listInBalances: a.type !== LedgerAccountType.DIVIDENDS,
+          listInBalances: true,
           active: true,
         }),
       );
