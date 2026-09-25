@@ -770,19 +770,38 @@ export class WaiterService implements OnModuleInit {
       timezone: shop.timezone,
     });
 
+    // Solo mesas abiertas en este turno (evita sesiones viejas colgadas).
     const openSessions = await this.sessions.find({
-      where: { shopId: shop.id, status: TableSessionStatus.OPEN },
+      where: {
+        shopId: shop.id,
+        status: TableSessionStatus.OPEN,
+        createdAt: And(MoreThanOrEqual(ownership.from), LessThan(ownership.to)),
+      },
       order: { createdAt: 'ASC' },
     });
     const sessionIds = openSessions.map((s) => s.id);
-    const orders = sessionIds.length
+
+    // Envíos del turno (también de mesas ya cerradas).
+    const shiftOrders = await this.orders
+      .createQueryBuilder('o')
+      .where('o.shopId = :shopId', { shopId: shop.id })
+      .andWhere('o.tableSessionId IS NOT NULL')
+      .andWhere('o.createdAt >= :from AND o.createdAt < :to', {
+        from: ownership.from,
+        to: ownership.to,
+      })
+      .orderBy('o.createdAt', 'DESC')
+      .take(60)
+      .getMany();
+
+    const openSessionOrders = sessionIds.length
       ? await this.orders.find({
           where: { shopId: shop.id, tableSessionId: In(sessionIds) },
           order: { createdAt: 'DESC' },
         })
       : [];
     const ordersBySession = new Map<string, CustomerOrder[]>();
-    for (const o of orders) {
+    for (const o of openSessionOrders) {
       const sid = String(o.tableSessionId ?? '');
       if (!sid) continue;
       const list = ordersBySession.get(sid) ?? [];
@@ -790,9 +809,24 @@ export class WaiterService implements OnModuleInit {
       ordersBySession.set(sid, list);
     }
 
-    const tableIds = [...new Set(openSessions.map((s) => s.salonTableId))];
-    const tables = tableIds.length
-      ? await this.tables.find({ where: { shopId: shop.id, id: In(tableIds) } })
+    const closedSessionIds = [
+      ...new Set(
+        shiftOrders
+          .map((o) => String(o.tableSessionId ?? ''))
+          .filter((id) => id && !sessionIds.includes(id)),
+      ),
+    ];
+    const closedSessions = closedSessionIds.length
+      ? await this.sessions.find({
+          where: { shopId: shop.id, id: In(closedSessionIds) },
+        })
+      : [];
+    const allSessionsForLabels = [...openSessions, ...closedSessions];
+    const allTableIds = [
+      ...new Set(allSessionsForLabels.map((s) => s.salonTableId)),
+    ];
+    const tables = allTableIds.length
+      ? await this.tables.find({ where: { shopId: shop.id, id: In(allTableIds) } })
       : [];
     const tableById = new Map(tables.map((t) => [t.id, t]));
     const sectorIds = [
@@ -806,7 +840,7 @@ export class WaiterService implements OnModuleInit {
     );
     const waiterIds = [
       ...new Set(
-        openSessions
+        allSessionsForLabels
           .map((s) => s.waiterEmployeeId)
           .filter((id): id is string => !!String(id ?? '').trim()),
       ),
@@ -815,6 +849,7 @@ export class WaiterService implements OnModuleInit {
       ? await this.employees.find({ where: { shopId: shop.id, id: In(waiterIds) } })
       : [];
     const waiterName = new Map(waiters.map((e) => [e.id, e.fullName]));
+    const sessionById = new Map(allSessionsForLabels.map((s) => [s.id, s]));
 
     const compactLines = (items: CustomerOrderLine[], max = 14) => {
       const rows: Array<{ qty: number; name: string; extra: boolean }> = [];
@@ -872,8 +907,8 @@ export class WaiterService implements OnModuleInit {
       })
       .filter((row): row is NonNullable<typeof row> => !!row);
 
-    const recentOrders = orders.slice(0, 20).map((o) => {
-      const session = openSessions.find((s) => s.id === o.tableSessionId);
+    const recentOrders = shiftOrders.slice(0, 40).map((o) => {
+      const session = sessionById.get(String(o.tableSessionId ?? ''));
       const table = session ? tableById.get(session.salonTableId) : null;
       return {
         id: o.id,
@@ -897,9 +932,19 @@ export class WaiterService implements OnModuleInit {
       take: 80,
     });
 
+    const openCovers = tableDtos.reduce((s, t) => s + (Number(t.covers) || 0), 0);
+    const openTotal = Math.round(
+      tableDtos.reduce((s, t) => s + (Number(t.total) || 0), 0) * 100,
+    ) / 100;
+    const sendsTotal = Math.round(
+      shiftOrders.reduce((s, o) => s + (Number(o.total) || 0), 0) * 100,
+    ) / 100;
+    const ticketsPrinted = tableDtos.filter((t) => t.customerTicketPrinted).length;
+
     return {
       shopName: shop.name,
       shiftName: shift?.name ?? null,
+      businessDate,
       tables: tableDtos,
       recentOrders,
       recentAudits: audits.map((a) => ({
@@ -923,6 +968,15 @@ export class WaiterService implements OnModuleInit {
         createdAt: a.createdAt,
         tableLabel: a.tableLabel ?? null,
       })),
+      summary: {
+        openTables: tableDtos.length,
+        openCovers,
+        openTotal,
+        sends: shiftOrders.length,
+        sendsTotal,
+        ticketsPrinted,
+        audits: audits.length,
+      },
     };
   }
 
