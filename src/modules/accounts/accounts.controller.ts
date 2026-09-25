@@ -201,6 +201,26 @@ class PaymentDepositsDto {
   other?: string | null;
 }
 
+class PartnerDividendConfigDto {
+  @ApiPropertyOptional({
+    description: 'Cuenta destino de Equilibrar / Es dividendo. null = Dividendos.',
+    nullable: true,
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  partnerDividendAccountId?: string | null;
+
+  @ApiPropertyOptional({
+    description: 'Concepto de división / dividendos. null = sin concepto.',
+    nullable: true,
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  partnerDividendConceptId?: string | null;
+}
+
 @ApiTags('accounts')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'), PermissionsGuard)
@@ -242,6 +262,16 @@ export class AccountsController {
       shopId,
       dto as Partial<Record<LinkedPaymentMethod, string | null>>,
     );
+  }
+
+  @Put('partner-dividend-config')
+  @RequirePermissions('accounts.manage')
+  setPartnerDividendConfig(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: PartnerDividendConfigDto,
+  ) {
+    return this.accounts.setPartnerDividendConfig(user, shopId, dto);
   }
 
   @Post()

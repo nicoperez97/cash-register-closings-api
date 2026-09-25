@@ -218,7 +218,10 @@ export class ConceptsService implements OnModuleInit {
     let target: Concept | null = null;
     const targetId = (dto.targetId || '').trim() || null;
     if (targetId) {
-      target = await this.concepts.findOne({ where: { id: targetId, shopId } });
+      target = await this.concepts.findOne({
+        where: { id: targetId, shopId },
+        withDeleted: true,
+      });
       if (!target) {
         throw new NotFoundException('Concepto destino no encontrado');
       }
@@ -255,6 +258,17 @@ export class ConceptsService implements OnModuleInit {
           }),
         );
       }
+    }
+
+    // Asegurar que el destino quede usable (por si estaba inactivo o archivado).
+    if (target.deletedAt) {
+      await this.concepts.recover(target);
+      target = (await this.concepts.findOne({ where: { id: target.id, shopId } }))!;
+    }
+    if (!target.active || !target.validated) {
+      target.active = true;
+      target.validated = true;
+      target = await this.concepts.save(target);
     }
 
     const fromIds = sourceIds.filter((id) => id !== target!.id);
@@ -297,6 +311,17 @@ export class ConceptsService implements OnModuleInit {
        WHERE cc.shopId = ? AND ce.conceptId IN (${fromIds.map(() => '?').join(',')})`,
       [target!.id, shopId, ...fromIds],
     );
+    // Retiros de caja del local: si apuntaban a un origen, pasar al destino.
+    await this.concepts.query(
+      `UPDATE shops SET cashWithdrawalConceptId = ? WHERE id = ? AND cashWithdrawalConceptId IN (${fromIds.map(() => '?').join(',')})`,
+      [target!.id, shopId, ...fromIds],
+    );
+    await this.concepts.query(
+      `UPDATE shops SET partnerDividendConceptId = ? WHERE id = ? AND partnerDividendConceptId IN (${fromIds.map(() => '?').join(',')})`,
+      [target!.id, shopId, ...fromIds],
+    );
+    // Reparar egresos de cierre cuyo movimiento quedó sin concepto (sync viejo).
+    await this.repairClosingExpenseMovementLinks(shopId);
 
     let removed = 0;
     for (const row of sources) {
@@ -320,6 +345,26 @@ export class ConceptsService implements OnModuleInit {
       },
       removed,
     };
+  }
+
+  /**
+   * Realinea movimientos de cierre con el conceptId del egreso del cierre.
+   * Corrige syncs viejos que ignoraban exp.conceptId (p.ej. tras unificar).
+   */
+  async repairClosingExpenseMovementLinks(shopId: string): Promise<number> {
+    const result = await this.concepts.query(
+      `UPDATE movements m
+       INNER JOIN closing_expenses ce ON ce.closingId = m.closingId
+         AND TRIM(IFNULL(ce.label, '')) = TRIM(IFNULL(m.description, ''))
+         AND ROUND(ce.amount, 2) = ROUND(m.amountUyu, 2)
+       INNER JOIN cash_closings cc ON cc.id = m.closingId AND cc.shopId = ?
+       SET m.conceptId = ce.conceptId
+       WHERE ce.conceptId IS NOT NULL
+         AND m.active = 1
+         AND (m.conceptId IS NULL OR m.conceptId <> ce.conceptId)`,
+      [shopId],
+    );
+    return Number(result?.affectedRows ?? result?.changedRows ?? 0) || 0;
   }
 
   async findByShop(shopId: string) {

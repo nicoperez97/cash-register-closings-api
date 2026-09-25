@@ -7,6 +7,7 @@ import { Movement } from '../../entities/movement.entity';
 import { AttendanceDay } from '../../entities/attendance-day.entity';
 import { ShopsService } from '../shops/shops.service';
 import { MovementsService } from '../movements/movements.service';
+import { ConceptsService } from '../concepts/concepts.service';
 import { PayrollService } from '../payroll/payroll.service';
 import { SalesProductsAnalyticsService } from '../sales-reports/sales-products-analytics.service';
 import { ReservationsService } from '../reservations/reservations.service';
@@ -55,6 +56,7 @@ export class ReportsService {
     private readonly attendance: Repository<AttendanceDay>,
     private readonly shops: ShopsService,
     private readonly movementsService: MovementsService,
+    private readonly conceptsService: ConceptsService,
     private readonly payroll: PayrollService,
     private readonly salesProducts: SalesProductsAnalyticsService,
     private readonly reservations: ReservationsService,
@@ -383,6 +385,8 @@ export class ReportsService {
     },
   ) {
     this.shops.assertShopAccess(user, shopId);
+    // Realinea egresos de cierre → movimientos (sync viejo / post-unificar).
+    await this.conceptsService.repairClosingExpenseMovementLinks(shopId);
     const rows = await this.movementsService.listAnalytics(user, shopId, {
       from: filters.from,
       to: filters.to,

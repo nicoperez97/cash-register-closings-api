@@ -6,6 +6,7 @@ import { AttendanceDay } from '../../entities/attendance-day.entity';
 import { PayrollPeriod } from '../../entities/payroll-period.entity';
 import { ShopsModule } from '../shops/shops.module';
 import { MovementsModule } from '../movements/movements.module';
+import { ConceptsModule } from '../concepts/concepts.module';
 import { PayrollModule } from '../payroll/payroll.module';
 import { SalesReportsModule } from '../sales-reports/sales-reports.module';
 import { ReservationsModule } from '../reservations/reservations.module';
@@ -46,6 +47,7 @@ import { UserShop } from '../../entities/user-shop.entity';
     ]),
     ShopsModule,
     MovementsModule,
+    ConceptsModule,
     PayrollModule,
     SalesReportsModule,
     ReservationsModule,

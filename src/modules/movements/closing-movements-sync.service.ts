@@ -61,9 +61,11 @@ export class ClosingMovementsSyncService {
     if (!ingreso || !egreso) return;
 
     const concepts = await this.concepts.find({
-      where: { shopId: closing.shopId, active: true },
+      where: { shopId: closing.shopId },
     });
-    const conceptByName = new Map(concepts.map((c) => [c.name, c]));
+    const conceptByName = new Map(
+      concepts.filter((c) => c.active !== false).map((c) => [c.name, c]),
+    );
 
     const findConcept = (name: string) => conceptByName.get(name)?.id ?? null;
 
@@ -249,6 +251,11 @@ export class ClosingMovementsSyncService {
       if (amount <= 0) continue;
       const conceptName =
         EXPENSE_CATEGORY_TO_CONCEPT[exp.category] ?? 'Otros gastos';
+      // Preferir el concepto elegido en el cierre (p.ej. tras unificar).
+      // Fallback: mapa categoría → nombre seed.
+      const conceptId =
+        (exp.conceptId && concepts.find((c) => c.id === exp.conceptId)?.id) ||
+        findConcept(conceptName);
       // Egresos salen del efectivo depositado; si no hay, de EGRESO no tiene sentido —
       // se omite el movimiento si no hay canal de efectivo configurado.
       if (!cashChannel) continue;
@@ -259,7 +266,7 @@ export class ClosingMovementsSyncService {
         toAccountId: egreso.id,
         description: exp.label,
         amountUyu: money(amount),
-        conceptId: findConcept(conceptName),
+        conceptId,
         closingId: closing.id,
         invoiced: false,
         active: true,
