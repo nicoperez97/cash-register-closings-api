@@ -1250,6 +1250,13 @@ export class CustomerOrdersService implements OnModuleInit {
         statuses.length === 1 && statuses[0] === CustomerOrderStatus.COMPLETED;
       const onlyCancelled =
         statuses.length === 1 && statuses[0] === CustomerOrderStatus.CANCELLED;
+      const onlyClosed =
+        statuses.length > 0 &&
+        statuses.every(
+          (s) =>
+            s === CustomerOrderStatus.COMPLETED ||
+            s === CustomerOrderStatus.CANCELLED,
+        );
       if (onlyCompleted) {
         qb.andWhere(
           new Brackets((b) => {
@@ -1267,6 +1274,23 @@ export class CustomerOrdersService implements OnModuleInit {
             );
           }),
           { from: range.from, to: range.to },
+        );
+      } else if (onlyClosed) {
+        qb.andWhere(
+          new Brackets((b) => {
+            b.where(
+              '(o.status = :completedStatus AND ((o.completedAt >= :from AND o.completedAt < :to) OR (o.completedAt IS NULL AND o.createdAt >= :from AND o.createdAt < :to)))',
+            )
+              .orWhere(
+                '(o.status = :cancelledStatus AND ((o.cancelledAt >= :from AND o.cancelledAt < :to) OR (o.cancelledAt IS NULL AND o.createdAt >= :from AND o.createdAt < :to)))',
+              );
+          }),
+          {
+            from: range.from,
+            to: range.to,
+            completedStatus: CustomerOrderStatus.COMPLETED,
+            cancelledStatus: CustomerOrderStatus.CANCELLED,
+          },
         );
       } else {
         qb.andWhere('o.createdAt >= :from AND o.createdAt < :to', {
