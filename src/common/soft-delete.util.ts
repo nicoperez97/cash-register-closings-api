@@ -26,7 +26,7 @@ export function markDeletedUnique(
   maxLen = 255,
 ): string {
   const suffix = `__DELETED__${String(entityId).replace(/-/g, '').slice(0, 8)}`;
-  const clean = String(value ?? '').replace(/__DELETED__[0-9a-f]{8}$/i, '');
+  const clean = String(value ?? '').replace(/__DELETED__.*/i, '');
   const maxBase = Math.max(1, maxLen - suffix.length);
   return `${clean.slice(0, maxBase)}${suffix}`;
 }
@@ -35,6 +35,13 @@ export function markDeletedUnique(
 export function displaySoftDeletedLabel(value?: string | null): string | null {
   const raw = String(value ?? '').trim();
   if (!raw) return null;
-  const cleaned = raw.replace(/__DELETED__[0-9a-f]{8}$/i, '').trim();
-  return cleaned || raw;
+  // Cualquier cola tras el marcador (hex corto, truncado, repetido, histórico).
+  const cleaned = raw.replace(/__DELETED__.*/i, '').replace(/\s+/g, ' ').trim();
+  // Nunca devolver texto que aún contenga el marcador.
+  if (!cleaned || /__DELETED__/i.test(cleaned)) return null;
+  return cleaned;
+}
+
+export function looksSoftDeletedLabel(value?: string | null): boolean {
+  return /__DELETED__/i.test(String(value ?? ''));
 }

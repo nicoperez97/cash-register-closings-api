@@ -8,6 +8,7 @@ import { AttendanceDay } from '../../entities/attendance-day.entity';
 import { ShopsService } from '../shops/shops.service';
 import { MovementsService } from '../movements/movements.service';
 import { ConceptsService } from '../concepts/concepts.service';
+import { displaySoftDeletedLabel, looksSoftDeletedLabel } from '../../common/soft-delete.util';
 import { PayrollService } from '../payroll/payroll.service';
 import { SalesProductsAnalyticsService } from '../sales-reports/sales-products-analytics.service';
 import { ReservationsService } from '../reservations/reservations.service';
@@ -391,26 +392,13 @@ export class ReportsService {
       from: filters.from,
       to: filters.to,
     });
-    const tagged = rows.map((r) => {
-      const kind = this.inferMovementKind(r);
-      const deleted = !!(r as { conceptDeleted?: boolean }).conceptDeleted;
-      const baseName = (r.conceptName ?? '').trim();
-      return {
-        ...r,
-        kind,
-        conceptName: !r.conceptId
-          ? 'Sin concepto'
-          : deleted
-            ? `${baseName || 'Concepto'} (eliminado)`
-            : baseName || 'Sin concepto',
-      };
-    });
+    const tagged = rows.map((r) => this.tagConceptRow(r));
 
     const optionMap = new Map<string, { id: string | null; name: string; kind: string }>();
     for (const r of tagged) {
       const id = r.conceptId ?? `__name:${r.conceptName}`;
       if (optionMap.has(id)) continue;
-      optionMap.set(id, { id: r.conceptId, name: r.conceptName, kind: r.kind });
+      optionMap.set(id, { id: r.conceptId ?? null, name: r.conceptName, kind: r.kind });
     }
     const conceptOptions = [...optionMap.values()].sort((a, b) =>
       a.name.localeCompare(b.name, 'es'),
@@ -433,11 +421,7 @@ export class ReportsService {
     if (filters.from && filters.to) {
       const prevRange = previousPeriod(filters.from, filters.to);
       const prevRows = await this.movementsService.listAnalytics(user, shopId, prevRange);
-      let prevTagged = prevRows.map((r) => ({
-        ...r,
-        kind: this.inferMovementKind(r),
-        conceptName: r.conceptName?.trim() || 'Sin concepto',
-      }));
+      let prevTagged = prevRows.map((r) => this.tagConceptRow(r));
       if (filters.kind) prevTagged = prevTagged.filter((r) => r.kind === filters.kind);
       if (filters.conceptId === '__none') {
         prevTagged = prevTagged.filter((r) => !r.conceptId);
@@ -724,6 +708,30 @@ export class ReportsService {
       byKind,
       byConcept,
       byDay: [...dayMap.values()].sort((a, b) => a.businessDate.localeCompare(b.businessDate)),
+    };
+  }
+
+  private tagConceptRow(r: {
+    conceptId?: string | null;
+    conceptName?: string | null;
+    conceptDeleted?: boolean;
+    amountUyu: number;
+    businessDate: string;
+    fromAccountName?: string | null;
+    toAccountName?: string | null;
+    conceptKind?: string | null;
+  }) {
+    const kind = this.inferMovementKind(r);
+    const deleted = !!r.conceptDeleted || looksSoftDeletedLabel(r.conceptName);
+    const baseName = displaySoftDeletedLabel(r.conceptName)?.trim() || '';
+    return {
+      ...r,
+      kind,
+      conceptName: !r.conceptId
+        ? 'Sin concepto'
+        : deleted
+          ? `${baseName || 'Concepto'} (eliminado)`
+          : baseName || 'Sin concepto',
     };
   }
 

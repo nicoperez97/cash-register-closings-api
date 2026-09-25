@@ -11,7 +11,7 @@ import { AuthUser } from '../../common/decorators';
 import { ConceptKind } from '../../common/enums';
 import { ShopsService } from '../shops/shops.service';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
-import { markDeletedUnique } from '../../common/soft-delete.util';
+import { displaySoftDeletedLabel, looksSoftDeletedLabel, markDeletedUnique } from '../../common/soft-delete.util';
 import {
   inferConceptCategories,
   isPaymentConceptScope,
@@ -43,6 +43,28 @@ export class ConceptsService implements OnModuleInit {
       }
     }
     await this.backfillCategories();
+    await this.repairActiveDeletedLabels();
+  }
+
+  /** Conceptos vivos que quedaron con sufijo __DELETED__ (p.ej. tras recover). */
+  private async repairActiveDeletedLabels() {
+    const rows = await this.concepts.find({ where: { active: true } });
+    for (const row of rows) {
+      if (!looksSoftDeletedLabel(row.name)) continue;
+      row.name = await this.uniqueCleanName(row.shopId, row.name, row.id);
+      await this.concepts.save(row);
+    }
+  }
+
+  private async uniqueCleanName(shopId: string, rawName: string, selfId: string): Promise<string> {
+    const base = displaySoftDeletedLabel(rawName)?.trim() || 'Concepto';
+    let candidate = base;
+    for (let n = 2; n <= 50; n++) {
+      const other = await this.concepts.findOne({ where: { shopId, name: candidate } });
+      if (!other || other.id === selfId) return candidate;
+      candidate = `${base} (${n})`;
+    }
+    return `${base} · ${selfId.slice(0, 8)}`;
   }
 
   private async backfillCategories() {
@@ -64,10 +86,12 @@ export class ConceptsService implements OnModuleInit {
   }
 
   toDto(c: Concept) {
+    const rawName = c.name ?? '';
+    const cleaned = displaySoftDeletedLabel(rawName);
     return {
       id: c.id,
       shopId: c.shopId,
-      name: c.name,
+      name: cleaned || (looksSoftDeletedLabel(rawName) ? 'Concepto eliminado' : rawName),
       description: c.description ?? null,
       kind: c.kind,
       categories: withClosureForSuppliers(normalizeConceptCategories(c.categories)),
@@ -263,13 +287,17 @@ export class ConceptsService implements OnModuleInit {
     // Asegurar que el destino quede usable (por si estaba inactivo o archivado).
     if (target.deletedAt) {
       await this.concepts.recover(target);
-      target = (await this.concepts.findOne({ where: { id: target.id, shopId } }))!;
+      target = (await this.concepts.findOne({
+        where: { id: target.id, shopId },
+        withDeleted: true,
+      }))!;
     }
-    if (!target.active || !target.validated) {
-      target.active = true;
-      target.validated = true;
-      target = await this.concepts.save(target);
+    if (looksSoftDeletedLabel(target.name)) {
+      target.name = await this.uniqueCleanName(shopId, target.name, target.id);
     }
+    target.active = true;
+    target.validated = true;
+    target = await this.concepts.save(target);
 
     const fromIds = sourceIds.filter((id) => id !== target!.id);
     if (!fromIds.length) {
@@ -358,6 +386,10 @@ export class ConceptsService implements OnModuleInit {
          AND TRIM(IFNULL(ce.label, '')) = TRIM(IFNULL(m.description, ''))
          AND ROUND(ce.amount, 2) = ROUND(m.amountUyu, 2)
        INNER JOIN cash_closings cc ON cc.id = m.closingId AND cc.shopId = ?
+       INNER JOIN concepts c ON c.id = ce.conceptId
+         AND c.deletedAt IS NULL
+         AND IFNULL(c.active, 1) <> 0
+         AND LOCATE('__DELETED__', IFNULL(c.name, '')) = 0
        SET m.conceptId = ce.conceptId
        WHERE ce.conceptId IS NOT NULL
          AND m.active = 1
