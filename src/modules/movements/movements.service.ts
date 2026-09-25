@@ -1180,6 +1180,17 @@ export class MovementsService implements OnModuleInit {
       if (!fromId || !toId) {
         throw new BadRequestException('La transferencia requiere cuenta origen y destino');
       }
+      if (dto.conceptId !== undefined) {
+        if (!dto.conceptId) {
+          row.conceptId = null;
+        } else {
+          const c = await this.concepts.findOne({
+            where: { id: dto.conceptId, shopId, active: true },
+          });
+          if (!c) throw new BadRequestException('Concepto inválido');
+          row.conceptId = dto.conceptId;
+        }
+      }
     } else if (dto.conceptId !== undefined) {
       if (!dto.conceptId) {
         throw new BadRequestException(
@@ -1230,6 +1241,42 @@ export class MovementsService implements OnModuleInit {
       );
     }
     return saved;
+  }
+
+  /**
+   * Asigna el mismo concepto a varios movimientos (gastos, ingresos o pases).
+   * Omite los de cierre si el usuario no puede editarlos.
+   */
+  async bulkSetConcept(
+    user: AuthUser,
+    shopId: string,
+    ids: string[],
+    conceptId: string,
+  ): Promise<{ updated: number; skipped: number }> {
+    this.shops.assertShopAccess(user, shopId);
+    const uniqueIds = [...new Set(ids.map((id) => String(id || '').trim()).filter(Boolean))];
+    if (!uniqueIds.length) {
+      throw new BadRequestException('Seleccioná al menos un movimiento');
+    }
+    if (!conceptId) {
+      throw new BadRequestException('Elegí un concepto');
+    }
+    const concept = await this.concepts.findOne({
+      where: { id: conceptId, shopId, active: true },
+    });
+    if (!concept) throw new BadRequestException('Concepto inválido');
+
+    let updated = 0;
+    let skipped = 0;
+    for (const id of uniqueIds) {
+      try {
+        await this.update(user, shopId, id, { conceptId });
+        updated += 1;
+      } catch {
+        skipped += 1;
+      }
+    }
+    return { updated, skipped };
   }
 
   async remove(

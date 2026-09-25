@@ -28,6 +28,7 @@ import { memoryStorage } from 'multer';
 import type { Response } from 'express';
 import {
   IsArray,
+  ArrayMinSize,
   IsBoolean,
   IsDateString,
   IsIn,
@@ -191,6 +192,18 @@ class UpdateMovementDto {
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
   @IsUUID()
   beneficiaryAccountId?: string | null;
+}
+
+class BulkSetConceptDto {
+  @ApiProperty({ type: [String] })
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsUUID('4', { each: true })
+  ids: string[];
+
+  @ApiProperty()
+  @IsUUID()
+  conceptId: string;
 }
 
 @ApiTags('movements')
@@ -563,6 +576,21 @@ export class MovementsController {
       `inline; filename="${encodeURIComponent(fileName)}"`,
     );
     return stream;
+  }
+
+  @Patch('bulk-concept')
+  @RequireAnyPermissions(
+    'expenses.manage',
+    'accountTransfers.manage',
+    'incomes.manage',
+    'movements.manage',
+  )
+  bulkSetConcept(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: BulkSetConceptDto,
+  ) {
+    return this.movements.bulkSetConcept(user, shopId, dto.ids, dto.conceptId);
   }
 
   @Patch(':id')
