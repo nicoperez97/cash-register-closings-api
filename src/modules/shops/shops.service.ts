@@ -13,6 +13,7 @@ import { UserShop } from '../../entities/user-shop.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
 import { ShopClosingSource } from '../../entities/shop-closing-source.entity';
+import { Concept } from '../../entities/concept.entity';
 import { CashClosing } from '../../entities/cash-closing.entity';
 import { AuthUser } from '../../common/decorators';
 import { ClosingSourceKind, ClosingStatus, GlobalRole, LedgerAccountType, Permission } from '../../common/enums';
@@ -111,6 +112,7 @@ export class ShopsService implements OnModuleInit {
     @InjectRepository(ShopClosingSource)
     private readonly closingSources: Repository<ShopClosingSource>,
     @InjectRepository(CashClosing) private readonly cashClosings: Repository<CashClosing>,
+    @InjectRepository(Concept) private readonly concepts: Repository<Concept>,
     private readonly catalogSeed: CatalogSeedService,
     private readonly live: ShopLiveService,
   ) {}
@@ -367,6 +369,22 @@ export class ShopsService implements OnModuleInit {
     try {
       await this.shops.query(`
         ALTER TABLE shops
+          ADD COLUMN partnerDividendAccountId VARCHAR(36) NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
+          ADD COLUMN partnerDividendConceptId VARCHAR(36) NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
           ADD COLUMN navConfig JSON NULL
       `);
     } catch {
@@ -590,6 +608,39 @@ export class ShopsService implements OnModuleInit {
     if (!user.shopIds.includes(shopId)) {
       throw new ForbiddenException('Sin acceso a este local');
     }
+  }
+
+  /**
+   * Destino de Equilibrar / Es dividendo / enviar a dividendos.
+   * Cuenta: config del local o Dividendos. Concepto: config o null.
+   */
+  async resolvePartnerDividendTarget(shopId: string): Promise<{
+    accountId: string;
+    accountName: string;
+    conceptId: string | null;
+  }> {
+    const shop = await this.shops.findOne({
+      where: { id: shopId },
+      select: ['id', 'partnerDividendAccountId', 'partnerDividendConceptId'],
+    });
+    let account: LedgerAccount | null = null;
+    const configuredAccountId = shop?.partnerDividendAccountId?.trim() || null;
+    if (configuredAccountId) {
+      account = await this.accounts.findOne({
+        where: { id: configuredAccountId, shopId, active: true },
+      });
+    }
+    if (!account) {
+      account = await this.catalogSeed.ensureDividendsAccount(shopId);
+    }
+    let conceptId = shop?.partnerDividendConceptId?.trim() || null;
+    if (conceptId) {
+      const concept = await this.concepts.findOne({
+        where: { id: conceptId, shopId, active: true },
+      });
+      if (!concept) conceptId = null;
+    }
+    return { accountId: account.id, accountName: account.name, conceptId };
   }
 
   async assertReservationsEnabled(shopId: string) {
@@ -954,6 +1005,8 @@ export class ShopsService implements OnModuleInit {
         emailMessageTemplates: normalizeEmailMessageTemplates(dto.emailMessageTemplates),
         salesSystemId: dto.salesSystemId ?? null,
         cashWithdrawalConceptId: dto.cashWithdrawalConceptId ?? null,
+        partnerDividendAccountId: dto.partnerDividendAccountId ?? null,
+        partnerDividendConceptId: dto.partnerDividendConceptId ?? null,
         posPaymentMap: dto.posPaymentMap ?? null,
         posnets: this.normalizePosnets(dto.posnets),
         paymentConceptCategories: dto.paymentConceptCategories
@@ -1150,6 +1203,39 @@ export class ShopsService implements OnModuleInit {
     }
     if (dto.cashWithdrawalConceptId !== undefined) {
       shop.cashWithdrawalConceptId = dto.cashWithdrawalConceptId || null;
+    }
+    if (dto.partnerDividendAccountId !== undefined) {
+      const id = dto.partnerDividendAccountId || null;
+      if (id) {
+        const found = await this.accounts.findOne({
+          where: { id, shopId: shop.id, active: true },
+        });
+        if (!found) {
+          throw new BadRequestException('Cuenta destino de división inválida');
+        }
+        if (found.type === LedgerAccountType.SYSTEM) {
+          throw new BadRequestException(
+            'La cuenta destino de división no puede ser de sistema (Ingreso/Egreso)',
+          );
+        }
+        shop.partnerDividendAccountId = id;
+      } else {
+        shop.partnerDividendAccountId = null;
+      }
+    }
+    if (dto.partnerDividendConceptId !== undefined) {
+      const id = dto.partnerDividendConceptId || null;
+      if (id) {
+        const concept = await this.concepts.findOne({
+          where: { id, shopId: shop.id, active: true },
+        });
+        if (!concept) {
+          throw new BadRequestException('Concepto de división inválido');
+        }
+        shop.partnerDividendConceptId = id;
+      } else {
+        shop.partnerDividendConceptId = null;
+      }
     }
     if (dto.posPaymentMap !== undefined) {
       shop.posPaymentMap = dto.posPaymentMap;
@@ -1739,6 +1825,8 @@ export class ShopsService implements OnModuleInit {
           : null,
       salesSystemId: s.salesSystemId ?? null,
       cashWithdrawalConceptId: s.cashWithdrawalConceptId ?? null,
+      partnerDividendAccountId: s.partnerDividendAccountId ?? null,
+      partnerDividendConceptId: s.partnerDividendConceptId ?? null,
       posPaymentMap: s.posPaymentMap ?? null,
       posnets: s.posnets ?? [],
       paymentConceptCategories: normalizePaymentConceptCategories(s.paymentConceptCategories),

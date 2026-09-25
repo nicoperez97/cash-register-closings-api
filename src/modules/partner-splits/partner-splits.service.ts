@@ -12,7 +12,6 @@ import { LedgerAccountType, PaymentStatus } from '../../common/enums';
 import { parseCommissionPercent } from '../../common/account-commission';
 import { ShopsService } from '../shops/shops.service';
 import { MovementsService } from '../movements/movements.service';
-import { CatalogSeedService } from '../../common/catalog-seed.service';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => (Math.round(Number(v || 0) * 100) / 100).toFixed(2);
@@ -72,7 +71,6 @@ export class PartnerSplitsService implements OnModuleInit {
     private readonly accountLinks: Repository<LedgerAccountUser>,
     private readonly shops: ShopsService,
     private readonly movements: MovementsService,
-    private readonly catalogSeed: CatalogSeedService,
   ) {}
 
   async onModuleInit() {
@@ -137,6 +135,7 @@ export class PartnerSplitsService implements OnModuleInit {
     const createdMovementIds: string[] = [];
     const createdPaymentIds: string[] = [];
     let distributed = 0;
+    const { conceptId: splitConceptId } = await this.shops.resolvePartnerDividendTarget(shopId);
     for (const t of transfers) {
       const betweenPartners =
         partnerIds.has(t.fromAccountId) && partnerIds.has(t.toAccountId);
@@ -152,6 +151,7 @@ export class PartnerSplitsService implements OnModuleInit {
               amount: money(t.amount),
               accountId: t.fromAccountId,
               toAccountId: t.toAccountId,
+              conceptId: splitConceptId,
               status: PaymentStatus.VALIDATED,
               validatedAt: new Date(),
               validatedByUserId: user.id,
@@ -174,6 +174,7 @@ export class PartnerSplitsService implements OnModuleInit {
           toAccountId: t.toAccountId,
           description: `División de socios · ${t.fromName} → ${t.toName}`,
           amountUyu: money(t.amount),
+          conceptId: splitConceptId,
           invoiced: false,
           active: true,
         }),
@@ -305,17 +306,20 @@ export class PartnerSplitsService implements OnModuleInit {
     const createdMovementIds: string[] = [];
     let distributed = 0;
 
-    const dividends = await this.catalogSeed.ensureDividendsAccount(shopId);
+    const dividendTarget = await this.shops.resolvePartnerDividendTarget(shopId);
+    const dividendsId = dividendTarget.accountId;
+    const dividendsName = dividendTarget.accountName;
+    const dividendConceptId = dividendTarget.conceptId;
 
     if (sendBalanced) {
       if (preview.transferStatus !== 'balanced') {
         throw new BadRequestException(
-          'Solo podés enviar la división a Dividendos cuando los saldos ya coinciden con el objetivo',
+          `Solo podés enviar la división a ${dividendsName} cuando los saldos ya coinciden con el objetivo`,
         );
       }
       const rows = (preview.partners ?? []).filter((p) => p.current > 0.004);
       if (!rows.length) {
-        throw new BadRequestException('No hay saldos de socios para enviar a Dividendos');
+        throw new BadRequestException(`No hay saldos de socios para enviar a ${dividendsName}`);
       }
       for (const p of rows) {
         const amount = round2(p.current);
@@ -325,9 +329,10 @@ export class PartnerSplitsService implements OnModuleInit {
             shopId,
             businessDate: today,
             fromAccountId: p.accountId,
-            toAccountId: dividends.id,
-            description: `Equilibrar · división → Dividendos · ${p.name}`,
+            toAccountId: dividendsId,
+            description: `Equilibrar · división → ${dividendsName} · ${p.name}`,
             amountUyu: money(amount),
+            conceptId: dividendConceptId,
             invoiced: false,
             active: true,
           }),
@@ -338,7 +343,7 @@ export class PartnerSplitsService implements OnModuleInit {
     } else if (sendSurplus) {
       const surplusRows = (preview.partners ?? []).filter((p) => p.difference < -0.004);
       if (!surplusRows.length) {
-        throw new BadRequestException('No hay sobrante para enviar a Dividendos');
+        throw new BadRequestException(`No hay sobrante para enviar a ${dividendsName}`);
       }
       for (const p of surplusRows) {
         const amount = round2(-p.difference);
@@ -348,9 +353,10 @@ export class PartnerSplitsService implements OnModuleInit {
             shopId,
             businessDate: today,
             fromAccountId: p.accountId,
-            toAccountId: dividends.id,
-            description: `Equilibrar · sobrante → Dividendos · ${p.name}`,
+            toAccountId: dividendsId,
+            description: `Equilibrar · sobrante → ${dividendsName} · ${p.name}`,
             amountUyu: money(amount),
+            conceptId: dividendConceptId,
             invoiced: false,
             active: true,
           }),
@@ -362,25 +368,26 @@ export class PartnerSplitsService implements OnModuleInit {
       if (!transfers.length) {
         throw new BadRequestException(
           preview.transferStatus === 'balanced'
-            ? 'Los saldos ya coinciden: no hay pases. Podés enviar esa división a Dividendos para sacarla de los saldos del local.'
+            ? `Los saldos ya coinciden: no hay pases. Podés enviar esa división a ${dividendsName} para sacarla de los saldos del local.`
             : preview.surplusTotal > 0.004 && preview.deficitTotal < 0.004
-              ? 'Todos tienen sobrante respecto al objetivo: no hay pases entre socios. Subí el monto, o enviá el sobrante a Dividendos.'
+              ? `Todos tienen sobrante respecto al objetivo: no hay pases entre socios. Subí el monto, o enviá el sobrante a ${dividendsName}.`
               : 'No hay diferencias para saldar',
         );
       }
       for (const t of transfers) {
         const mode = actions.length ? this.generateOf(t, actions) : 'payment';
         if (mode === 'skip') continue;
-        // Destino del dinero: siempre Dividendos. El socio receptor queda anotado, sin sumar saldo.
+        // Destino del dinero: cuenta configurada (o Dividendos). El socio receptor queda anotado.
         if (mode === 'payment') {
           const pay = await this.payments.save(
             this.payments.create({
               shopId,
               title: `Equilibrar · Dividendo · ${t.fromName} → ${t.toName}`,
-              notes: `Al abonar va a Dividendos · anotado para ${t.toName} · no le suma saldo · sale de ${t.fromName}`,
+              notes: `Al abonar va a ${dividendsName} · anotado para ${t.toName} · no le suma saldo · sale de ${t.fromName}`,
               amount: money(t.amount),
               accountId: t.fromAccountId,
               toAccountId: t.toAccountId,
+              conceptId: dividendConceptId,
               isDividend: true,
               status: PaymentStatus.VALIDATED,
               validatedAt: new Date(),
@@ -401,11 +408,12 @@ export class PartnerSplitsService implements OnModuleInit {
             shopId,
             businessDate: today,
             fromAccountId: t.fromAccountId,
-            toAccountId: dividends.id,
+            toAccountId: dividendsId,
             beneficiaryAccountId: t.toAccountId,
             toUserId: link?.userId ?? null,
             description: `Equilibrar · Dividendo · ${t.fromName} → ${t.toName}`,
             amountUyu: money(t.amount),
+            conceptId: dividendConceptId,
             invoiced: false,
             active: true,
           }),
@@ -419,9 +427,9 @@ export class PartnerSplitsService implements OnModuleInit {
     if (!created.length) {
       throw new BadRequestException(
         sendBalanced
-          ? 'No se pudo enviar la división a Dividendos'
+          ? `No se pudo enviar la división a ${dividendsName}`
           : sendSurplus
-            ? 'No se pudo enviar sobrante a Dividendos'
+            ? `No se pudo enviar sobrante a ${dividendsName}`
             : 'Elegí Pago o Movimiento en al menos un pase',
       );
     }

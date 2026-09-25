@@ -2118,6 +2118,14 @@ export class ShopBackupService {
       const mapped = map.get(String(src.cashWithdrawalConceptId));
       src.cashWithdrawalConceptId = mapped ?? null;
     }
+    if (src.partnerDividendConceptId != null && String(src.partnerDividendConceptId) !== '') {
+      const mapped = map.get(String(src.partnerDividendConceptId));
+      src.partnerDividendConceptId = mapped ?? null;
+    }
+    if (src.partnerDividendAccountId != null && String(src.partnerDividendAccountId) !== '') {
+      const mapped = map.get(String(src.partnerDividendAccountId));
+      src.partnerDividendAccountId = mapped ?? null;
+    }
     // salesSystemId del dump puede ser de otro entorno: no romper FK al restaurar.
     if (src.salesSystemId != null && String(src.salesSystemId).trim() !== '') {
       const sid = String(src.salesSystemId).trim();

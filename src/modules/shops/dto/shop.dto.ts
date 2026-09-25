@@ -554,6 +554,26 @@ export class CreateShopDto {
   cashWithdrawalConceptId?: string | null;
 
   @ApiPropertyOptional({
+    description:
+      'Cuenta destino de Equilibrar / Es dividendo / enviar a dividendos. null = cuenta Dividendos del local.',
+    nullable: true,
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  partnerDividendAccountId?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      'Concepto de movimientos y pagos de división de socios / dividendos. null = sin concepto.',
+    nullable: true,
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  partnerDividendConceptId?: string | null;
+
+  @ApiPropertyOptional({
     description: 'Mapa código FormaDePago → cash|card|mercadoPago|delivery|transfer|accountDni|other',
   })
   @IsOptional()

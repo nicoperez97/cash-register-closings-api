@@ -357,6 +357,20 @@ export class Shop extends BaseEntity {
   cashWithdrawalConceptId?: string | null;
 
   /**
+   * Cuenta destino de divisiones/dividendos (Equilibrar, “Es dividendo”, enviar a dividendos).
+   * null = cuenta Dividendos del local (código DIVIDENDOS).
+   */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  partnerDividendAccountId?: string | null;
+
+  /**
+   * Concepto de movimientos/pagos de división de socios y dividendos.
+   * null = sin concepto.
+   */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  partnerDividendConceptId?: string | null;
+
+  /**
    * Categorías de concepto a listar según el tipo de pago / movimiento.
    * null = defaults (proveedores, servicios+proveedores, empleados, movimientos).
    */

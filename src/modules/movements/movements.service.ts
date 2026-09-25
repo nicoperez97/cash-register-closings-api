@@ -603,16 +603,37 @@ export class MovementsService implements OnModuleInit {
     }
     qb.orderBy('m.businessDate', 'ASC');
     const rows = await qb.getMany();
-    return rows.map((m) => ({
-      id: m.id,
-      businessDate: m.businessDate,
-      amountUyu: n(m.amountUyu),
-      conceptId: m.conceptId ?? null,
-      conceptName: m.concept?.name ?? null,
-      conceptKind: m.concept?.kind ?? null,
-      fromAccountName: m.fromAccount?.name ?? null,
-      toAccountName: m.toAccount?.name ?? null,
-    }));
+
+    // Si el concepto fue archivado (soft-delete), el join no lo trae: recuperar nombre.
+    const missingIds = [
+      ...new Set(
+        rows
+          .filter((m) => m.conceptId && !m.concept)
+          .map((m) => String(m.conceptId)),
+      ),
+    ];
+    const archivedById = new Map<string, Concept>();
+    if (missingIds.length) {
+      const archived = await this.concepts.find({
+        where: { id: In(missingIds), shopId },
+        withDeleted: true,
+      });
+      for (const c of archived) archivedById.set(c.id, c);
+    }
+
+    return rows.map((m) => {
+      const concept = m.concept ?? (m.conceptId ? archivedById.get(m.conceptId) : null);
+      return {
+        id: m.id,
+        businessDate: m.businessDate,
+        amountUyu: n(m.amountUyu),
+        conceptId: m.conceptId ?? null,
+        conceptName: concept?.name ?? null,
+        conceptKind: concept?.kind ?? null,
+        fromAccountName: m.fromAccount?.name ?? null,
+        toAccountName: m.toAccount?.name ?? null,
+      };
+    });
   }
 
   private async paymentLinksForMovements(
@@ -744,8 +765,9 @@ export class MovementsService implements OnModuleInit {
     let beneficiaryAccountId: string | null = null;
     if (kind === 'transfer') {
       if (dto.isDividend) {
-        const dividends = await this.catalogSeed.ensureDividendsAccount(shopId);
-        toAccountId = dividends.id;
+        const target = await this.shops.resolvePartnerDividendTarget(shopId);
+        toAccountId = target.accountId;
+        if (!conceptId && target.conceptId) conceptId = target.conceptId;
       }
       if (!fromAccountId || !toAccountId) {
         throw new BadRequestException('La transferencia requiere cuenta origen y destino');
@@ -1032,8 +1054,11 @@ export class MovementsService implements OnModuleInit {
     let dividendToName: string | null = null;
     let dividendBeneficiaryId: string | null | undefined = undefined;
     if (kind === 'transfer' && dto.isDividend) {
-      const dividends = await this.catalogSeed.ensureDividendsAccount(shopId);
-      toId = dividends.id;
+      const target = await this.shops.resolvePartnerDividendTarget(shopId);
+      toId = target.accountId;
+      if (dto.conceptId === undefined && !row.conceptId && target.conceptId) {
+        row.conceptId = target.conceptId;
+      }
       const from = fromId
         ? await this.accounts.findOne({ where: { id: fromId, shopId, active: true } })
         : null;

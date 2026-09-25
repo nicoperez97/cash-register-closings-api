@@ -399,6 +399,58 @@ export class AccountsService implements OnModuleInit {
     return this.list(user, shopId);
   }
 
+  async setPartnerDividendConfig(
+    user: AuthUser,
+    shopId: string,
+    dto: {
+      partnerDividendAccountId?: string | null;
+      partnerDividendConceptId?: string | null;
+    },
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+
+    if (dto.partnerDividendAccountId !== undefined) {
+      const id = dto.partnerDividendAccountId || null;
+      if (id) {
+        const found = await this.accounts.findOne({
+          where: { id, shopId, active: true },
+        });
+        if (!found) {
+          throw new BadRequestException('Cuenta destino de división inválida');
+        }
+        if (found.type === LedgerAccountType.SYSTEM) {
+          throw new BadRequestException(
+            'La cuenta destino de división no puede ser de sistema (Ingreso/Egreso)',
+          );
+        }
+        shop.partnerDividendAccountId = id;
+      } else {
+        shop.partnerDividendAccountId = null;
+      }
+    }
+    if (dto.partnerDividendConceptId !== undefined) {
+      const id = dto.partnerDividendConceptId || null;
+      if (id) {
+        const concept = await this.concepts.findOne({
+          where: { id, shopId, active: true },
+        });
+        if (!concept) {
+          throw new BadRequestException('Concepto de división inválido');
+        }
+        shop.partnerDividendConceptId = id;
+      } else {
+        shop.partnerDividendConceptId = null;
+      }
+    }
+    await this.shopsRepo.save(shop);
+    return {
+      partnerDividendAccountId: shop.partnerDividendAccountId ?? null,
+      partnerDividendConceptId: shop.partnerDividendConceptId ?? null,
+    };
+  }
+
   /** Quita el medio de todas las cuentas del local (opcionalmente excepto una). */
   private async clearLinkedPaymentMethod(
     shopId: string,
@@ -508,6 +560,10 @@ export class AccountsService implements OnModuleInit {
     row.linkedPaymentMethod = null;
     await this.accounts.save(row);
     await this.accounts.softRemove(row);
+    await this.accounts.query(
+      `UPDATE shops SET partnerDividendAccountId = NULL WHERE id = ? AND partnerDividendAccountId = ?`,
+      [shopId, id],
+    );
     return { ok: true, transferredBalance: Math.abs(balance) >= BALANCE_EPS ? balance : 0 };
   }
 
