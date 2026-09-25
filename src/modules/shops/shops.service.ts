@@ -1213,9 +1213,12 @@ export class ShopsService implements OnModuleInit {
         if (!found) {
           throw new BadRequestException('Cuenta destino de división inválida');
         }
-        if (found.type === LedgerAccountType.SYSTEM) {
+        if (
+          found.type === LedgerAccountType.SYSTEM &&
+          String(found.code ?? '').toUpperCase() !== 'EGRESO'
+        ) {
           throw new BadRequestException(
-            'La cuenta destino de división no puede ser de sistema (Ingreso/Egreso)',
+            'De las cuentas de sistema solo podés elegir Egreso como destino de división',
           );
         }
         shop.partnerDividendAccountId = id;
