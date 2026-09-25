@@ -39,7 +39,7 @@ import { StreamableFile } from '@nestjs/common';
 import * as ExcelJS from 'exceljs';
 import { accountCommissionOf } from '../../common/account-commission';
 import { formatMoney } from '../../common/format-money';
-import { displaySoftDeletedLabel } from '../../common/soft-delete.util';
+import { displaySoftDeletedLabel, looksSoftDeletedLabel } from '../../common/soft-delete.util';
 import { excludeDeletedClosingMovements } from './movement-query.util';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
@@ -216,16 +216,9 @@ export class MovementsService implements OnModuleInit {
       usdRate: m.usdRate != null ? n(m.usdRate) : null,
       amountUsd: m.amountUsd != null ? n(m.amountUsd) : null,
       conceptId: m.conceptId ?? null,
-      conceptName: m.concept
-        ? displaySoftDeletedLabel(m.concept.name)
-        : m.conceptId
-          ? 'Concepto eliminado'
-          : null,
+      conceptName: this.conceptDisplayName(m),
       conceptKind: m.concept?.kind ?? null,
-      conceptDeleted: !!(
-        m.conceptId &&
-        (!m.concept || m.concept.deletedAt || m.concept.active === false)
-      ),
+      conceptDeleted: this.isConceptMissingOrDeleted(m),
       invoiced: !!m.invoiced,
       invoiceNumber: m.invoiceNumber ?? null,
       closingId: m.closingId ?? null,
@@ -459,9 +452,23 @@ export class MovementsService implements OnModuleInit {
     if (filters.conceptId === '__none') {
       qb.andWhere('m.conceptId IS NULL');
     } else if (filters.conceptId === '__deleted') {
-      // Soft-delete: el join no trae el concepto → concept.id IS NULL.
+      // Soft-delete en el JOIN → concept.id NULL; también inactivo o nombre con marcador.
+      // LOCATE evita comodines de LIKE sobre `_`. NOT EXISTS cubre huérfanos / otro shop.
       qb.andWhere('m.conceptId IS NOT NULL');
-      qb.andWhere('(concept.id IS NULL OR concept.active = false)');
+      qb.andWhere(
+        `(
+          concept.id IS NULL
+          OR concept.active = false
+          OR LOCATE('__DELETED__', IFNULL(concept.name, '')) > 0
+          OR NOT EXISTS (
+            SELECT 1 FROM concepts cx
+            WHERE cx.id = m.conceptId
+              AND cx.deletedAt IS NULL
+              AND IFNULL(cx.active, 1) <> 0
+              AND LOCATE('__DELETED__', IFNULL(cx.name, '')) = 0
+          )
+        )`,
+      );
     } else if (filters.conceptId) {
       qb.andWhere('m.conceptId = :conceptId', { conceptId: filters.conceptId });
     }
@@ -624,27 +631,32 @@ export class MovementsService implements OnModuleInit {
     await this.attachConceptsIncludingDeleted(shopId, rows);
 
     return rows.map((m) => {
-      const concept = m.concept;
-      const conceptDeleted = !!(
-        m.conceptId &&
-        (!concept || concept.deletedAt || concept.active === false)
-      );
       return {
         id: m.id,
         businessDate: m.businessDate,
         amountUyu: n(m.amountUyu),
         conceptId: m.conceptId ?? null,
-        conceptName: concept
-          ? displaySoftDeletedLabel(concept.name)
-          : m.conceptId
-            ? 'Concepto eliminado'
-            : null,
-        conceptKind: concept?.kind ?? null,
-        conceptDeleted,
+        conceptName: this.conceptDisplayName(m),
+        conceptKind: m.concept?.kind ?? null,
+        conceptDeleted: this.isConceptMissingOrDeleted(m),
         fromAccountName: m.fromAccount?.name ?? null,
         toAccountName: m.toAccount?.name ?? null,
       };
     });
+  }
+
+  private isConceptMissingOrDeleted(m: Movement): boolean {
+    if (!m.conceptId) return false;
+    if (!m.concept) return true;
+    if (m.concept.deletedAt) return true;
+    if (m.concept.active === false) return true;
+    return looksSoftDeletedLabel(m.concept.name);
+  }
+
+  private conceptDisplayName(m: Movement): string | null {
+    if (!m.conceptId) return null;
+    if (!m.concept) return 'Concepto eliminado';
+    return displaySoftDeletedLabel(m.concept.name) || 'Concepto eliminado';
   }
 
   /** Recupera conceptos soft-deleted para mostrar nombre (sin sufijo __DELETED__). */
@@ -1309,9 +1321,14 @@ export class MovementsService implements OnModuleInit {
     const map = new Map<string, { conceptId: string | null; conceptName: string; total: number }>();
     for (const r of rows) {
       const key = r.conceptId ?? r.conceptName ?? 'Sin concepto';
+      const rawName = r.conceptName ?? 'Sin concepto';
+      const deleted = !!(r as { conceptDeleted?: boolean }).conceptDeleted || looksSoftDeletedLabel(rawName);
+      const conceptName = deleted
+        ? `${displaySoftDeletedLabel(rawName) || 'Concepto'} (eliminado)`
+        : displaySoftDeletedLabel(rawName) || rawName;
       const cur = map.get(key) ?? {
         conceptId: r.conceptId,
-        conceptName: r.conceptName ?? 'Sin concepto',
+        conceptName,
         total: 0,
       };
       cur.total += r.amountUyu;
