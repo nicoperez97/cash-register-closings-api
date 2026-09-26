@@ -7,7 +7,9 @@ import {
   Param,
   Post,
   Put,
+  Query,
   Req,
+  UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -57,7 +59,22 @@ export class IntegrationsWebhookController {
    */
   @Public()
   @Post('deliverate')
-  handleDeliverate(@Body() body: Record<string, unknown>) {
+  handleDeliverate(
+    @Body() body: Record<string, unknown>,
+    @Query('token') token?: string,
+    @Headers('x-webhook-secret') headerSecret?: string,
+  ) {
+    // Verificación opt-in: si DELIVERATE_WEBHOOK_SECRET está configurado, el
+    // webhook exige el token (query ?token= o header x-webhook-secret). Sin la
+    // env configurada, el comportamiento es el de siempre (compatibilidad).
+    const secret = String(process.env.DELIVERATE_WEBHOOK_SECRET ?? '').trim();
+    if (secret) {
+      const provided = String(token ?? headerSecret ?? '').trim();
+      if (provided !== secret) {
+        this.logger.warn('Deliverate webhook rechazado: token inválido o ausente');
+        throw new UnauthorizedException('Webhook no autorizado');
+      }
+    }
     const action = String(body?.action ?? '').trim();
     const rawUpdate = body?.update;
     const update =
