@@ -17,6 +17,7 @@ import {
   IsDateString,
   IsEnum,
   IsNumber,
+  IsObject,
   IsOptional,
   IsString,
   IsUUID,
@@ -55,6 +56,21 @@ class ShiftAssignmentDto {
   @IsString()
   @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
   serviceCheckOut?: string | null;
+
+  /**
+   * Overrides de horario por día de la semana (clave '0'=Domingo .. '6'=Sábado).
+   * Cada valor: { serviceCheckIn, serviceCheckOut } en HH:mm. El servicio
+   * sanitiza y descarta días vacíos o mal formados.
+   */
+  @ApiPropertyOptional({
+    description: "Horario por día (clave '0'=Dom..'6'=Sáb): { serviceCheckIn, serviceCheckOut }",
+  })
+  @IsOptional()
+  @IsObject()
+  days?: Record<
+    string,
+    { serviceCheckIn?: string | null; serviceCheckOut?: string | null }
+  > | null;
 }
 
 class CreateEmployeeDto {

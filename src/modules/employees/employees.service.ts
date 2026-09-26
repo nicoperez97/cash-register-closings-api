@@ -185,6 +185,7 @@ export class EmployeesService implements OnModuleInit {
       type?: string | null;
       serviceCheckIn?: string | null;
       serviceCheckOut?: string | null;
+      days?: unknown;
     }> | null,
   ): Promise<EmployeeShiftAssignment[]> {
     const assignments = normalizeShiftAssignments(raw);
@@ -336,6 +337,7 @@ export class EmployeesService implements OnModuleInit {
         type?: EmployeeType | string;
         serviceCheckIn?: string | null;
         serviceCheckOut?: string | null;
+        days?: unknown;
       }> | null;
       countsForAttendanceBonus?: boolean;
       producesFood?: boolean;
@@ -428,6 +430,7 @@ export class EmployeesService implements OnModuleInit {
         type?: EmployeeType | string;
         serviceCheckIn?: string | null;
         serviceCheckOut?: string | null;
+        days?: unknown;
       }> | null;
       countsForAttendanceBonus?: boolean;
       producesFood?: boolean;
