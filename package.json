@@ -12,7 +12,8 @@
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",
-    "test:e2e": "jest --testPathPattern=e2e-spec"
+    "test:e2e": "jest --testPathPattern=e2e-spec",
+    "test:e2e:db": "jest --config jest-e2e-db.config.js --runInBand"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.3",

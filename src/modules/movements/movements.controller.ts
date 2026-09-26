@@ -47,6 +47,7 @@ import {
   RequirePermissions,
 } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
+import { parsePageParams } from '../../common/pagination';
 import { MovementsService } from './movements.service';
 import { MovementsExcelImportService } from './movements-excel-import.service';
 import { MulterExceptionFilter } from '../../common/filters/multer-exception.filter';
@@ -238,26 +239,33 @@ export class MovementsController {
     @Query('employeeId') employeeId?: string,
     @Query('hasReceipt') hasReceipt?: string,
     @Query('shiftId') shiftId?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
   ) {
-    return this.movements.list(user, shopId, {
-      from,
-      to,
-      fromAccountId,
-      toAccountId,
-      accountId,
-      conceptId,
-      closingId,
-      q,
-      kind,
-      source,
-      partyType,
-      invoiced,
-      paymentId,
-      paymentMethod,
-      employeeId,
-      hasReceipt,
-      shiftId,
-    });
+    return this.movements.list(
+      user,
+      shopId,
+      {
+        from,
+        to,
+        fromAccountId,
+        toAccountId,
+        accountId,
+        conceptId,
+        closingId,
+        q,
+        kind,
+        source,
+        partyType,
+        invoiced,
+        paymentId,
+        paymentMethod,
+        employeeId,
+        hasReceipt,
+        shiftId,
+      },
+      parsePageParams({ page, pageSize }),
+    );
   }
 
   @Get('expenses-by-concept')

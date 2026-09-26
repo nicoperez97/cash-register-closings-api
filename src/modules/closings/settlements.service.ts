@@ -354,15 +354,19 @@ export class SettlementsService implements OnModuleInit {
     const now = new Date();
     const settleBatchId = randomUUID();
     const settledByName = actorDisplayName(user);
-    for (const row of rows) {
-      row.settledAt = now;
-      row.settledToAccountId = dest.id;
-      row.settledByUserId = user.id;
-      row.settledByName = settledByName;
-      row.settlementMovementId = movement.id;
-      row.settleBatchId = settleBatchId;
-      await this.sourceAmounts.save(row);
-    }
+    // Update atómico de todas las filas en un solo statement: evita que queden
+    // "a medias" si fallara a mitad del loop anterior.
+    await this.sourceAmounts.update(
+      { id: In(rows.map((r) => r.id)) },
+      {
+        settledAt: now,
+        settledToAccountId: dest.id,
+        settledByUserId: user.id,
+        settledByName,
+        settlementMovementId: movement.id,
+        settleBatchId,
+      },
+    );
 
     this.logger.log(
       `Rendición ${settleBatchId}: ${rows.length} montos → ${dest.name} ($${total.toFixed(2)})`,

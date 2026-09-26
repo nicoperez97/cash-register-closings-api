@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ConfigModule } from './config/config.module';
 import { DatabaseModule } from './database/database.module';
@@ -45,6 +45,7 @@ import { UploadsModule } from './modules/uploads/uploads.module';
 import { IntegrationsModule } from './modules/integrations/integrations.module';
 import { JwtAuthGuard, PermissionsGuard } from './common/guards';
 import { PublicAbuseGuard } from './common/public-abuse.guard';
+import { QueryFailedExceptionFilter } from './common/filters/query-failed-exception.filter';
 
 @Module({
   imports: [
@@ -93,6 +94,7 @@ import { PublicAbuseGuard } from './common/public-abuse.guard';
     UploadsModule,
   ],
   providers: [
+    { provide: APP_FILTER, useClass: QueryFailedExceptionFilter },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },
     { provide: APP_GUARD, useClass: PublicAbuseGuard },

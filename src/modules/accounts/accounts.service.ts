@@ -91,6 +91,16 @@ export class AccountsService implements OnModuleInit {
     } catch {
       // columna ya existe
     }
+    try {
+      // Amplía el ENUM de type una sola vez al arrancar (antes corría en cada list()).
+      await this.accounts.query(`
+        ALTER TABLE ledger_accounts
+          MODIFY COLUMN type ENUM('PARTNER', 'CHANNEL', 'SYSTEM', 'SUPPLIER', 'SERVICE', 'DIVIDENDS')
+          NOT NULL DEFAULT 'PARTNER'
+      `);
+    } catch {
+      // enum ya actualizado
+    }
     for (const col of [
       'listInExpenses',
       'listInIncomes',
@@ -208,15 +218,7 @@ export class AccountsService implements OnModuleInit {
 
   async list(user: AuthUser, shopId: string, opts?: { includeInactive?: boolean }) {
     this.shops.assertShopAccess(user, shopId);
-    try {
-      await this.accounts.query(`
-        ALTER TABLE ledger_accounts
-          MODIFY COLUMN type ENUM('PARTNER', 'CHANNEL', 'SYSTEM', 'SUPPLIER', 'SERVICE', 'DIVIDENDS')
-          NOT NULL DEFAULT 'PARTNER'
-      `);
-    } catch {
-      // enum ya actualizado
-    }
+    // El ALTER del ENUM de `type` se hace una sola vez en onModuleInit (no en cada request).
     try {
       await this.catalogSeed.ensureShopCatalogs(shopId);
     } catch {
