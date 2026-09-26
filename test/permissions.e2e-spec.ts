@@ -8,6 +8,7 @@ import { ClosingsController } from '../src/modules/closings/closings.controller'
 import { ClosingsService } from '../src/modules/closings/closings.service';
 import { WhatsappImportService } from '../src/modules/closings/whatsapp-import.service';
 import { ExcelImportService } from '../src/modules/closings/excel-import.service';
+import { ClosingStepFilesService } from '../src/modules/closings/closing-step-files.service';
 import { ReservationsController } from '../src/modules/reservations/reservations.controller';
 import { ReservationsService } from '../src/modules/reservations/reservations.service';
 import { ReservationRequestsService } from '../src/modules/reservations/reservation-requests.service';
@@ -47,6 +48,7 @@ describe('Permisos HTTP (e2e)', () => {
         { provide: ClosingsService, useValue: closingsService },
         { provide: WhatsappImportService, useValue: {} },
         { provide: ExcelImportService, useValue: {} },
+        { provide: ClosingStepFilesService, useValue: {} },
         { provide: ReservationsService, useValue: reservationsService },
         { provide: ReservationRequestsService, useValue: {} },
         { provide: UsersService, useValue: usersService },
