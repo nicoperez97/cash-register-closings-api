@@ -260,6 +260,46 @@ function extractDriveWarningCookie(setCookie: string | null): string | null {
   return m?.[1]?.trim() || null;
 }
 
+function decodeHtmlEntities(raw: string): string {
+  return String(raw ?? '')
+    .replace(/&amp;/g, '&')
+    .replace(/&#38;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#34;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>');
+}
+
+/**
+ * Aviso de archivo grande de Drive: hoy es un <form id="download-form"> cuyo
+ * action apunta a drive.usercontent.google.com/download y trae inputs hidden
+ * (id, export, confirm, uuid, at). El viejo uc?...&confirm= ya no alcanza para
+ * archivos grandes, así que resolvemos la URL a partir del propio formulario.
+ */
+function extractDriveDownloadUrl(html: string): string | null {
+  const formMatch =
+    html.match(/<form[^>]*\bid=["']download-form["'][^>]*>/i) ||
+    html.match(
+      /<form[^>]*\baction=["'][^"']*(?:usercontent\.google\.com|drive\.google\.com)[^"']*["'][^>]*>/i,
+    );
+  if (!formMatch) return null;
+  const actionMatch = formMatch[0].match(/\baction=["']([^"']+)["']/i);
+  if (!actionMatch) return null;
+  let action: URL;
+  try {
+    action = new URL(decodeHtmlEntities(actionMatch[1]));
+  } catch {
+    return null;
+  }
+  const inputRe = /<input\b[^>]*\bname=["']([^"']+)["'][^>]*\bvalue=["']([^"']*)["'][^>]*>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = inputRe.exec(html))) {
+    action.searchParams.set(m[1], decodeHtmlEntities(m[2]));
+  }
+  return action.toString();
+}
+
 /**
  * Baja el instalador desde un link (p.ej. Google Drive).
  * Drive en archivos grandes muestra un HTML de “aviso de virus”; sin el confirm
@@ -315,17 +355,27 @@ async function fetchInstallerFromUrl(
           'El link no devolvió un archivo. Subí el instalador como archivo en Locales.',
         );
       }
-      const fileId = parsed.searchParams.get('id');
-      const confirm =
-        extractDriveConfirmToken(html) ||
-        warning ||
-        't';
+      // Preferir el formulario real del aviso (apunta a drive.usercontent.google.com
+      // con uuid/at). Es lo único que funciona para archivos grandes hoy.
+      const formUrl = extractDriveDownloadUrl(html);
+      if (formUrl) {
+        url = formUrl;
+        continue;
+      }
+      const fileId =
+        parsed.searchParams.get('id') ||
+        parsed.pathname.match(/\/file\/d\/([^/]+)/)?.[1] ||
+        parsed.pathname.match(/\/d\/([^/]+)/)?.[1] ||
+        null;
+      const confirm = extractDriveConfirmToken(html) || warning || 't';
       if (!fileId) {
         throw new BadRequestException(
           'No se pudo resolver el archivo de Google Drive. Subí el instalador como archivo en Locales.',
         );
       }
-      url = `https://drive.google.com/uc?export=download&id=${encodeURIComponent(fileId)}&confirm=${encodeURIComponent(confirm)}`;
+      url = `https://drive.usercontent.google.com/download?id=${encodeURIComponent(
+        fileId,
+      )}&export=download&confirm=${encodeURIComponent(confirm)}`;
       continue;
     }
 

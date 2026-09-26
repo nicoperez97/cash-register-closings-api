@@ -7,6 +7,15 @@ import {
 } from './shift-hours.util';
 import type { ShopShift } from './shop-shifts';
 
+/** Días de la semana: 0 = Domingo … 6 = Sábado (getDay estándar). */
+export const WEEKDAYS = [0, 1, 2, 3, 4, 5, 6] as const;
+
+/** Override de horario para un día puntual dentro de un turno. */
+export type ShiftDayHours = {
+  serviceCheckIn?: string | null;
+  serviceCheckOut?: string | null;
+};
+
 export type EmployeeShiftAssignment = {
   shiftId: string;
   type: EmployeeType;
@@ -14,7 +23,39 @@ export type EmployeeShiftAssignment = {
   serviceCheckIn?: string | null;
   /** Retirada de servicio en este turno (HH:mm). Vacío = hereda empleado/turno. */
   serviceCheckOut?: string | null;
+  /**
+   * Overrides por día de la semana (clave '0'..'6'). Vacío = usa el horario del
+   * turno. Permite, p. ej., 18:00–00:00 de lunes a viernes y 20:00–02:00 el sábado.
+   */
+  days?: Record<string, ShiftDayHours> | null;
 };
+
+/** Día de la semana (0=Dom..6=Sáb) de una fecha 'YYYY-MM-DD'. null si inválida. */
+export function weekdayOf(date?: string | null): number | null {
+  const s = String(date ?? '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const d = new Date(`${s}T00:00:00`);
+  const wd = d.getDay();
+  return Number.isNaN(wd) ? null : wd;
+}
+
+function normalizeShiftDays(
+  raw: unknown,
+): Record<string, ShiftDayHours> | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const src = raw as Record<string, { serviceCheckIn?: string | null; serviceCheckOut?: string | null }>;
+  const out: Record<string, ShiftDayHours> = {};
+  for (const wd of WEEKDAYS) {
+    const row = src[wd] ?? src[String(wd)];
+    if (!row || typeof row !== 'object') continue;
+    const checkIn = parseHhMm(row.serviceCheckIn);
+    const checkOut = parseHhMm(row.serviceCheckOut);
+    if (checkIn || checkOut) {
+      out[String(wd)] = { serviceCheckIn: checkIn, serviceCheckOut: checkOut };
+    }
+  }
+  return Object.keys(out).length ? out : null;
+}
 
 export function normalizeEmployeeType(value?: string | null): EmployeeType {
   return value === EmployeeType.ROTATING ? EmployeeType.ROTATING : EmployeeType.FIXED;
@@ -26,6 +67,7 @@ export function normalizeShiftAssignments(
     type?: string | null;
     serviceCheckIn?: string | null;
     serviceCheckOut?: string | null;
+    days?: unknown;
   }> | null,
 ): EmployeeShiftAssignment[] {
   if (!Array.isArray(raw) || !raw.length) return [];
@@ -42,6 +84,7 @@ export function normalizeShiftAssignments(
       type: normalizeEmployeeType(row?.type),
       serviceCheckIn: checkIn,
       serviceCheckOut: checkOut,
+      days: normalizeShiftDays(row?.days),
     });
   }
   return out;
@@ -61,7 +104,11 @@ export function shiftWindowFallback(
   };
 }
 
-/** Horario de servicio efectivo: asignación → empleado → ventana del turno. */
+/**
+ * Horario de servicio efectivo.
+ * Prioridad: día del turno → turno → empleado → ventana del turno.
+ * `weekday` (0=Dom..6=Sáb) habilita los overrides por día; null los ignora.
+ */
 export function shiftServiceSchedule(
   emp: {
     serviceCheckIn?: string | null;
@@ -70,16 +117,19 @@ export function shiftServiceSchedule(
   },
   shiftId: string | null | undefined,
   fallback: { checkIn: string; checkOut: string },
+  weekday?: number | null,
 ): { checkIn: string; checkOut: string } {
   const assignments = normalizeShiftAssignments(emp.shiftAssignments);
   const hit = shiftId ? assignments.find((a) => a.shiftId === shiftId) : assignments[0];
+  const dayOverride =
+    hit && weekday != null && hit.days ? hit.days[String(weekday)] : null;
   return {
     checkIn: requireHhMm(
-      hit?.serviceCheckIn ?? emp.serviceCheckIn,
+      dayOverride?.serviceCheckIn ?? hit?.serviceCheckIn ?? emp.serviceCheckIn,
       fallback.checkIn,
     ),
     checkOut: requireHhMm(
-      hit?.serviceCheckOut ?? emp.serviceCheckOut,
+      dayOverride?.serviceCheckOut ?? hit?.serviceCheckOut ?? emp.serviceCheckOut,
       fallback.checkOut,
     ),
   };

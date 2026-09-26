@@ -12,6 +12,7 @@ import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
+import { Employee } from '../../entities/employee.entity';
 import { AuthUser } from '../../common/decorators';
 import { GlobalRole, LedgerAccountType } from '../../common/enums';
 import { isGlobalAdmin, isSuperAdmin } from '../../common/guards';
@@ -136,6 +137,8 @@ export class UsersService implements OnModuleInit {
     private readonly accounts: Repository<LedgerAccount>,
     @InjectRepository(LedgerAccountUser)
     private readonly accountLinks: Repository<LedgerAccountUser>,
+    @InjectRepository(Employee)
+    private readonly employees: Repository<Employee>,
   ) {}
 
   async onModuleInit() {
@@ -915,6 +918,9 @@ export class UsersService implements OnModuleInit {
     }
     await this.accountLinks.delete({ userId: id });
     await this.userShops.delete({ userId: id });
+    // Desvincular empleados que apuntaban a este usuario (evita FK colgada y
+    // que la ficha de empleado siga mostrando un usuario ya eliminado).
+    await this.employees.update({ userId: id }, { userId: null });
     user.active = false;
     user.email = markDeletedUnique(user.email, user.id, 160);
     await this.users.save(user);
