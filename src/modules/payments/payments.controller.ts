@@ -42,6 +42,7 @@ import {
 import { NotifyTargetsDto } from '../../common/dto/notify-targets.dto';
 import { CurrentUser, AuthUser, RequireAnyPermissions, RequirePermissions } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
+import { parsePageParams } from '../../common/pagination';
 import { PaymentsService } from './payments.service';
 import { ToBoolean } from '../../common/boolean.util';
 
@@ -334,24 +335,31 @@ export class PaymentsController {
     @Query('serviceId') serviceId?: string,
     @Query('amountMin') amountMin?: string,
     @Query('amountMax') amountMax?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
   ) {
     const mineUserId =
       mine === '1' || mine === 'true' ? user.id : undefined;
-    return this.payments.list(user, shopId, {
-      status,
-      payerUserId,
-      validatorUserId,
-      mineUserId,
-      dueFrom,
-      dueTo,
-      paidFrom,
-      paidTo,
-      supplierId,
-      employeeId,
-      serviceId,
-      amountMin,
-      amountMax,
-    });
+    return this.payments.list(
+      user,
+      shopId,
+      {
+        status,
+        payerUserId,
+        validatorUserId,
+        mineUserId,
+        dueFrom,
+        dueTo,
+        paidFrom,
+        paidTo,
+        supplierId,
+        employeeId,
+        serviceId,
+        amountMin,
+        amountMax,
+      },
+      parsePageParams({ page, pageSize }),
+    );
   }
 
   @Get('export.xlsx')

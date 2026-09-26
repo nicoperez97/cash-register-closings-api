@@ -7,7 +7,7 @@ import {
   StreamableFile,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, Repository, SelectQueryBuilder } from 'typeorm';
 import { createReadStream } from 'fs';
 import * as ExcelJS from 'exceljs';
 import { Payment } from '../../entities/payment.entity';
@@ -19,6 +19,7 @@ import { Employee } from '../../entities/employee.entity';
 import { ShopService } from '../../entities/shop-service.entity';
 import { Concept } from '../../entities/concept.entity';
 import { AuthUser } from '../../common/decorators';
+import { PageParams, offsetOf, paginated } from '../../common/pagination';
 import { GlobalRole, NotificationType, PaymentMethod, PaymentPriority, PaymentStatus } from '../../common/enums';
 import { ShopsService } from '../shops/shops.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -693,81 +694,22 @@ export class PaymentsService implements OnModuleInit {
       amountMin?: string | number;
       amountMax?: string | number;
     },
+    page?: PageParams | null,
   ) {
     this.shops.assertShopAccess(user, shopId);
-    const qb = this.payments
-      .createQueryBuilder('p')
-      .leftJoinAndSelect('p.payer', 'payer')
-      .leftJoinAndSelect('p.validator', 'validator')
-      .leftJoinAndSelect('p.account', 'account')
-      .leftJoinAndSelect('p.toAccount', 'toAccount')
-      .leftJoinAndSelect('p.supplier', 'supplier')
-      .leftJoinAndSelect('p.employee', 'employee')
-      .leftJoinAndSelect('p.service', 'service')
-      .leftJoinAndSelect('p.createdBy', 'createdBy')
-      .where('p.shopId = :shopId', { shopId })
-      .andWhere('p.active = true');
+
+    // Valores parseados una sola vez y aplicados por el closure a cualquier qb.
     const statuses = this.parseStatuses(opts?.status);
-    if (statuses.length === 1) {
-      qb.andWhere('p.status = :status', { status: statuses[0] });
-    } else if (statuses.length > 1) {
-      qb.andWhere('p.status IN (:...statuses)', { statuses });
-    }
     const payerIds = this.parseCsv(opts?.payerUserId);
-    if (payerIds.length === 1) {
-      qb.andWhere('p.payerUserId = :payerUserId', { payerUserId: payerIds[0] });
-    } else if (payerIds.length > 1) {
-      qb.andWhere('p.payerUserId IN (:...payerIds)', { payerIds });
-    }
     const validatorIds = this.parseCsv(opts?.validatorUserId);
-    if (validatorIds.length === 1) {
-      qb.andWhere('p.validatorUserId = :validatorUserId', {
-        validatorUserId: validatorIds[0],
-      });
-    } else if (validatorIds.length > 1) {
-      qb.andWhere('p.validatorUserId IN (:...validatorIds)', { validatorIds });
-    }
     const mineUserId = (opts?.mineUserId ?? '').trim();
-    if (mineUserId) {
-      qb.andWhere(
-        '(p.payerUserId = :mineUserId OR p.validatorUserId = :mineUserId)',
-        { mineUserId },
-      );
-    }
     const dueFrom = this.toDateOnly(opts?.dueFrom);
     const dueTo = this.toDateOnly(opts?.dueTo);
-    if (dueFrom) {
-      qb.andWhere('p.dueDate IS NOT NULL AND p.dueDate >= :dueFrom', { dueFrom });
-    }
-    if (dueTo) {
-      qb.andWhere('p.dueDate IS NOT NULL AND p.dueDate <= :dueTo', { dueTo });
-    }
     const paidFrom = this.toDateOnly(opts?.paidFrom);
     const paidTo = this.toDateOnly(opts?.paidTo);
-    if (paidFrom) {
-      qb.andWhere('p.paidAt IS NOT NULL AND p.paidAt >= :paidFrom', { paidFrom });
-    }
-    if (paidTo) {
-      qb.andWhere('p.paidAt IS NOT NULL AND p.paidAt <= :paidTo', { paidTo });
-    }
     const supplierIds = this.parseCsv(opts?.supplierId);
-    if (supplierIds.length === 1) {
-      qb.andWhere('p.supplierId = :supplierId', { supplierId: supplierIds[0] });
-    } else if (supplierIds.length > 1) {
-      qb.andWhere('p.supplierId IN (:...supplierIds)', { supplierIds });
-    }
     const employeeIds = this.parseCsv(opts?.employeeId);
-    if (employeeIds.length === 1) {
-      qb.andWhere('p.employeeId = :employeeId', { employeeId: employeeIds[0] });
-    } else if (employeeIds.length > 1) {
-      qb.andWhere('p.employeeId IN (:...employeeIds)', { employeeIds });
-    }
     const serviceIds = this.parseCsv(opts?.serviceId);
-    if (serviceIds.length === 1) {
-      qb.andWhere('p.serviceId = :serviceId', { serviceId: serviceIds[0] });
-    } else if (serviceIds.length > 1) {
-      qb.andWhere('p.serviceId IN (:...serviceIds)', { serviceIds });
-    }
     const amountMin =
       opts?.amountMin !== undefined && opts?.amountMin !== null && opts?.amountMin !== ''
         ? Number(opts.amountMin)
@@ -776,18 +718,102 @@ export class PaymentsService implements OnModuleInit {
       opts?.amountMax !== undefined && opts?.amountMax !== null && opts?.amountMax !== ''
         ? Number(opts.amountMax)
         : null;
-    if (amountMin != null && Number.isFinite(amountMin)) {
-      qb.andWhere('p.amount IS NOT NULL AND p.amount >= :amountMin', { amountMin });
+
+    const applyFilters = (qb: SelectQueryBuilder<Payment>) => {
+      qb.where('p.shopId = :shopId', { shopId }).andWhere('p.active = true');
+      if (statuses.length === 1) {
+        qb.andWhere('p.status = :status', { status: statuses[0] });
+      } else if (statuses.length > 1) {
+        qb.andWhere('p.status IN (:...statuses)', { statuses });
+      }
+      if (payerIds.length === 1) {
+        qb.andWhere('p.payerUserId = :payerUserId', { payerUserId: payerIds[0] });
+      } else if (payerIds.length > 1) {
+        qb.andWhere('p.payerUserId IN (:...payerIds)', { payerIds });
+      }
+      if (validatorIds.length === 1) {
+        qb.andWhere('p.validatorUserId = :validatorUserId', { validatorUserId: validatorIds[0] });
+      } else if (validatorIds.length > 1) {
+        qb.andWhere('p.validatorUserId IN (:...validatorIds)', { validatorIds });
+      }
+      if (mineUserId) {
+        qb.andWhere('(p.payerUserId = :mineUserId OR p.validatorUserId = :mineUserId)', {
+          mineUserId,
+        });
+      }
+      if (dueFrom) {
+        qb.andWhere('p.dueDate IS NOT NULL AND p.dueDate >= :dueFrom', { dueFrom });
+      }
+      if (dueTo) {
+        qb.andWhere('p.dueDate IS NOT NULL AND p.dueDate <= :dueTo', { dueTo });
+      }
+      if (paidFrom) {
+        qb.andWhere('p.paidAt IS NOT NULL AND p.paidAt >= :paidFrom', { paidFrom });
+      }
+      if (paidTo) {
+        qb.andWhere('p.paidAt IS NOT NULL AND p.paidAt <= :paidTo', { paidTo });
+      }
+      if (supplierIds.length === 1) {
+        qb.andWhere('p.supplierId = :supplierId', { supplierId: supplierIds[0] });
+      } else if (supplierIds.length > 1) {
+        qb.andWhere('p.supplierId IN (:...supplierIds)', { supplierIds });
+      }
+      if (employeeIds.length === 1) {
+        qb.andWhere('p.employeeId = :employeeId', { employeeId: employeeIds[0] });
+      } else if (employeeIds.length > 1) {
+        qb.andWhere('p.employeeId IN (:...employeeIds)', { employeeIds });
+      }
+      if (serviceIds.length === 1) {
+        qb.andWhere('p.serviceId = :serviceId', { serviceId: serviceIds[0] });
+      } else if (serviceIds.length > 1) {
+        qb.andWhere('p.serviceId IN (:...serviceIds)', { serviceIds });
+      }
+      if (amountMin != null && Number.isFinite(amountMin)) {
+        qb.andWhere('p.amount IS NOT NULL AND p.amount >= :amountMin', { amountMin });
+      }
+      if (amountMax != null && Number.isFinite(amountMax)) {
+        qb.andWhere('p.amount IS NOT NULL AND p.amount <= :amountMax', { amountMax });
+      }
+      return qb;
+    };
+
+    const PRIORITY_ORDER = `CASE p.priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END`;
+    const applyOrder = (qb: SelectQueryBuilder<Payment>) =>
+      qb.orderBy(PRIORITY_ORDER, 'ASC').addOrderBy('p.dueDate', 'ASC').addOrderBy('p.createdAt', 'DESC');
+
+    const withRelations = (qb: SelectQueryBuilder<Payment>) =>
+      qb
+        .leftJoinAndSelect('p.payer', 'payer')
+        .leftJoinAndSelect('p.validator', 'validator')
+        .leftJoinAndSelect('p.account', 'account')
+        .leftJoinAndSelect('p.toAccount', 'toAccount')
+        .leftJoinAndSelect('p.supplier', 'supplier')
+        .leftJoinAndSelect('p.employee', 'employee')
+        .leftJoinAndSelect('p.service', 'service')
+        .leftJoinAndSelect('p.createdBy', 'createdBy');
+
+    if (page) {
+      // Paso 1: IDs de la página (sin joins → LIMIT/OFFSET crudo es correcto y
+      // no dispara la reescritura del ORDER BY CASE que rompe con .take()).
+      const idQb = applyFilters(this.payments.createQueryBuilder('p'));
+      const total = await idQb.getCount();
+      applyOrder(idQb).select('p.id', 'id').offset(offsetOf(page)).limit(page.pageSize);
+      const idRows = await idQb.getRawMany<{ id: string }>();
+      const ids = idRows.map((r) => r.id);
+      if (!ids.length) return paginated([], total, page);
+      // Paso 2: entidades completas de esos IDs, re-aplicando el orden.
+      const entQb = withRelations(this.payments.createQueryBuilder('p')).where(
+        'p.id IN (:...ids)',
+        { ids },
+      );
+      applyOrder(entQb);
+      const rows = await entQb.getMany();
+      return paginated(rows.map((r) => this.toDto(r)), total, page);
     }
-    if (amountMax != null && Number.isFinite(amountMax)) {
-      qb.andWhere('p.amount IS NOT NULL AND p.amount <= :amountMax', { amountMax });
-    }
-    qb.orderBy(
-      `CASE p.priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END`,
-      'ASC',
-    )
-      .addOrderBy('p.dueDate', 'ASC')
-      .addOrderBy('p.createdAt', 'DESC');
+
+    const qb = withRelations(this.payments.createQueryBuilder('p'));
+    applyFilters(qb);
+    applyOrder(qb);
     // Sin .take(): TypeORM + LIMIT reescribe el ORDER BY CASE y busca el alias "CASE p".
     const rows = await qb.getMany();
     return rows.map((r) => this.toDto(r));
@@ -858,7 +884,7 @@ export class PaymentsService implements OnModuleInit {
     this.shops.assertShopAccess(user, shopId);
     const shop = await this.shops.findOne(user, shopId);
     const status = opts?.status;
-    let rows = await this.list(user, shopId, {
+    const listed = await this.list(user, shopId, {
       status: status || undefined,
       payerUserId: opts?.payerUserId,
       validatorUserId: opts?.validatorUserId,
@@ -873,6 +899,7 @@ export class PaymentsService implements OnModuleInit {
       amountMin: opts?.amountMin,
       amountMax: opts?.amountMax,
     });
+    let rows = Array.isArray(listed) ? listed : listed.items;
     const kindNorm =
       opts?.kind === 'employee' ||
       opts?.kind === 'supplier' ||
