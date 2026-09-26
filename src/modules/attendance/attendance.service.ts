@@ -24,6 +24,7 @@ import {
   normalizeShiftAssignments,
   shiftServiceSchedule,
   shiftWindowFallback,
+  weekdayOf,
 } from '../../common/employee-shift.util';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
@@ -289,11 +290,17 @@ export class AttendanceService implements OnModuleInit {
       shiftAssignments?: Parameters<typeof shiftServiceSchedule>[0]['shiftAssignments'];
     } | null,
     shiftId?: string | null,
+    date?: string | null,
   ) {
-    return shiftServiceSchedule(emp ?? {}, shiftId, this.scheduleFallback(shop, shiftId));
+    return shiftServiceSchedule(
+      emp ?? {},
+      shiftId,
+      this.scheduleFallback(shop, shiftId),
+      weekdayOf(date),
+    );
   }
 
-  /** Baseline de extras: asignación → empleado → ventana del turno. */
+  /** Baseline de extras: día del turno → asignación → empleado → ventana del turno. */
   private overtimeBaseline(
     shop: {
       shifts?: Parameters<typeof normalizeShopShifts>[0];
@@ -305,8 +312,9 @@ export class AttendanceService implements OnModuleInit {
       shiftAssignments?: Parameters<typeof shiftServiceSchedule>[0]['shiftAssignments'];
     } | null | undefined,
     shiftId?: string | null,
+    date?: string | null,
   ) {
-    return this.employeeShiftDefaults(shop, emp, shiftId);
+    return this.employeeShiftDefaults(shop, emp, shiftId, date);
   }
 
   private applyShift(
@@ -373,7 +381,7 @@ export class AttendanceService implements OnModuleInit {
     }
     const { shop, shift } = await this.resolveAttendanceShift(shopId, dto.shiftId);
     const withHours = this.withHours(shop);
-    const defaults = this.overtimeBaseline(shop ?? {}, emp, shift.id);
+    const defaults = this.overtimeBaseline(shop ?? {}, emp, shift.id, dto.date);
 
     let row = await this.days.findOne({
       where: { employeeId: dto.employeeId, date: dto.date, shiftId: shift.id },
@@ -476,7 +484,7 @@ export class AttendanceService implements OnModuleInit {
           days.reduce((s, d) => {
             if (!d.isPresent) return s;
             if (withHours && d.checkInAt && d.checkOutAt) {
-              const defaults = this.overtimeBaseline(shop ?? {}, e, d.shiftId);
+              const defaults = this.overtimeBaseline(shop ?? {}, e, d.shiftId, d.date);
               return (
                 s +
                 computeOvertimeHours({
