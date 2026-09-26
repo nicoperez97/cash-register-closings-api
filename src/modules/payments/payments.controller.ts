@@ -337,6 +337,8 @@ export class PaymentsController {
     @Query('amountMax') amountMax?: string,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
+    @Query('kind') kind?: string,
+    @Query('sort') sort?: string,
   ) {
     const mineUserId =
       mine === '1' || mine === 'true' ? user.id : undefined;
@@ -357,6 +359,8 @@ export class PaymentsController {
         serviceId,
         amountMin,
         amountMax,
+        kind,
+        sort,
       },
       parsePageParams({ page, pageSize }),
     );

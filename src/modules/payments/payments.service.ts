@@ -693,6 +693,10 @@ export class PaymentsService implements OnModuleInit {
       serviceId?: string;
       amountMin?: string | number;
       amountMax?: string | number;
+      /** Tipo de bandeja (supplier/service/employee/partner). Filtra por la cuenta/entidad ligada. */
+      kind?: string;
+      /** Orden: updated|due|amountDesc|amountAsc|priority|created|paid. Default priority. */
+      sort?: string;
     },
     page?: PageParams | null,
   ) {
@@ -774,12 +778,53 @@ export class PaymentsService implements OnModuleInit {
       if (amountMax != null && Number.isFinite(amountMax)) {
         qb.andWhere('p.amount IS NOT NULL AND p.amount <= :amountMax', { amountMax });
       }
+      // Tipo de bandeja: replica kindOfPayment del front (service→supplier→partner→employee).
+      switch (opts?.kind) {
+        case 'service':
+          qb.andWhere('p.serviceId IS NOT NULL');
+          break;
+        case 'supplier':
+          qb.andWhere('p.serviceId IS NULL AND p.supplierId IS NOT NULL');
+          break;
+        case 'partner':
+          qb.andWhere('p.serviceId IS NULL AND p.supplierId IS NULL AND p.toAccountId IS NOT NULL');
+          break;
+        case 'employee':
+          qb.andWhere('p.serviceId IS NULL AND p.supplierId IS NULL AND p.toAccountId IS NULL');
+          break;
+        default:
+          break;
+      }
       return qb;
     };
 
     const PRIORITY_ORDER = `CASE p.priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END`;
-    const applyOrder = (qb: SelectQueryBuilder<Payment>) =>
-      qb.orderBy(PRIORITY_ORDER, 'ASC').addOrderBy('p.dueDate', 'ASC').addOrderBy('p.createdAt', 'DESC');
+    // Orden equivalente a comparePayments del front. nulls-last como el cliente.
+    const applyOrder = (qb: SelectQueryBuilder<Payment>) => {
+      switch (opts?.sort) {
+        case 'due':
+          return qb.orderBy('p.dueDate IS NULL', 'ASC').addOrderBy('p.dueDate', 'ASC');
+        case 'amountDesc':
+          return qb.orderBy('COALESCE(p.amount, 0)', 'DESC');
+        case 'amountAsc':
+          return qb.orderBy('COALESCE(p.amount, 0)', 'ASC');
+        case 'created':
+          return qb.orderBy('p.createdAt IS NULL', 'ASC').addOrderBy('p.createdAt', 'DESC');
+        case 'paid':
+          return qb.orderBy('p.paidAt IS NULL', 'ASC').addOrderBy('p.paidAt', 'DESC');
+        case 'updated':
+          return qb
+            .orderBy('COALESCE(p.updatedAt, p.createdAt) IS NULL', 'ASC')
+            .addOrderBy('COALESCE(p.updatedAt, p.createdAt)', 'DESC');
+        case 'priority':
+        default:
+          return qb
+            .orderBy(PRIORITY_ORDER, 'ASC')
+            .addOrderBy('p.dueDate IS NULL', 'ASC')
+            .addOrderBy('p.dueDate', 'ASC')
+            .addOrderBy('p.createdAt', 'DESC');
+      }
+    };
 
     const withRelations = (qb: SelectQueryBuilder<Payment>) =>
       qb
