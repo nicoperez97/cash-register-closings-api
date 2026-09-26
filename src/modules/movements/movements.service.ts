@@ -15,6 +15,7 @@ import { UserShop } from '../../entities/user-shop.entity';
 import { LedgerAccountUser } from '../../entities/ledger-account-user.entity';
 import { Payment } from '../../entities/payment.entity';
 import { AuthUser } from '../../common/decorators';
+import { PageParams, offsetOf, paginated } from '../../common/pagination';
 import {
   ConceptKind,
   GlobalRole,
@@ -398,7 +399,12 @@ export class MovementsService implements OnModuleInit {
     return all.find((a) => (a.name ?? '').toLowerCase().includes(needle)) ?? null;
   }
 
-  async list(user: AuthUser, shopId: string, filters: MovementFilters = {}) {
+  async list(
+    user: AuthUser,
+    shopId: string,
+    filters: MovementFilters = {},
+    page?: PageParams | null,
+  ) {
     this.shops.assertShopAccess(user, shopId);
     if (filters.kind === 'expense') {
       this.assertPerm(user, shopId, 'expenses.read');
@@ -555,11 +561,20 @@ export class MovementsService implements OnModuleInit {
       );
     }
 
-    qb.distinct(true)
-      .orderBy('m.businessDate', 'DESC')
-      .addOrderBy('m.createdAt', 'DESC')
-      .take(2500);
-    const rows = await qb.getMany();
+    qb.distinct(true).orderBy('m.businessDate', 'DESC').addOrderBy('m.createdAt', 'DESC');
+
+    // Paginación server-side opcional: con page/pageSize devuelve { items, total };
+    // sin ellos, el array de siempre (tope defensivo de 2500).
+    let rows: Movement[];
+    let total: number | undefined;
+    if (page) {
+      qb.skip(offsetOf(page)).take(page.pageSize);
+      [rows, total] = await qb.getManyAndCount();
+    } else {
+      qb.take(2500);
+      rows = await qb.getMany();
+    }
+
     await this.attachConceptsIncludingDeleted(shopId, rows);
     const paymentLinks = await this.paymentLinksForMovements(
       shopId,
@@ -567,7 +582,7 @@ export class MovementsService implements OnModuleInit {
     );
     const dtos = rows.map((r) => this.toDto(r, paymentLinks.get(r.id) ?? null));
     await this.enrichDividendBeneficiaries(shopId, dtos, rows);
-    return dtos;
+    return page ? paginated(dtos, total ?? dtos.length, page) : dtos;
   }
 
   /**

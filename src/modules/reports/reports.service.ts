@@ -769,7 +769,7 @@ export class ReportsService {
       shopId,
       from: filters.from ?? null,
       to: filters.to ?? null,
-      movementCount: movements.length,
+      movementCount: Array.isArray(movements) ? movements.length : movements.total,
       expenses,
       balances,
     };
@@ -779,10 +779,11 @@ export class ReportsService {
     this.shops.assertShopAccess(user, shopId);
     const shop = await this.shops.findOne(user, shopId);
     const rows = await this.filteredRows(shopId, filters);
-    const movRows = await this.movementsService.list(user, shopId, {
+    const movListed = await this.movementsService.list(user, shopId, {
       from: filters.from,
       to: filters.to,
     });
+    const movRows = Array.isArray(movListed) ? movListed : movListed.items;
     const expenses = await this.movementsService.expensesByConcept(user, shopId, {
       from: filters.from,
       to: filters.to,

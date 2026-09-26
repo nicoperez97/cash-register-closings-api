@@ -24,6 +24,7 @@ import { ClosingMovementsSyncService } from '../movements/closing-movements-sync
 import { AccountsService } from '../accounts/accounts.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AuthUser } from '../../common/decorators';
+import { PageParams, offsetOf, paginated } from '../../common/pagination';
 import { assertCanViewClosingsList } from '../../common/guards';
 import {
   ClosingKind,
@@ -475,10 +476,32 @@ export class ClosingsService implements OnModuleInit {
     return extra;
   }
 
-  async list(user: AuthUser, shopId: string, filters: ClosingListFilters = {}) {
+  async list(
+    user: AuthUser,
+    shopId: string,
+    filters: ClosingListFilters = {},
+    page?: PageParams | null,
+  ) {
     this.shops.assertShopAccess(user, shopId);
     assertCanViewClosingsList(user, shopId);
+    // Paginación server-side opcional: si el cliente manda page/pageSize
+    // devolvemos un sobre { items, total, ... }; si no, el array de siempre.
+    if (page) {
+      const qb = this.closings
+        .createQueryBuilder('c')
+        .where('c.shopId = :shopId', { shopId })
+        .andWhere('c.active = true');
+      applyClosingFilters(qb, 'c', filters);
+      qb.orderBy('c.businessDate', 'DESC').skip(offsetOf(page)).take(page.pageSize);
+      const [rows, total] = await qb.getManyAndCount();
+      return paginated(await this.mapWithExpenseTotals(rows), total, page);
+    }
     const rows = await this.queryFiltered(shopId, filters, false, LIST_MAX_ROWS);
+    return this.mapWithExpenseTotals(rows);
+  }
+
+  /** Adjunta el total de gastos de cada cierre y mapea a DTO. */
+  private async mapWithExpenseTotals(rows: CashClosing[]) {
     const ids = rows.map((r) => r.id);
     const totals = new Map<string, number>();
     if (ids.length) {

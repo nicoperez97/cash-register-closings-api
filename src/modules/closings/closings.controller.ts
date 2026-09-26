@@ -29,6 +29,7 @@ import { PermissionsGuard, assertCanViewClosingsList } from '../../common/guards
 import { CreateClosingDto, UpdateClosingDto } from './dto/closing.dto';
 import { OpenClosingDto } from './dto/open-closing.dto';
 import { parseClosingFilters } from './closing-filters';
+import { parsePageParams } from '../../common/pagination';
 import { MulterExceptionFilter } from '../../common/filters/multer-exception.filter';
 import {
   isClosingStepFileSlot,
@@ -55,7 +56,7 @@ export class ClosingsController {
     @Query() query: Record<string, string | undefined>,
   ) {
     assertCanViewClosingsList(user, shopId);
-    return this.closings.list(user, shopId, parseClosingFilters(query));
+    return this.closings.list(user, shopId, parseClosingFilters(query), parsePageParams(query));
   }
 
   @Post('import-whatsapp')

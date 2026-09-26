@@ -197,7 +197,8 @@ export class MovementsExcelImportService {
   async exportRange(user: AuthUser, shopId: string, filters: MovementFilters = {}) {
     this.shops.assertShopAccess(user, shopId);
     const shop = await this.shops.findOne(user, shopId);
-    const rows = [...(await this.movementsService.list(user, shopId, filters))].reverse();
+    const listed = await this.movementsService.list(user, shopId, filters);
+    const rows = [...(Array.isArray(listed) ? listed : listed.items)].reverse();
 
     const wb = new ExcelJS.Workbook();
     wb.creator = 'Cash Register Closings';
