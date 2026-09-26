@@ -148,7 +148,11 @@ export class IntegrationsService implements OnModuleInit {
         'Indicá la URL pública de la API de este local para registrar el webhook',
       );
     }
-    return `${origin}/api/v1/webhooks/deliverate`;
+    // Si hay secreto configurado, lo registramos en la URL para que Deliverate
+    // lo devuelva y el webhook pueda verificarlo (opt-in vía env).
+    const secret = String(process.env.DELIVERATE_WEBHOOK_SECRET ?? '').trim();
+    const suffix = secret ? `?token=${encodeURIComponent(secret)}` : '';
+    return `${origin}/api/v1/webhooks/deliverate${suffix}`;
   }
 
   private async getOrCreate(shopId: string): Promise<ShopIntegration> {
