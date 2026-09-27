@@ -34,13 +34,19 @@ import {
 } from 'class-validator';
 import type { Response } from 'express';
 import { ToBoolean } from '../../common/boolean.util';
-import { CurrentUser, AuthUser, RequirePermissions } from '../../common/decorators';
+import {
+  CurrentUser,
+  AuthUser,
+  RequireAnyPermissions,
+  RequirePermissions,
+} from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { SalesReportImportService } from './sales-report-import.service';
 import {
   parseSalesProductsFilters,
   SalesProductsAnalyticsService,
 } from './sales-products-analytics.service';
+import { MenuSalesAnalyticsService } from './menu-sales-analytics.service';
 import { PosCatalogService } from './pos-catalog.service';
 import type { SalesReportProductLabelOverride } from './sales-report-import.service';
 
@@ -80,11 +86,31 @@ class UpdatePosProductDto {
   @ApiPropertyOptional() @IsOptional() @IsString() subcategory?: string | null;
   @ApiPropertyOptional() @IsOptional() @ValidateIf((_, v) => v != null) @IsUUID() categoryId?: string | null;
   @ApiPropertyOptional() @IsOptional() @ValidateIf((_, v) => v != null) @IsUUID() subcategoryId?: string | null;
+  @ApiPropertyOptional({ nullable: true, description: 'Ítem de carta enlazado (null = sin enlace)' })
+  @IsOptional()
+  @ValidateIf((_, v) => v != null && v !== '')
+  @IsString()
+  menuItemId?: string | null;
   @ApiPropertyOptional()
   @IsOptional()
   @ToBoolean()
   @IsBoolean()
   active?: boolean;
+}
+
+class LinkCommitDto {
+  @ApiProperty({
+    type: 'array',
+    items: {
+      type: 'object',
+      properties: {
+        productId: { type: 'string' },
+        menuItemId: { type: 'string', nullable: true },
+      },
+    },
+  })
+  @IsOptional()
+  links: Array<{ productId: string; menuItemId?: string | null }>;
 }
 
 class CreateCategoryDto {
@@ -131,11 +157,12 @@ export class SalesReportsController {
   constructor(
     private readonly imports: SalesReportImportService,
     private readonly analytics: SalesProductsAnalyticsService,
+    private readonly menuSales: MenuSalesAnalyticsService,
     private readonly catalog: PosCatalogService,
   ) {}
 
   @Post('shops/:shopId/sales-reports/import-excel')
-  @RequirePermissions('reports.export')
+  @RequireAnyPermissions('reports.export', 'reportsProducts.read')
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
@@ -150,13 +177,14 @@ export class SalesReportsController {
     },
   })
   @UseInterceptors(FileInterceptor('file'))
-  importExcel(
+  async importExcel(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
     @UploadedFile() file: Express.Multer.File,
     @Body('productLabels') productLabelsRaw?: string,
     @Query('commit') commit?: string,
   ) {
+    await this.analytics.assertImportAllowed(user, shopId);
     const doCommit = commit === 'true' || commit === '1';
     const productLabels = doCommit ? parseProductLabelsBody(productLabelsRaw) : null;
     return doCommit
@@ -165,7 +193,7 @@ export class SalesReportsController {
   }
 
   @Get('shops/:shopId/sales-reports/products/summary')
-  @RequirePermissions('reports.view')
+  @RequirePermissions('reportsProducts.read')
   productsSummary(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -176,8 +204,34 @@ export class SalesReportsController {
     return this.analytics.summary(user, shopId, filters);
   }
 
+  /** Ventas de carta: pedidos online + mostrador + comanda (no Restosoft). */
+  @Get('shops/:shopId/sales-reports/menu/summary')
+  @RequirePermissions('reportsSales.read')
+  menuSummary(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Query() query: Record<string, string | undefined>,
+  ) {
+    const filters = parseSalesProductsFilters(query);
+    if (!filters) throw new BadRequestException('Parámetros from y to son obligatorios');
+    return this.menuSales.summary(user, shopId, filters);
+  }
+
+  /** Preview: platos enlazados y cuánto vendieron en Ventas POS (para Traer a Ventas). */
+  @Get('shops/:shopId/sales-reports/menu/pos-linked-preview')
+  @RequirePermissions('reportsSales.read')
+  menuPosLinkedPreview(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Query() query: Record<string, string | undefined>,
+  ) {
+    const filters = parseSalesProductsFilters(query);
+    if (!filters) throw new BadRequestException('Parámetros from y to son obligatorios');
+    return this.menuSales.posLinkedPreview(user, shopId, filters);
+  }
+
   @Get('shops/:shopId/sales-reports/products/export.xlsx')
-  @RequirePermissions('reports.export')
+  @RequireAnyPermissions('reports.export', 'reportsProducts.read')
   async productsExport(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -186,6 +240,7 @@ export class SalesReportsController {
   ) {
     const filters = parseSalesProductsFilters(query);
     if (!filters) throw new BadRequestException('Parámetros from y to son obligatorios');
+    await this.analytics.assertExportAllowed(user, shopId);
     const { buffer, filename } = await this.analytics.exportExcel(user, shopId, filters);
     res.setHeader(
       'Content-Type',
@@ -196,7 +251,7 @@ export class SalesReportsController {
   }
 
   @Get('shops/:shopId/pos-products')
-  @RequirePermissions('reports.view')
+  @RequireAnyPermissions('reportsProducts.read', 'shops.manage')
   listProducts(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -216,6 +271,26 @@ export class SalesReportsController {
     return this.analytics.updateCatalog(user, shopId, id, dto);
   }
 
+  @Post('shops/:shopId/pos-catalog/link-suggest')
+  @RequirePermissions('shops.manage')
+  linkSuggest(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
+    return this.catalog.suggestMenuLinks(user, shopId);
+  }
+
+  @Post('shops/:shopId/pos-catalog/link-commit')
+  @RequirePermissions('shops.manage')
+  linkCommit(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: LinkCommitDto,
+  ) {
+    const links = (dto.links ?? []).map((l) => ({
+      productId: String(l.productId ?? ''),
+      menuItemId: l.menuItemId == null || l.menuItemId === '' ? null : String(l.menuItemId),
+    }));
+    return this.catalog.commitMenuLinks(user, shopId, links);
+  }
+
   @Post('shops/:shopId/pos-catalog/seed-from-report')
   @RequirePermissions('shops.manage')
   seedCatalog(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
@@ -223,7 +298,7 @@ export class SalesReportsController {
   }
 
   @Get('shops/:shopId/pos-categories')
-  @RequirePermissions('reports.view')
+  @RequireAnyPermissions('reportsProducts.read', 'shops.manage')
   listCategories(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
     return this.catalog.listCategories(user, shopId);
   }
@@ -260,7 +335,7 @@ export class SalesReportsController {
   }
 
   @Get('shops/:shopId/pos-subcategories')
-  @RequirePermissions('reports.view')
+  @RequireAnyPermissions('reportsProducts.read', 'shops.manage')
   listSubcategories(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,

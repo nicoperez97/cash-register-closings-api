@@ -83,6 +83,10 @@ export interface MovementFilters {
   shiftId?: string;
   /** panel (default) | all */
   scope?: 'panel' | 'all';
+  /** Columna de la tabla UI / campo ordenable. */
+  sortBy?: string;
+  /** asc | desc */
+  sortDir?: 'asc' | 'desc';
 }
 
 export interface UpsertMovementDto {
@@ -392,6 +396,67 @@ export class MovementsService implements OnModuleInit {
     )`;
   }
 
+  /** Orden de listado (UI Transacciones). Default: createdAt DESC. */
+  private applyListSort(
+    qb: ReturnType<Repository<Movement>['createQueryBuilder']>,
+    sortBy?: string | null,
+    sortDir?: string | null,
+  ) {
+    const dir: 'ASC' | 'DESC' = sortDir === 'asc' ? 'ASC' : 'DESC';
+    const key = String(sortBy ?? '').trim();
+
+    const simple: Record<string, string> = {
+      businessDate: 'm.businessDate',
+      createdAt: 'm.createdAt',
+      amountUyu: 'm.amountUyu',
+      description: 'm.description',
+      invoiced: 'm.invoiced',
+      paymentMethod: 'm.paymentMethod',
+      fromAccountName: 'COALESCE(fromAccount.name, fromUser.fullName)',
+      toAccountName: 'COALESCE(toAccount.name, toUser.fullName)',
+      conceptName: 'concept.name',
+      hasReceiptFile:
+        "CASE WHEN m.receiptFilePath IS NOT NULL AND m.receiptFilePath <> '' THEN 1 ELSE 0 END",
+      source:
+        'CASE WHEN m.closingId IS NOT NULL THEN 2 WHEN pay.id IS NOT NULL THEN 1 ELSE 0 END',
+    };
+
+    if (key === 'kind') {
+      qb.setParameters({
+        ...this.expenseDestinationParams(),
+        incomeKind: ConceptKind.INCOME,
+        ingresoName: '%ingreso%',
+        ingresoCode: 'INGRESO',
+      });
+      const kindExpr = `CASE
+        WHEN ${this.expenseDestinationSql()} THEN 0
+        WHEN (
+          concept.kind = :incomeKind
+          OR LOWER(fromAccount.name) LIKE :ingresoName
+          OR UPPER(fromAccount.code) = :ingresoCode
+        ) AND ${this.notExpenseDestinationSql()} THEN 1
+        ELSE 2
+      END`;
+      qb.addSelect(kindExpr, 'sort_kind');
+      qb.orderBy('sort_kind', dir).addOrderBy('m.createdAt', 'DESC');
+      return;
+    }
+
+    const expr = simple[key];
+    if (expr) {
+      if (expr.includes(' ') || expr.includes('(')) {
+        qb.addSelect(expr, 'sort_col');
+        qb.orderBy('sort_col', dir).addOrderBy('m.createdAt', 'DESC');
+      } else {
+        qb.orderBy(expr, dir).addOrderBy('m.createdAt', 'DESC');
+      }
+      return;
+    }
+
+    // Más recientes primero por alta en el sistema (no por fecha de negocio).
+    qb.orderBy('m.createdAt', 'DESC').addOrderBy('m.businessDate', 'DESC');
+  }
+
   private async findSystemAccount(shopId: string, code: 'INGRESO' | 'EGRESO') {
     const byCode = await this.accounts.findOne({ where: { shopId, code, active: true } });
     if (byCode) return byCode;
@@ -562,8 +627,8 @@ export class MovementsService implements OnModuleInit {
       );
     }
 
-    // Más recientes primero por alta en el sistema (no por fecha de negocio).
-    qb.distinct(true).orderBy('m.createdAt', 'DESC').addOrderBy('m.businessDate', 'DESC');
+    qb.distinct(true);
+    this.applyListSort(qb, filters.sortBy, filters.sortDir);
 
     // Paginación server-side opcional: con page/pageSize devuelve { items, total };
     // sin ellos, el array de siempre (tope defensivo de 2500).

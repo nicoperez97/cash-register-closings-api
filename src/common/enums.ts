@@ -251,6 +251,7 @@ export const PERMISSIONS = [
   'reports.view',
   'reports.export',
   'reportsConcepts.read',
+  'reportsSales.read',
   'reportsProducts.read',
   'reportsStats.read',
   'shops.read',

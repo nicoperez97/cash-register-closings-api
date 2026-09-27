@@ -9,6 +9,7 @@ import { PosSubcategory } from './pos-subcategory.entity';
 @Unique(['shopId', 'productCode'])
 @Index(['shopId', 'category'])
 @Index(['shopId', 'categoryId'])
+@Index(['shopId', 'menuItemId'])
 export class PosProduct extends BaseEntity {
   @Column()
   shopId: string;
@@ -35,6 +36,10 @@ export class PosProduct extends BaseEntity {
 
   @Column({ type: 'varchar', length: 36, nullable: true })
   subcategoryId?: string | null;
+
+  /** Ítem de carta (`shops.menu`) enlazado a este plato POS. */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  menuItemId?: string | null;
 
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })

@@ -36,6 +36,7 @@ import {
   normalizeOrderingConfigVisibility,
 } from '../../common/ordering-config-visibility';
 import { normalizeShopConfigVisibility } from '../../common/shop-config-visibility';
+import { normalizeReportsProductsVisibility } from '../../common/reports-products-visibility';
 import { closingDateKey } from '../../common/soft-delete.util';
 import { saveUploadFile } from '../../common/uploads';
 import {
@@ -556,7 +557,18 @@ export class AuthService implements OnModuleInit {
       let modules: ModulePermissionsMap;
       // null = legacy (derivar del rol); objeto (aunque vacío) = explícito.
       if (link?.modulePermissions != null) {
-        modules = link.modulePermissions as ModulePermissionsMap;
+        modules = { ...(link.modulePermissions as ModulePermissionsMap) };
+        // Módulo nuevo "Ventas" (carta): si el snapshot no lo trae, heredar de otros reportes.
+        if (
+          !Object.prototype.hasOwnProperty.call(link.modulePermissions, 'reportsSales') &&
+          (modules.reports === 'read' ||
+            modules.reports === 'export' ||
+            modules.reportsProducts === 'read' ||
+            modules.reportsConcepts === 'read' ||
+            modules.reportsStats === 'read')
+        ) {
+          modules.reportsSales = 'read';
+        }
       } else {
         modules = deriveModulesFromRole(effectiveRole);
       }
@@ -736,6 +748,9 @@ export class AuthService implements OnModuleInit {
         ),
         shopConfigVisibility: normalizeShopConfigVisibility(
           link?.shopConfigVisibility as Partial<Record<string, unknown>> | null,
+        ),
+        reportsProductsVisibility: normalizeReportsProductsVisibility(
+          link?.reportsProductsVisibility as Partial<Record<string, unknown>> | null,
         ),
         canEditExpenses: !!link?.canEditExpenses,
         canEditPayments: !!link?.canEditPayments,

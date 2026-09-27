@@ -1,11 +1,20 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as ExcelJS from 'exceljs';
 import { AuthUser } from '../../common/decorators';
+import { GlobalRole } from '../../common/enums';
+import { isGlobalAdmin } from '../../common/guards';
+import {
+  canSeeAmount,
+  canSeeQty,
+  normalizeReportsProductsVisibility,
+  ReportsProductsVisibility,
+} from '../../common/reports-products-visibility';
 import { PosProduct } from '../../entities/pos-product.entity';
 import { PosCategory } from '../../entities/pos-category.entity';
 import { PosSaleTicketLine } from '../../entities/pos-sale-ticket-line.entity';
+import { UserShop } from '../../entities/user-shop.entity';
 import { ShopsService } from '../shops/shops.service';
 import {
   allSeedProducts,
@@ -23,6 +32,10 @@ export interface SalesProductsFilters {
   subcategory?: string | null;
   paymentCode?: string | null;
   salesSystemId?: string | null;
+  /** Ventas (carta): sumar ventas POS de platos enlazados al summary. */
+  includePosSales?: boolean;
+  /** Si viene, solo mergea estos menuItemId (tras “Traer de ventas POS”). */
+  posMenuItemIds?: string[] | null;
 }
 
 export interface SalesProductRow {
@@ -39,6 +52,8 @@ export interface SalesProductRow {
   ticketContribution: number;
   /** Δ % vs período anterior (mismo filtro de fechas corrido). */
   trendPct: number | null;
+  menuItemId?: string | null;
+  menuItemName?: string | null;
 }
 
 export interface SalesCategoryRow {
@@ -153,8 +168,128 @@ export class SalesProductsAnalyticsService {
     private readonly lines: Repository<PosSaleTicketLine>,
     @InjectRepository(PosProduct)
     private readonly products: Repository<PosProduct>,
+    @InjectRepository(UserShop)
+    private readonly userShops: Repository<UserShop>,
     private readonly shops: ShopsService,
   ) {}
+
+  async visibilityFor(
+    user: AuthUser,
+    shopId: string,
+  ): Promise<ReportsProductsVisibility> {
+    if (isGlobalAdmin(user.globalRole as GlobalRole)) {
+      return normalizeReportsProductsVisibility(null);
+    }
+    const link = await this.userShops.findOne({
+      where: { userId: user.id, shopId },
+    });
+    return normalizeReportsProductsVisibility(
+      link?.reportsProductsVisibility as Partial<ReportsProductsVisibility> | null,
+    );
+  }
+
+  async assertExportAllowed(user: AuthUser, shopId: string): Promise<void> {
+    this.shops.assertShopAccess(user, shopId);
+    const v = await this.visibilityFor(user, shopId);
+    if (!v.export) throw new ForbiddenException('Sin permiso para descargar Ventas POS');
+  }
+
+  async assertImportAllowed(user: AuthUser, shopId: string): Promise<void> {
+    this.shops.assertShopAccess(user, shopId);
+    const v = await this.visibilityFor(user, shopId);
+    if (!v.import) throw new ForbiddenException('Sin permiso para importar Ventas POS');
+  }
+
+  private redactSummary(
+    summary: SalesProductsSummary,
+    v: ReportsProductsVisibility,
+  ): SalesProductsSummary {
+    const seeAmount = canSeeAmount(v);
+    const seeQty = canSeeQty(v);
+    const redactMoney = (row: Record<string, unknown>): Record<string, unknown> => {
+      const next: Record<string, unknown> = { ...row };
+      if (!seeAmount) {
+        if ('amount' in next) next['amount'] = 0;
+        if ('avgTicketAmount' in next) next['avgTicketAmount'] = 0;
+        if ('ticketContribution' in next) next['ticketContribution'] = 0;
+        if ('share' in next) next['share'] = 0;
+        if ('maxTicketAmount' in next) next['maxTicketAmount'] = 0;
+        if ('minTicketAmount' in next) next['minTicketAmount'] = 0;
+        if ('top10Share' in next) next['top10Share'] = 0;
+        if ('amountDeltaPct' in next) next['amountDeltaPct'] = null;
+        if ('previousAmount' in next) next['previousAmount'] = 0;
+        if ('deltaPct' in next) next['deltaPct'] = null;
+        if ('cumulativeShare' in next) next['cumulativeShare'] = 0;
+      }
+      if (!seeQty) {
+        if ('qty' in next) next['qty'] = 0;
+        if ('dishesPerTicket' in next) next['dishesPerTicket'] = 0;
+      }
+      return next;
+    };
+
+    const products = v.tabProducts
+      ? summary.products.map((r) => redactMoney({ ...r }) as unknown as SalesProductRow)
+      : [];
+    const categories = v.tabCategories
+      ? summary.categories.map((r) => redactMoney({ ...r }) as unknown as SalesCategoryRow)
+      : [];
+    const subcategories = v.tabCategories
+      ? summary.subcategories.map((r) => redactMoney({ ...r }) as unknown as SalesSubcategoryRow)
+      : [];
+    const byDay = v.tabDays
+      ? summary.byDay.map((r) => redactMoney({ ...r }) as unknown as SalesDayRow)
+      : [];
+    const byPayment = v.charts
+      ? summary.byPayment.map((r) => redactMoney({ ...r }) as unknown as SalesPaymentRow)
+      : [];
+    const pareto = v.charts
+      ? summary.pareto.map((r) =>
+          seeAmount
+            ? r
+            : { ...r, amount: 0, cumulativeShare: 0 },
+        )
+      : [];
+    const categoryByDay = v.charts
+      ? summary.categoryByDay.map((r) => (seeAmount ? r : { ...r, amount: 0 }))
+      : [];
+    const sameWeekdayCompare = v.charts
+      ? summary.sameWeekdayCompare.map((r) =>
+          seeAmount
+            ? r
+            : { ...r, amount: 0, previousAmount: 0, deltaPct: null },
+        )
+      : [];
+
+    const totals = redactMoney({
+      ...summary.totals,
+    }) as unknown as SalesProductsSummary['totals'];
+
+    return {
+      ...summary,
+      totals: v.kpis
+        ? totals
+        : {
+            ...totals,
+            qty: 0,
+            amount: 0,
+            avgTicketAmount: 0,
+            maxTicketAmount: 0,
+            minTicketAmount: 0,
+            dishesPerTicket: 0,
+            top10Share: 0,
+            amountDeltaPct: null,
+          },
+      products,
+      categories,
+      subcategories,
+      byDay,
+      byPayment,
+      pareto,
+      categoryByDay,
+      sameWeekdayCompare,
+    };
+  }
 
   async summary(
     user: AuthUser,
@@ -162,6 +297,7 @@ export class SalesProductsAnalyticsService {
     filters: SalesProductsFilters,
   ): Promise<SalesProductsSummary> {
     this.shops.assertShopAccess(user, shopId);
+    const visibility = await this.visibilityFor(user, shopId);
 
     const base = this.lines
       .createQueryBuilder('l')
@@ -245,11 +381,44 @@ export class SalesProductsAnalyticsService {
     const totalAmount = n(totalsRaw?.amount);
     const ticketCount = n(totalsRaw?.ticketCount);
 
+    const catalogRows = await this.products.find({
+      where: { shopId, active: true },
+      select: ['productCode', 'menuItemId'],
+    });
+    const menuItemByCode = new Map(
+      catalogRows
+        .filter((p) => p.productCode && p.menuItemId)
+        .map((p) => [p.productCode, p.menuItemId as string]),
+    );
+    const shopEntity = await this.shops.getShopEntity(shopId);
+    const menuNameById = new Map<string, string>();
+    const menu = shopEntity?.menu;
+    if (menu) {
+      const pushItems = (
+        sections?: Array<{ items?: Array<{ id?: string; name?: string }> }>,
+      ) => {
+        for (const sec of sections ?? []) {
+          for (const it of sec?.items ?? []) {
+            const id = String(it?.id ?? '').trim();
+            const name = String(it?.name ?? '').trim();
+            if (id && name) menuNameById.set(id, name);
+          }
+        }
+      };
+      if (Array.isArray(menu.menus)) {
+        for (const m of menu.menus) pushItems(m.sections);
+      } else {
+        pushItems(menu.sections);
+      }
+    }
+
     const products: SalesProductRow[] = productRaw.map((r) => {
       const amount = n(r.amount);
       const tc = n(r.ticketCount);
+      const code = r.productCode ?? null;
+      const menuItemId = code ? menuItemByCode.get(code) ?? null : null;
       return {
-        productCode: r.productCode ?? null,
+        productCode: code,
         productName: r.productName ?? null,
         category: r.category ?? null,
         subcategory: r.subcategory ?? null,
@@ -260,6 +429,8 @@ export class SalesProductsAnalyticsService {
         avgTicketAmount: tc > 0 ? amount / tc : 0,
         ticketContribution: 0,
         trendPct: null,
+        menuItemId,
+        menuItemName: menuItemId ? menuNameById.get(menuItemId) ?? null : null,
       };
     });
 
@@ -466,7 +637,7 @@ export class SalesProductsAnalyticsService {
       };
     });
 
-    return {
+    const full: SalesProductsSummary = {
       shopId,
       from: filters.from,
       to: filters.to,
@@ -495,6 +666,7 @@ export class SalesProductsAnalyticsService {
       sameWeekdayCompare,
       filterOptions,
     };
+    return this.redactSummary(full, visibility);
   }
 
   async listCatalog(user: AuthUser, shopId: string, q?: string | null) {
@@ -549,6 +721,7 @@ export class SalesProductsAnalyticsService {
       subcategory?: string | null;
       categoryId?: string | null;
       subcategoryId?: string | null;
+      menuItemId?: string | null;
       active?: boolean;
     },
   ) {
@@ -558,6 +731,9 @@ export class SalesProductsAnalyticsService {
 
     if (dto.productName !== undefined) row.productName = dto.productName;
     if (dto.active !== undefined) row.active = dto.active;
+    if (dto.menuItemId !== undefined) {
+      row.menuItemId = dto.menuItemId?.trim() ? dto.menuItemId.trim() : null;
+    }
 
     // Prefer IDs when provided; sync denormalized names.
     if (dto.categoryId !== undefined || dto.subcategoryId !== undefined) {
@@ -1022,6 +1198,15 @@ export function parseSalesProductsFilters(
   const from = query.from?.trim();
   const to = query.to?.trim();
   if (!from || !to) return null;
+  const posIdsRaw = query.posMenuItemIds?.trim();
+  const posMenuItemIds = posIdsRaw
+    ? [...new Set(posIdsRaw.split(',').map((s) => s.trim()).filter(Boolean))]
+    : null;
+  const includeFlag = String(query.includePosSales ?? '')
+    .trim()
+    .toLowerCase();
+  const includePosSales =
+    includeFlag === '1' || includeFlag === 'true' || includeFlag === 'yes';
   return {
     from,
     to,
@@ -1030,5 +1215,7 @@ export function parseSalesProductsFilters(
     subcategory: query.subcategory?.trim() || null,
     paymentCode: query.paymentCode?.trim() || null,
     salesSystemId: query.salesSystemId?.trim() || null,
+    includePosSales: includePosSales || undefined,
+    posMenuItemIds,
   };
 }

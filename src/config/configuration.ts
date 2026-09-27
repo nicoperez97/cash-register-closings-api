@@ -55,9 +55,9 @@ export default () => {
     /** Gemini (opcional): mejora parseo de cartas, CV y facturas. Free tier en AI Studio. */
     gemini: {
       apiKey: (env.GEMINI_API_KEY ?? '').trim(),
-      model: (env.GEMINI_MODEL ?? 'gemini-3.6-flash').trim() || 'gemini-3.6-flash',
+      model: (env.GEMINI_MODEL ?? 'gemini-3.8-flash').trim() || 'gemini-3.8-flash',
       /** Modelos a probar si el principal responde 503/alta demanda (coma-separados). */
-      fallbackModels: (env.GEMINI_FALLBACK_MODELS ?? 'gemini-2.5-flash,gemini-2.0-flash')
+      fallbackModels: (env.GEMINI_FALLBACK_MODELS ?? 'gemini-3.6-flash,gemini-flash-latest')
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean),
