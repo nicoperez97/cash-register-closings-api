@@ -110,12 +110,52 @@ export class ClosingMovementsSyncService {
     // Cuentas del local (OWN_ACCOUNT): un asiento por source con monto > 0.
     // Compat legacy: si aún hay montos en columnas canal y no hay sourceAmounts, usar linkedPaymentMethod.
     const sourceRows = closing.sourceAmounts ?? [];
+    const resolveSourceDest = (src: {
+      name?: string | null;
+      accountId?: string | null;
+      kind?: string | null;
+    }): LedgerAccount | null => {
+      if (src.kind && src.kind !== ClosingSourceKind.OWN_ACCOUNT) return null;
+      if (src.accountId) {
+        const byId = accounts.find((a) => a.id === src.accountId);
+        if (byId) return byId;
+      }
+      // Fallback: nombre/código canónico (PVS, MP, DNI…) si la cuenta del local quedó sin accountId.
+      const name = String(src.name ?? '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .trim();
+      if (!name) return null;
+      const byCode = (codes: string[], linked?: LinkedPaymentMethod) =>
+        accounts.find(
+          (a) =>
+            a.active &&
+            (codes.includes(a.code) ||
+              (linked != null && a.linkedPaymentMethod === linked)),
+        ) ?? null;
+      if (name === 'pvs' || name.includes('pvs') || name.includes('tarjeta') || name === 'card') {
+        return byCode(['PVS'], LinkedPaymentMethod.CARD);
+      }
+      if (name.includes('mercado') || name === 'mp' || name === 'mercadopago') {
+        return byCode(['MP'], LinkedPaymentMethod.MERCADO_PAGO);
+      }
+      if (name.includes('dni')) {
+        return byCode(['DNI'], LinkedPaymentMethod.ACCOUNT_DNI);
+      }
+      if (name.includes('delivery') || name.includes('pedidos') || name.includes('rappi')) {
+        return byCode(['DELIVERY'], LinkedPaymentMethod.DELIVERY);
+      }
+      if (name.includes('transfer')) {
+        return byCode(['TRANSFER'], LinkedPaymentMethod.TRANSFER);
+      }
+      return null;
+    };
     for (const src of sourceRows) {
       const amount = n(src.amount);
       if (amount <= 0) continue;
       if (String(src.role ?? '') === 'CASH') continue;
-      if (src.kind !== ClosingSourceKind.OWN_ACCOUNT || !src.accountId) continue;
-      const dest = accounts.find((a) => a.id === src.accountId);
+      const dest = resolveSourceDest(src);
       if (!dest) continue;
       rows.push({
         shopId: closing.shopId,
@@ -584,11 +624,39 @@ export class ClosingMovementsSyncService {
       } else {
         for (const src of sourceRows) {
           const amount = n(src.amount);
-          if (!(amount > 0) || src.kind !== ClosingSourceKind.OWN_ACCOUNT || !src.accountId) {
-            continue;
-          }
+          if (!(amount > 0)) continue;
           if (String(src.role ?? '') === 'CASH') continue;
-          const dest = accounts.find((a) => a.id === src.accountId) ?? null;
+          if (src.kind && src.kind !== ClosingSourceKind.OWN_ACCOUNT) continue;
+          let dest = src.accountId
+            ? accounts.find((a) => a.id === src.accountId) ?? null
+            : null;
+          if (!dest) {
+            const name = String(src.name ?? '')
+              .normalize('NFD')
+              .replace(/[\u0300-\u036f]/g, '')
+              .toLowerCase()
+              .trim();
+            const byCode = (codes: string[], linked?: LinkedPaymentMethod) =>
+              accounts.find(
+                (a) =>
+                  a.active &&
+                  (codes.includes(a.code) ||
+                    (linked != null && a.linkedPaymentMethod === linked)),
+              ) ?? null;
+            if (
+              name === 'pvs' ||
+              name.includes('pvs') ||
+              name.includes('tarjeta') ||
+              name === 'card'
+            ) {
+              dest = byCode(['PVS'], LinkedPaymentMethod.CARD);
+            } else if (name.includes('mercado') || name === 'mp' || name === 'mercadopago') {
+              dest = byCode(['MP'], LinkedPaymentMethod.MERCADO_PAGO);
+            } else if (name.includes('dni')) {
+              dest = byCode(['DNI'], LinkedPaymentMethod.ACCOUNT_DNI);
+            }
+          }
+          if (!dest) continue;
           push(closing, null, amount, src.name, dest);
         }
         if (n(closing.otherAmount) > 0) {

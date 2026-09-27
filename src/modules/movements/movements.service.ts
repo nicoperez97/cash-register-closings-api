@@ -203,6 +203,7 @@ export class MovementsService implements OnModuleInit {
       id: m.id,
       shopId: m.shopId,
       businessDate: m.businessDate,
+      createdAt: m.createdAt ? new Date(m.createdAt).toISOString() : null,
       fromAccountId: m.fromAccountId,
       toAccountId: m.toAccountId,
       fromAccountName: m.fromAccount?.name ?? null,
@@ -561,7 +562,8 @@ export class MovementsService implements OnModuleInit {
       );
     }
 
-    qb.distinct(true).orderBy('m.businessDate', 'DESC').addOrderBy('m.createdAt', 'DESC');
+    // Más recientes primero por alta en el sistema (no por fecha de negocio).
+    qb.distinct(true).orderBy('m.createdAt', 'DESC').addOrderBy('m.businessDate', 'DESC');
 
     // Paginación server-side opcional: con page/pageSize devuelve { items, total };
     // sin ellos, el array de siempre (tope defensivo de 2500).

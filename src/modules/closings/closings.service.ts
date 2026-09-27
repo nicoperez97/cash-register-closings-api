@@ -48,6 +48,7 @@ import { OpenClosingDto } from './dto/open-closing.dto';
 import {
   applyPosnetSums,
   calcClosingTotals,
+  channelAmountsFromSources,
   expensesTotalFrom,
   differenceReasonMissing,
   extraIncomeFromLines,
@@ -257,6 +258,95 @@ export class ClosingsService implements OnModuleInit {
       `);
     } catch {
       // columna ya existe
+    }
+    await this.backfillChannelAmountsFromSources();
+  }
+
+  /**
+   * Cierres guardados con Cuentas del local dejaron cardAmount/MP/DNI en 0.
+   * Recalcula esas columnas desde closing_source_amounts y re-sincroniza el libro.
+   */
+  private async backfillChannelAmountsFromSources(): Promise<void> {
+    try {
+      await this.closings.query(`
+        CREATE TABLE IF NOT EXISTS app_meta (
+          metaKey VARCHAR(64) NOT NULL PRIMARY KEY,
+          metaValue VARCHAR(255) NULL,
+          updatedAt DATETIME(6) NULL
+        )
+      `);
+      const rows: Array<{ c: number | string }> = await this.closings.query(
+        `SELECT COUNT(*) AS c FROM app_meta WHERE metaKey = 'channel_amounts_from_sources_v1'`,
+      );
+      if (Number(rows?.[0]?.c ?? 0) > 0) return;
+
+      const sources = await this.sourceAmounts.find();
+      if (!sources.length) {
+        await this.closings.query(`
+          INSERT INTO app_meta (metaKey, metaValue, updatedAt)
+          VALUES ('channel_amounts_from_sources_v1', '1', NOW(6))
+        `);
+        return;
+      }
+
+      const byClosing = new Map<string, typeof sources>();
+      for (const s of sources) {
+        const list = byClosing.get(s.closingId) ?? [];
+        list.push(s);
+        byClosing.set(s.closingId, list);
+      }
+
+      let updated = 0;
+      const resyncIds: string[] = [];
+      for (const [closingId, list] of byClosing) {
+        const ch = channelAmountsFromSources(list);
+        if (
+          !(
+            ch.cardAmount > 0 ||
+            ch.mercadoPagoAmount > 0 ||
+            ch.accountDniAmount > 0 ||
+            ch.deliveryAppsAmount > 0 ||
+            ch.transferAmount > 0
+          )
+        ) {
+          continue;
+        }
+        const closing = await this.closings.findOne({ where: { id: closingId } });
+        if (!closing) continue;
+        const same =
+          n(closing.cardAmount) === ch.cardAmount &&
+          n(closing.mercadoPagoAmount) === ch.mercadoPagoAmount &&
+          n(closing.accountDniAmount) === ch.accountDniAmount &&
+          n(closing.deliveryAppsAmount) === ch.deliveryAppsAmount &&
+          n(closing.transferAmount) === ch.transferAmount;
+        if (same) continue;
+        closing.cardAmount = money(ch.cardAmount);
+        closing.mercadoPagoAmount = money(ch.mercadoPagoAmount);
+        closing.accountDniAmount = money(ch.accountDniAmount);
+        closing.deliveryAppsAmount = money(ch.deliveryAppsAmount);
+        closing.transferAmount = money(ch.transferAmount);
+        await this.closings.save(closing);
+        updated += 1;
+        resyncIds.push(closingId);
+      }
+
+      for (const id of resyncIds) {
+        await this.syncMovements(id);
+      }
+
+      await this.closings.query(`
+        INSERT INTO app_meta (metaKey, metaValue, updatedAt)
+        VALUES ('channel_amounts_from_sources_v1', '1', NOW(6))
+      `);
+      if (updated) {
+        this.logger.log(
+          `Backfill canales desde Cuentas del local: ${updated} cierres, ${resyncIds.length} libros re-sincronizados`,
+        );
+      }
+    } catch (err) {
+      this.logger.warn(
+        `No se pudo backfill canales desde sources: ${(err as Error)?.message ?? err}`,
+      );
     }
   }
 
@@ -476,6 +566,55 @@ export class ClosingsService implements OnModuleInit {
     return extra;
   }
 
+  /** Rellena nombre/rol desde el catálogo y deriva columnas canal legacy (PVS → cardAmount…). */
+  private async withChannelAmountsFromSources(
+    shopId: string,
+    dto: CreateClosingDto,
+  ): Promise<CreateClosingDto> {
+    const rows = dto.sourceAmounts ?? [];
+    if (!rows.length) return dto;
+    const defs = await this.sources.find({ where: { shopId } });
+    const byId = new Map(defs.map((s) => [s.id, s]));
+    const named = rows.map((row) => {
+      const src = byId.get(row.sourceId);
+      return {
+        name: src?.name ?? '',
+        role: src?.role ?? 'STANDARD',
+        amount: sourceAmountOf(row),
+        lines: row.lines,
+        posnetAmounts: row.posnetAmounts,
+      };
+    });
+    const ch = channelAmountsFromSources(named);
+    return {
+      ...dto,
+      cardAmount: ch.cardAmount,
+      mercadoPagoAmount: ch.mercadoPagoAmount,
+      accountDniAmount: ch.accountDniAmount,
+      deliveryAppsAmount: ch.deliveryAppsAmount,
+      transferAmount: ch.transferAmount,
+    };
+  }
+
+  /**
+   * Si hay sourceAmounts, los totales ya incluyen esos montos vía sourceDeclared.
+   * Anula columnas canal para no sumar PVS/MP/DNI dos veces.
+   */
+  private forTotalsWithoutLegacyChannels(
+    dto: CreateClosingDto,
+    hasSourceAmounts: boolean,
+  ): CreateClosingDto {
+    if (!hasSourceAmounts) return dto;
+    return {
+      ...dto,
+      cardAmount: 0,
+      mercadoPagoAmount: 0,
+      accountDniAmount: 0,
+      deliveryAppsAmount: 0,
+      transferAmount: 0,
+    };
+  }
+
   async list(
     user: AuthUser,
     shopId: string,
@@ -504,6 +643,7 @@ export class ClosingsService implements OnModuleInit {
   private async mapWithExpenseTotals(rows: CashClosing[]) {
     const ids = rows.map((r) => r.id);
     const totals = new Map<string, number>();
+    const sourcesByClosing = new Map<string, ClosingSourceAmount[]>();
     if (ids.length) {
       const raw = await this.expenses
         .createQueryBuilder('e')
@@ -515,8 +655,55 @@ export class ClosingsService implements OnModuleInit {
       for (const row of raw) {
         totals.set(row.closingId, n(row.total));
       }
+      const sourceRows = await this.sourceAmounts.find({
+        where: { closingId: In(ids) },
+      });
+      for (const s of sourceRows) {
+        const list = sourcesByClosing.get(s.closingId) ?? [];
+        list.push(s);
+        sourcesByClosing.set(s.closingId, list);
+      }
     }
-    return rows.map((r) => this.toDto(r, { expensesTotal: totals.get(r.id) ?? 0 }));
+    return rows.map((r) => {
+      const dto = this.toDto(r, { expensesTotal: totals.get(r.id) ?? 0 });
+      const list = sourcesByClosing.get(r.id) ?? [];
+      const sourceAmounts = list.map((s) => ({
+        id: s.id,
+        sourceId: s.sourceId,
+        name: s.name,
+        includeInDeclared: !!s.includeInDeclared,
+        kind: s.kind,
+        role: s.role ?? 'STANDARD',
+        accountId: s.accountId ?? null,
+        amount: n(s.amount),
+        lines: sourceLinesOf(s.lines),
+        posnetAmounts: (s.posnetAmounts ?? []).map((p) => ({
+          posnetId: p.posnetId,
+          name: p.name,
+          amount: n(p.amount),
+        })),
+      }));
+      const ch = channelAmountsFromSources(list);
+      const hasChannels =
+        ch.cardAmount > 0 ||
+        ch.mercadoPagoAmount > 0 ||
+        ch.accountDniAmount > 0 ||
+        ch.deliveryAppsAmount > 0 ||
+        ch.transferAmount > 0;
+      return {
+        ...dto,
+        sourceAmounts,
+        ...(hasChannels
+          ? {
+              cardAmount: ch.cardAmount,
+              mercadoPagoAmount: ch.mercadoPagoAmount,
+              accountDniAmount: ch.accountDniAmount,
+              deliveryAppsAmount: ch.deliveryAppsAmount,
+              transferAmount: ch.transferAmount,
+            }
+          : {}),
+      };
+    });
   }
 
   async queryFiltered(
@@ -735,12 +922,19 @@ export class ClosingsService implements OnModuleInit {
       shiftId: shift.id,
       closingId,
     });
-    const normalized = this.applyPosnetSums(dto);
-    const posnetAmounts = this.normalizePosnetAmounts(normalized.posnetAmounts);
-    const incomeExtras = extraIncomeFromLines(normalized.extraLines);
-    const sourceDeclared = await this.declaredFromSources(shopId, normalized);
-    const expensesTotal = expensesTotalFrom(normalized.expenses);
-    const totals = this.calc(normalized, incomeExtras + sourceDeclared, expensesTotal);
+    const withPosnets = { ...dto, ...this.applyPosnetSums(dto) } as CreateClosingDto;
+    const posnetAmounts = this.normalizePosnetAmounts(withPosnets.posnetAmounts);
+    const incomeExtras = extraIncomeFromLines(withPosnets.extraLines);
+    const sourceDeclared = await this.declaredFromSources(shopId, withPosnets);
+    const expensesTotal = expensesTotalFrom(withPosnets.expenses);
+    // Con Cuentas del local los canales van en sourceDeclared: no sumar también cardAmount/MP/DNI.
+    const forCalc = this.forTotalsWithoutLegacyChannels(
+      withPosnets,
+      !!(withPosnets.sourceAmounts ?? []).length,
+    );
+    const totals = this.calc(forCalc, incomeExtras + sourceDeclared, expensesTotal);
+    // Columnas canal legacy para lista/reportes (después del calc).
+    const normalized = await this.withChannelAmountsFromSources(shopId, withPosnets);
     await this.assertDifferenceReason(shopId, totals.difference, normalized.differenceReason);
     const withdrawn = await this.resolveWithdrawnBy(
       shopId,
@@ -863,26 +1057,56 @@ export class ClosingsService implements OnModuleInit {
       notes: dto.notes ?? row.notes ?? undefined, evidenceUrl: dto.evidenceUrl ?? row.evidenceUrl ?? undefined,
       expenses: dto.expenses, extraLines: dto.extraLines, sourceAmounts: dto.sourceAmounts,
     };
-    const merged = (
-      dto.posnetAmounts !== undefined ? this.applyPosnetSums(mergedRaw) : mergedRaw
+    const mergedPosnets = (
+      dto.posnetAmounts !== undefined
+        ? { ...mergedRaw, ...this.applyPosnetSums(mergedRaw) }
+        : mergedRaw
     ) as CreateClosingDto;
     const posnetAmounts =
       dto.posnetAmounts !== undefined
-        ? this.normalizePosnetAmounts(merged.posnetAmounts)
+        ? this.normalizePosnetAmounts(mergedPosnets.posnetAmounts)
         : row.posnetAmounts ?? null;
-    const incomeExtras = extraIncomeFromLines(merged.extraLines ?? row.extraLines);
+    const incomeExtras = extraIncomeFromLines(mergedPosnets.extraLines ?? row.extraLines);
+    const sourcesForDeclared =
+      mergedPosnets.sourceAmounts ??
+      row.sourceAmounts
+        ?.filter((s): s is typeof s & { sourceId: string } => !!s.sourceId)
+        .map((s) => ({ sourceId: s.sourceId, amount: n(s.amount) }));
     const sourceDeclared = await this.declaredFromSources(shopId, {
-      sourceAmounts:
-        merged.sourceAmounts ??
-        row.sourceAmounts
-          ?.filter((s): s is typeof s & { sourceId: string } => !!s.sourceId)
-          .map((s) => ({ sourceId: s.sourceId, amount: n(s.amount) })),
+      sourceAmounts: sourcesForDeclared,
     });
     const expensesTotal = expensesTotalFrom(
-      merged.expenses ??
+      mergedPosnets.expenses ??
         row.expenses?.map((e) => ({ amount: e.amount })),
     );
-    const totals = this.calc(merged, incomeExtras + sourceDeclared, expensesTotal);
+    const forCalc = this.forTotalsWithoutLegacyChannels(
+      mergedPosnets,
+      !!(sourcesForDeclared && sourcesForDeclared.length),
+    );
+    const totals = this.calc(forCalc, incomeExtras + sourceDeclared, expensesTotal);
+    // Columnas canal legacy para lista/reportes (después del calc).
+    let merged = mergedPosnets;
+    if (mergedPosnets.sourceAmounts !== undefined) {
+      merged = await this.withChannelAmountsFromSources(shopId, mergedPosnets);
+    } else if (row.sourceAmounts?.length) {
+      const ch = channelAmountsFromSources(
+        row.sourceAmounts.map((s) => ({
+          name: s.name,
+          role: s.role,
+          amount: n(s.amount),
+          lines: s.lines,
+          posnetAmounts: s.posnetAmounts,
+        })),
+      );
+      merged = {
+        ...mergedPosnets,
+        cardAmount: ch.cardAmount,
+        mercadoPagoAmount: ch.mercadoPagoAmount,
+        accountDniAmount: ch.accountDniAmount,
+        deliveryAppsAmount: ch.deliveryAppsAmount,
+        transferAmount: ch.transferAmount,
+      };
+    }
     await this.assertDifferenceReason(shopId, totals.difference, merged.differenceReason);
     const withdrawn = await this.resolveWithdrawnBy(shopId, merged.cashWithdrawnByUserId, merged.cashWithdrawnByName, merged.cashWithdrawnByEmployeeId);
     const cashWithdrawnToAccountId = await this.resolveWithdrawnToAccount(
