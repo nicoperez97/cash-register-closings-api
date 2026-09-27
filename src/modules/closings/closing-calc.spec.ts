@@ -3,6 +3,7 @@ import { PosnetType } from '../../common/posnet';
 import {
   applyPosnetSums,
   calcClosingTotals,
+  channelAmountsFromSources,
   differenceReasonMissing,
   extraIncomeFromLines,
 } from './closing-calc';
@@ -104,6 +105,30 @@ describe('extraIncomeFromLines', () => {
   it('vacío o nulo = 0', () => {
     expect(extraIncomeFromLines(null)).toBe(0);
     expect(extraIncomeFromLines([])).toBe(0);
+  });
+});
+
+describe('channelAmountsFromSources', () => {
+  it('suma PVS / MP / DNI por nombre de cuenta del local', () => {
+    const ch = channelAmountsFromSources([
+      { name: 'PVS', amount: 34_000, posnetAmounts: [{ amount: 34_000 }] },
+      { name: 'Mercado Pago', amount: 1_500 },
+      { name: 'Cuenta DNI', role: 'STANDARD', lines: [10_000, 5_000] },
+      { name: 'Efectivo', role: 'CASH', amount: 99_999 },
+    ]);
+    expect(ch.cardAmount).toBe(34_000);
+    expect(ch.mercadoPagoAmount).toBe(1_500);
+    expect(ch.accountDniAmount).toBe(15_000);
+  });
+
+  it('lista vacía = ceros', () => {
+    expect(channelAmountsFromSources([])).toEqual({
+      cardAmount: 0,
+      mercadoPagoAmount: 0,
+      accountDniAmount: 0,
+      deliveryAppsAmount: 0,
+      transferAmount: 0,
+    });
   });
 });
 

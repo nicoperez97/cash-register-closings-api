@@ -113,6 +113,104 @@ export function applyPosnetSums<T extends { posnetAmounts?: ClosingPosnetAmount[
   };
 }
 
+export type SourceChannelRow = {
+  name?: string | null;
+  role?: string | null;
+  amount?: number | string | null;
+  lines?: unknown;
+  posnetAmounts?: Array<{ amount?: number | string | null }> | null;
+};
+
+export type ChannelAmounts = {
+  cardAmount: number;
+  mercadoPagoAmount: number;
+  accountDniAmount: number;
+  deliveryAppsAmount: number;
+  transferAmount: number;
+};
+
+function normSourceName(s: string): string {
+  return s
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+function amountOfSourceChannelRow(row: SourceChannelRow): number {
+  const posnets = Array.isArray(row.posnetAmounts) ? row.posnetAmounts : [];
+  if (posnets.length) {
+    return posnets.reduce((sum, p) => sum + closingNum(p.amount), 0);
+  }
+  if (Array.isArray(row.lines)) {
+    const lines = row.lines
+      .map((v) => closingNum(typeof v === 'object' && v ? (v as { amount?: unknown }).amount : v))
+      .filter((v) => v > 0);
+    if (lines.length) return lines.reduce((sum, v) => sum + v, 0);
+  }
+  return closingNum(row.amount);
+}
+
+/**
+ * Suma montos de Cuentas del local hacia las columnas canal legacy
+ * (lista de cierres, reportes Excel, filtros).
+ */
+export function channelAmountsFromSources(
+  rows: SourceChannelRow[] | null | undefined,
+): ChannelAmounts {
+  const out: ChannelAmounts = {
+    cardAmount: 0,
+    mercadoPagoAmount: 0,
+    accountDniAmount: 0,
+    deliveryAppsAmount: 0,
+    transferAmount: 0,
+  };
+  for (const row of rows ?? []) {
+    if (String(row.role ?? '') === 'CASH') continue;
+    const amount = amountOfSourceChannelRow(row);
+    if (!(amount > 0)) continue;
+    const name = normSourceName(String(row.name ?? ''));
+    if (!name) continue;
+    if (name === 'pvs' || name.includes('pvs') || name.includes('tarjeta') || name === 'card') {
+      out.cardAmount += amount;
+    } else if (name.includes('mercado') || name === 'mp' || name === 'mercadopago') {
+      out.mercadoPagoAmount += amount;
+    } else if (name.includes('dni')) {
+      out.accountDniAmount += amount;
+    } else if (
+      name.includes('delivery') ||
+      name.includes('pedidos') ||
+      name.includes('rappi') ||
+      name.includes('deliberate')
+    ) {
+      out.deliveryAppsAmount += amount;
+    } else if (name.includes('transfer')) {
+      out.transferAmount += amount;
+    }
+  }
+  return out;
+}
+
+/**
+ * Si hay sourceAmounts, pisa las columnas canal legacy con la suma por nombre
+ * (PVS → cardAmount, etc.). Sin sources, deja el dto igual.
+ */
+export function applyChannelAmountsFromSources<
+  T extends ClosingCalcInput & { sourceAmounts?: SourceChannelRow[] | null },
+>(dto: T): T {
+  const rows = dto.sourceAmounts;
+  if (!rows?.length) return dto;
+  const ch = channelAmountsFromSources(rows);
+  return {
+    ...dto,
+    cardAmount: ch.cardAmount,
+    mercadoPagoAmount: ch.mercadoPagoAmount,
+    accountDniAmount: ch.accountDniAmount,
+    deliveryAppsAmount: ch.deliveryAppsAmount,
+    transferAmount: ch.transferAmount,
+  };
+}
+
 /** true si el local pide motivo y |diff| llega al tope sin texto. */
 export function differenceReasonMissing(
   minAmount: number,
