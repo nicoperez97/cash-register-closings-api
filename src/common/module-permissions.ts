@@ -7,6 +7,7 @@ export type ModuleKey =
   | 'settlements'
   | 'reports'
   | 'reportsConcepts'
+  | 'reportsSales'
   | 'reportsProducts'
   | 'reportsStats'
   | 'movements'
@@ -122,6 +123,14 @@ export const MODULE_DEFS: ModuleDef[] = [
   {
     key: 'reportsConcepts',
     label: 'Reportes · Conceptos',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+    ],
+  },
+  {
+    key: 'reportsSales',
+    label: 'Reportes · Ventas',
     levels: [
       { value: 'none', label: 'Ninguno' },
       { value: 'read', label: 'Ver' },
@@ -644,6 +653,8 @@ export function expandModulePermissions(
       break;
   }
   if (modules.reportsConcepts === 'read') add(set, 'reportsConcepts.read');
+  // 'none' explícito (módulo nuevo) no otorga permiso; ausente lo completa auth al heredar.
+  if (modules.reportsSales === 'read') add(set, 'reportsSales.read');
   if (modules.reportsProducts === 'read') add(set, 'reportsProducts.read');
   if (modules.reportsStats === 'read') add(set, 'reportsStats.read');
 
@@ -868,6 +879,7 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
     settlements: level('settlements.read', 'settlements.manage'),
     reports: reports(),
     reportsConcepts: has('reportsConcepts.read') || has('reports.view') ? 'read' : 'none',
+    reportsSales: has('reportsSales.read') || has('reports.view') ? 'read' : 'none',
     reportsProducts: has('reportsProducts.read') || has('reports.view') ? 'read' : 'none',
     reportsStats: has('reportsStats.read') || has('reports.view') ? 'read' : 'none',
     expenses: level('expenses.read', 'expenses.manage'),
@@ -1055,7 +1067,10 @@ export function sanitizeModulePermissions(
   for (const def of MODULE_DEFS) {
     if (def.key === 'users' && !allowUsers) continue;
     const raw = rawInput[def.key];
-    if ((def.key === 'orders' || def.key === 'shopConfig') && raw === 'none') {
+    if (
+      (def.key === 'orders' || def.key === 'shopConfig' || def.key === 'reportsSales') &&
+      raw === 'none'
+    ) {
       out[def.key] = 'none';
       continue;
     }

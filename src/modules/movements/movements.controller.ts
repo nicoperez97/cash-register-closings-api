@@ -239,6 +239,8 @@ export class MovementsController {
     @Query('employeeId') employeeId?: string,
     @Query('hasReceipt') hasReceipt?: string,
     @Query('shiftId') shiftId?: string,
+    @Query('sortBy') sortBy?: string,
+    @Query('sortDir') sortDir?: 'asc' | 'desc',
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
   ) {
@@ -263,6 +265,8 @@ export class MovementsController {
         employeeId,
         hasReceipt,
         shiftId,
+        sortBy,
+        sortDir: sortDir === 'asc' || sortDir === 'desc' ? sortDir : undefined,
       },
       parsePageParams({ page, pageSize }),
     );

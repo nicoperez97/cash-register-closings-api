@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -10,7 +11,9 @@ import { PosCategory } from '../../entities/pos-category.entity';
 import { PosSubcategory } from '../../entities/pos-subcategory.entity';
 import { PosProduct } from '../../entities/pos-product.entity';
 import { PosSaleTicketLine } from '../../entities/pos-sale-ticket-line.entity';
+import { Shop } from '../../entities/shop.entity';
 import { ShopsService } from '../shops/shops.service';
+import { GeminiDocumentService } from '../ai/gemini-document.service';
 import {
   SEED_CATEGORIES,
   SEED_SUBCATEGORIES,
@@ -23,8 +26,15 @@ import {
   normProductName,
 } from './pos-catalog.seed';
 
+export type FlatMenuItem = {
+  menuItemId: string;
+  name: string;
+  menuTitle: string;
+  sectionName: string;
+};
+
 @Injectable()
-export class PosCatalogService {
+export class PosCatalogService implements OnModuleInit {
   constructor(
     @InjectRepository(PosCategory) private readonly categories: Repository<PosCategory>,
     @InjectRepository(PosSubcategory)
@@ -32,8 +42,209 @@ export class PosCatalogService {
     @InjectRepository(PosProduct) private readonly products: Repository<PosProduct>,
     @InjectRepository(PosSaleTicketLine)
     private readonly lines: Repository<PosSaleTicketLine>,
+    @InjectRepository(Shop) private readonly shopRepo: Repository<Shop>,
     private readonly shops: ShopsService,
+    private readonly gemini: GeminiDocumentService,
   ) {}
+
+  async onModuleInit(): Promise<void> {
+    try {
+      await this.products.query(`
+        ALTER TABLE pos_products
+          ADD COLUMN menuItemId VARCHAR(36) NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.products.query(`
+        CREATE INDEX idx_pos_products_shop_menu_item ON pos_products (shopId, menuItemId)
+      `);
+    } catch {
+      // índice ya existe
+    }
+  }
+
+  flattenMenuItems(menu: Shop['menu'] | null | undefined): FlatMenuItem[] {
+    if (!menu || typeof menu !== 'object') return [];
+    const out: FlatMenuItem[] = [];
+    const pushSections = (
+      sections: Array<{ name?: string; items?: Array<{ id?: string; name?: string }> }> | undefined,
+      menuTitle: string,
+    ) => {
+      for (const sec of sections ?? []) {
+        const sectionName = String(sec?.name ?? '').trim() || 'Sin sección';
+        for (const it of sec?.items ?? []) {
+          const id = String(it?.id ?? '').trim();
+          const name = String(it?.name ?? '').trim();
+          if (!id || !name) continue;
+          out.push({ menuItemId: id, name, menuTitle, sectionName });
+        }
+      }
+    };
+    if (Array.isArray(menu.menus) && menu.menus.length) {
+      for (const m of menu.menus) {
+        pushSections(m.sections, String(m.title ?? m.slug ?? 'Carta').trim() || 'Carta');
+      }
+    } else {
+      pushSections(menu.sections, String(menu.title ?? 'Carta').trim() || 'Carta');
+    }
+    return out;
+  }
+
+  async listMenuItems(user: AuthUser, shopId: string): Promise<FlatMenuItem[]> {
+    this.shops.assertShopAccess(user, shopId);
+    const shop = await this.shopRepo.findOne({ where: { id: shopId } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    return this.flattenMenuItems(shop.menu);
+  }
+
+  private normalizeName(s: string): string {
+    return s
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+  }
+
+  private localNameMatches(
+    posProducts: Array<{ productCode: string; productName: string | null }>,
+    menuItems: FlatMenuItem[],
+  ): Array<{
+    productCode: string;
+    menuItemId: string;
+    confidence: number;
+    reason: string;
+  }> {
+    const usedMenu = new Set<string>();
+    const out: Array<{
+      productCode: string;
+      menuItemId: string;
+      confidence: number;
+      reason: string;
+    }> = [];
+    const menuByNorm = new Map<string, FlatMenuItem[]>();
+    for (const m of menuItems) {
+      const key = this.normalizeName(m.name);
+      if (!key) continue;
+      const arr = menuByNorm.get(key) ?? [];
+      arr.push(m);
+      menuByNorm.set(key, arr);
+    }
+    for (const p of posProducts) {
+      const key = this.normalizeName(p.productName ?? '');
+      if (!key) continue;
+      const candidates = menuByNorm.get(key) ?? [];
+      const hit = candidates.find((c) => !usedMenu.has(c.menuItemId));
+      if (!hit) continue;
+      usedMenu.add(hit.menuItemId);
+      out.push({
+        productCode: p.productCode,
+        menuItemId: hit.menuItemId,
+        confidence: 0.85,
+        reason: 'Nombre igual (normalizado)',
+      });
+    }
+    return out;
+  }
+
+  async suggestMenuLinks(user: AuthUser, shopId: string) {
+    this.shops.assertShopAccess(user, shopId);
+    const shop = await this.shopRepo.findOne({ where: { id: shopId } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    const menuItems = this.flattenMenuItems(shop.menu);
+    const products = await this.products.find({
+      where: { shopId, active: true },
+      order: { productName: 'ASC' },
+    });
+    const posList = products.map((p) => ({
+      productCode: p.productCode,
+      productName: p.productName ?? null,
+      currentMenuItemId: p.menuItemId ?? null,
+    }));
+
+    let suggestions: Array<{
+      productCode: string;
+      menuItemId: string;
+      confidence: number;
+      reason: string;
+    }> = [];
+    let source: 'gemini' | 'local' = 'local';
+    let warnings: string[] = [];
+
+    const gemini = await this.gemini.suggestPosMenuLinks({
+      posProducts: posList.map((p) => ({
+        productCode: p.productCode,
+        productName: p.productName,
+      })),
+      menuItems: menuItems.map((m) => ({
+        menuItemId: m.menuItemId,
+        name: m.name,
+        menuTitle: m.menuTitle,
+        sectionName: m.sectionName,
+      })),
+    });
+    if (gemini.ok) {
+      source = 'gemini';
+      suggestions = gemini.data.suggestions;
+      warnings = gemini.data.warnings;
+    } else {
+      suggestions = this.localNameMatches(
+        posList.map((p) => ({ productCode: p.productCode, productName: p.productName })),
+        menuItems,
+      );
+      if (gemini.reason !== 'disabled') {
+        warnings = [gemini.message, ...warnings].filter(Boolean).slice(0, 4);
+      }
+    }
+
+    const menuIds = new Set(menuItems.map((m) => m.menuItemId));
+    const codeSet = new Set(posList.map((p) => p.productCode));
+    suggestions = suggestions.filter(
+      (s) => codeSet.has(s.productCode) && menuIds.has(s.menuItemId),
+    );
+
+    return {
+      products: posList,
+      menuItems,
+      suggestions,
+      source,
+      warnings,
+    };
+  }
+
+  async commitMenuLinks(
+    user: AuthUser,
+    shopId: string,
+    links: Array<{ productId: string; menuItemId: string | null }>,
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    if (!Array.isArray(links) || !links.length) {
+      throw new BadRequestException('links es obligatorio');
+    }
+    const shop = await this.shopRepo.findOne({ where: { id: shopId } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    const validMenu = new Set(this.flattenMenuItems(shop.menu).map((m) => m.menuItemId));
+    let updated = 0;
+    for (const link of links) {
+      const productId = String(link.productId ?? '').trim();
+      if (!productId) continue;
+      const row = await this.products.findOne({ where: { id: productId, shopId } });
+      if (!row) continue;
+      const menuItemId =
+        link.menuItemId == null || link.menuItemId === ''
+          ? null
+          : String(link.menuItemId).trim();
+      if (menuItemId && !validMenu.has(menuItemId)) {
+        throw new BadRequestException(`Ítem de carta inválido: ${menuItemId}`);
+      }
+      row.menuItemId = menuItemId;
+      await this.products.save(row);
+      updated += 1;
+    }
+    return { updated };
+  }
 
   // ─── Categories ─────────────────────────────────────────────
 

@@ -42,6 +42,12 @@ import {
   normalizeShopConfigVisibility,
   ShopConfigVisibility,
 } from '../../common/shop-config-visibility';
+import {
+  defaultReportsProductsVisibility,
+  mergeReportsProductsVisibility,
+  normalizeReportsProductsVisibility,
+  ReportsProductsVisibility,
+} from '../../common/reports-products-visibility';
 
 const SHOP_ADMIN_ROLES = new Set([GlobalRole.OWNER, GlobalRole.ADMIN]);
 
@@ -82,6 +88,8 @@ export class CreateUserBody {
   orderingConfigVisibility?: Partial<OrderingConfigVisibility> | null;
   /** Nivel por sección de Configuración del local (none | read | manage). */
   shopConfigVisibility?: Partial<ShopConfigVisibility> | null;
+  /** Visibilidad granular de Reportes · Ventas POS. */
+  reportsProductsVisibility?: Partial<ReportsProductsVisibility> | null;
   canEditExpenses?: boolean;
   canEditPayments?: boolean;
   /** En el cierre, si hay monto hay que adjuntar archivo. */
@@ -120,6 +128,8 @@ export class UpdateUserBody {
   orderingConfigVisibility?: Partial<OrderingConfigVisibility> | null;
   /** Nivel por sección de Configuración del local (none | read | manage). */
   shopConfigVisibility?: Partial<ShopConfigVisibility> | null;
+  /** Visibilidad granular de Reportes · Ventas POS. */
+  reportsProductsVisibility?: Partial<ReportsProductsVisibility> | null;
   canEditExpenses?: boolean;
   canEditPayments?: boolean;
   requireClosingFiles?: boolean;
@@ -226,6 +236,14 @@ export class UsersService implements OnModuleInit {
       await this.userShops.query(`
         ALTER TABLE user_shops
           ADD COLUMN shopConfigVisibility JSON NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.userShops.query(`
+        ALTER TABLE user_shops
+          ADD COLUMN reportsProductsVisibility JSON NULL
       `);
     } catch {
       // columna ya existe
@@ -424,6 +442,7 @@ export class UsersService implements OnModuleInit {
         isCustomerOrdersAdmin: !!link?.isCustomerOrdersAdmin,
         orderingConfigVisibility: this.linkOrderingConfigVisibility(link),
         shopConfigVisibility: this.linkShopConfigVisibility(link),
+        reportsProductsVisibility: this.linkReportsProductsVisibility(link),
         canEditExpenses: !!link?.canEditExpenses,
         canEditPayments: !!link?.canEditPayments,
         requireClosingFiles: !!link?.requireClosingFiles,
@@ -485,6 +504,10 @@ export class UsersService implements OnModuleInit {
         defaultShopId === shopId
           ? this.resolveShopConfigVisibilityFromDto(dto)
           : defaultShopConfigVisibility();
+      const reportsProductsVisibility =
+        defaultShopId === shopId
+          ? this.resolveReportsProductsVisibilityFromDto(dto)
+          : defaultReportsProductsVisibility();
       await this.userShops.save(
         this.userShops.create({
           userId: user.id,
@@ -504,6 +527,7 @@ export class UsersService implements OnModuleInit {
             defaultShopId === shopId ? !!dto.isCustomerOrdersAdmin : false,
           orderingConfigVisibility,
           shopConfigVisibility,
+          reportsProductsVisibility,
           canEditExpenses:
             defaultShopId === shopId && isSuperAdmin(actor.globalRole as GlobalRole)
               ? !!dto.canEditExpenses
@@ -629,6 +653,10 @@ export class UsersService implements OnModuleInit {
               shopId === sid
                 ? this.resolveShopConfigVisibilityFromDto(dto)
                 : defaultShopConfigVisibility();
+            const reportsProductsVisibility =
+              shopId === sid
+                ? this.resolveReportsProductsVisibilityFromDto(dto)
+                : defaultReportsProductsVisibility();
             await this.userShops.save(
               this.userShops.create({
                 userId: id,
@@ -650,6 +678,7 @@ export class UsersService implements OnModuleInit {
                 isCustomerOrdersAdmin: shopId === sid ? !!dto.isCustomerOrdersAdmin : false,
                 orderingConfigVisibility,
                 shopConfigVisibility,
+                reportsProductsVisibility,
                 requireClosingFiles: shopId === sid ? !!dto.requireClosingFiles : false,
                 ...this.editFlagsFromDto(actor, dto, undefined, shopId === sid),
               }),
@@ -674,6 +703,12 @@ export class UsersService implements OnModuleInit {
             }
             if (shopId === sid && dto.shopConfigVisibility !== undefined) {
               exists.shopConfigVisibility = this.resolveShopConfigVisibilityFromDto(dto, exists);
+            }
+            if (shopId === sid && dto.reportsProductsVisibility !== undefined) {
+              exists.reportsProductsVisibility = this.resolveReportsProductsVisibilityFromDto(
+                dto,
+                exists,
+              );
             }
             if (shopId === sid && dto.isStockAdmin !== undefined) {
               exists.isStockAdmin = !!dto.isStockAdmin;
@@ -723,6 +758,9 @@ export class UsersService implements OnModuleInit {
         const prevShopConfigVisibility = new Map(
           links.map((l) => [l.shopId, this.linkShopConfigVisibility(l)]),
         );
+        const prevReportsProductsVisibility = new Map(
+          links.map((l) => [l.shopId, this.linkReportsProductsVisibility(l)]),
+        );
         const prevEditExpenses = new Map(links.map((l) => [l.shopId, !!l.canEditExpenses]));
         const prevEditPayments = new Map(links.map((l) => [l.shopId, !!l.canEditPayments]));
         const prevRequireClosingFiles = new Map(
@@ -749,6 +787,12 @@ export class UsersService implements OnModuleInit {
                   shopConfigVisibility: prevShopConfigVisibility.get(sid),
                 } as UserShop)
               : (prevShopConfigVisibility.get(sid) ?? defaultShopConfigVisibility());
+          const reportsProductsVisibility =
+            shopId === sid && dto.reportsProductsVisibility !== undefined
+              ? this.resolveReportsProductsVisibilityFromDto(dto, {
+                  reportsProductsVisibility: prevReportsProductsVisibility.get(sid),
+                } as UserShop)
+              : (prevReportsProductsVisibility.get(sid) ?? defaultReportsProductsVisibility());
           const stockAdmin =
             shopId === sid && dto.isStockAdmin !== undefined
               ? !!dto.isStockAdmin
@@ -802,6 +846,7 @@ export class UsersService implements OnModuleInit {
               isCustomerOrdersAdmin: customerOrdersAdmin,
               orderingConfigVisibility,
               shopConfigVisibility,
+              reportsProductsVisibility,
               requireClosingFiles,
               canEditExpenses: editFlags.canEditExpenses,
               canEditPayments: editFlags.canEditPayments,
@@ -816,6 +861,7 @@ export class UsersService implements OnModuleInit {
         this.hasVisibilityPatch(dto) ||
         dto.orderingConfigVisibility !== undefined ||
         dto.shopConfigVisibility !== undefined ||
+        dto.reportsProductsVisibility !== undefined ||
         dto.isStockAdmin !== undefined ||
         dto.isBeverageStockAdmin !== undefined ||
         dto.isShortageAdmin !== undefined ||
@@ -843,6 +889,12 @@ export class UsersService implements OnModuleInit {
         }
         if (dto.shopConfigVisibility !== undefined) {
           link.shopConfigVisibility = this.resolveShopConfigVisibilityFromDto(dto, link);
+        }
+        if (dto.reportsProductsVisibility !== undefined) {
+          link.reportsProductsVisibility = this.resolveReportsProductsVisibilityFromDto(
+            dto,
+            link,
+          );
         }
         if (dto.isStockAdmin !== undefined) {
           link.isStockAdmin = !!dto.isStockAdmin;
@@ -889,6 +941,7 @@ export class UsersService implements OnModuleInit {
             isCustomerOrdersAdmin: !!dto.isCustomerOrdersAdmin,
             orderingConfigVisibility: this.resolveOrderingConfigVisibilityFromDto(dto),
             shopConfigVisibility: this.resolveShopConfigVisibilityFromDto(dto),
+            reportsProductsVisibility: this.resolveReportsProductsVisibilityFromDto(dto),
             requireClosingFiles: !!dto.requireClosingFiles,
             ...this.editFlagsFromDto(actor, dto, undefined, true),
           }),
@@ -970,6 +1023,7 @@ export class UsersService implements OnModuleInit {
       isCustomerOrdersAdmin: !!link?.isCustomerOrdersAdmin,
       orderingConfigVisibility: this.linkOrderingConfigVisibility(link),
       shopConfigVisibility: this.linkShopConfigVisibility(link),
+      reportsProductsVisibility: this.linkReportsProductsVisibility(link),
       canEditExpenses: !!link?.canEditExpenses,
       canEditPayments: !!link?.canEditPayments,
       requireClosingFiles: !!link?.requireClosingFiles,
@@ -996,6 +1050,12 @@ export class UsersService implements OnModuleInit {
   private linkShopConfigVisibility(link?: UserShop | null): ShopConfigVisibility {
     return normalizeShopConfigVisibility(
       link?.shopConfigVisibility as Partial<Record<string, unknown>> | null,
+    );
+  }
+
+  private linkReportsProductsVisibility(link?: UserShop | null): ReportsProductsVisibility {
+    return normalizeReportsProductsVisibility(
+      link?.reportsProductsVisibility as Partial<Record<string, unknown>> | null,
     );
   }
 
@@ -1057,6 +1117,19 @@ export class UsersService implements OnModuleInit {
     return base;
   }
 
+  private resolveReportsProductsVisibilityFromDto(
+    dto: { reportsProductsVisibility?: Partial<ReportsProductsVisibility> | Record<string, unknown> | null },
+    existing?: UserShop | null,
+  ): ReportsProductsVisibility {
+    const base = existing
+      ? this.linkReportsProductsVisibility(existing)
+      : defaultReportsProductsVisibility();
+    if (dto.reportsProductsVisibility !== undefined) {
+      return mergeReportsProductsVisibility(base, dto.reportsProductsVisibility);
+    }
+    return base;
+  }
+
   private effectiveModulesForLink(
     link: UserShop | undefined,
     globalRole: GlobalRole,
@@ -1066,7 +1139,18 @@ export class UsersService implements OnModuleInit {
     }
     // null = legacy; objeto (aunque vacío) = explícito sin módulos.
     if (link?.modulePermissions != null) {
-      return link.modulePermissions;
+      const modules = { ...link.modulePermissions } as Record<string, string>;
+      if (
+        !Object.prototype.hasOwnProperty.call(link.modulePermissions, 'reportsSales') &&
+        (modules.reports === 'read' ||
+          modules.reports === 'export' ||
+          modules.reportsProducts === 'read' ||
+          modules.reportsConcepts === 'read' ||
+          modules.reportsStats === 'read')
+      ) {
+        modules.reportsSales = 'read';
+      }
+      return modules;
     }
     const role = (link?.shopRole ?? globalRole) as GlobalRole;
     return deriveModulesFromRole(role) as Record<string, string>;

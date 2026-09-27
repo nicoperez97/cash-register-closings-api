@@ -81,6 +81,13 @@ export class UserShop {
   @Column({ type: 'json', nullable: true })
   shopConfigVisibility?: Record<string, string> | null;
 
+  /**
+   * Visibilidad granular de Reportes · Ventas POS.
+   * Flags: kpis, charts, tabProducts, tabCategories, tabDays, export, import + amountMode.
+   */
+  @Column({ type: 'json', nullable: true })
+  reportsProductsVisibility?: Record<string, string | boolean> | null;
+
   /** Super admin le habilitó editar y borrar gastos de este local. */
   @Column({ default: false })
   canEditExpenses: boolean;

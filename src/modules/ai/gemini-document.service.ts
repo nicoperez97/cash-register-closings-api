@@ -27,12 +27,12 @@ export class GeminiDocumentService {
   }
 
   private model(): string {
-    return this.config.get<string>('gemini.model') || 'gemini-3.6-flash';
+    return this.config.get<string>('gemini.model') || 'gemini-3.8-flash';
   }
 
   private fallbackModels(): string[] {
     const list = this.config.get<string[]>('gemini.fallbackModels');
-    return Array.isArray(list) ? list : ['gemini-2.5-flash', 'gemini-2.0-flash'];
+    return Array.isArray(list) ? list : ['gemini-3.6-flash', 'gemini-flash-latest'];
   }
 
   private modelChain(): string[] {
@@ -252,7 +252,7 @@ export class GeminiDocumentService {
     if (lastKind === 'not_found') {
       return this.fail(
         'error',
-        `El modelo Gemini configurado no está disponible. Probá GEMINI_MODEL=gemini-2.5-flash. Se usó el parseo local.`,
+        `El modelo Gemini configurado no está disponible. Probá GEMINI_MODEL=gemini-3.8-flash. Se usó el parseo local.`,
       );
     }
     return this.fail(
@@ -844,5 +844,93 @@ Reglas:
       .filter(Boolean)
       .slice(0, 4);
     return { ok: true, data: { labels, warnings } };
+  }
+
+  async suggestPosMenuLinks(digest: {
+    posProducts: Array<{ productCode: string; productName: string | null }>;
+    menuItems: Array<{
+      menuItemId: string;
+      name: string;
+      menuTitle: string;
+      sectionName: string;
+    }>;
+  }): Promise<
+    GeminiResult<{
+      suggestions: Array<{
+        productCode: string;
+        menuItemId: string;
+        confidence: number;
+        reason: string;
+      }>;
+      warnings: string[];
+    }>
+  > {
+    if (!this.isEnabled()) {
+      return this.fail('disabled', 'Gemini no está configurado (falta GEMINI_API_KEY).');
+    }
+    const system = `Sos un experto en gastronomía. Vas a enlazar platos del POS (código + nombre) con ítems de la carta digital del local.
+Devolvé SOLO JSON:
+{"suggestions":[{"productCode":"string","menuItemId":"string","confidence":0.0,"reason":"string"}],"warnings":["string"]}
+Reglas:
+- Solo sugerí pares cuando haya alta probabilidad de que sean el mismo plato.
+- productCode y menuItemId deben existir exactamente en las listas del digest.
+- Un productCode como máximo una vez; un menuItemId como máximo una vez.
+- confidence entre 0 y 1. reason: frase corta en español rioplatense.
+- No inventes IDs. Máximo 150 suggestions. warnings: hasta 4.`;
+    const data = await this.generateJson<{
+      suggestions?: unknown;
+      warnings?: unknown;
+    }>(
+      [
+        {
+          text: `POS y carta a enlazar:\n${JSON.stringify(digest).slice(0, 20000)}`,
+        },
+      ],
+      system,
+      28_000,
+    );
+    if (!data.ok) {
+      return this.fail(
+        data.reason,
+        data.message.replace(/\s*Se usó el parseo local\.?/gi, '').trim() || data.message,
+      );
+    }
+    const usedPos = new Set<string>();
+    const usedMenu = new Set<string>();
+    const suggestions = (Array.isArray(data.data.suggestions) ? data.data.suggestions : [])
+      .map((raw) => {
+        const row = raw as {
+          productCode?: unknown;
+          menuItemId?: unknown;
+          confidence?: unknown;
+          reason?: unknown;
+        };
+        const productCode = String(row?.productCode ?? '').trim().slice(0, 64);
+        const menuItemId = String(row?.menuItemId ?? '').trim().slice(0, 36);
+        if (!productCode || !menuItemId) return null;
+        if (usedPos.has(productCode) || usedMenu.has(menuItemId)) return null;
+        usedPos.add(productCode);
+        usedMenu.add(menuItemId);
+        const conf = Number(row?.confidence);
+        const confidence = Number.isFinite(conf) ? Math.min(1, Math.max(0, conf)) : 0.5;
+        const reason = String(row?.reason ?? '').trim().slice(0, 160) || 'Sugerencia IA';
+        return { productCode, menuItemId, confidence, reason };
+      })
+      .filter(
+        (
+          x,
+        ): x is {
+          productCode: string;
+          menuItemId: string;
+          confidence: number;
+          reason: string;
+        } => !!x,
+      )
+      .slice(0, 150);
+    const warnings = (Array.isArray(data.data.warnings) ? data.data.warnings : [])
+      .map((x) => String(x ?? '').trim())
+      .filter(Boolean)
+      .slice(0, 4);
+    return { ok: true, data: { suggestions, warnings } };
   }
 }
