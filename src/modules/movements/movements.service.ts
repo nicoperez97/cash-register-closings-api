@@ -829,6 +829,9 @@ export class MovementsService implements OnModuleInit {
         const target = await this.shops.resolvePartnerDividendTarget(shopId);
         toAccountId = target.accountId;
         if (!conceptId && target.conceptId) conceptId = target.conceptId;
+      } else {
+        // El concepto de las transferencias es fijo: lo define la config del local.
+        conceptId = await this.shops.resolveTransferConcept(shopId);
       }
       if (!fromAccountId || !toAccountId) {
         throw new BadRequestException('La transferencia requiere cuenta origen y destino');

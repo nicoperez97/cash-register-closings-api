@@ -99,6 +99,29 @@ export class CatalogSeedService {
     );
   }
 
+  /** Concepto "Transferencia e/ cuentas" (transfer) para movimientos entre cuentas. */
+  async ensureTransferConcept(shopId: string): Promise<Concept> {
+    await this.ensureConcepts(shopId);
+    const existing = await this.concepts.findOne({
+      where: { shopId, name: 'Transferencia e/ cuentas', active: true },
+    });
+    if (existing) return existing;
+    const alt = await this.concepts.findOne({
+      where: { shopId, kind: ConceptKind.TRANSFER, active: true },
+    });
+    if (alt) return alt;
+    return this.concepts.save(
+      this.concepts.create({
+        shopId,
+        name: 'Transferencia e/ cuentas',
+        kind: ConceptKind.TRANSFER,
+        categories: inferConceptCategories('Transferencia e/ cuentas'),
+        active: true,
+        validated: true,
+      }),
+    );
+  }
+
   /** Catálogo completo al crear un local (sin vincular medios de pago). */
   async seedNewShopCatalogs(shopId: string) {
     for (const a of DEFAULT_LEDGER_ACCOUNTS) {
