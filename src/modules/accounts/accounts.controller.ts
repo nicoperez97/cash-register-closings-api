@@ -201,6 +201,17 @@ class PaymentDepositsDto {
   other?: string | null;
 }
 
+class TransferConceptConfigDto {
+  @ApiPropertyOptional({
+    description: 'Concepto fijo de los movimientos entre cuentas. null = Transferencia e/ cuentas.',
+    nullable: true,
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  transferConceptId?: string | null;
+}
+
 class PartnerDividendConfigDto {
   @ApiPropertyOptional({
     description: 'Cuenta destino de Equilibrar / Es dividendo. null = Egreso.',
@@ -272,6 +283,16 @@ export class AccountsController {
     @Body() dto: PartnerDividendConfigDto,
   ) {
     return this.accounts.setPartnerDividendConfig(user, shopId, dto);
+  }
+
+  @Put('transfer-concept-config')
+  @RequirePermissions('accounts.manage')
+  setTransferConceptConfig(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: TransferConceptConfigDto,
+  ) {
+    return this.accounts.setTransferConceptConfig(user, shopId, dto);
   }
 
   @Post()

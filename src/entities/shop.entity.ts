@@ -371,6 +371,14 @@ export class Shop extends BaseEntity {
   partnerDividendConceptId?: string | null;
 
   /**
+   * Concepto fijo de los movimientos entre cuentas (transferencias).
+   * Se aplica siempre al generar una transferencia (el usuario solo lo ve).
+   * null = concepto Transferencia e/ cuentas (se asegura al usarlo).
+   */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  transferConceptId?: string | null;
+
+  /**
    * Categorías de concepto a listar según el tipo de pago / movimiento.
    * null = defaults (proveedores, servicios+proveedores, empleados, movimientos).
    */
