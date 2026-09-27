@@ -454,6 +454,34 @@ export class AccountsService implements OnModuleInit {
     };
   }
 
+  /** Concepto fijo de los movimientos entre cuentas (transferencias). */
+  async setTransferConceptConfig(
+    user: AuthUser,
+    shopId: string,
+    dto: { transferConceptId?: string | null },
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+
+    if (dto.transferConceptId !== undefined) {
+      const id = dto.transferConceptId || null;
+      if (id) {
+        const concept = await this.concepts.findOne({
+          where: { id, shopId, active: true },
+        });
+        if (!concept) {
+          throw new BadRequestException('Concepto de movimientos entre cuentas inválido');
+        }
+        shop.transferConceptId = id;
+      } else {
+        shop.transferConceptId = null;
+      }
+    }
+    await this.shopsRepo.save(shop);
+    return { transferConceptId: shop.transferConceptId ?? null };
+  }
+
   private isEgresoAccount(account: {
     type?: string | null;
     code?: string | null;

@@ -385,6 +385,14 @@ export class ShopsService implements OnModuleInit {
     try {
       await this.shops.query(`
         ALTER TABLE shops
+          ADD COLUMN transferConceptId VARCHAR(36) NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
           ADD COLUMN navConfig JSON NULL
       `);
     } catch {
@@ -644,6 +652,25 @@ export class ShopsService implements OnModuleInit {
       conceptId = (await this.catalogSeed.ensureDivisionConcept(shopId)).id;
     }
     return { accountId: account.id, accountName: account.name, conceptId };
+  }
+
+  /**
+   * Concepto fijo de las transferencias (movimientos entre cuentas).
+   * Devuelve el configurado en el local o, por defecto, "Transferencia e/ cuentas".
+   */
+  async resolveTransferConcept(shopId: string): Promise<string> {
+    const shop = await this.shops.findOne({
+      where: { id: shopId },
+      select: ['id', 'transferConceptId'],
+    });
+    const configuredId = shop?.transferConceptId?.trim() || null;
+    if (configuredId) {
+      const concept = await this.concepts.findOne({
+        where: { id: configuredId, shopId, active: true },
+      });
+      if (concept) return concept.id;
+    }
+    return (await this.catalogSeed.ensureTransferConcept(shopId)).id;
   }
 
   /** Egreso del local (código EGRESO o nombre). */
@@ -1028,6 +1055,7 @@ export class ShopsService implements OnModuleInit {
         cashWithdrawalConceptId: dto.cashWithdrawalConceptId ?? null,
         partnerDividendAccountId: dto.partnerDividendAccountId ?? null,
         partnerDividendConceptId: dto.partnerDividendConceptId ?? null,
+        transferConceptId: dto.transferConceptId ?? null,
         posPaymentMap: dto.posPaymentMap ?? null,
         posnets: this.normalizePosnets(dto.posnets),
         paymentConceptCategories: dto.paymentConceptCategories
@@ -1261,6 +1289,20 @@ export class ShopsService implements OnModuleInit {
         shop.partnerDividendConceptId = id;
       } else {
         shop.partnerDividendConceptId = null;
+      }
+    }
+    if (dto.transferConceptId !== undefined) {
+      const id = dto.transferConceptId || null;
+      if (id) {
+        const concept = await this.concepts.findOne({
+          where: { id, shopId: shop.id, active: true },
+        });
+        if (!concept) {
+          throw new BadRequestException('Concepto de movimientos entre cuentas inválido');
+        }
+        shop.transferConceptId = id;
+      } else {
+        shop.transferConceptId = null;
       }
     }
     if (dto.posPaymentMap !== undefined) {
@@ -1853,6 +1895,7 @@ export class ShopsService implements OnModuleInit {
       cashWithdrawalConceptId: s.cashWithdrawalConceptId ?? null,
       partnerDividendAccountId: s.partnerDividendAccountId ?? null,
       partnerDividendConceptId: s.partnerDividendConceptId ?? null,
+      transferConceptId: s.transferConceptId ?? null,
       posPaymentMap: s.posPaymentMap ?? null,
       posnets: s.posnets ?? [],
       paymentConceptCategories: normalizePaymentConceptCategories(s.paymentConceptCategories),

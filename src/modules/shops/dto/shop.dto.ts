@@ -574,6 +574,16 @@ export class CreateShopDto {
   partnerDividendConceptId?: string | null;
 
   @ApiPropertyOptional({
+    description:
+      'Concepto fijo de los movimientos entre cuentas. null = Transferencia e/ cuentas.',
+    nullable: true,
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  transferConceptId?: string | null;
+
+  @ApiPropertyOptional({
     description: 'Mapa código FormaDePago → cash|card|mercadoPago|delivery|transfer|accountDni|other',
   })
   @IsOptional()
