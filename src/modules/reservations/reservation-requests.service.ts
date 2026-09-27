@@ -9,7 +9,7 @@ import { Repository } from 'typeorm';
 import { AuthUser } from '../../common/decorators';
 import { NotificationType } from '../../common/enums';
 import { isEntityActive } from '../../common/active.util';
-import { resolveShopCalendarDate } from '../../common/business-date';
+import { resolveShopCalendarDate, shopNowHhMm } from '../../common/business-date';
 import { isIsoDateOnly, toIsoDateOnly } from '../../common/iso-date';
 import { UserShop } from '../../entities/user-shop.entity';
 import { Shop } from '../../entities/shop.entity';
@@ -114,6 +114,23 @@ export class ReservationRequestsService implements OnModuleInit {
     }
   }
 
+  /**
+   * Turnos disponibles para una fecha. Si la fecha es HOY (calendario del
+   * local), descarta los horarios que ya pasaron respecto de la hora actual.
+   * Para fechas futuras devuelve todos.
+   */
+  private futureSlotsForDate(
+    slots: string[],
+    businessDate: string,
+    timezone?: string | null,
+  ): string[] {
+    if (!slots.length) return slots;
+    const today = resolveShopCalendarDate(new Date(), { timezone });
+    if (businessDate !== today) return slots;
+    const nowHhMm = shopNowHhMm(timezone);
+    return slots.filter((slot) => slot > nowHhMm);
+  }
+
   async publicSignupInfo(slug: string, date?: string) {
     const shop = await this.requirePublicShop(slug);
     const businessDate =
@@ -133,13 +150,25 @@ export class ReservationRequestsService implements OnModuleInit {
     const noticeRow = await this.dayNotices.findOne({
       where: { shopId: shop.id, businessDate },
     });
-    const dayNotice = String(noticeRow?.message ?? '').trim() || null;
+    const dayNotice0 = String(noticeRow?.message ?? '').trim() || null;
+    // Turnos que todavía no pasaron (si es hoy). Si el día tenía turnos y ya
+    // pasaron todos, se bloquea la reserva para ese día.
+    const availableSlots = this.futureSlotsForDate(
+      publicForm.timeSlots,
+      businessDate,
+      shop.timezone,
+    );
+    const slotsPassedToday = publicForm.timeSlots.length > 0 && availableSlots.length === 0;
+    const blockDay = closedDay || slotsPassedToday;
+    const dayNotice =
+      dayNotice0 ??
+      (slotsPassedToday ? 'Por hoy ya no quedan horarios disponibles. Elegí otro día.' : null);
     return {
-      signupEnabled: flags.signupEnabled && !closedDay,
-      insideEnabled: closedDay ? false : flags.insideEnabled,
-      outsideEnabled: closedDay ? false : flags.outsideEnabled,
-      insideCapacityRemaining: closedDay ? 0 : flags.insideCapacityRemaining,
-      outsideCapacityRemaining: closedDay ? 0 : flags.outsideCapacityRemaining,
+      signupEnabled: flags.signupEnabled && !blockDay,
+      insideEnabled: blockDay ? false : flags.insideEnabled,
+      outsideEnabled: blockDay ? false : flags.outsideEnabled,
+      insideCapacityRemaining: blockDay ? 0 : flags.insideCapacityRemaining,
+      outsideCapacityRemaining: blockDay ? 0 : flags.outsideCapacityRemaining,
       insideMaxPartySize: partyRules.reservationInsideMaxPartySize ?? null,
       outsideMaxPartySize: partyRules.reservationOutsideMaxPartySize ?? null,
       outsideMinPartySize: partyRules.reservationOutsideMaxPartySize ?? null,
@@ -149,9 +178,9 @@ export class ReservationRequestsService implements OnModuleInit {
       timeRequired: PublicForm.effectiveTimeRequired(
         shop,
         overrides?.timeRequired,
-        publicForm.timeSlots.length,
+        availableSlots.length,
       ),
-      timeSlots: publicForm.timeSlots,
+      timeSlots: availableSlots,
       generalMessage: publicForm.generalMessage,
       weekdayMessage: publicForm.weekdayMessage,
       dayNotice,
@@ -299,16 +328,28 @@ export class ReservationRequestsService implements OnModuleInit {
       shop.reservationPublicForm,
       weekday,
     );
-    if (!formForDay.timeSlots.length) {
+    // Turnos disponibles (si es hoy, sin los que ya pasaron).
+    const availableSlots = this.futureSlotsForDate(
+      formForDay.timeSlots,
+      businessDate,
+      shop.timezone,
+    );
+    if (formForDay.timeSlots.length > 0 && availableSlots.length === 0) {
+      throw new BadRequestException(
+        'Por hoy ya no quedan horarios disponibles. Elegí otro día.',
+      );
+    }
+    if (!availableSlots.length) {
       reservationTime = null;
-    } else if (reservationTime && !formForDay.timeSlots.includes(reservationTime)) {
+    } else if (reservationTime && !availableSlots.includes(reservationTime)) {
+      // Cubre tanto un turno inexistente como uno que ya pasó hoy.
       throw new BadRequestException('Ese horario no está disponible ese día');
     }
     if (
       PublicForm.effectiveTimeRequired(
         shop,
         overrides?.timeRequired,
-        formForDay.timeSlots.length,
+        availableSlots.length,
       ) &&
       !reservationTime
     ) {

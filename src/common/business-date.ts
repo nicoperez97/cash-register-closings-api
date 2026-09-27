@@ -77,6 +77,15 @@ export function resolveShopCalendarDate(
   return `${p.year}-${pad2(p.month)}-${pad2(p.day)}`;
 }
 
+/** Hora actual "HH:mm" (wall-clock) en el timezone del local. */
+export function shopNowHhMm(
+  timezone?: string | null,
+  when: Date = new Date(),
+): string {
+  const p = zonedDateParts(when, timezone);
+  return `${pad2(p.hour)}:${pad2(p.minute)}`;
+}
+
 /**
  * Día laboral YYYY-MM-DD según timezone y hora de apertura.
  * Si todavía no llegó la hora de apertura, cuenta el día anterior.
