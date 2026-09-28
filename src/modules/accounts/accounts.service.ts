@@ -482,6 +482,34 @@ export class AccountsService implements OnModuleInit {
     return { transferConceptId: shop.transferConceptId ?? null };
   }
 
+  /** Concepto de los cobros que genera el cierre a cuentas del local. */
+  async setClosingIncomeConceptConfig(
+    user: AuthUser,
+    shopId: string,
+    dto: { closingIncomeConceptId?: string | null },
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+
+    if (dto.closingIncomeConceptId !== undefined) {
+      const id = dto.closingIncomeConceptId || null;
+      if (id) {
+        const concept = await this.concepts.findOne({
+          where: { id, shopId, active: true },
+        });
+        if (!concept) {
+          throw new BadRequestException('Concepto de cobros del cierre inválido');
+        }
+        shop.closingIncomeConceptId = id;
+      } else {
+        shop.closingIncomeConceptId = null;
+      }
+    }
+    await this.shopsRepo.save(shop);
+    return { closingIncomeConceptId: shop.closingIncomeConceptId ?? null };
+  }
+
   private isEgresoAccount(account: {
     type?: string | null;
     code?: string | null;

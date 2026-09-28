@@ -379,6 +379,14 @@ export class Shop extends BaseEntity {
   transferConceptId?: string | null;
 
   /**
+   * Concepto de los cobros que genera el cierre al cargar montos en cuentas
+   * del local (canales: PVS, MP, Cuenta DNI, etc.).
+   * null = concepto Cobro (se asegura al usarlo).
+   */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  closingIncomeConceptId?: string | null;
+
+  /**
    * Categorías de concepto a listar según el tipo de pago / movimiento.
    * null = defaults (proveedores, servicios+proveedores, empleados, movimientos).
    */
