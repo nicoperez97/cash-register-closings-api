@@ -392,7 +392,11 @@ export class ReportsService {
       from: filters.from,
       to: filters.to,
     });
-    const tagged = rows.map((r) => this.tagConceptRow(r));
+    // El reporte de conceptos es solo Ingresos / Egresos: las transferencias
+    // (movimientos entre cuentas) son internas y no se listan acá.
+    const tagged = rows
+      .map((r) => this.tagConceptRow(r))
+      .filter((r) => r.kind !== 'TRANSFER');
 
     const optionMap = new Map<string, { id: string | null; name: string; kind: string }>();
     for (const r of tagged) {
@@ -421,7 +425,9 @@ export class ReportsService {
     if (filters.from && filters.to) {
       const prevRange = previousPeriod(filters.from, filters.to);
       const prevRows = await this.movementsService.listAnalytics(user, shopId, prevRange);
-      let prevTagged = prevRows.map((r) => this.tagConceptRow(r));
+      let prevTagged = prevRows
+        .map((r) => this.tagConceptRow(r))
+        .filter((r) => r.kind !== 'TRANSFER');
       if (filters.kind) prevTagged = prevTagged.filter((r) => r.kind === filters.kind);
       if (filters.conceptId === '__none') {
         prevTagged = prevTagged.filter((r) => !r.conceptId);
@@ -457,12 +463,15 @@ export class ReportsService {
     },
   ) {
     const shop = await this.shops.findOne(user, shopId);
-    const data = await this.conceptsAnalytics(user, shopId, filters);
+    // Siempre exportamos Ingresos y Egresos separados en tabs: ignoramos el filtro
+    // de tipo (mantenemos período y concepto) para que ambos tabs vengan poblados.
+    const data = await this.conceptsAnalytics(user, shopId, {
+      from: filters.from,
+      to: filters.to,
+      conceptId: filters.conceptId,
+    });
     const wb = new ExcelJS.Workbook();
     wb.creator = 'Cash Register Closings';
-
-    const kindLabel = (kind: string) =>
-      kind === 'INCOME' ? 'Ingreso' : kind === 'EXPENSE' ? 'Egreso' : kind === 'TRANSFER' ? 'Transferencia' : kind;
 
     const monthNames = [
       'enero',
@@ -478,67 +487,67 @@ export class ReportsService {
       'noviembre',
       'diciembre',
     ];
-    const kindTitle =
-      filters.kind === 'EXPENSE'
-        ? 'Egresos'
-        : filters.kind === 'INCOME'
-          ? 'Ingresos'
-          : filters.kind === 'TRANSFER'
-            ? 'Transferencias'
-            : 'Conceptos';
-    let banner = kindTitle.toUpperCase();
-    if (data.from && data.to) {
-      const [fy, fm] = data.from.split('-').map(Number);
-      const [ty, tm] = data.to.split('-').map(Number);
-      if (fy === ty && fm === tm) {
-        banner = `${kindTitle.toUpperCase()} ${(monthNames[fm - 1] ?? '').toUpperCase()} ${fy}`;
-      } else {
-        banner = `${kindTitle.toUpperCase()} ${data.from} – ${data.to}`;
+    const bannerFor = (title: string) => {
+      const upper = title.toUpperCase();
+      if (data.from && data.to) {
+        const [fy, fm] = data.from.split('-').map(Number);
+        const [ty, tm] = data.to.split('-').map(Number);
+        if (fy === ty && fm === tm) {
+          return `${upper} ${(monthNames[fm - 1] ?? '').toUpperCase()} ${fy}`;
+        }
+        return `${upper} ${data.from} – ${data.to}`;
       }
-    }
+      return upper;
+    };
 
-    const wsPivot = wb.addWorksheet('Conceptos');
-    wsPivot.mergeCells('A1:C1');
-    wsPivot.getCell('A1').value = banner;
-    wsPivot.getCell('A1').font = { bold: true, size: 14, color: { argb: 'FF003366' } };
-    wsPivot.getCell('A1').fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: 'FFD6EAF8' },
+    // Un tab por tipo (Ingresos / Egresos) con % relativo a su propio total.
+    const addPivot = (sheetName: string, title: string, kind: 'INCOME' | 'EXPENSE') => {
+      const concepts = data.byConcept.filter((c) => c.kind === kind);
+      const total = concepts.reduce((s, c) => s + c.amount, 0);
+      const ws = wb.addWorksheet(sheetName);
+      ws.mergeCells('A1:C1');
+      ws.getCell('A1').value = bannerFor(title);
+      ws.getCell('A1').font = { bold: true, size: 14, color: { argb: 'FF003366' } };
+      ws.getCell('A1').fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFD6EAF8' },
+      };
+      ws.getCell('A3').value = 'Concepto validado';
+      ws.getCell('B3').value = 'SUM de Importe $';
+      ws.getCell('C3').value = '%';
+      ws.getRow(3).font = { bold: true };
+      ws.getRow(3).fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFEEEEEE' },
+      };
+      ws.getCell('B3').alignment = { horizontal: 'right' };
+      ws.getCell('C3').alignment = { horizontal: 'right' };
+      ws.getColumn(1).width = 36;
+      ws.getColumn(2).width = 20;
+      ws.getColumn(3).width = 12;
+      concepts.forEach((c, i) => {
+        const share = total > 0 ? c.amount / total : 0;
+        const row = ws.addRow([c.name, c.amount, share]);
+        row.getCell(2).numFmt = '"$" #,##0.00';
+        row.getCell(3).numFmt = '0.00%';
+        if (i % 2 === 1) {
+          row.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FFF7F9FB' },
+          };
+        }
+      });
+      const totalRow = ws.addRow(['Suma total', total, total > 0 ? 1 : 0]);
+      totalRow.font = { bold: true };
+      totalRow.getCell(2).numFmt = '"$" #,##0.00';
+      totalRow.getCell(3).numFmt = '0.00%';
+      totalRow.border = { top: { style: 'medium' } };
     };
-    wsPivot.getCell('A3').value = 'Concepto validado';
-    wsPivot.getCell('B3').value = 'SUM de Importe $';
-    wsPivot.getCell('C3').value = '%';
-    wsPivot.getRow(3).font = { bold: true };
-    wsPivot.getRow(3).fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: 'FFEEEEEE' },
-    };
-    wsPivot.getCell('B3').alignment = { horizontal: 'right' };
-    wsPivot.getCell('C3').alignment = { horizontal: 'right' };
-    wsPivot.getColumn(1).width = 36;
-    wsPivot.getColumn(2).width = 20;
-    wsPivot.getColumn(3).width = 12;
-    let excelTotal = 0;
-    data.byConcept.forEach((r, i) => {
-      excelTotal += r.amount;
-      const row = wsPivot.addRow([r.name, r.amount, r.share]);
-      row.getCell(2).numFmt = '"$" #,##0.00';
-      row.getCell(3).numFmt = '0.00%';
-      if (i % 2 === 1) {
-        row.fill = {
-          type: 'pattern',
-          pattern: 'solid',
-          fgColor: { argb: 'FFF7F9FB' },
-        };
-      }
-    });
-    const totalRow = wsPivot.addRow(['Suma total', excelTotal, 1]);
-    totalRow.font = { bold: true };
-    totalRow.getCell(2).numFmt = '"$" #,##0.00';
-    totalRow.getCell(3).numFmt = '0.00%';
-    totalRow.border = { top: { style: 'medium' } };
+    addPivot('Ingresos', 'Ingresos', 'INCOME');
+    addPivot('Egresos', 'Egresos', 'EXPENSE');
 
     const wsSum = wb.addWorksheet('Resumen');
     wsSum.columns = [
@@ -551,32 +560,10 @@ export class ReportsService {
     wsSum.addRow({ k: 'Movimientos', v: data.totals.movementCount });
     wsSum.addRow({ k: 'Ingresos', v: data.totals.income });
     wsSum.addRow({ k: 'Egresos', v: data.totals.expense });
-    wsSum.addRow({ k: 'Transferencias', v: data.totals.transfer });
     wsSum.addRow({ k: 'Resultado (ing. − egr.)', v: data.totals.net });
     wsSum.addRow({ k: 'Sin concepto (cant.)', v: data.totals.withoutConceptCount });
     wsSum.addRow({ k: 'Sin concepto ($)', v: data.totals.withoutConceptAmount });
     wsSum.getRow(1).font = { bold: true };
-
-    const wsCon = wb.addWorksheet('Detalle');
-    wsCon.columns = [
-      { header: 'Concepto', key: 'name', width: 28 },
-      { header: 'Tipo', key: 'kind', width: 16 },
-      { header: 'Movimientos', key: 'count', width: 14 },
-      { header: 'Importe $', key: 'amount', width: 16 },
-      { header: 'Promedio $', key: 'avg', width: 14 },
-      { header: 'Participación %', key: 'share', width: 16 },
-    ];
-    for (const r of data.byConcept) {
-      wsCon.addRow({
-        name: r.name,
-        kind: kindLabel(r.kind),
-        count: r.count,
-        amount: r.amount,
-        avg: r.avgAmount,
-        share: Math.round(r.share * 1000) / 10,
-      });
-    }
-    wsCon.getRow(1).font = { bold: true };
 
     const wsDay = wb.addWorksheet('Por día');
     wsDay.columns = [
@@ -584,7 +571,6 @@ export class ReportsService {
       { header: 'Movimientos', key: 'count', width: 14 },
       { header: 'Ingresos $', key: 'income', width: 14 },
       { header: 'Egresos $', key: 'expense', width: 14 },
-      { header: 'Transferencias $', key: 'transfer', width: 18 },
     ];
     for (const d of data.byDay) {
       wsDay.addRow({
@@ -592,7 +578,6 @@ export class ReportsService {
         count: d.count,
         income: d.income,
         expense: d.expense,
-        transfer: d.transfer,
       });
     }
     wsDay.getRow(1).font = { bold: true };
