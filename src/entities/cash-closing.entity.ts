@@ -110,6 +110,18 @@ export class CashClosing extends BaseEntity {
   @Column({ type: 'varchar', nullable: true })
   cashWithdrawnToAccountId?: string | null;
 
+  /**
+   * Aportes de cambio a la caja (quién dejó plata y cuánto).
+   * Se suman al efectivo de apertura y generan movimiento cuenta → Efectivo Caja.
+   */
+  @Column({ type: 'simple-json', nullable: true })
+  cashChangeContributions?: Array<{
+    accountId: string;
+    amount: number;
+    userId?: string | null;
+    name?: string | null;
+  }> | null;
+
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
   tipsAmount: string;
 

@@ -202,6 +202,14 @@ export class ClosingsService implements OnModuleInit {
     } catch {
       // columna ya existe
     }
+    try {
+      await this.closings.query(`
+        ALTER TABLE cash_closings
+          ADD COLUMN cashChangeContributions TEXT NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
     // Una sola vez: volver al signo caja sistema − declarado (v3).
     try {
       await this.closings.query(`
@@ -450,6 +458,33 @@ export class ClosingsService implements OnModuleInit {
     }));
   }
 
+  private normalizeCashChangeContributions(
+    raw?:
+      | Array<{
+          accountId?: string | null;
+          amount?: number | string | null;
+          userId?: string | null;
+          name?: string | null;
+        }>
+      | null,
+  ): Array<{
+    accountId: string;
+    amount: number;
+    userId?: string | null;
+    name?: string | null;
+  }> | null {
+    if (!Array.isArray(raw) || !raw.length) return null;
+    const rows = raw
+      .map((row) => ({
+        accountId: String(row.accountId ?? '').trim(),
+        amount: n(row.amount),
+        userId: row.userId ? String(row.userId) : null,
+        name: String(row.name ?? '').trim() || null,
+      }))
+      .filter((row) => row.accountId && row.amount > 0);
+    return rows.length ? rows : null;
+  }
+
   private async backfillClosingShifts() {
     const shops = await this.shopRepo.find();
     for (const shop of shops) {
@@ -509,6 +544,7 @@ export class ClosingsService implements OnModuleInit {
       cashWithdrawn: n(c.cashWithdrawn), cashWithdrawnByUserId: c.cashWithdrawnByUserId,
       cashWithdrawnByEmployeeId: c.cashWithdrawnByEmployeeId ?? null, cashWithdrawnByName: c.cashWithdrawnByName,
       cashWithdrawnToAccountId: c.cashWithdrawnToAccountId ?? null,
+      cashChangeContributions: this.normalizeCashChangeContributions(c.cashChangeContributions),
       tipsAmount: n(c.tipsAmount), declaredTotal: n(c.declaredTotal), calculatedTotal: n(c.calculatedTotal),
       difference: n(c.difference), differenceReason: c.differenceReason, notes: c.notes,
       evidenceUrl: c.evidenceUrl, status: c.status, createdByUserId: c.createdByUserId, submittedAt: c.submittedAt,
@@ -969,6 +1005,9 @@ export class ClosingsService implements OnModuleInit {
       cashWithdrawnByEmployeeId: withdrawn.cashWithdrawnByEmployeeId,
       cashWithdrawnByName: withdrawn.cashWithdrawnByName,
       cashWithdrawnToAccountId,
+      cashChangeContributions: this.normalizeCashChangeContributions(
+        normalized.cashChangeContributions,
+      ),
       tipsAmount: money(n(normalized.tipsAmount)), declaredTotal: money(totals.declaredTotal),
       calculatedTotal: money(totals.calculatedTotal), difference: money(totals.difference),
       differenceReason: normalized.differenceReason ?? null, notes: normalized.notes ?? null,
@@ -1052,6 +1091,10 @@ export class ClosingsService implements OnModuleInit {
         dto.cashWithdrawnToAccountId !== undefined
           ? dto.cashWithdrawnToAccountId
           : row.cashWithdrawnToAccountId ?? undefined,
+      cashChangeContributions:
+        dto.cashChangeContributions !== undefined
+          ? dto.cashChangeContributions
+          : row.cashChangeContributions ?? undefined,
       tipsAmount: dto.tipsAmount ?? n(row.tipsAmount), declaredTotal: dto.declaredTotal,
       differenceReason: dto.differenceReason ?? row.differenceReason ?? undefined,
       notes: dto.notes ?? row.notes ?? undefined, evidenceUrl: dto.evidenceUrl ?? row.evidenceUrl ?? undefined,
@@ -1142,6 +1185,11 @@ export class ClosingsService implements OnModuleInit {
       cashWithdrawnByEmployeeId: withdrawn.cashWithdrawnByEmployeeId,
       cashWithdrawnByName: withdrawn.cashWithdrawnByName,
       cashWithdrawnToAccountId,
+      cashChangeContributions: this.normalizeCashChangeContributions(
+        merged.cashChangeContributions !== undefined
+          ? merged.cashChangeContributions
+          : row.cashChangeContributions,
+      ),
       tipsAmount: money(n(merged.tipsAmount)), declaredTotal: money(totals.declaredTotal),
       calculatedTotal: money(totals.calculatedTotal), difference: money(totals.difference),
       differenceReason: merged.differenceReason ?? null, notes: merged.notes ?? null,
