@@ -221,6 +221,15 @@ class ClosingIncomeConceptConfigDto {
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
   @IsUUID()
   closingIncomeConceptId?: string | null;
+
+  @ApiPropertyOptional({
+    description: 'Concepto del Efectivo del día del cierre. null = EFECTIVO ingreso.',
+    nullable: true,
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  closingCashConceptId?: string | null;
 }
 
 class PartnerDividendConfigDto {
