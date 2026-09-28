@@ -387,6 +387,14 @@ export class Shop extends BaseEntity {
   closingIncomeConceptId?: string | null;
 
   /**
+   * Concepto del movimiento de Efectivo del día que genera el cierre.
+   * Se configura aparte del resto de los cobros.
+   * null = concepto EFECTIVO ingreso (se asegura al usarlo).
+   */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  closingCashConceptId?: string | null;
+
+  /**
    * Categorías de concepto a listar según el tipo de pago / movimiento.
    * null = defaults (proveedores, servicios+proveedores, empleados, movimientos).
    */

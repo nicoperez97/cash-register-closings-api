@@ -78,6 +78,11 @@ export class ClosingMovementsSyncService {
       concepts,
       findConcept,
     );
+    const closingCashConceptId = this.resolveClosingCashConceptId(
+      shop,
+      concepts,
+      findConcept,
+    );
 
     const ingresoAccount = ingreso;
 
@@ -105,7 +110,7 @@ export class ClosingMovementsSyncService {
         toAccountId: cashDest.id,
         description: 'Efectivo del día',
         amountUyu: money(cashIncome),
-        conceptId: findConcept('EFECTIVO ingreso'),
+        conceptId: closingCashConceptId,
         closingId: closing.id,
         invoiced: false,
         active: true,
@@ -394,6 +399,19 @@ export class ClosingMovementsSyncService {
       if (configured) return configured.id;
     }
     return findConcept('Cobro') ?? findConcept('Ingreso');
+  }
+
+  private resolveClosingCashConceptId(
+    shop: Shop | null,
+    concepts: Concept[],
+    findConcept: (name: string) => string | null,
+  ): string | null {
+    const configuredId = shop?.closingCashConceptId?.trim();
+    if (configuredId) {
+      const configured = concepts.find((c) => c.id === configuredId && c.active);
+      if (configured) return configured.id;
+    }
+    return findConcept('EFECTIVO ingreso') ?? findConcept('Ingreso') ?? findConcept('Cobro');
   }
 
   async previewMissingIncomes(shopId: string) {
