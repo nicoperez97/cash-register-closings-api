@@ -230,6 +230,16 @@ class ClosingIncomeConceptConfigDto {
   @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
   @IsUUID()
   closingCashConceptId?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      'Concepto del retiro cuando se elige quién se lleva el efectivo. null = Utilidades / Gastos varios.',
+    nullable: true,
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  cashWithdrawalConceptId?: string | null;
 }
 
 class PartnerDividendConfigDto {

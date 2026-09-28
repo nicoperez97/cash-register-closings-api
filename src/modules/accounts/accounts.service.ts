@@ -482,11 +482,15 @@ export class AccountsService implements OnModuleInit {
     return { transferConceptId: shop.transferConceptId ?? null };
   }
 
-  /** Conceptos que genera el cierre: cobros a cuentas del local y Efectivo del día. */
+  /** Conceptos que genera el cierre: cobros a cuentas del local, Efectivo del día y quién se lo lleva. */
   async setClosingIncomeConceptConfig(
     user: AuthUser,
     shopId: string,
-    dto: { closingIncomeConceptId?: string | null; closingCashConceptId?: string | null },
+    dto: {
+      closingIncomeConceptId?: string | null;
+      closingCashConceptId?: string | null;
+      cashWithdrawalConceptId?: string | null;
+    },
   ) {
     this.shops.assertShopAccess(user, shopId);
     const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
@@ -520,10 +524,25 @@ export class AccountsService implements OnModuleInit {
         shop.closingCashConceptId = null;
       }
     }
+    if (dto.cashWithdrawalConceptId !== undefined) {
+      const id = dto.cashWithdrawalConceptId || null;
+      if (id) {
+        const concept = await this.concepts.findOne({
+          where: { id, shopId, active: true },
+        });
+        if (!concept) {
+          throw new BadRequestException('Concepto de retiro de efectivo inválido');
+        }
+        shop.cashWithdrawalConceptId = id;
+      } else {
+        shop.cashWithdrawalConceptId = null;
+      }
+    }
     await this.shopsRepo.save(shop);
     return {
       closingIncomeConceptId: shop.closingIncomeConceptId ?? null,
       closingCashConceptId: shop.closingCashConceptId ?? null,
+      cashWithdrawalConceptId: shop.cashWithdrawalConceptId ?? null,
     };
   }
 
