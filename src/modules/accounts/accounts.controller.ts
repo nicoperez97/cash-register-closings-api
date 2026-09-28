@@ -212,6 +212,17 @@ class TransferConceptConfigDto {
   transferConceptId?: string | null;
 }
 
+class ClosingIncomeConceptConfigDto {
+  @ApiPropertyOptional({
+    description: 'Concepto de los cobros del cierre a cuentas del local. null = Cobro.',
+    nullable: true,
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  closingIncomeConceptId?: string | null;
+}
+
 class PartnerDividendConfigDto {
   @ApiPropertyOptional({
     description: 'Cuenta destino de Equilibrar / Es dividendo. null = Egreso.',
@@ -293,6 +304,16 @@ export class AccountsController {
     @Body() dto: TransferConceptConfigDto,
   ) {
     return this.accounts.setTransferConceptConfig(user, shopId, dto);
+  }
+
+  @Put('closing-income-concept-config')
+  @RequirePermissions('accounts.manage')
+  setClosingIncomeConceptConfig(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: ClosingIncomeConceptConfigDto,
+  ) {
+    return this.accounts.setClosingIncomeConceptConfig(user, shopId, dto);
   }
 
   @Post()

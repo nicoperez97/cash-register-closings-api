@@ -393,6 +393,14 @@ export class ShopsService implements OnModuleInit {
     try {
       await this.shops.query(`
         ALTER TABLE shops
+          ADD COLUMN closingIncomeConceptId VARCHAR(36) NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
           ADD COLUMN navConfig JSON NULL
       `);
     } catch {
@@ -1056,6 +1064,7 @@ export class ShopsService implements OnModuleInit {
         partnerDividendAccountId: dto.partnerDividendAccountId ?? null,
         partnerDividendConceptId: dto.partnerDividendConceptId ?? null,
         transferConceptId: dto.transferConceptId ?? null,
+        closingIncomeConceptId: dto.closingIncomeConceptId ?? null,
         posPaymentMap: dto.posPaymentMap ?? null,
         posnets: this.normalizePosnets(dto.posnets),
         paymentConceptCategories: dto.paymentConceptCategories
@@ -1303,6 +1312,20 @@ export class ShopsService implements OnModuleInit {
         shop.transferConceptId = id;
       } else {
         shop.transferConceptId = null;
+      }
+    }
+    if (dto.closingIncomeConceptId !== undefined) {
+      const id = dto.closingIncomeConceptId || null;
+      if (id) {
+        const concept = await this.concepts.findOne({
+          where: { id, shopId: shop.id, active: true },
+        });
+        if (!concept) {
+          throw new BadRequestException('Concepto de cobros del cierre inválido');
+        }
+        shop.closingIncomeConceptId = id;
+      } else {
+        shop.closingIncomeConceptId = null;
       }
     }
     if (dto.posPaymentMap !== undefined) {
@@ -1896,6 +1919,7 @@ export class ShopsService implements OnModuleInit {
       partnerDividendAccountId: s.partnerDividendAccountId ?? null,
       partnerDividendConceptId: s.partnerDividendConceptId ?? null,
       transferConceptId: s.transferConceptId ?? null,
+      closingIncomeConceptId: s.closingIncomeConceptId ?? null,
       posPaymentMap: s.posPaymentMap ?? null,
       posnets: s.posnets ?? [],
       paymentConceptCategories: normalizePaymentConceptCategories(s.paymentConceptCategories),

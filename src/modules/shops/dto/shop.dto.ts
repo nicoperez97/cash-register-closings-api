@@ -584,6 +584,16 @@ export class CreateShopDto {
   transferConceptId?: string | null;
 
   @ApiPropertyOptional({
+    description:
+      'Concepto de los cobros del cierre a cuentas del local. null = Cobro.',
+    nullable: true,
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined && v !== '')
+  @IsUUID()
+  closingIncomeConceptId?: string | null;
+
+  @ApiPropertyOptional({
     description: 'Mapa código FormaDePago → cash|card|mercadoPago|delivery|transfer|accountDni|other',
   })
   @IsOptional()

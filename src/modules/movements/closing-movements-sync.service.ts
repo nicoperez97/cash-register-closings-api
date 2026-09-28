@@ -73,6 +73,11 @@ export class ClosingMovementsSyncService {
     const date = closing.businessDate;
     const shop = await this.shops.findOne({ where: { id: closing.shopId } });
     const withdrawalDate = await this.resolveWithdrawalBusinessDate(closing, shop);
+    const closingIncomeConceptId = this.resolveClosingIncomeConceptId(
+      shop,
+      concepts,
+      findConcept,
+    );
 
     const ingresoAccount = ingreso;
 
@@ -164,7 +169,7 @@ export class ClosingMovementsSyncService {
         toAccountId: dest.id,
         description: src.name,
         amountUyu: money(amount),
-        conceptId: findConcept('Cobro') ?? findConcept('Ingreso'),
+        conceptId: closingIncomeConceptId,
         closingId: closing.id,
         invoiced: false,
         active: true,
@@ -194,7 +199,7 @@ export class ClosingMovementsSyncService {
           toAccountId: channel.id,
           description: label,
           amountUyu: money(amount),
-          conceptId: findConcept(conceptName),
+          conceptId: conceptName === 'Cobro' ? closingIncomeConceptId : findConcept(conceptName),
           closingId: closing.id,
           invoiced: false,
           active: true,
@@ -376,6 +381,19 @@ export class ClosingMovementsSyncService {
       findConcept('Gastos varios') ??
       findConcept('Transferencia e/ cuentas')
     );
+  }
+
+  private resolveClosingIncomeConceptId(
+    shop: Shop | null,
+    concepts: Concept[],
+    findConcept: (name: string) => string | null,
+  ): string | null {
+    const configuredId = shop?.closingIncomeConceptId?.trim();
+    if (configuredId) {
+      const configured = concepts.find((c) => c.id === configuredId && c.active);
+      if (configured) return configured.id;
+    }
+    return findConcept('Cobro') ?? findConcept('Ingreso');
   }
 
   async previewMissingIncomes(shopId: string) {
