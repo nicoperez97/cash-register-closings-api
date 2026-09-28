@@ -482,11 +482,11 @@ export class AccountsService implements OnModuleInit {
     return { transferConceptId: shop.transferConceptId ?? null };
   }
 
-  /** Concepto de los cobros que genera el cierre a cuentas del local. */
+  /** Conceptos que genera el cierre: cobros a cuentas del local y Efectivo del día. */
   async setClosingIncomeConceptConfig(
     user: AuthUser,
     shopId: string,
-    dto: { closingIncomeConceptId?: string | null },
+    dto: { closingIncomeConceptId?: string | null; closingCashConceptId?: string | null },
   ) {
     this.shops.assertShopAccess(user, shopId);
     const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
@@ -506,8 +506,25 @@ export class AccountsService implements OnModuleInit {
         shop.closingIncomeConceptId = null;
       }
     }
+    if (dto.closingCashConceptId !== undefined) {
+      const id = dto.closingCashConceptId || null;
+      if (id) {
+        const concept = await this.concepts.findOne({
+          where: { id, shopId, active: true },
+        });
+        if (!concept) {
+          throw new BadRequestException('Concepto de efectivo del cierre inválido');
+        }
+        shop.closingCashConceptId = id;
+      } else {
+        shop.closingCashConceptId = null;
+      }
+    }
     await this.shopsRepo.save(shop);
-    return { closingIncomeConceptId: shop.closingIncomeConceptId ?? null };
+    return {
+      closingIncomeConceptId: shop.closingIncomeConceptId ?? null,
+      closingCashConceptId: shop.closingCashConceptId ?? null,
+    };
   }
 
   private isEgresoAccount(account: {
