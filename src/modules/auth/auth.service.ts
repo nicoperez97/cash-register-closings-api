@@ -726,6 +726,12 @@ export class AuthService implements OnModuleInit {
             ? true
             : !!s.emailNotificationsEnabled,
         salesSystemId: s.salesSystemId ?? null,
+        cashWithdrawalConceptId: s.cashWithdrawalConceptId ?? null,
+        partnerDividendAccountId: s.partnerDividendAccountId ?? null,
+        partnerDividendConceptId: s.partnerDividendConceptId ?? null,
+        transferConceptId: s.transferConceptId ?? null,
+        closingIncomeConceptId: s.closingIncomeConceptId ?? null,
+        closingCashConceptId: s.closingCashConceptId ?? null,
         posnets: s.posnets ?? [],
         navConfig: s.navConfig && typeof s.navConfig === 'object' ? s.navConfig : null,
         myNavConfig: link?.navConfig && typeof link.navConfig === 'object' ? link.navConfig : null,
