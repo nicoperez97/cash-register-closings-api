@@ -17,12 +17,15 @@ import {
   emptyShopMenu,
   menuHasItems,
   normalizeKitchenSectors,
+  normalizeItemImages,
   normalizeRemovableIngredients,
   normalizeShopMenus,
+  newMenuImageId,
   parseMenuFile,
   ShopMenu,
   ShopMenuDoc,
   ShopMenuItem,
+  ShopMenuItemImage,
 } from './menu-parse.util';
 import { buildPricedMenuPdf } from './menu-priced-pdf';
 import { isPromoInSchedule, normalizeShopPromos, type ShopPromo } from '../../common/shop-promos';
@@ -109,11 +112,26 @@ export class MenuService {
       sourceMime: sourceFile ? menu.sourceMime ?? null : null,
       sections: (menu.sections ?? []).map((sec) => ({
         ...sec,
-        items: (sec.items ?? []).map((it) => ({
-          ...it,
-          imageUrl: this.sanitizeItemImage(it.imageUrl, shopId),
-        })),
+        items: (sec.items ?? []).map((it) => this.withSafeItemImages(it, shopId)),
       })),
+    };
+  }
+
+  private withSafeItemImages(it: ShopMenuItem, shopId: string): ShopMenuItem {
+    const images = (it.images ?? [])
+      .map((img) => ({
+        id: String(img.id ?? '').trim(),
+        url: this.sanitizeItemImage(img.url, shopId) ?? '',
+      }))
+      .filter((img) => !!img.id && !!img.url);
+    const legacy = this.sanitizeItemImage(it.imageUrl, shopId);
+    if (legacy && !images.some((img) => img.url === legacy)) {
+      images.unshift({ id: newMenuImageId(), url: legacy });
+    }
+    return {
+      ...it,
+      images,
+      imageUrl: images[0]?.url ?? null,
     };
   }
 
@@ -122,11 +140,39 @@ export class MenuService {
     for (const m of menus) {
       for (const sec of m.sections ?? []) {
         for (const it of sec.items ?? []) {
+          for (const img of it.images ?? []) {
+            if (img.url) out.add(img.url);
+          }
           if (it.imageUrl) out.add(it.imageUrl);
         }
       }
     }
     return out;
+  }
+
+  private findItem(
+    menus: ShopMenuDoc[],
+    itemId: string,
+  ): { menuIdx: number; secIdx: number; itemIdx: number; item: ShopMenuItem } | null {
+    const wanted = String(itemId ?? '').trim();
+    if (!wanted) return null;
+    for (let mi = 0; mi < menus.length; mi++) {
+      const sections = menus[mi].sections ?? [];
+      for (let si = 0; si < sections.length; si++) {
+        const items = sections[si].items ?? [];
+        for (let ii = 0; ii < items.length; ii++) {
+          if (String(items[ii].id ?? '').trim() === wanted) {
+            return { menuIdx: mi, secIdx: si, itemIdx: ii, item: items[ii] };
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  private itemImagesOf(it: ShopMenuItem): ShopMenuItemImage[] {
+    const { images } = normalizeItemImages(it);
+    return images;
   }
 
   private sourceKind(mime?: string | null, fileName?: string | null): 'pdf' | 'image' | 'other' {
@@ -429,37 +475,27 @@ export class MenuService {
     }
     const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
     if (!shop) throw new NotFoundException('Local no encontrado');
-    const wanted = String(itemId ?? '').trim();
-    if (!wanted) throw new BadRequestException('Ítem inválido');
     const menus = this.readMenus(shop);
-    let found: { menuIdx: number; secIdx: number; itemIdx: number } | null = null;
-    for (let mi = 0; mi < menus.length; mi++) {
-      const sections = menus[mi].sections ?? [];
-      for (let si = 0; si < sections.length; si++) {
-        const items = sections[si].items ?? [];
-        for (let ii = 0; ii < items.length; ii++) {
-          if (String(items[ii].id ?? '').trim() === wanted) {
-            found = { menuIdx: mi, secIdx: si, itemIdx: ii };
-            break;
-          }
-        }
-        if (found) break;
-      }
-      if (found) break;
-    }
+    const found = this.findItem(menus, itemId);
     if (!found) throw new NotFoundException('Ítem no encontrado. Guardá la carta primero.');
-    const current = menus[found.menuIdx].sections[found.secIdx].items[found.itemIdx];
-    if (current.imageUrl) deleteUploadIfExists(current.imageUrl);
+    const current = found.item;
+    const images = this.itemImagesOf(current);
+    if (images.length >= 12) {
+      throw new BadRequestException('Máximo 12 fotos por ítem');
+    }
+    const imageId = newMenuImageId();
     const saved = saveUploadFile({
-      relativeDir: `menus/${shopId}/items`,
-      basename: wanted,
+      relativeDir: `menus/${shopId}/items/${found.item.id ?? itemId}`,
+      basename: imageId,
       buffer,
       originalName: file.originalname,
       mime: file.mimetype,
     });
+    const nextImages = [...images, { id: imageId, url: saved.relativePath }];
     menus[found.menuIdx].sections[found.secIdx].items[found.itemIdx] = {
       ...current,
-      imageUrl: saved.relativePath,
+      images: nextImages,
+      imageUrl: nextImages[0]?.url ?? null,
     };
     shop.menu = { menus };
     await this.persistShopColumns(shopId, { menu: shop.menu });
@@ -468,6 +504,8 @@ export class MenuService {
       slug: shop.slug,
       menus: menus.map((m) => this.withSafeSource(m, shopId)),
       imageUrl: saved.relativePath,
+      imageId,
+      images: nextImages,
     };
   }
 
@@ -475,20 +513,18 @@ export class MenuService {
     this.shops.assertOrderingCatalogManage(user, shopId);
     const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
     if (!shop) throw new NotFoundException('Local no encontrado');
-    const wanted = String(itemId ?? '').trim();
     const menus = this.readMenus(shop);
-    let cleared = false;
-    for (const menu of menus) {
-      for (const sec of menu.sections ?? []) {
-        for (const it of sec.items ?? []) {
-          if (String(it.id ?? '').trim() !== wanted) continue;
-          if (it.imageUrl) deleteUploadIfExists(it.imageUrl);
-          it.imageUrl = null;
-          cleared = true;
-        }
-      }
+    const found = this.findItem(menus, itemId);
+    if (!found) throw new NotFoundException('Ítem no encontrado');
+    for (const img of this.itemImagesOf(found.item)) {
+      deleteUploadIfExists(img.url);
     }
-    if (!cleared) throw new NotFoundException('Ítem no encontrado');
+    if (found.item.imageUrl) deleteUploadIfExists(found.item.imageUrl);
+    menus[found.menuIdx].sections[found.secIdx].items[found.itemIdx] = {
+      ...found.item,
+      images: [],
+      imageUrl: null,
+    };
     shop.menu = { menus };
     await this.persistShopColumns(shopId, { menu: shop.menu });
     return {
@@ -498,34 +534,104 @@ export class MenuService {
     };
   }
 
-  async publicItemImage(slug: string, itemId: string) {
+  async deleteItemImage(user: AuthUser, shopId: string, itemId: string, imageId: string) {
+    this.shops.assertOrderingCatalogManage(user, shopId);
+    const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    const menus = this.readMenus(shop);
+    const found = this.findItem(menus, itemId);
+    if (!found) throw new NotFoundException('Ítem no encontrado');
+    const wanted = String(imageId ?? '').trim();
+    if (!wanted) throw new BadRequestException('Foto inválida');
+    const images = this.itemImagesOf(found.item);
+    const target = images.find((img) => img.id === wanted);
+    if (!target) throw new NotFoundException('Foto no encontrada');
+    deleteUploadIfExists(target.url);
+    const nextImages = images.filter((img) => img.id !== wanted);
+    menus[found.menuIdx].sections[found.secIdx].items[found.itemIdx] = {
+      ...found.item,
+      images: nextImages,
+      imageUrl: nextImages[0]?.url ?? null,
+    };
+    shop.menu = { menus };
+    await this.persistShopColumns(shopId, { menu: shop.menu });
+    return {
+      enabled: !!shop.menuEnabled,
+      slug: shop.slug,
+      menus: menus.map((m) => this.withSafeSource(m, shopId)),
+      images: nextImages,
+    };
+  }
+
+  async reorderItemImages(
+    user: AuthUser,
+    shopId: string,
+    itemId: string,
+    imageIds: string[],
+  ) {
+    this.shops.assertOrderingCatalogManage(user, shopId);
+    const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    const menus = this.readMenus(shop);
+    const found = this.findItem(menus, itemId);
+    if (!found) throw new NotFoundException('Ítem no encontrado');
+    const images = this.itemImagesOf(found.item);
+    const byId = new Map(images.map((img) => [img.id, img]));
+    const ordered: ShopMenuItemImage[] = [];
+    const seen = new Set<string>();
+    for (const id of imageIds ?? []) {
+      const key = String(id ?? '').trim();
+      const img = byId.get(key);
+      if (!img || seen.has(key)) continue;
+      seen.add(key);
+      ordered.push(img);
+    }
+    for (const img of images) {
+      if (seen.has(img.id)) continue;
+      ordered.push(img);
+    }
+    menus[found.menuIdx].sections[found.secIdx].items[found.itemIdx] = {
+      ...found.item,
+      images: ordered,
+      imageUrl: ordered[0]?.url ?? null,
+    };
+    shop.menu = { menus };
+    await this.persistShopColumns(shopId, { menu: shop.menu });
+    return {
+      enabled: !!shop.menuEnabled,
+      slug: shop.slug,
+      menus: menus.map((m) => this.withSafeSource(m, shopId)),
+      images: ordered,
+    };
+  }
+
+  async publicItemImage(slug: string, itemId: string, imageId?: string | null) {
     const shop = await this.shops.findActiveBySlug(String(slug ?? '').trim().toLowerCase());
     if (!shop) throw new NotFoundException('Imagen no encontrada');
-    const wanted = String(itemId ?? '').trim();
-    for (const menu of this.readMenus(shop)) {
-      for (const sec of menu.sections ?? []) {
-        for (const it of sec.items ?? []) {
-          if (String(it.id ?? '').trim() !== wanted) continue;
-          const path = this.sanitizeItemImage(it.imageUrl, shop.id);
-          const abs = resolveUploadPath(path);
-          if (!abs) throw new NotFoundException('Imagen no encontrada');
-          const mime =
-            extname(abs).toLowerCase() === '.png'
-              ? 'image/png'
-              : extname(abs).toLowerCase() === '.webp'
-                ? 'image/webp'
-                : extname(abs).toLowerCase() === '.gif'
-                  ? 'image/gif'
-                  : 'image/jpeg';
-          return {
-            stream: new StreamableFile(createReadStream(abs)),
-            mime,
-            fileName: `item${extname(abs) || '.jpg'}`,
-          };
-        }
-      }
-    }
-    throw new NotFoundException('Imagen no encontrada');
+    const found = this.findItem(this.readMenus(shop), itemId);
+    if (!found) throw new NotFoundException('Imagen no encontrada');
+    const images = this.itemImagesOf(found.item);
+    const wantedImg = String(imageId ?? '').trim();
+    const pick = wantedImg
+      ? images.find((img) => img.id === wantedImg)
+      : images[0] ?? (found.item.imageUrl ? { id: '', url: found.item.imageUrl } : null);
+    if (!pick) throw new NotFoundException('Imagen no encontrada');
+    const path = this.sanitizeItemImage(pick.url, shop.id);
+    const abs = resolveUploadPath(path);
+    if (!abs) throw new NotFoundException('Imagen no encontrada');
+    const mime =
+      extname(abs).toLowerCase() === '.png'
+        ? 'image/png'
+        : extname(abs).toLowerCase() === '.webp'
+          ? 'image/webp'
+          : extname(abs).toLowerCase() === '.gif'
+            ? 'image/gif'
+            : 'image/jpeg';
+    return {
+      stream: new StreamableFile(createReadStream(abs)),
+      mime,
+      fileName: `item${extname(abs) || '.jpg'}`,
+    };
   }
 
   private publicShop(shop: Shop) {

@@ -128,6 +128,28 @@ export class MenuController {
     return this.menus.clearItemImage(user, shopId, itemId);
   }
 
+  @Delete('items/:itemId/images/:imageId')
+  @RequireAnyPermissions('shops.manage', 'orderingCatalog.manage')
+  deleteItemImage(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('itemId') itemId: string,
+    @Param('imageId') imageId: string,
+  ) {
+    return this.menus.deleteItemImage(user, shopId, itemId, imageId);
+  }
+
+  @Put('items/:itemId/images/order')
+  @RequireAnyPermissions('shops.manage', 'orderingCatalog.manage')
+  reorderItemImages(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('itemId') itemId: string,
+    @Body() body: { imageIds?: string[] },
+  ) {
+    return this.menus.reorderItemImages(user, shopId, itemId, body?.imageIds ?? []);
+  }
+
   @Post(':menuId/source')
   @RequireAnyPermissions('shops.manage', 'orderingCatalog.manage')
   @ApiConsumes('multipart/form-data')
@@ -220,6 +242,21 @@ export class PublicMenuController {
     );
     res.setHeader('Cache-Control', 'public, max-age=60');
     return new StreamableFile(Buffer.from(bytes));
+  }
+
+  @Public()
+  @Get(':slug/menu-items/:itemId/images/:imageId')
+  async publicItemImageById(
+    @Param('slug') slug: string,
+    @Param('itemId') itemId: string,
+    @Param('imageId') imageId: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { stream, fileName, mime } = await this.menus.publicItemImage(slug, itemId, imageId);
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(fileName)}"`);
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    return stream;
   }
 
   @Public()
