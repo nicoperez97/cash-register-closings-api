@@ -296,6 +296,31 @@ export class ClosingMovementsSyncService {
       });
     }
 
+    // Cambio aportado a la caja: cuenta de quien lo dejó → Efectivo Caja
+    // (mismo concepto configurado para “quién se lo lleva”).
+    const changeConceptId = this.resolveWithdrawalConceptId(shop, concepts, findConcept);
+    if (cashDrawer) {
+      for (const row of closing.cashChangeContributions ?? []) {
+        const amount = n(row.amount);
+        const fromId = String(row.accountId ?? '').trim();
+        if (amount <= 0 || !fromId) continue;
+        const from = accounts.find((a) => a.id === fromId);
+        if (!from) continue;
+        rows.push({
+          shopId: closing.shopId,
+          businessDate: date,
+          fromAccountId: from.id,
+          toAccountId: cashDrawer.id,
+          description: `Cambio en caja — ${row.name?.trim() || from.name}`,
+          amountUyu: money(amount),
+          conceptId: changeConceptId,
+          closingId: closing.id,
+          invoiced: false,
+          active: true,
+        });
+      }
+    }
+
     for (const exp of closing.expenses ?? []) {
       const amount = n(exp.amount);
       if (amount <= 0) continue;

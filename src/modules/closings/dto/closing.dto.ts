@@ -44,6 +44,29 @@ export class ExpenseDto {
   notes?: string | null;
 }
 
+export class CashChangeContributionDto {
+  @ApiProperty({ description: 'Cuenta PARTNER de quien dejó el cambio' })
+  @IsUUID()
+  accountId: string;
+
+  @ApiProperty()
+  @IsNumber()
+  @Min(0.01)
+  amount: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== '')
+  @IsUUID()
+  userId?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  name?: string | null;
+}
+
 export class ExtraLineDto {
   @ApiProperty({ enum: ExtraLineType })
   @IsEnum(ExtraLineType)
@@ -128,6 +151,18 @@ export class CreateClosingDto {
   @IsOptional()
   @IsUUID()
   cashWithdrawnToAccountId?: string | null;
+
+  @ApiPropertyOptional({
+    type: [CashChangeContributionDto],
+    description:
+      'Aportes de cambio a la caja (quién dejó + monto). Se suman a la apertura y generan movimiento a Efectivo.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CashChangeContributionDto)
+  cashChangeContributions?: CashChangeContributionDto[] | null;
+
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) tipsAmount?: number;
   @ApiPropertyOptional({ description: 'Desglose propinas: efectivo' })
   @IsOptional()
