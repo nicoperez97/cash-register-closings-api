@@ -1272,10 +1272,10 @@ export class ClosingsService implements OnModuleInit {
       throw new ForbiddenException('Solo un super admin puede eliminar cierres');
     }
     this.shops.assertShopAccess(user, shopId);
-    const row = await this.closings.findOne({
-      where: { id, shopId },
-      relations: ['expenses', 'extraLines', 'sourceAmounts'],
-    });
+    // Sin relaciones: el softRemove/save no debe cascadear a los hijos (ya se borran
+    // abajo por closingId). Además ClosingSourceAmount no tiene columna de borrado,
+    // por lo que un softRemove en cascada tiraba MissingDeleteDateColumnError (500).
+    const row = await this.closings.findOne({ where: { id, shopId } });
     if (!row) throw new NotFoundException('Cierre no encontrado');
     await this.closingMovements.removeFromClosing(id);
     await this.cashWithdrawals.cancelForClosing(id);
