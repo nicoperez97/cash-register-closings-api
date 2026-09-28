@@ -463,17 +463,27 @@ export class CustomerOrdersService implements OnModuleInit {
           name: sec.name,
           items: (sec.items ?? [])
             .filter((it) => it.available !== false && it.price != null && !soldOut.has(String(it.id ?? '')))
-            .map((it) => ({
-              id: it.id,
-              name: it.name,
-              description: it.description ?? null,
-              price: it.price,
-              priceLabel: it.priceLabel ?? null,
-              removableIngredients: it.removableIngredients ?? [],
-              imageUrl: it.imageUrl
-                ? `/public/shops/${shop.slug}/menu-items/${encodeURIComponent(String(it.id))}/image`
-                : null,
-            })),
+            .map((it) => {
+              const images = (it.images ?? []).map((img) => ({
+                id: img.id,
+                url: `/public/shops/${shop.slug}/menu-items/${encodeURIComponent(String(it.id))}/images/${encodeURIComponent(img.id)}`,
+              }));
+              const first =
+                images[0]?.url ??
+                (it.imageUrl
+                  ? `/public/shops/${shop.slug}/menu-items/${encodeURIComponent(String(it.id))}/image`
+                  : null);
+              return {
+                id: it.id,
+                name: it.name,
+                description: it.description ?? null,
+                price: it.price,
+                priceLabel: it.priceLabel ?? null,
+                removableIngredients: it.removableIngredients ?? [],
+                imageUrl: first,
+                images,
+              };
+            }),
         })),
       })),
     };
@@ -551,14 +561,21 @@ export class CustomerOrdersService implements OnModuleInit {
           name: sec.name,
           items: (sec.items ?? [])
             .filter((it) => it.available !== false && it.price != null && !soldOut.has(String(it.id ?? '')))
-            .map((it) => ({
-              id: it.id,
-              name: it.name,
-              description: it.description ?? null,
-              price: Number(it.price),
-              removableIngredients: it.removableIngredients ?? [],
-              imageUrl: it.imageUrl ?? null,
-            })),
+            .map((it) => {
+              const images = (it.images ?? []).map((img) => ({
+                id: img.id,
+                url: img.url,
+              }));
+              return {
+                id: it.id,
+                name: it.name,
+                description: it.description ?? null,
+                price: Number(it.price),
+                removableIngredients: it.removableIngredients ?? [],
+                imageUrl: it.imageUrl ?? images[0]?.url ?? null,
+                images,
+              };
+            }),
         })),
       })),
     };

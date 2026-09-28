@@ -3,6 +3,12 @@ import { pathToFileURL } from 'url';
 import * as path from 'path';
 import { recognize } from 'tesseract.js';
 
+export type ShopMenuItemImage = {
+  id: string;
+  /** Path relativo bajo uploads/. */
+  url: string;
+};
+
 export type ShopMenuItem = {
   id?: string;
   name: string;
@@ -10,8 +16,10 @@ export type ShopMenuItem = {
   price?: number | null;
   priceLabel?: string | null;
   available?: boolean;
-  /** Path relativo bajo uploads/ de la foto del ítem. */
+  /** Compat: primera foto (o legacy). Preferí `images`. */
   imageUrl?: string | null;
+  /** Fotos del ítem en orden de visualización. */
+  images?: ShopMenuItemImage[];
   /** Ingredientes que el cliente puede pedir sin (ej. cebolla, tomate). */
   removableIngredients?: string[];
   /** Sectores (comanda): ids del catálogo kitchenSectors del local. */
@@ -322,6 +330,44 @@ function newMenuItemId(): string {
   return `i_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+export function newMenuImageId(): string {
+  return `img_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** Normaliza fotos del ítem; migra `imageUrl` legacy a `images[]`. */
+export function normalizeItemImages(raw: {
+  imageUrl?: unknown;
+  images?: unknown;
+} | null | undefined): { images: ShopMenuItemImage[]; imageUrl: string | null } {
+  const images: ShopMenuItemImage[] = [];
+  const seenUrls = new Set<string>();
+  const seenIds = new Set<string>();
+  const push = (idRaw: string, urlRaw: string) => {
+    const url = urlRaw.trim().replace(/\\/g, '/').slice(0, 220);
+    if (!url || seenUrls.has(url)) return;
+    let id = idRaw.trim().slice(0, 40);
+    if (!id || seenIds.has(id)) id = newMenuImageId();
+    seenUrls.add(url);
+    seenIds.add(id);
+    images.push({ id, url });
+  };
+  if (Array.isArray(raw?.images)) {
+    for (const row of raw!.images as Array<{ id?: unknown; url?: unknown; imageUrl?: unknown }>) {
+      const url = String(row?.url ?? row?.imageUrl ?? '').trim();
+      const id = String(row?.id ?? '').trim();
+      if (url) push(id, url);
+    }
+  }
+  const legacy = String(raw?.imageUrl ?? '')
+    .trim()
+    .replace(/\\/g, '/');
+  if (legacy) push(newMenuImageId(), legacy);
+  return {
+    images,
+    imageUrl: images[0]?.url ?? null,
+  };
+}
+
 export function newKitchenSectorId(): string {
   return `ks_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -448,10 +494,7 @@ export function normalizeShopMenu(raw?: ShopMenu | null): ShopMenu {
       usedItemIds.add(id);
       const available =
         it?.available === undefined || it?.available === null ? true : !!it.available;
-      const imageUrl = String(it?.imageUrl ?? '')
-        .trim()
-        .replace(/\\/g, '/')
-        .slice(0, 220) || null;
+      const { images, imageUrl } = normalizeItemImages(it as { imageUrl?: unknown; images?: unknown });
       const kitchenSectorIds = normalizeKitchenSectorIds(it);
       items.push({
         id,
@@ -461,6 +504,7 @@ export function normalizeShopMenu(raw?: ShopMenu | null): ShopMenu {
         priceLabel: String(it?.priceLabel ?? '').trim().slice(0, 48) || null,
         available,
         imageUrl,
+        images,
         removableIngredients: normalizeRemovableIngredients(
           (it as { removableIngredients?: unknown })?.removableIngredients,
         ),

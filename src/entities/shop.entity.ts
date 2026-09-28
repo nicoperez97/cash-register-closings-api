@@ -233,6 +233,7 @@ export class Shop extends BaseEntity {
           priceLabel?: string | null;
           available?: boolean;
           imageUrl?: string | null;
+          images?: Array<{ id: string; url: string }>;
           kitchenSectorIds?: string[];
           kitchenSectorId?: string | null;
         }>;
