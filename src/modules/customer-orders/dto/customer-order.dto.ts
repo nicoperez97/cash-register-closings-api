@@ -39,6 +39,17 @@ export class CreateCustomerOrderItemDto {
   @Max(99)
   qty: number;
 
+  /**
+   * Solo staff/comanda: precio fijado al agregar (debe ser el fijo o uno de accountPrices).
+   * En pedidos públicos se ignora.
+   */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  unitPrice?: number | null;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
