@@ -828,9 +828,22 @@ export class ReservationRequestsService implements OnModuleInit {
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   }
 
+  private static readonly WEEKDAY_LABELS = [
+    'domingo',
+    'lunes',
+    'martes',
+    'miércoles',
+    'jueves',
+    'viernes',
+    'sábado',
+  ] as const;
+
   private formatWhen(date: string, time?: string | null): string {
     const [y, m, d] = date.split('-').map(Number);
     const label = `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}/${y}`;
-    return time ? `${label} a las ${time}` : label;
+    const weekday =
+      ReservationRequestsService.WEEKDAY_LABELS[PublicForm.weekdayFromIsoDate(date)] ?? '';
+    const withDay = weekday ? `${weekday}, ${label}` : label;
+    return time ? `${withDay} a las ${time}` : withDay;
   }
 }

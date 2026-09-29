@@ -13,6 +13,9 @@ export type ShopMenuItemImage = {
 export type MenuItemAccountPrice = {
   accountId: string;
   price: number;
+  /** Cómo se llegó a ese precio (ajuste masivo o edición manual). */
+  mode?: 'fixed' | 'add' | 'percent';
+  value?: number;
 };
 
 export type ShopMenuItem = {
@@ -75,7 +78,7 @@ export function allowedUnitPrices(
 
 export function normalizeMenuAccountPrices(raw: unknown): MenuItemAccountPrice[] {
   if (!Array.isArray(raw)) return [];
-  const byId = new Map<string, number>();
+  const byId = new Map<string, MenuItemAccountPrice>();
   for (const row of raw) {
     if (!row || typeof row !== 'object') continue;
     const accountId = String((row as { accountId?: unknown }).accountId ?? '')
@@ -84,14 +87,23 @@ export function normalizeMenuAccountPrices(raw: unknown): MenuItemAccountPrice[]
     if (!accountId) continue;
     const price = Number((row as { price?: unknown }).price);
     if (!Number.isFinite(price) || price < 0) continue;
-    byId.set(accountId, Math.round(price));
+    const modeRaw = String((row as { mode?: unknown }).mode ?? '').trim();
+    const mode =
+      modeRaw === 'fixed' || modeRaw === 'add' || modeRaw === 'percent' ? modeRaw : null;
+    const valueRaw = Number((row as { value?: unknown }).value);
+    const entry: MenuItemAccountPrice = { accountId, price: Math.round(price) };
+    if (mode && Number.isFinite(valueRaw) && !(mode === 'fixed' && valueRaw < 0)) {
+      entry.mode = mode;
+      entry.value = mode === 'fixed' ? Math.round(valueRaw) : valueRaw;
+    }
+    byId.set(accountId, entry);
   }
-  return [...byId.entries()].map(([accountId, price]) => ({ accountId, price }));
+  return [...byId.values()];
 }
 
 export function normalizeMenuAccountPriceRules(raw: unknown): MenuAccountPriceRule[] {
   if (!Array.isArray(raw)) return [];
-  const byId = new Map<string, MenuAccountPriceRule>();
+  const byKey = new Map<string, MenuAccountPriceRule>();
   for (const row of raw) {
     if (!row || typeof row !== 'object') continue;
     const accountId = String((row as { accountId?: unknown }).accountId ?? '')
@@ -105,9 +117,10 @@ export function normalizeMenuAccountPriceRules(raw: unknown): MenuAccountPriceRu
     const value = Number((row as { value?: unknown }).value);
     if (!Number.isFinite(value)) continue;
     if (mode === 'fixed' && value < 0) continue;
-    byId.set(accountId, { accountId, mode, value });
+    const rule: MenuAccountPriceRule = { accountId, mode, value };
+    byKey.set(`${accountId}|${mode}|${value}`, rule);
   }
-  return [...byId.values()];
+  return [...byKey.values()];
 }
 
 export type MenuItemRecipeLine = {
@@ -142,7 +155,7 @@ export type MenuPriceSlot = {
   color?: string;
 };
 
-/** Cómo se cargó el último ajuste masivo de precios por cuenta en esta carta. */
+/** Ajuste(s) masivo(s) de precios por cuenta en esta carta (varios por la misma cuenta). */
 export type MenuAccountPriceRule = {
   accountId: string;
   mode: 'fixed' | 'add' | 'percent';
