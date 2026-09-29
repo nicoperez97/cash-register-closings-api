@@ -9,12 +9,23 @@ export type ShopMenuItemImage = {
   url: string;
 };
 
+/** Precio de ítem ligado a una cuenta ledger del local (Pedidos Ya, PVS…). */
+export type MenuItemAccountPrice = {
+  accountId: string;
+  price: number;
+};
+
 export type ShopMenuItem = {
   id?: string;
   name: string;
   description?: string | null;
   price?: number | null;
   priceLabel?: string | null;
+  /**
+   * Precios por cuenta (mostrador / comanda). No se muestran en /m ni /pedir.
+   * Si el medio de pago tiene accountId y hay fila acá, se usa ese monto.
+   */
+  accountPrices?: MenuItemAccountPrice[];
   available?: boolean;
   /** Compat: primera foto (o legacy). Preferí `images`. */
   imageUrl?: string | null;
@@ -29,6 +40,75 @@ export type ShopMenuItem = {
   /** Insumos de stock que se descuentan al vender este plato. */
   recipe?: MenuItemRecipeLine[];
 };
+
+/** Precio unitario según cuenta del medio de pago; si no hay, el precio fijo. */
+export function resolveItemUnitPrice(
+  item: { price?: number | null; accountPrices?: MenuItemAccountPrice[] | null },
+  accountId?: string | null,
+): number | null {
+  const base = item.price == null ? null : Number(item.price);
+  const baseOk = base != null && Number.isFinite(base) && base >= 0 ? base : null;
+  const acc = String(accountId ?? '').trim();
+  if (acc) {
+    const hit = (item.accountPrices ?? []).find((r) => String(r.accountId ?? '').trim() === acc);
+    if (hit) {
+      const n = Number(hit.price);
+      if (Number.isFinite(n) && n >= 0) return Math.round(n);
+    }
+  }
+  return baseOk == null ? null : Math.round(baseOk);
+}
+
+/** Montos válidos para que staff mande unitPrice (anti-tamper). */
+export function allowedUnitPrices(
+  item: { price?: number | null; accountPrices?: MenuItemAccountPrice[] | null },
+): Set<number> {
+  const out = new Set<number>();
+  const base = item.price == null ? null : Number(item.price);
+  if (base != null && Number.isFinite(base) && base >= 0) out.add(Math.round(base));
+  for (const row of item.accountPrices ?? []) {
+    const n = Number(row.price);
+    if (Number.isFinite(n) && n >= 0) out.add(Math.round(n));
+  }
+  return out;
+}
+
+export function normalizeMenuAccountPrices(raw: unknown): MenuItemAccountPrice[] {
+  if (!Array.isArray(raw)) return [];
+  const byId = new Map<string, number>();
+  for (const row of raw) {
+    if (!row || typeof row !== 'object') continue;
+    const accountId = String((row as { accountId?: unknown }).accountId ?? '')
+      .trim()
+      .slice(0, 36);
+    if (!accountId) continue;
+    const price = Number((row as { price?: unknown }).price);
+    if (!Number.isFinite(price) || price < 0) continue;
+    byId.set(accountId, Math.round(price));
+  }
+  return [...byId.entries()].map(([accountId, price]) => ({ accountId, price }));
+}
+
+export function normalizeMenuAccountPriceRules(raw: unknown): MenuAccountPriceRule[] {
+  if (!Array.isArray(raw)) return [];
+  const byId = new Map<string, MenuAccountPriceRule>();
+  for (const row of raw) {
+    if (!row || typeof row !== 'object') continue;
+    const accountId = String((row as { accountId?: unknown }).accountId ?? '')
+      .trim()
+      .slice(0, 36);
+    if (!accountId) continue;
+    const modeRaw = String((row as { mode?: unknown }).mode ?? '').trim();
+    const mode =
+      modeRaw === 'fixed' || modeRaw === 'add' || modeRaw === 'percent' ? modeRaw : null;
+    if (!mode) continue;
+    const value = Number((row as { value?: unknown }).value);
+    if (!Number.isFinite(value)) continue;
+    if (mode === 'fixed' && value < 0) continue;
+    byId.set(accountId, { accountId, mode, value });
+  }
+  return [...byId.values()];
+}
 
 export type MenuItemRecipeLine = {
   stockProductId: string;
@@ -62,6 +142,13 @@ export type MenuPriceSlot = {
   color?: string;
 };
 
+/** Cómo se cargó el último ajuste masivo de precios por cuenta en esta carta. */
+export type MenuAccountPriceRule = {
+  accountId: string;
+  mode: 'fixed' | 'add' | 'percent';
+  value: number;
+};
+
 export type ShopMenu = {
   id?: string;
   slug?: string;
@@ -73,6 +160,8 @@ export type ShopMenu = {
   sourceMime?: string | null;
   /** Slots de precio sobre el PDF físico (solo aplica si source es PDF). */
   priceSlots?: MenuPriceSlot[];
+  /** Último modo de carga masiva por cuenta (fijo / sumar / %). */
+  accountPriceRules?: MenuAccountPriceRule[];
   sections: ShopMenuSection[];
 };
 
@@ -479,6 +568,9 @@ export function normalizeShopMenu(raw?: ShopMenu | null): ShopMenu {
   const priceSlots = normalizeMenuPriceSlots(
     (raw as { priceSlots?: unknown } | null | undefined)?.priceSlots,
   );
+  const accountPriceRules = normalizeMenuAccountPriceRules(
+    (raw as { accountPriceRules?: unknown } | null | undefined)?.accountPriceRules,
+  );
   const sections: ShopMenuSection[] = [];
   const usedItemIds = new Set<string>();
   for (const sec of raw?.sections ?? []) {
@@ -496,12 +588,16 @@ export function normalizeShopMenu(raw?: ShopMenu | null): ShopMenu {
         it?.available === undefined || it?.available === null ? true : !!it.available;
       const { images, imageUrl } = normalizeItemImages(it as { imageUrl?: unknown; images?: unknown });
       const kitchenSectorIds = normalizeKitchenSectorIds(it);
+      const accountPrices = normalizeMenuAccountPrices(
+        (it as { accountPrices?: unknown })?.accountPrices,
+      );
       items.push({
         id,
         name: itemName,
         description: String(it?.description ?? '').trim().slice(0, 400) || null,
         price: Number.isFinite(price) && price != null && price >= 0 ? price : null,
         priceLabel: String(it?.priceLabel ?? '').trim().slice(0, 48) || null,
+        accountPrices: accountPrices.length ? accountPrices : undefined,
         available,
         imageUrl,
         images,
@@ -514,7 +610,16 @@ export function normalizeShopMenu(raw?: ShopMenu | null): ShopMenu {
     }
     sections.push({ name, items });
   }
-  return { title, note, sourceFile, sourceFileName, sourceMime, priceSlots, sections };
+  return {
+    title,
+    note,
+    sourceFile,
+    sourceFileName,
+    sourceMime,
+    priceSlots,
+    accountPriceRules: accountPriceRules.length ? accountPriceRules : undefined,
+    sections,
+  };
 }
 
 export function menuParseScore(menu: ShopMenu): number {
@@ -568,6 +673,7 @@ export function normalizeShopMenus(raw?: unknown): ShopMenuDoc[] {
       sourceFileName: content.sourceFileName,
       sourceMime: content.sourceMime,
       priceSlots: content.priceSlots,
+      accountPriceRules: content.accountPriceRules,
       sections: content.sections,
     });
   }
@@ -585,6 +691,7 @@ export function emptyShopMenu(partial?: Partial<ShopMenu>): ShopMenuDoc {
     sourceFileName: partial?.sourceFileName ?? null,
     sourceMime: partial?.sourceMime ?? null,
     priceSlots: partial?.priceSlots ?? [],
+    accountPriceRules: partial?.accountPriceRules ?? [],
     sections: partial?.sections ?? [],
   };
 }

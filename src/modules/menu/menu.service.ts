@@ -192,7 +192,13 @@ export class MenuService {
       slug: menu.slug,
       title: menu.title,
       note: menu.note,
-      sections: menu.sections,
+      sections: (menu.sections ?? []).map((sec) => ({
+        name: sec.name,
+        items: (sec.items ?? []).map((it) => {
+          const { accountPrices: _ap, ...pub } = it;
+          return pub;
+        }),
+      })),
       hasSourceFile: !!abs,
       sourceFileName: abs ? menu.sourceFileName ?? null : null,
       sourceKind: abs ? this.sourceKind(menu.sourceMime, menu.sourceFileName || menu.sourceFile) : null,

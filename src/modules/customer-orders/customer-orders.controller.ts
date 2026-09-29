@@ -74,6 +74,12 @@ export class CustomerOrdersController {
     return this.service.createStaff(user, shopId, dto);
   }
 
+  @Get('ordering-catalog')
+  @RequirePermissions('customerOrders.manage')
+  orderingCatalog(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
+    return this.service.getStaffOrderingConfig(user, shopId);
+  }
+
   @Get()
   @RequirePermissions('customerOrders.read')
   list(

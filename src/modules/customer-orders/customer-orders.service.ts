@@ -67,7 +67,13 @@ import {
   isPromoInSchedule,
   normalizeShopPromos,
 } from '../../common/shop-promos';
-import { normalizeRemovableIngredients, normalizeShopMenus, ShopMenuItem } from '../menu/menu-parse.util';
+import {
+  allowedUnitPrices,
+  normalizeRemovableIngredients,
+  normalizeShopMenus,
+  resolveItemUnitPrice,
+  ShopMenuItem,
+} from '../menu/menu-parse.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrintAgentService } from '../print-agent/print-agent.service';
 import { ShopLiveService } from '../shop-live/shop-live.service';
@@ -280,11 +286,38 @@ export class CustomerOrdersService implements OnModuleInit {
           const price = it.price == null ? null : Number(it.price);
           if (price == null || !Number.isFinite(price) || price < 0) continue;
           if (it.available === false) continue;
-          map.set(id, { ...it, unitPrice: price });
+          map.set(id, { ...it, unitPrice: Math.round(price) });
         }
       }
     }
     return map;
+  }
+
+  /** Precio de línea: staff/mesa puede fijar unitPrice; público siempre precio fijo. */
+  private resolveLineUnitPrice(
+    item: ShopMenuItem & { unitPrice: number },
+    row: { unitPrice?: number | null },
+    opts: { response: 'public' | 'staff' | 'waiter' | 'guest'; accountId: string | null },
+  ): number {
+    const allowStaffPrice = opts.response === 'staff' || opts.response === 'waiter';
+    if (allowStaffPrice && row.unitPrice != null && Number.isFinite(Number(row.unitPrice))) {
+      const asked = Math.round(Number(row.unitPrice));
+      if (asked < 0) {
+        throw new BadRequestException(`Precio inválido para ${item.name}`);
+      }
+      const allowed = allowedUnitPrices(item);
+      if (!allowed.has(asked)) {
+        throw new BadRequestException(
+          `Precio no permitido para ${item.name}. Usá el precio de carta o uno por cuenta.`,
+        );
+      }
+      return asked;
+    }
+    if (allowStaffPrice) {
+      const resolved = resolveItemUnitPrice(item, opts.accountId);
+      if (resolved != null) return resolved;
+    }
+    return item.unitPrice;
   }
 
   private toDto(o: CustomerOrder) {
@@ -383,9 +416,25 @@ export class CustomerOrdersService implements OnModuleInit {
     if (!shop.onlineOrderingEnabled) {
       throw new NotFoundException('Pedidos online no disponibles');
     }
-
     await this.maybeAutoCloseOrdering(shop);
+    return this.buildOrderingConfig(shop, { includeAccountPrices: false });
+  }
 
+  /** Catálogo de mostrador: igual que /pedir pero con precios por cuenta. */
+  async getStaffOrderingConfig(user: AuthUser, shopId: string) {
+    this.assertShopAccess(user, shopId);
+    const shop = await this.shops.findOne({ where: { id: shopId, active: true as any } });
+    if (!shop || !shop.onlineOrderingEnabled) {
+      throw new NotFoundException('Pedidos online no disponibles');
+    }
+    await this.maybeAutoCloseOrdering(shop);
+    return this.buildOrderingConfig(shop, { includeAccountPrices: true });
+  }
+
+  private async buildOrderingConfig(
+    shop: Shop,
+    opts: { includeAccountPrices: boolean },
+  ) {
     const hours = normalizeShopOrderingHours(shop.orderingHours);
     const takeawayHours = hours?.takeaway ?? null;
     const deliveryHours = hours?.delivery ?? null;
@@ -479,6 +528,14 @@ export class CustomerOrdersService implements OnModuleInit {
                 description: it.description ?? null,
                 price: it.price,
                 priceLabel: it.priceLabel ?? null,
+                ...(opts.includeAccountPrices
+                  ? {
+                      accountPrices: (it.accountPrices ?? []).map((r) => ({
+                        accountId: r.accountId,
+                        price: r.price,
+                      })),
+                    }
+                  : {}),
                 removableIngredients: it.removableIngredients ?? [],
                 imageUrl: first,
                 images,
@@ -571,6 +628,10 @@ export class CustomerOrdersService implements OnModuleInit {
                 name: it.name,
                 description: it.description ?? null,
                 price: Number(it.price),
+                accountPrices: (it.accountPrices ?? []).map((r) => ({
+                  accountId: r.accountId,
+                  price: r.price,
+                })),
                 removableIngredients: it.removableIngredients ?? [],
                 imageUrl: it.imageUrl ?? images[0]?.url ?? null,
                 images,
@@ -587,6 +648,7 @@ export class CustomerOrdersService implements OnModuleInit {
       items: Array<{
         menuItemId: string;
         qty: number;
+        unitPrice?: number | null;
         notes?: string | null;
         removedIngredients?: string[];
         isEntrada?: boolean;
@@ -770,6 +832,10 @@ export class CustomerOrdersService implements OnModuleInit {
       }
     }
 
+    const priceAccountId =
+      opts.response === 'staff' || opts.response === 'waiter'
+        ? String(payItem?.accountId ?? '').trim() || null
+        : null;
     const catalog = this.menuItemIndex(shop);
     const lines: CustomerOrderLine[] = [];
     let subtotal = 0;
@@ -779,7 +845,10 @@ export class CustomerOrdersService implements OnModuleInit {
         throw new BadRequestException(`Ítem no disponible: ${row.menuItemId}`);
       }
       const qty = Math.max(1, Math.min(99, Number(row.qty) || 1));
-      const unitPrice = found.unitPrice;
+      const unitPrice = this.resolveLineUnitPrice(found, row, {
+        response: opts.response,
+        accountId: priceAccountId,
+      });
       subtotal += unitPrice * qty;
       const allowedRemoved = new Set(
         (found.removableIngredients ?? []).map((x) => x.toLowerCase()),

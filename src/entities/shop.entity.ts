@@ -231,6 +231,7 @@ export class Shop extends BaseEntity {
           description?: string | null;
           price?: number | null;
           priceLabel?: string | null;
+          accountPrices?: Array<{ accountId: string; price: number }>;
           available?: boolean;
           imageUrl?: string | null;
           images?: Array<{ id: string; url: string }>;
@@ -250,6 +251,7 @@ export class Shop extends BaseEntity {
         description?: string | null;
         price?: number | null;
         priceLabel?: string | null;
+        accountPrices?: Array<{ accountId: string; price: number }>;
         available?: boolean;
       }>;
     }>;

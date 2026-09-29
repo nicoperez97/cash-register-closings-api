@@ -48,6 +48,14 @@ class WaiterOrderItemDto {
   @Max(99)
   qty: number;
 
+  /** Precio fijado al agregar (precio fijo o por cuenta). */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  unitPrice?: number | null;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()

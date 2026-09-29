@@ -1128,6 +1128,7 @@ export class WaiterService implements OnModuleInit {
       items?: Array<{
         menuItemId: string;
         qty: number;
+        unitPrice?: number | null;
         notes?: string | null;
         removedIngredients?: string[];
         isEntrada?: boolean;
