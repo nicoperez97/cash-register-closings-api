@@ -4,9 +4,14 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { AppNotification } from '../../entities/notification.entity';
 import { Shop } from '../../entities/shop.entity';
+import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { NotificationType } from '../../common/enums';
 import { AuthUser } from '../../common/decorators';
+import {
+  isDemoStaffUserId,
+  shouldNeverNotifyStaff,
+} from '../../common/demo-user.util';
 import { normalizeLogoUrl } from '../../common/drive-url';
 import { resolveShopLogoUrlForEmail } from '../../common/shop-branding.util';
 import { PushService } from './push.service';
@@ -100,6 +105,8 @@ export class NotificationsService implements OnModuleInit {
     private readonly shops: Repository<Shop>,
     @InjectRepository(UserShop)
     private readonly userShops: Repository<UserShop>,
+    @InjectRepository(User)
+    private readonly users: Repository<User>,
     private readonly config: ConfigService,
     private readonly push: PushService,
     private readonly mail: MailService,
@@ -274,6 +281,7 @@ export class NotificationsService implements OnModuleInit {
     closingId?: string | null;
     targetId?: string | null;
   }) {
+    if (await this.shouldSkipStaffRecipient(input.userId)) return null;
     const mute = await this.muteChannelsFor(input.userId, input.shopId, input.type);
     if (mute.app && mute.email) {
       return null;
@@ -343,9 +351,12 @@ export class NotificationsService implements OnModuleInit {
     }>,
   ) {
     if (!inputs.length) return [];
+    const skipIds = await this.neverNotifyUserIds(inputs.map((i) => i.userId));
+    const usable = inputs.filter((i) => !skipIds.has(i.userId));
+    if (!usable.length) return [];
     const toSave: typeof inputs = [];
     const toEmail: typeof inputs = [];
-    for (const input of inputs) {
+    for (const input of usable) {
       const mute = await this.muteChannelsFor(input.userId, input.shopId, input.type);
       if (!mute.app) toSave.push(input);
       if (!mute.email) toEmail.push(input);
@@ -680,6 +691,36 @@ export class NotificationsService implements OnModuleInit {
       });
     }
     return out;
+  }
+
+  private async shouldSkipStaffRecipient(userId: string): Promise<boolean> {
+    if (isDemoStaffUserId(userId)) return true;
+    const user = await this.users.findOne({
+      where: { id: userId },
+      select: ['id', 'email'],
+    });
+    return shouldNeverNotifyStaff({ userId, email: user?.email });
+  }
+
+  private async neverNotifyUserIds(userIds: string[]): Promise<Set<string>> {
+    const unique = [...new Set(userIds.filter(Boolean))];
+    const skip = new Set<string>();
+    if (!unique.length) return skip;
+    for (const id of unique) {
+      if (isDemoStaffUserId(id)) skip.add(id);
+    }
+    const remaining = unique.filter((id) => !skip.has(id));
+    if (!remaining.length) return skip;
+    const users = await this.users.find({
+      where: { id: In(remaining) },
+      select: ['id', 'email'],
+    });
+    for (const u of users) {
+      if (shouldNeverNotifyStaff({ userId: u.id, email: u.email })) {
+        skip.add(u.id);
+      }
+    }
+    return skip;
   }
 
   private async muteChannelsFor(
