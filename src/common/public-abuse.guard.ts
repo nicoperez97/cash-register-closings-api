@@ -68,6 +68,7 @@ export class PublicAbuseGuard implements CanActivate {
     const mutating = method !== 'GET';
     const isPublicApi = path.includes('/public/');
     const isLogin = path.endsWith('/auth/login') && method === 'POST';
+    const isDemoLogin = path.endsWith('/auth/demo') && method === 'POST';
     const isReserve =
       isPublicApi && method === 'POST' && path.includes('/reservation-requests');
     const isLookup =
@@ -83,6 +84,8 @@ export class PublicAbuseGuard implements CanActivate {
 
     if (isLogin) {
       this.hit(`login:${ip}`, 8, 60_000, 'Demasiados intentos de ingreso. Probá en un minuto.');
+    } else if (isDemoLogin) {
+      this.hit(`demo:${ip}`, 12, 60_000, 'Demasiados ingresos a la demo. Probá en un minuto.');
     } else if (isReserve) {
       this.hit(
         `reserve:${ip}`,
