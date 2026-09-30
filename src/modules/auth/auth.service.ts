@@ -27,6 +27,7 @@ import {
   ExpenseCategory,
   ExtraLineType,
   GlobalRole,
+  NotificationType,
 } from '../../common/enums';
 import { isGlobalAdmin, isSuperAdmin } from '../../common/guards';
 import { AuthUser } from '../../common/decorators';
@@ -38,6 +39,10 @@ import {
 } from '../../common/module-permissions';
 import { Permission } from '../../common/enums';
 import { isEntityActive } from '../../common/active.util';
+import {
+  DEMO_ADMIN_EMAIL,
+  DEMO_ADMIN_USER_ID,
+} from '../../common/demo-user.util';
 import {
   normalizeOrderingConfigVisibility,
 } from '../../common/ordering-config-visibility';
@@ -55,15 +60,13 @@ import {
 } from '../../common/shop-ordering';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
 
-const DEMO_ADMIN_EMAIL = 'demo.admin@cierres.com';
-
 const IDS = {
   panino: '11111111-1111-1111-1111-111111111111',
   tutto: '22222222-2222-2222-2222-222222222222',
   admin: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
   manager: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
   cashier: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
-  demoAdmin: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+  demoAdmin: DEMO_ADMIN_USER_ID,
 };
 
 @Injectable()
@@ -92,6 +95,13 @@ export class AuthService implements OnModuleInit {
       `);
     } catch {
       // ya existe
+    }
+    // Siempre: si quedó un admin demo de seeds viejos, no debe recibir mails reales.
+    try {
+      await this.sanitizeDemoStaffUser();
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[AuthService] Demo staff sanitize failed:', err);
     }
     // Seed demo solo si se pide explícitamente (nunca por defecto en prod/local limpio).
     if (process.env.ENABLE_DEMO_SEED === 'true') {
@@ -245,12 +255,48 @@ export class AuthService implements OnModuleInit {
     await this.ensureSampleClosings();
   }
 
+  /**
+   * Corrige seeds viejos del admin demo: email no enrutable + mute total
+   * para que no entre en createMany / SMTP de locales reales (p. ej. Al Panino).
+   */
+  private async sanitizeDemoStaffUser() {
+    const users = await this.users.find({
+      where: [
+        { id: DEMO_ADMIN_USER_ID },
+        { email: 'demo.admin@cierres.com' },
+        { email: DEMO_ADMIN_EMAIL },
+      ],
+    });
+    if (!users.length) return;
+
+    const allTypes = Object.values(NotificationType);
+    const seen = new Set<string>();
+    for (const user of users) {
+      if (seen.has(user.id)) continue;
+      seen.add(user.id);
+
+      if (user.email !== DEMO_ADMIN_EMAIL) {
+        user.email = DEMO_ADMIN_EMAIL;
+        await this.users.save(user);
+      }
+
+      const links = await this.userShops.find({ where: { userId: user.id } });
+      for (const link of links) {
+        link.mutedEmailNotificationTypes = allTypes;
+        link.mutedAppNotificationTypes = allTypes;
+        link.mutedNotificationTypes = allTypes;
+        await this.userShops.save(link);
+      }
+    }
+  }
+
   /** Local demo + admin de local + catálogo / carta / mensajes de muestra. */
   private async ensureDemoAdminReady() {
     await this.ensurePaninoShop();
     const passwordHash = await bcrypt.hash('demo', 10);
     let user =
       (await this.users.findOne({ where: { email: DEMO_ADMIN_EMAIL } })) ??
+      (await this.users.findOne({ where: { email: 'demo.admin@cierres.com' } })) ??
       (await this.users.findOne({ where: { id: IDS.demoAdmin } }));
     if (!user) {
       user = await this.users.save(
@@ -276,11 +322,11 @@ export class AuthService implements OnModuleInit {
       }
       if (dirty) await this.users.save(user);
     }
-    const link = await this.userShops.findOne({
+    let link = await this.userShops.findOne({
       where: { userId: user.id, shopId: IDS.panino },
     });
     if (!link) {
-      await this.userShops.save(
+      link = await this.userShops.save(
         this.userShops.create({
           userId: user.id,
           shopId: IDS.panino,
@@ -288,6 +334,11 @@ export class AuthService implements OnModuleInit {
         }),
       );
     }
+    const allTypes = Object.values(NotificationType);
+    link.mutedEmailNotificationTypes = allTypes;
+    link.mutedAppNotificationTypes = allTypes;
+    link.mutedNotificationTypes = allTypes;
+    await this.userShops.save(link);
     await this.ensureDemoShopContent(IDS.panino);
   }
 

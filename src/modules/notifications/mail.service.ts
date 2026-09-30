@@ -9,6 +9,7 @@ import { Shop } from '../../entities/shop.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { NotificationType } from '../../common/enums';
 import { isEntityActive } from '../../common/active.util';
+import { isNonDeliverableStaffEmail } from '../../common/demo-user.util';
 import { resolveShopLogoUrlForEmail } from '../../common/shop-branding.util';
 import {
   loadEmailSafeShopLogo,
@@ -361,7 +362,7 @@ export class MailService {
       select: ['id', 'email', 'fullName', 'active'],
     });
     if (!user || !isEntityActive(user.active) || !user.email?.trim()) return;
-    if (user.email.includes('@import.cierres.local')) return;
+    if (isNonDeliverableStaffEmail(user.email)) return;
 
     const from = fromEmail;
     if (!from) {
@@ -492,7 +493,7 @@ export class MailService {
 
       const user = userById.get(input.userId);
       if (!user || !isEntityActive(user.active) || !user.email?.trim()) continue;
-      if (user.email.includes('@import.cierres.local')) continue;
+      if (isNonDeliverableStaffEmail(user.email)) continue;
 
       const { transporter, fromEmail } = this.transporterForShop(shop);
       if (!transporter || !fromEmail) continue;
