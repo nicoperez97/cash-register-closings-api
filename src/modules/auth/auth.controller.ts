@@ -8,6 +8,8 @@ import { GoogleLoginDto } from './dto/google-login.dto';
 import { CurrentUser, Public, AuthUser } from '../../common/decorators';
 import { ConfigService } from '@nestjs/config';
 
+const DEMO_LOGIN_ENABLED = () => process.env.DEMO_LOGIN_ENABLED === 'true';
+
 class FavoriteShopDto {
   @ApiPropertyOptional({ nullable: true, description: 'null para quitar el favorito' })
   @IsOptional()
@@ -45,11 +47,25 @@ export class AuthController {
     return this.auth.loginWithGoogle(dto);
   }
 
+  /** Disponibilidad del botón «Ver demo» en el login. */
+  @Public()
+  @Get('demo')
+  demoStatus() {
+    return { enabled: DEMO_LOGIN_ENABLED() };
+  }
+
+  /** Entrada demo como admin de local (sin credenciales en el cliente). */
+  @Public()
+  @Post('demo')
+  loginDemo() {
+    return this.auth.loginDemo();
+  }
+
   @ApiBearerAuth()
   @UseGuards(AuthGuard('jwt'))
   @Get('me')
   me(@CurrentUser() user: AuthUser) {
-    return this.auth.me(user.id);
+    return this.auth.me(user.id, { isDemo: !!user.isDemo });
   }
 
   @ApiBearerAuth()

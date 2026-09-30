@@ -19,7 +19,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  async validate(payload: { sub: string }) {
-    return this.auth.buildAuthUser(payload.sub);
+  async validate(payload: { sub: string; isDemo?: boolean }) {
+    const user = await this.auth.buildAuthUser(payload.sub);
+    return { ...user, isDemo: !!payload.isDemo };
   }
 }

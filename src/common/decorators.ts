@@ -38,6 +38,8 @@ export type AuthUser = {
   shopCanEditPayments?: Record<string, boolean>;
   /** Local favorito al iniciar sesión. */
   favoriteShopId?: string | null;
+  /** Sesión de demo (claim JWT); mutaciones las ignora el front. */
+  isDemo?: boolean;
 };
 
 export const CurrentUser = createParamDecorator(

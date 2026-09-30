@@ -1,4 +1,10 @@
-import { Injectable, UnauthorizedException, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
+import {
+  Injectable,
+  UnauthorizedException,
+  OnModuleInit,
+  ServiceUnavailableException,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -47,6 +53,9 @@ import {
   normalizeShopOrderingHours,
   ShopMode,
 } from '../../common/shop-ordering';
+import { CatalogSeedService } from '../../common/catalog-seed.service';
+
+const DEMO_ADMIN_EMAIL = 'demo.admin@cierres.com';
 
 const IDS = {
   panino: '11111111-1111-1111-1111-111111111111',
@@ -54,6 +63,7 @@ const IDS = {
   admin: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
   manager: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
   cashier: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+  demoAdmin: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
 };
 
 @Injectable()
@@ -71,6 +81,7 @@ export class AuthService implements OnModuleInit {
     private readonly closingSources: Repository<ShopClosingSource>,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
+    private readonly catalogSeed: CatalogSeedService,
   ) {}
 
   async onModuleInit() {
@@ -83,14 +94,22 @@ export class AuthService implements OnModuleInit {
       // ya existe
     }
     // Seed demo solo si se pide explícitamente (nunca por defecto en prod/local limpio).
-    if (process.env.ENABLE_DEMO_SEED !== 'true') {
-      return;
+    if (process.env.ENABLE_DEMO_SEED === 'true') {
+      try {
+        await this.ensureSeed();
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('[AuthService] Seed failed:', err);
+      }
     }
-    try {
-      await this.ensureSeed();
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error('[AuthService] Seed failed:', err);
+    // Con login demo activo, asegurar usuario admin de local + contenido de muestra.
+    if (process.env.DEMO_LOGIN_ENABLED === 'true') {
+      try {
+        await this.ensureDemoAdminReady();
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('[AuthService] Demo admin seed failed:', err);
+      }
     }
   }
 
@@ -173,24 +192,37 @@ export class AuthService implements OnModuleInit {
         globalRole: GlobalRole.CASHIER,
         shopIds: [IDS.panino],
       },
+      {
+        id: IDS.demoAdmin,
+        fullName: 'Admin Demo',
+        email: DEMO_ADMIN_EMAIL,
+        passwordHash,
+        globalRole: GlobalRole.ADMIN,
+        shopIds: [IDS.panino],
+      },
     ];
 
     for (const su of seedUsers) {
-      const existing = await this.users.findOne({ where: { email: su.email } });
-      if (existing) {
+      const { shopIds, ...userData } = su;
+      let user =
+        (await this.users.findOne({ where: { email: su.email } })) ??
+        (su.id ? await this.users.findOne({ where: { id: su.id } }) : null);
+
+      if (user) {
         // Promover admin demo a Super admin (OWNER) si quedó como ADMIN.
         if (
           su.email === 'admin@cierres.com' &&
-          existing.globalRole !== GlobalRole.OWNER
+          user.globalRole !== GlobalRole.OWNER
         ) {
-          existing.globalRole = GlobalRole.OWNER;
-          existing.fullName = su.fullName ?? existing.fullName;
-          await this.users.save(existing);
+          user.globalRole = GlobalRole.OWNER;
+          user.fullName = su.fullName ?? user.fullName;
+          if (su.email && user.email !== su.email) user.email = su.email;
+          await this.users.save(user);
         }
-        continue;
+      } else {
+        user = await this.users.save(this.users.create({ ...userData, active: true }));
       }
-      const { shopIds, ...userData } = su;
-      const user = await this.users.save(this.users.create({ ...userData, active: true }));
+
       for (const shopId of shopIds) {
         const shopRole =
           userData.globalRole === GlobalRole.ADMIN ||
@@ -198,13 +230,188 @@ export class AuthService implements OnModuleInit {
           userData.globalRole === GlobalRole.MANAGER
             ? GlobalRole.ADMIN
             : (userData.globalRole as GlobalRole);
-        await this.userShops.save(
-          this.userShops.create({ userId: user.id, shopId, shopRole }),
-        );
+        const link = await this.userShops.findOne({
+          where: { userId: user.id, shopId },
+        });
+        if (!link) {
+          await this.userShops.save(
+            this.userShops.create({ userId: user.id, shopId, shopRole }),
+          );
+        }
       }
     }
 
+    await this.ensureDemoShopContent(IDS.panino);
     await this.ensureSampleClosings();
+  }
+
+  /** Local demo + admin de local + catálogo / carta / mensajes de muestra. */
+  private async ensureDemoAdminReady() {
+    await this.ensurePaninoShop();
+    const passwordHash = await bcrypt.hash('demo', 10);
+    let user =
+      (await this.users.findOne({ where: { email: DEMO_ADMIN_EMAIL } })) ??
+      (await this.users.findOne({ where: { id: IDS.demoAdmin } }));
+    if (!user) {
+      user = await this.users.save(
+        this.users.create({
+          id: IDS.demoAdmin,
+          fullName: 'Admin Demo',
+          email: DEMO_ADMIN_EMAIL,
+          passwordHash,
+          globalRole: GlobalRole.ADMIN,
+          active: true,
+          favoriteShopId: IDS.panino,
+        }),
+      );
+    } else {
+      let dirty = false;
+      if (user.email !== DEMO_ADMIN_EMAIL) {
+        user.email = DEMO_ADMIN_EMAIL;
+        dirty = true;
+      }
+      if (user.globalRole !== GlobalRole.ADMIN) {
+        user.globalRole = GlobalRole.ADMIN;
+        dirty = true;
+      }
+      if (dirty) await this.users.save(user);
+    }
+    const link = await this.userShops.findOne({
+      where: { userId: user.id, shopId: IDS.panino },
+    });
+    if (!link) {
+      await this.userShops.save(
+        this.userShops.create({
+          userId: user.id,
+          shopId: IDS.panino,
+          shopRole: GlobalRole.ADMIN,
+        }),
+      );
+    }
+    await this.ensureDemoShopContent(IDS.panino);
+  }
+
+  private async ensurePaninoShop(): Promise<Shop> {
+    let panino = await this.shops.findOne({ where: { id: IDS.panino } });
+    if (!panino) {
+      panino = await this.shops.save(
+        this.shops.create({
+          id: IDS.panino,
+          name: 'Al Panino',
+          slug: 'al-panino',
+          unitsLabel: 'paninos',
+          coversEnabled: false,
+          shopMode: ShopMode.AL_PASO,
+          onlineOrderingEnabled: false,
+          takeawayEnabled: true,
+          deliveryEnabled: false,
+          defaultChangeAmount: '15000.00',
+          accentColor: '#E65100',
+          accentSecondary: '#FFB300',
+          active: true,
+          menuEnabled: true,
+        }),
+      );
+    }
+    return panino;
+  }
+
+  private async ensureDemoShopContent(shopId: string) {
+    const shop = await this.shops.findOne({ where: { id: shopId } });
+    if (!shop) return;
+
+    let dirty = false;
+    if (!shop.menuEnabled) {
+      shop.menuEnabled = true;
+      dirty = true;
+    }
+    if (!shop.menu || !(shop.menu as { menus?: unknown[] }).menus?.length) {
+      shop.menu = {
+        menus: [
+          {
+            id: 'menu_demo_carta',
+            slug: 'carta',
+            title: 'Carta',
+            note: 'Ejemplo de carta para la demo',
+            sections: [
+              {
+                name: 'Clásicos',
+                items: [
+                  {
+                    id: 'mi_demo_milanesa',
+                    name: 'Milanesa al pan',
+                    description: 'Con papas fritas',
+                    price: 12500,
+                    available: true,
+                  },
+                  {
+                    id: 'mi_demo_lomito',
+                    name: 'Lomito completo',
+                    description: 'Huevo, jamón y queso',
+                    price: 14500,
+                    available: true,
+                  },
+                ],
+              },
+              {
+                name: 'Bebidas',
+                items: [
+                  {
+                    id: 'mi_demo_agua',
+                    name: 'Agua 500 ml',
+                    price: 2500,
+                    available: true,
+                  },
+                  {
+                    id: 'mi_demo_gaseosa',
+                    name: 'Gaseosa 500 ml',
+                    price: 3200,
+                    available: true,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+      dirty = true;
+    }
+    if (!shop.promos || !shop.promos.length) {
+      shop.promos = [
+        {
+          id: 'pr_demo_combo',
+          name: 'Combo demo',
+          description: 'Sandwich + bebida',
+          available: true,
+          showOnPublicMenu: true,
+          sellable: true,
+          tableMatchable: true,
+          fixedPrice: 15000,
+          items: [
+            { menuItemId: 'mi_demo_milanesa', qty: 1 },
+            { menuItemId: 'mi_demo_agua', qty: 1 },
+          ],
+        },
+      ];
+      dirty = true;
+    }
+    if (!shop.emailMessageTemplates || !Object.keys(shop.emailMessageTemplates).length) {
+      shop.emailMessageTemplates = {
+        reservationConfirmed: {
+          subject: 'Reserva confirmada — {{shopName}}',
+          body: 'Hola {{guestName}}, tu reserva para {{partySize}} el {{date}} está confirmada.',
+        },
+        orderReady: {
+          subject: 'Tu pedido está listo',
+          body: 'Hola {{guestName}}, ya podés retirar tu pedido en {{shopName}}.',
+        },
+      };
+      dirty = true;
+    }
+    if (dirty) {
+      await this.shops.save(shop);
+    }
+    await this.catalogSeed.seedNewShopCatalogs(shopId);
   }
 
   private async ensureSampleClosings() {
@@ -433,14 +640,32 @@ export class AuthService implements OnModuleInit {
     return this.issueSession(user.id);
   }
 
-  private async issueSession(userId: string) {
+  /**
+   * Login demo (admin de local). Solo con DEMO_LOGIN_ENABLED=true.
+   * Emite JWT con claim isDemo; el front no persiste mutaciones.
+   */
+  async loginDemo() {
+    if (process.env.DEMO_LOGIN_ENABLED !== 'true') {
+      throw new NotFoundException('Demo no disponible');
+    }
+    await this.ensureDemoAdminReady();
+    const user = await this.users.findOne({ where: { email: DEMO_ADMIN_EMAIL } });
+    if (!user || !isEntityActive(user.active)) {
+      throw new ServiceUnavailableException('Usuario demo no disponible');
+    }
+    return this.issueSession(user.id, { isDemo: true });
+  }
+
+  private async issueSession(userId: string, opts?: { isDemo?: boolean }) {
     const profile = await this.buildAuthUser(userId);
+    const isDemo = !!opts?.isDemo;
     const accessToken = await this.jwt.signAsync({
       sub: profile.id,
       email: profile.email,
       role: profile.globalRole,
+      ...(isDemo ? { isDemo: true } : {}),
     });
-    return { accessToken, user: profile };
+    return { accessToken, user: { ...profile, isDemo } };
   }
 
   private async enrichUserFromGoogle(
@@ -626,7 +851,7 @@ export class AuthService implements OnModuleInit {
     return this.me(userId);
   }
 
-  async me(userId: string) {
+  async me(userId: string, opts?: { isDemo?: boolean }) {
     const profile = await this.buildAuthUser(userId);
     const user = await this.users.findOne({ where: { id: userId } });
     const links = await this.userShops.find({ where: { userId } });
@@ -648,6 +873,7 @@ export class AuthService implements OnModuleInit {
     }
     return {
       ...profile,
+      isDemo: !!opts?.isDemo,
       phone: user?.phone ?? null,
       bankAlias: user?.bankAlias ?? null,
       cbu: user?.cbu ?? null,
