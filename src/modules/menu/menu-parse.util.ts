@@ -30,6 +30,11 @@ export type ShopMenuItem = {
    */
   accountPrices?: MenuItemAccountPrice[];
   available?: boolean;
+  /**
+   * Si este ítem suma a las unidades del cierre (ej. paninos).
+   * Si no viene, hereda de la sección; si tampoco, cuenta (compat).
+   */
+  countsAsUnits?: boolean;
   /** Compat: primera foto (o legacy). Preferí `images`. */
   imageUrl?: string | null;
   /** Fotos del ítem en orden de visualización. */
@@ -138,6 +143,11 @@ export type KitchenSector = {
 
 export type ShopMenuSection = {
   name: string;
+  /**
+   * Default de la sección para unidades del cierre.
+   * Los ítems pueden overridear con su propio `countsAsUnits`.
+   */
+  countsAsUnits?: boolean;
   items: ShopMenuItem[];
 };
 
@@ -180,6 +190,35 @@ export type ShopMenu = {
 
 export type ShopMenuDoc = ShopMenu & { id: string; slug: string };
 
+/** true = suma a unidades del cierre; undefined en ítem hereda sección; default true. */
+export function resolveCountsAsUnits(
+  item?: { countsAsUnits?: boolean | null },
+  section?: { countsAsUnits?: boolean | null },
+): boolean {
+  if (item?.countsAsUnits !== undefined && item?.countsAsUnits !== null) {
+    return !!item.countsAsUnits;
+  }
+  if (section?.countsAsUnits !== undefined && section?.countsAsUnits !== null) {
+    return !!section.countsAsUnits;
+  }
+  return true;
+}
+
+/** Mapa menuItemId → si cuenta como unidad del cierre. */
+export function menuItemCountsAsUnitsMap(menus: ShopMenuDoc[] | ShopMenu[]): Map<string, boolean> {
+  const map = new Map<string, boolean>();
+  for (const menu of menus ?? []) {
+    for (const sec of menu.sections ?? []) {
+      for (const it of sec.items ?? []) {
+        const id = String(it.id ?? '').trim();
+        if (!id) continue;
+        map.set(id, resolveCountsAsUnits(it, sec));
+      }
+    }
+  }
+  return map;
+}
+
 export type ShopMenusStore = {
   menus: ShopMenu[];
 };
@@ -210,6 +249,15 @@ export function normalizeRemovableIngredients(raw: unknown): string[] {
     if (out.length >= 24) break;
   }
   return out;
+}
+
+/** undefined si no vino; boolean si sí. */
+function normalizeOptionalBool(raw: unknown): boolean | undefined {
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  if (typeof raw === 'boolean') return raw;
+  if (raw === 1 || raw === '1' || raw === 'true') return true;
+  if (raw === 0 || raw === '0' || raw === 'false') return false;
+  return undefined;
 }
 
 /** Receta: insumos de stock por unidad de plato. */
@@ -589,6 +637,9 @@ export function normalizeShopMenu(raw?: ShopMenu | null): ShopMenu {
   for (const sec of raw?.sections ?? []) {
     const name = String(sec?.name ?? '').trim().slice(0, 60);
     if (!name) continue;
+    const sectionCountsAsUnits = normalizeOptionalBool(
+      (sec as { countsAsUnits?: unknown })?.countsAsUnits,
+    );
     const items: ShopMenuItem[] = [];
     for (const it of sec.items ?? []) {
       const itemName = String(it?.name ?? '').trim().slice(0, 120);
@@ -599,6 +650,9 @@ export function normalizeShopMenu(raw?: ShopMenu | null): ShopMenu {
       usedItemIds.add(id);
       const available =
         it?.available === undefined || it?.available === null ? true : !!it.available;
+      const countsAsUnits = normalizeOptionalBool(
+        (it as { countsAsUnits?: unknown })?.countsAsUnits,
+      );
       const { images, imageUrl } = normalizeItemImages(it as { imageUrl?: unknown; images?: unknown });
       const kitchenSectorIds = normalizeKitchenSectorIds(it);
       const accountPrices = normalizeMenuAccountPrices(
@@ -612,6 +666,7 @@ export function normalizeShopMenu(raw?: ShopMenu | null): ShopMenu {
         priceLabel: String(it?.priceLabel ?? '').trim().slice(0, 48) || null,
         accountPrices: accountPrices.length ? accountPrices : undefined,
         available,
+        ...(countsAsUnits !== undefined ? { countsAsUnits } : {}),
         imageUrl,
         images,
         removableIngredients: normalizeRemovableIngredients(
@@ -621,7 +676,11 @@ export function normalizeShopMenu(raw?: ShopMenu | null): ShopMenu {
         recipe: normalizeMenuRecipe((it as { recipe?: unknown })?.recipe),
       });
     }
-    sections.push({ name, items });
+    sections.push({
+      name,
+      ...(sectionCountsAsUnits !== undefined ? { countsAsUnits: sectionCountsAsUnits } : {}),
+      items,
+    });
   }
   return {
     title,
