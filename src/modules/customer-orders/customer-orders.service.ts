@@ -69,6 +69,7 @@ import {
 } from '../../common/shop-promos';
 import {
   allowedUnitPrices,
+  menuItemCountsAsUnitsMap,
   normalizeRemovableIngredients,
   normalizeShopMenus,
   resolveItemUnitPrice,
@@ -1642,6 +1643,7 @@ export class CustomerOrdersService implements OnModuleInit {
     let unitsSold = 0;
     let openCount = 0;
     const orderIds: string[] = [];
+    const countsAsUnitsByItem = menuItemCountsAsUnitsMap(normalizeShopMenus(shop.menu));
 
     const deliverateHint = await this.integrations.getDeliverateClosingHint(shopId);
     const deliverateBucket = emptyBucket();
@@ -1743,6 +1745,11 @@ export class CustomerOrdersService implements OnModuleInit {
       }
 
       for (const line of row.items ?? []) {
+        const mid = String(line.menuItemId ?? '').trim();
+        // Ítems de carta con countsAsUnits=false no suman; extras/promos sin mapa siguen contando.
+        if (mid && countsAsUnitsByItem.has(mid) && countsAsUnitsByItem.get(mid) === false) {
+          continue;
+        }
         const qty = Math.max(0, Number(line.qty) || 0);
         unitsSold += qty;
         bucket.unitsSold += qty;
