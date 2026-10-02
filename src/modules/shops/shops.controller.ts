@@ -179,7 +179,11 @@ export class ShopsController {
           name: string;
           accountId?: string | null;
           active?: boolean;
+          kind?: 'CASH' | 'TRANSFER' | 'CARD';
+          fulfillments?: Array<'TAKEAWAY' | 'DELIVERY'>;
         }>;
+        transferCbu?: string | null;
+        transferAlias?: string | null;
         transferInstructions?: string | null;
         whatsapp?: string | null;
       } | null;

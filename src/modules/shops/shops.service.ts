@@ -1496,6 +1496,14 @@ export class ShopsService implements OnModuleInit {
       shop.orderingPayments = normalizeOrderingPayments({
         items,
         methods: incomingMethods ?? prev?.methods,
+        transferCbu:
+          (incoming as { transferCbu?: string | null }).transferCbu !== undefined
+            ? (incoming as { transferCbu?: string | null }).transferCbu
+            : (prev?.transferCbu ?? null),
+        transferAlias:
+          (incoming as { transferAlias?: string | null }).transferAlias !== undefined
+            ? (incoming as { transferAlias?: string | null }).transferAlias
+            : (prev?.transferAlias ?? null),
         transferInstructions:
           incoming.transferInstructions !== undefined
             ? incoming.transferInstructions

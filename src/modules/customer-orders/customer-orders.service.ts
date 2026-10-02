@@ -64,6 +64,7 @@ import {
   normalizeShopOrderingHours,
   normalizeTablePaymentMethods,
   classifyPaymentMethodKind,
+  resolvePaymentMethodKind,
   type ShopOrderingPayments,
 } from '../../common/shop-ordering';
 import {
@@ -383,8 +384,13 @@ export class CustomerOrdersService implements OnModuleInit {
     const isTransfer = full.paymentMethod === CustomerOrderPaymentMethod.TRANSFER;
     const payments = shop ? normalizeOrderingPayments(shop.orderingPayments) : null;
     const receiptWhatsapp = isTransfer && shop ? this.resolveReceiptWhatsapp(shop) : null;
+    const transferCbu = isTransfer ? payments?.transferCbu ?? null : null;
+    const transferAlias = isTransfer ? payments?.transferAlias ?? null : null;
     const transferInstructions =
-      isTransfer ? payments?.transferInstructions ?? null : null;
+      isTransfer
+        ? payments?.transferInstructions ??
+          ([transferCbu, transferAlias].filter(Boolean).join('\n') || null)
+        : null;
     return {
       code: full.code,
       status: full.status,
@@ -410,6 +416,8 @@ export class CustomerOrdersService implements OnModuleInit {
       completedAt: full.completedAt,
       cancelledAt: full.cancelledAt,
       receiptWhatsapp,
+      transferCbu,
+      transferAlias,
       transferInstructions,
     };
   }
@@ -462,6 +470,8 @@ export class CustomerOrdersService implements OnModuleInit {
       return {
         items: normalizeCounterPaymentMethods(shop.counterPaymentMethods),
         methods: ['CASH', 'TRANSFER'],
+        transferCbu: null,
+        transferAlias: null,
         transferInstructions: null,
         whatsapp: null,
       };
@@ -473,6 +483,8 @@ export class CustomerOrdersService implements OnModuleInit {
           { id: 'op_cash', name: 'Efectivo', accountId: null, active: true },
           { id: 'op_transfer', name: 'Transferencia', accountId: null, active: true },
         ],
+        transferCbu: null,
+        transferAlias: null,
         transferInstructions: null,
         whatsapp: null,
       }
@@ -834,7 +846,21 @@ export class CustomerOrdersService implements OnModuleInit {
     const isTable = dto.fulfillment === CustomerOrderFulfillment.TABLE;
     const payChannel = opts.response === 'staff' ? 'counter' : 'public';
     const payments = this.resolvePayCatalog(shop, payChannel);
-    const activeItems = (payments.items ?? []).filter((i) => i.active !== false);
+    const fulfillmentKey =
+      dto.fulfillment === CustomerOrderFulfillment.DELIVERY
+        ? 'DELIVERY'
+        : dto.fulfillment === CustomerOrderFulfillment.TAKEAWAY ||
+            dto.fulfillment === CustomerOrderFulfillment.COUNTER
+          ? 'TAKEAWAY'
+          : null;
+    const activeItems = (payments.items ?? []).filter((i) => {
+      if (i.active === false) return false;
+      if (payChannel !== 'public' || !fulfillmentKey || isTable) return true;
+      const channels = i.fulfillments?.length
+        ? i.fulfillments
+        : (['TAKEAWAY', 'DELIVERY'] as const);
+      return channels.includes(fulfillmentKey);
+    });
     const payId = String(dto.paymentMethodId ?? '').trim();
     const payItem = payId
       ? activeItems.find((i) => i.id === payId) ?? null
@@ -846,7 +872,7 @@ export class CustomerOrdersService implements OnModuleInit {
     let paymentMethodId: string | null = payItem?.id ?? (payId || null);
     let paymentMethodName: string | null = payItem?.name?.trim() || null;
     if (payItem) {
-      const kind = classifyPaymentMethodKind(payItem.id, payItem.name);
+      const kind = resolvePaymentMethodKind(payItem);
       paymentMethod =
         kind === 'TRANSFER'
           ? CustomerOrderPaymentMethod.TRANSFER
@@ -1763,7 +1789,7 @@ export class CustomerOrdersService implements OnModuleInit {
           : isCard
             ? 'CARD'
             : catalogItem
-              ? classifyPaymentMethodKind(catalogItem.id, catalogItem.name)
+              ? resolvePaymentMethodKind(catalogItem)
               : classifyPaymentMethodKind(id, name);
         const accountId = catalogItem?.accountId ?? null;
         const prev = byPayMethod.get(id) ?? {

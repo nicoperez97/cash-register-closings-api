@@ -22,12 +22,20 @@ export type ShopOrderingHours = {
 
 export type OrderingPaymentMethod = 'CASH' | 'TRANSFER';
 
+export type OrderingPaymentKind = 'CASH' | 'TRANSFER' | 'CARD';
+
+export type OrderingPaymentFulfillment = 'TAKEAWAY' | 'DELIVERY';
+
 /** Medio de pago del pedido online: nombre libre + cuenta opcional (igual que mesa). */
 export type OrderingPaymentMethodItem = {
   id: string;
   name: string;
   accountId?: string | null;
   active?: boolean;
+  /** Tipo explícito (web pública). Si falta, se deriva por nombre/id. */
+  kind?: OrderingPaymentKind;
+  /** Canales donde se muestra (web pública). Default: Retiro + Delivery. */
+  fulfillments?: OrderingPaymentFulfillment[];
 };
 
 export type ShopOrderingPayments = {
@@ -35,6 +43,14 @@ export type ShopOrderingPayments = {
   methods?: OrderingPaymentMethod[];
   /** Lista editable (nombre + cuenta), igual que medios de mesa. */
   items?: OrderingPaymentMethodItem[];
+  /** CBU / CVU para transferencias (web pública). */
+  transferCbu?: string | null;
+  /** Alias para transferencias (web pública). */
+  transferAlias?: string | null;
+  /**
+   * Legacy: texto libre CBU/alias juntos.
+   * Se sigue derivando de transferCbu + transferAlias para compat.
+   */
   transferInstructions?: string | null;
   /** WhatsApp para comprobantes de transferencia. Si vacío, se usa el teléfono del local. */
   whatsapp?: string | null;
@@ -67,7 +83,7 @@ function newCounterPayId(): string {
 export function classifyPaymentMethodKind(
   id: string,
   name: string,
-): 'CASH' | 'TRANSFER' | 'CARD' {
+): OrderingPaymentKind {
   const key = `${id} ${name}`.toLowerCase();
   if (/transf|transfer|alias|cbu|cvu|mercado\s*pago|mp\b/.test(key)) return 'TRANSFER';
   if (/tarjeta|card|d[eé]bito|cr[eé]dito|posnet|visa|master|amex|\bpvs\b/.test(key)) {
@@ -77,10 +93,45 @@ export function classifyPaymentMethodKind(
   return 'CASH';
 }
 
+/** Prefiere `kind` explícito del item; si falta, heurística por id/nombre. */
+export function resolvePaymentMethodKind(
+  item: Pick<OrderingPaymentMethodItem, 'id' | 'name' | 'kind'>,
+): OrderingPaymentKind {
+  const raw = String(item.kind ?? '').trim().toUpperCase();
+  if (raw === 'CASH' || raw === 'TRANSFER' || raw === 'CARD') return raw;
+  return classifyPaymentMethodKind(item.id, item.name);
+}
+
+const DEFAULT_PAY_FULFILLMENTS: OrderingPaymentFulfillment[] = ['TAKEAWAY', 'DELIVERY'];
+
+function normalizePayFulfillments(raw: unknown): OrderingPaymentFulfillment[] {
+  if (!Array.isArray(raw)) return [...DEFAULT_PAY_FULFILLMENTS];
+  const set = new Set<OrderingPaymentFulfillment>();
+  for (const v of raw) {
+    const s = String(v ?? '').trim().toUpperCase();
+    if (s === 'TAKEAWAY' || s === 'DELIVERY') set.add(s);
+  }
+  return set.size ? [...set] : [...DEFAULT_PAY_FULFILLMENTS];
+}
+
 function defaultOrderingPayItems(): OrderingPaymentMethodItem[] {
   return [
-    { id: 'op_cash', name: 'Efectivo', accountId: null, active: true },
-    { id: 'op_transfer', name: 'Transferencia', accountId: null, active: true },
+    {
+      id: 'op_cash',
+      name: 'Efectivo',
+      accountId: null,
+      active: true,
+      kind: 'CASH',
+      fulfillments: [...DEFAULT_PAY_FULFILLMENTS],
+    },
+    {
+      id: 'op_transfer',
+      name: 'Transferencia',
+      accountId: null,
+      active: true,
+      kind: 'TRANSFER',
+      fulfillments: [...DEFAULT_PAY_FULFILLMENTS],
+    },
   ];
 }
 
@@ -97,11 +148,14 @@ function normalizeOrderingPayItems(raw: unknown): OrderingPaymentMethodItem[] {
     if (!id || used.has(id)) id = newOrderingPayId();
     used.add(id);
     const accountId = String(r.accountId ?? '').trim().slice(0, 36) || null;
+    const kind = resolvePaymentMethodKind({ id, name, kind: r.kind });
     out.push({
       id,
       name,
       accountId,
       active: r.active !== false,
+      kind,
+      fulfillments: normalizePayFulfillments(r.fulfillments),
     });
   }
   return out;
@@ -113,8 +167,22 @@ function orderingItemsFromLegacyMethods(
   const wantCash = !methods.length || methods.includes('CASH');
   const wantTransfer = !methods.length || methods.includes('TRANSFER');
   return [
-    { id: 'op_cash', name: 'Efectivo', accountId: null, active: wantCash },
-    { id: 'op_transfer', name: 'Transferencia', accountId: null, active: wantTransfer },
+    {
+      id: 'op_cash',
+      name: 'Efectivo',
+      accountId: null,
+      active: wantCash,
+      kind: 'CASH',
+      fulfillments: [...DEFAULT_PAY_FULFILLMENTS],
+    },
+    {
+      id: 'op_transfer',
+      name: 'Transferencia',
+      accountId: null,
+      active: wantTransfer,
+      kind: 'TRANSFER',
+      fulfillments: [...DEFAULT_PAY_FULFILLMENTS],
+    },
   ];
 }
 
@@ -124,7 +192,7 @@ function deriveOrderingMethods(
   const set = new Set<OrderingPaymentMethod>();
   for (const item of items) {
     if (item.active === false) continue;
-    const kind = classifyPaymentMethodKind(item.id, item.name);
+    const kind = resolvePaymentMethodKind(item);
     set.add(kind === 'TRANSFER' ? 'TRANSFER' : 'CASH');
   }
   if (!set.size) return ['CASH', 'TRANSFER'];
@@ -141,19 +209,34 @@ export function syncOrderingPayItemsFromMethods(
   let hasCash = false;
   let hasTransfer = false;
   const out = (items.length ? items : defaultOrderingPayItems()).map((it) => {
-    const kind = classifyPaymentMethodKind(it.id, it.name);
+    const kind = resolvePaymentMethodKind(it);
     if (kind === 'TRANSFER') {
       hasTransfer = true;
-      return { ...it, active: wantTransfer };
+      return { ...it, kind: 'TRANSFER' as const, active: wantTransfer };
     }
     hasCash = true;
-    return { ...it, active: wantCash };
+    const nextKind: OrderingPaymentKind = kind === 'CARD' ? 'CARD' : 'CASH';
+    return { ...it, kind: nextKind, active: wantCash };
   });
   if (wantCash && !hasCash) {
-    out.push({ id: 'op_cash', name: 'Efectivo', accountId: null, active: true });
+    out.push({
+      id: 'op_cash',
+      name: 'Efectivo',
+      accountId: null,
+      active: true,
+      kind: 'CASH',
+      fulfillments: [...DEFAULT_PAY_FULFILLMENTS],
+    });
   }
   if (wantTransfer && !hasTransfer) {
-    out.push({ id: 'op_transfer', name: 'Transferencia', accountId: null, active: true });
+    out.push({
+      id: 'op_transfer',
+      name: 'Transferencia',
+      accountId: null,
+      active: true,
+      kind: 'TRANSFER',
+      fulfillments: [...DEFAULT_PAY_FULFILLMENTS],
+    });
   }
   return out;
 }
@@ -253,6 +336,8 @@ export function migrateOrderingPaymentsSplit(
       : defaultCounterPayItems();
   const ordering = normalizeOrderingPayments({
     items: defaultOrderingPayItems(),
+    transferCbu: prev?.transferCbu ?? null,
+    transferAlias: prev?.transferAlias ?? null,
     transferInstructions: prev?.transferInstructions ?? null,
     whatsapp: prev?.whatsapp ?? null,
   });
@@ -260,6 +345,8 @@ export function migrateOrderingPaymentsSplit(
     orderingPayments: ordering ?? {
       items: defaultOrderingPayItems(),
       methods: ['CASH', 'TRANSFER'],
+      transferCbu: prev?.transferCbu ?? null,
+      transferAlias: prev?.transferAlias ?? null,
       transferInstructions: prev?.transferInstructions ?? null,
       whatsapp: prev?.whatsapp ?? null,
     },
@@ -601,14 +688,30 @@ export function normalizeOrderingPayments(raw: unknown): ShopOrderingPayments | 
     items = defaultOrderingPayItems();
   }
   const methods = deriveOrderingMethods(items);
-  const transferInstructions =
+  let transferCbu =
+    String((o as { transferCbu?: unknown }).transferCbu ?? '')
+      .trim()
+      .slice(0, 40) || null;
+  let transferAlias =
+    String((o as { transferAlias?: unknown }).transferAlias ?? '')
+      .trim()
+      .slice(0, 80) || null;
+  const legacyInstructions =
     String(o.transferInstructions ?? '')
       .trim()
       .slice(0, 500) || null;
+  // Migración: el campo libre viejo pasa a Alias si no hay CBU/Alias nuevos.
+  if (!transferCbu && !transferAlias && legacyInstructions) {
+    transferAlias = legacyInstructions.slice(0, 80);
+  }
+  const transferInstructions =
+    [transferCbu, transferAlias].filter(Boolean).join('\n') || null;
   const whatsapp = String(o.whatsapp ?? '').trim().slice(0, 40) || null;
   return {
     items,
     methods,
+    transferCbu,
+    transferAlias,
     transferInstructions,
     whatsapp,
   };
