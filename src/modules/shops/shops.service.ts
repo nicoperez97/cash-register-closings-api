@@ -27,6 +27,8 @@ import { shiftWindowFallback } from '../../common/employee-shift.util';
 import { CreateShopDto, UpdateShopDto } from './dto/shop.dto';
 import { PosnetType, ShopPosnet } from '../../common/posnet';
 import {
+  migrateOrderingPaymentsSplit,
+  normalizeCounterPaymentMethods,
   normalizeDeliveryZones,
   normalizeDiscountPresets,
   normalizeOrderingEta,
@@ -38,6 +40,7 @@ import {
   normalizeWaiterCapabilities,
   syncOrderingPayItemsFromMethods,
   ShopMode,
+  type CounterPaymentMethod,
   type DeliveryZone,
   type DiscountPreset,
   type OrderingPaymentMethodItem,
@@ -513,6 +516,14 @@ export class ShopsService implements OnModuleInit {
     try {
       await this.shops.query(`
         ALTER TABLE shops
+          ADD COLUMN counterPaymentMethods JSON NULL
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
           ADD COLUMN tablePaymentMethods JSON NULL
       `);
     } catch {
@@ -844,6 +855,7 @@ export class ShopsService implements OnModuleInit {
       where: { id: In(user.shopIds), active: true },
       order: { name: 'ASC' },
     });
+    await this.ensurePaymentMethodsSplitMany(list);
     return this.withSettlementsEnabled(list.map((s) => this.toDto(s)));
   }
 
@@ -852,6 +864,7 @@ export class ShopsService implements OnModuleInit {
       return this.mine(user);
     }
     const list = await this.shops.find({ order: { name: 'ASC' } });
+    await this.ensurePaymentMethodsSplitMany(list);
     return this.withSettlementsEnabled(list.map((s) => this.toDto(s)));
   }
 
@@ -859,6 +872,7 @@ export class ShopsService implements OnModuleInit {
     this.assertShopAccess(user, id);
     const shop = await this.shops.findOne({ where: { id } });
     if (!shop) throw new NotFoundException('Local no encontrado');
+    await this.ensurePaymentMethodsSplit(shop);
     const justAutoClosed = await this.maybeAutoCloseOrdering(shop);
     const [dto] = await this.withSettlementsEnabled([
       this.toDto(shop, {
@@ -1036,6 +1050,9 @@ export class ShopsService implements OnModuleInit {
         deliveryEnabled: dto.deliveryEnabled ?? false,
         orderingHours: normalizeShopOrderingHours(dto.orderingHours),
         orderingPayments: normalizeOrderingPayments(dto.orderingPayments),
+        counterPaymentMethods: normalizeCounterPaymentMethods(
+          dto.counterPaymentMethods ?? undefined,
+        ),
         tablePaymentMethods: normalizeTablePaymentMethods(dto.tablePaymentMethods),
         waiterCapabilities: normalizeWaiterCapabilities(dto.waiterCapabilities),
         deliveryZones: normalizeDeliveryZones(dto.deliveryZones),
@@ -1092,6 +1109,7 @@ export class ShopsService implements OnModuleInit {
     this.assertShopManage(user, id);
     const shop = await this.shops.findOne({ where: { id } });
     if (!shop) throw new NotFoundException('Local no encontrado');
+    this.applyPaymentMethodsSplit(shop);
 
     if (dto.name !== undefined) shop.name = dto.name.trim();
     if (dto.slug !== undefined) {
@@ -1177,6 +1195,9 @@ export class ShopsService implements OnModuleInit {
     }
     if (dto.orderingPayments !== undefined) {
       shop.orderingPayments = normalizeOrderingPayments(dto.orderingPayments);
+    }
+    if (dto.counterPaymentMethods !== undefined) {
+      shop.counterPaymentMethods = normalizeCounterPaymentMethods(dto.counterPaymentMethods);
     }
     if (dto.tablePaymentMethods !== undefined) {
       shop.tablePaymentMethods = normalizeTablePaymentMethods(dto.tablePaymentMethods);
@@ -1420,6 +1441,7 @@ export class ShopsService implements OnModuleInit {
       orderingEta?: ShopOrderingEta | null;
       deliveryZones?: DeliveryZone[] | null;
       orderingPayments?: ShopOrderingPayments | null;
+      counterPaymentMethods?: CounterPaymentMethod[] | null;
       tablePaymentMethods?: TablePaymentMethod[] | null;
       waiterCapabilities?: WaiterCapabilities | null;
       orderingExtras?: Array<{
@@ -1437,6 +1459,7 @@ export class ShopsService implements OnModuleInit {
     this.assertOrderingCatalogManage(user, id);
     const shop = await this.shops.findOne({ where: { id } });
     if (!shop) throw new NotFoundException('Local no encontrado');
+    this.applyPaymentMethodsSplit(shop);
     if (dto.onlineOrderingEnabled !== undefined) {
       shop.onlineOrderingEnabled = !!dto.onlineOrderingEnabled;
     }
@@ -1480,6 +1503,9 @@ export class ShopsService implements OnModuleInit {
         whatsapp:
           incoming.whatsapp !== undefined ? incoming.whatsapp : (prev?.whatsapp ?? null),
       });
+    }
+    if (dto.counterPaymentMethods !== undefined) {
+      shop.counterPaymentMethods = normalizeCounterPaymentMethods(dto.counterPaymentMethods);
     }
     if (dto.tablePaymentMethods !== undefined) {
       shop.tablePaymentMethods = normalizeTablePaymentMethods(dto.tablePaymentMethods);
@@ -1835,6 +1861,34 @@ export class ShopsService implements OnModuleInit {
     }
   }
 
+  /**
+   * Migración lazy: copia orderingPayments → counter y deja la web en Efectivo/Transferencia.
+   * Devuelve true si mutó el entity (hay que persistir).
+   */
+  applyPaymentMethodsSplit(shop: Shop): boolean {
+    const migrated = migrateOrderingPaymentsSplit(
+      shop.orderingPayments,
+      shop.counterPaymentMethods,
+    );
+    if (!migrated) return false;
+    shop.orderingPayments = migrated.orderingPayments;
+    shop.counterPaymentMethods = migrated.counterPaymentMethods;
+    return true;
+  }
+
+  async ensurePaymentMethodsSplit(shop: Shop): Promise<Shop> {
+    if (!this.applyPaymentMethodsSplit(shop)) return shop;
+    return this.shops.save(shop);
+  }
+
+  async ensurePaymentMethodsSplitMany(list: Shop[]): Promise<void> {
+    const dirty: Shop[] = [];
+    for (const shop of list) {
+      if (this.applyPaymentMethodsSplit(shop)) dirty.push(shop);
+    }
+    if (dirty.length) await this.shops.save(dirty);
+  }
+
   toDto(s: Shop, opts?: { emailSmtpConfigured?: boolean; orderingJustAutoClosed?: boolean }) {
     return {
       id: s.id,
@@ -1906,6 +1960,9 @@ export class ShopsService implements OnModuleInit {
       deliveryEnabled: !!s.deliveryEnabled,
       orderingHours: normalizeShopOrderingHours(s.orderingHours),
       orderingPayments: normalizeOrderingPayments(s.orderingPayments),
+      counterPaymentMethods: normalizeCounterPaymentMethods(
+        s.counterPaymentMethods ?? undefined,
+      ),
       tablePaymentMethods: normalizeTablePaymentMethods(s.tablePaymentMethods),
       waiterCapabilities: normalizeWaiterCapabilities(s.waiterCapabilities),
       deliveryZones: normalizeDeliveryZones(s.deliveryZones),

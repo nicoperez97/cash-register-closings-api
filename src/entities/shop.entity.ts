@@ -5,6 +5,7 @@ import { CashClosing } from './cash-closing.entity';
 import { ShopPosnet } from '../common/posnet';
 import { ShopShift } from '../common/shop-shifts';
 import {
+  CounterPaymentMethod,
   DeliveryZone,
   DiscountPreset,
   OrderingExtra,
@@ -176,9 +177,13 @@ export class Shop extends BaseEntity {
   @Column({ type: 'simple-json', nullable: true })
   orderingHours?: ShopOrderingHours | null;
 
-  /** Medios de pago del pedido online. */
+  /** Medios de pago de la web pública (/pedir). */
   @Column({ type: 'simple-json', nullable: true })
   orderingPayments?: ShopOrderingPayments | null;
+
+  /** Medios de pago del mostrador (caja staff). */
+  @Column({ type: 'simple-json', nullable: true })
+  counterPaymentMethods?: CounterPaymentMethod[] | null;
 
   /** Medios de pago al cerrar mesa (comanda), con cuenta opcional. */
   @Column({ type: 'simple-json', nullable: true })

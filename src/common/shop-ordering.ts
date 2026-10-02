@@ -48,12 +48,19 @@ export type TablePaymentMethod = {
   active?: boolean;
 };
 
+/** Medio de pago de mostrador (caja staff): mismo shape que online/mesa. */
+export type CounterPaymentMethod = OrderingPaymentMethodItem;
+
 function newTablePayId(): string {
   return `tp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
 function newOrderingPayId(): string {
   return `op_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function newCounterPayId(): string {
+  return `cp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
 /** Clasifica un medio por id/nombre para cierre / enum de pedidos. */
@@ -185,6 +192,79 @@ export function normalizeTablePaymentMethods(raw: unknown): TablePaymentMethod[]
     ];
   }
   return out;
+}
+
+function defaultCounterPayItems(): CounterPaymentMethod[] {
+  return [
+    { id: 'cp_cash', name: 'Efectivo', accountId: null, active: true },
+    { id: 'cp_transfer', name: 'Transferencia', accountId: null, active: true },
+  ];
+}
+
+export function normalizeCounterPaymentMethods(raw: unknown): CounterPaymentMethod[] {
+  if (!Array.isArray(raw)) {
+    return defaultCounterPayItems();
+  }
+  const used = new Set<string>();
+  const out: CounterPaymentMethod[] = [];
+  for (const row of raw.slice(0, 30)) {
+    if (!row || typeof row !== 'object') continue;
+    const r = row as CounterPaymentMethod;
+    const name = String(r.name ?? '').trim().slice(0, 80);
+    if (!name) continue;
+    let id = String(r.id ?? '').trim().slice(0, 40);
+    if (!id || used.has(id)) id = newCounterPayId();
+    used.add(id);
+    const accountId = String(r.accountId ?? '').trim().slice(0, 36) || null;
+    out.push({
+      id,
+      name,
+      accountId,
+      active: r.active !== false,
+    });
+  }
+  if (!out.length) return defaultCounterPayItems();
+  return out;
+}
+
+/**
+ * Si `counterPaymentMethods` aún no existe (null/undefined), mueve los items
+ * actuales de `orderingPayments` al mostrador y deja la web pública en
+ * Efectivo + Transferencia (conserva CBU/WhatsApp).
+ * Devuelve null si ya estaba migrado.
+ */
+export function migrateOrderingPaymentsSplit(
+  orderingPayments: unknown,
+  counterPaymentMethods: unknown,
+): {
+  orderingPayments: ShopOrderingPayments;
+  counterPaymentMethods: CounterPaymentMethod[];
+} | null {
+  if (counterPaymentMethods != null) return null;
+  const prev = normalizeOrderingPayments(orderingPayments);
+  const counterSource =
+    prev?.items?.length
+      ? prev.items.map((i) => ({
+          id: i.id,
+          name: i.name,
+          accountId: i.accountId ?? null,
+          active: i.active !== false,
+        }))
+      : defaultCounterPayItems();
+  const ordering = normalizeOrderingPayments({
+    items: defaultOrderingPayItems(),
+    transferInstructions: prev?.transferInstructions ?? null,
+    whatsapp: prev?.whatsapp ?? null,
+  });
+  return {
+    orderingPayments: ordering ?? {
+      items: defaultOrderingPayItems(),
+      methods: ['CASH', 'TRANSFER'],
+      transferInstructions: prev?.transferInstructions ?? null,
+      whatsapp: prev?.whatsapp ?? null,
+    },
+    counterPaymentMethods: normalizeCounterPaymentMethods(counterSource),
+  };
 }
 
 /** Capacidades de la comanda (emitir / modificar / borrar), por canal. */

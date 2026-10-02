@@ -139,7 +139,7 @@ export class CustomerOrder extends BaseEntity {
   @Column({ type: 'varchar', length: 16 })
   paymentMethod: CustomerOrderPaymentMethod;
 
-  /** Id del medio configurado en Pedidos (orderingPayments.items). */
+  /** Id del medio configurado (web pública o mostrador). */
   @Column({ type: 'varchar', length: 40, nullable: true })
   paymentMethodId?: string | null;
 

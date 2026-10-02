@@ -2140,6 +2140,12 @@ export class ShopBackupService {
     if (src.tablePaymentMethods != null) {
       src.tablePaymentMethods = this.remapAccountIdInJsonArray(src.tablePaymentMethods, map);
     }
+    if (src.counterPaymentMethods != null) {
+      src.counterPaymentMethods = this.remapAccountIdInJsonArray(
+        src.counterPaymentMethods,
+        map,
+      );
+    }
     if (src.orderingPayments != null) {
       src.orderingPayments = this.remapOrderingPayments(src.orderingPayments, map);
     }

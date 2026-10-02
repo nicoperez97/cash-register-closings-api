@@ -51,6 +51,7 @@ import { normalizeReportsProductsVisibility } from '../../common/reports-product
 import { closingDateKey } from '../../common/soft-delete.util';
 import { saveUploadFile } from '../../common/uploads';
 import {
+  normalizeCounterPaymentMethods,
   normalizeDeliveryZones,
   normalizeOrderingEta,
   normalizeOrderingPayments,
@@ -982,6 +983,9 @@ export class AuthService implements OnModuleInit {
         deliveryEnabled: !!s.deliveryEnabled,
         orderingHours: normalizeShopOrderingHours(s.orderingHours),
         orderingPayments: normalizeOrderingPayments(s.orderingPayments),
+        counterPaymentMethods: normalizeCounterPaymentMethods(
+          s.counterPaymentMethods ?? undefined,
+        ),
         deliveryZones: normalizeDeliveryZones(s.deliveryZones),
         orderingEta: normalizeOrderingEta(s.orderingEta),
         defaultChangeAmount: Number(s.defaultChangeAmount),
