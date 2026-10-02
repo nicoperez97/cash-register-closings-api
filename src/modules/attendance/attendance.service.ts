@@ -178,13 +178,27 @@ export class AttendanceService implements OnModuleInit {
     return { from, to, last };
   }
 
-  private async activeEmployees(shopId: string) {
+  private async listEmployees(
+    shopId: string,
+    filter: 'active' | 'inactive' | 'all' = 'active',
+  ) {
     // Filtrar en memoria: MySQL tinyint a veces no matchea bien con `active: true` en WHERE.
     const rows = await this.employees.find({
       where: { shopId },
       order: { fullName: 'ASC' },
     });
+    if (filter === 'all') return rows;
+    if (filter === 'inactive') return rows.filter((e) => !isEntityActive(e.active));
     return rows.filter((e) => isEntityActive(e.active));
+  }
+
+  private parseEmployeesFilter(raw?: string | null): 'active' | 'inactive' | 'all' {
+    const v = String(raw ?? '')
+      .toLowerCase()
+      .trim();
+    if (v === 'inactive' || v === 'deactivated' || v === 'disabled') return 'inactive';
+    if (v === 'all') return 'all';
+    return 'active';
   }
 
   async getMonth(
@@ -193,12 +207,14 @@ export class AttendanceService implements OnModuleInit {
     year: number,
     month: number,
     shiftId?: string | null,
+    employeesFilterRaw?: string | null,
   ) {
     this.shops.assertShopAccess(user, shopId);
     if (month < 1 || month > 12) throw new BadRequestException('Mes inválido');
     const { shift } = await this.resolveAttendanceShift(shopId, shiftId);
     const { from, to, last } = this.monthRange(year, month);
-    const employees = await this.activeEmployees(shopId);
+    const employeesFilter = this.parseEmployeesFilter(employeesFilterRaw);
+    const employees = await this.listEmployees(shopId, employeesFilter);
     const rows = await this.days.find({
       where: {
         shopId,
@@ -219,6 +235,7 @@ export class AttendanceService implements OnModuleInit {
       year,
       month,
       daysInMonth: last,
+      employeesFilter,
       employees: employees.map((e) => {
         const empDays = byEmp.get(e.id) ?? [];
         const byDate: Record<
@@ -245,6 +262,7 @@ export class AttendanceService implements OnModuleInit {
         return {
           employeeId: e.id,
           fullName: e.fullName,
+          active: isEntityActive(e.active),
           baseSalary: n(e.baseSalary),
           overtimeHourRate: n(e.overtimeHourRate),
           serviceCheckIn: e.serviceCheckIn ?? null,
@@ -463,7 +481,7 @@ export class AttendanceService implements OnModuleInit {
     const withHours = this.withHours(shop);
     const countLateArrival = opts.countLateArrival ?? !!opts.countAll;
     const countEarlyLeave = opts.countEarlyLeave ?? !!opts.countAll;
-    const employees = await this.activeEmployees(shopId);
+    const employees = await this.listEmployees(shopId, 'active');
     const ids = employees.map((e) => e.id);
     const rows = ids.length
       ? await this.days.find({
@@ -565,7 +583,7 @@ export class AttendanceService implements OnModuleInit {
 
   async publicEmployeeList(slug: string) {
     const shop = await this.requirePublicAttendanceShop(slug);
-    const employees = await this.activeEmployees(shop.id);
+    const employees = await this.listEmployees(shop.id, 'active');
     return {
       shop: {
         id: shop.id,
@@ -590,7 +608,7 @@ export class AttendanceService implements OnModuleInit {
   ) {
     const shop = await this.requirePublicAttendanceShop(slug);
     if (month < 1 || month > 12) throw new BadRequestException('Mes inválido');
-    const employees = await this.activeEmployees(shop.id);
+    const employees = await this.listEmployees(shop.id, 'active');
     const emp = employees.find((e) => e.id === employeeId);
     if (!emp) throw new NotFoundException('Empleado no encontrado');
     const { from, to, last } = this.monthRange(year, month);

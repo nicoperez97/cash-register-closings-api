@@ -96,6 +96,15 @@ export class AttendanceExcelImportService {
     };
   }
 
+  private parseEmployeesFilter(raw?: string | null): 'active' | 'inactive' | 'all' {
+    const v = String(raw ?? '')
+      .toLowerCase()
+      .trim();
+    if (v === 'inactive' || v === 'deactivated' || v === 'disabled') return 'inactive';
+    if (v === 'all') return 'all';
+    return 'active';
+  }
+
   /** Exporta el presentismo de un rango (from/to). year/month queda como respaldo. */
   async exportRange(
     user: AuthUser,
@@ -104,15 +113,23 @@ export class AttendanceExcelImportService {
     toRaw?: string,
     yearRaw?: string,
     monthRaw?: string,
+    employeesFilterRaw?: string | null,
   ) {
     this.shops.assertShopAccess(user, shopId);
     const { from, to, dates } = this.resolveExportRange(fromRaw, toRaw, yearRaw, monthRaw);
     const shop = await this.shops.findOne(user, shopId);
+    const employeesFilter = this.parseEmployeesFilter(employeesFilterRaw);
 
-    const employees = await this.employees.find({
+    const allEmployees = await this.employees.find({
       where: { shopId },
       order: { fullName: 'ASC' },
     });
+    const employees =
+      employeesFilter === 'all'
+        ? allEmployees
+        : employeesFilter === 'inactive'
+          ? allEmployees.filter((e) => !isEntityActive(e.active))
+          : allEmployees.filter((e) => isEntityActive(e.active));
     const rows = await this.days.find({
       where: {
         shopId,
@@ -134,6 +151,15 @@ export class AttendanceExcelImportService {
     info.getRow(1).font = { bold: true, size: 13 };
     info.addRow([`Local: ${shop.name}`]);
     info.addRow([`Período: ${from} a ${to}`]);
+    info.addRow([
+      `Empleados: ${
+        employeesFilter === 'inactive'
+          ? 'desactivados'
+          : employeesFilter === 'all'
+            ? 'todos'
+            : 'activos'
+      }`,
+    ]);
     info.addRow([]);
     info.addRow([
       'Formato compatible con la importación: hoja "Base de datos" y "Validación de datos".',
@@ -151,9 +177,7 @@ export class AttendanceExcelImportService {
     ];
     ws.getRow(1).font = { bold: true };
 
-    const activeEmployees = employees.filter((e) => isEntityActive(e.active));
-
-    for (const emp of activeEmployees) {
+    for (const emp of employees) {
       for (const date of dates) {
         const cell = byKey.get(`${emp.id}|${date}`);
         ws.addRow({
@@ -174,7 +198,7 @@ export class AttendanceExcelImportService {
       { header: 'Sueldo actual', width: 14 },
     ];
     val.getRow(1).font = { bold: true };
-    for (const emp of activeEmployees) {
+    for (const emp of employees) {
       val.addRow([emp.fullName, n(emp.baseSalary)]);
     }
 

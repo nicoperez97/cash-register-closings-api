@@ -91,12 +91,13 @@ export class AttendanceController {
     @Query('year') year: string,
     @Query('month') month: string,
     @Query('shiftId') shiftId: string,
+    @Query('employees') employees: string,
     @Res({ passthrough: true }) res: Response,
   ) {
     res.setHeader('Cache-Control', 'no-store');
     const y = Number(year) || new Date().getFullYear();
     const m = Number(month) || new Date().getMonth() + 1;
-    return this.attendance.getMonth(user, shopId, y, m, shiftId || null);
+    return this.attendance.getMonth(user, shopId, y, m, shiftId || null, employees || null);
   }
 
   @Get('overtime-summary')
@@ -159,6 +160,7 @@ export class AttendanceController {
     @Query('to') to: string,
     @Query('year') year: string,
     @Query('month') month: string,
+    @Query('employees') employees: string,
     @Res() res: Response,
   ) {
     const { buffer, filename } = await this.excelImport.exportRange(
@@ -168,6 +170,7 @@ export class AttendanceController {
       to,
       year,
       month,
+      employees || null,
     );
     res.setHeader(
       'Content-Type',
