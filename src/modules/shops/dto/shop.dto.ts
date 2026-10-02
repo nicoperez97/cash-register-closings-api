@@ -297,7 +297,7 @@ export class CreateShopDto {
 
   @ApiPropertyOptional({
     description:
-      'Medios de pago online: items (nombre + cuenta) o legacy methods CASH/TRANSFER + instrucciones',
+      'Medios de pago de la web pública (/pedir): items (nombre + cuenta) o legacy methods CASH/TRANSFER + instrucciones',
   })
   @IsOptional()
   @IsObject()
@@ -312,6 +312,18 @@ export class CreateShopDto {
     transferInstructions?: string | null;
     whatsapp?: string | null;
   } | null;
+
+  @ApiPropertyOptional({
+    description: 'Medios de pago de mostrador (caja staff): nombre + accountId opcional',
+  })
+  @IsOptional()
+  @IsArray()
+  counterPaymentMethods?: Array<{
+    id?: string;
+    name: string;
+    accountId?: string | null;
+    active?: boolean;
+  }> | null;
 
   @ApiPropertyOptional({
     description: 'Medios de pago de mesa (comanda): nombre + accountId opcional',

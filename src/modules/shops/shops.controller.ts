@@ -183,6 +183,12 @@ export class ShopsController {
         transferInstructions?: string | null;
         whatsapp?: string | null;
       } | null;
+      counterPaymentMethods?: Array<{
+        id?: string;
+        name: string;
+        accountId?: string | null;
+        active?: boolean;
+      }> | null;
       tablePaymentMethods?: Array<{
         id?: string;
         name: string;

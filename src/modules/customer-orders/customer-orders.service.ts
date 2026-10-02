@@ -53,6 +53,8 @@ import {
   formatOrderingHoursSummary,
   isOrderingChannelOpenNow,
   findZoneAtPoint,
+  migrateOrderingPaymentsSplit,
+  normalizeCounterPaymentMethods,
   normalizeDeliveryZones,
   normalizeDiscountPresets,
   normalizeOrderingEta,
@@ -62,6 +64,7 @@ import {
   normalizeShopOrderingHours,
   normalizeTablePaymentMethods,
   classifyPaymentMethodKind,
+  type ShopOrderingPayments,
 } from '../../common/shop-ordering';
 import {
   isPromoInSchedule,
@@ -417,24 +420,68 @@ export class CustomerOrdersService implements OnModuleInit {
     if (!shop.onlineOrderingEnabled) {
       throw new NotFoundException('Pedidos online no disponibles');
     }
+    await this.ensureShopPaymentSplit(shop);
     await this.maybeAutoCloseOrdering(shop);
-    return this.buildOrderingConfig(shop, { includeAccountPrices: false });
+    return this.buildOrderingConfig(shop, {
+      includeAccountPrices: false,
+      paymentsChannel: 'public',
+    });
   }
 
-  /** Catálogo de mostrador: igual que /pedir pero con precios por cuenta. */
+  /** Catálogo de mostrador: igual que /pedir pero con precios por cuenta y medios de mostrador. */
   async getStaffOrderingConfig(user: AuthUser, shopId: string) {
     this.assertShopAccess(user, shopId);
     const shop = await this.shops.findOne({ where: { id: shopId, active: true as any } });
     if (!shop || !shop.onlineOrderingEnabled) {
       throw new NotFoundException('Pedidos online no disponibles');
     }
+    await this.ensureShopPaymentSplit(shop);
     await this.maybeAutoCloseOrdering(shop);
-    return this.buildOrderingConfig(shop, { includeAccountPrices: true });
+    return this.buildOrderingConfig(shop, {
+      includeAccountPrices: true,
+      paymentsChannel: 'counter',
+    });
+  }
+
+  private async ensureShopPaymentSplit(shop: Shop): Promise<Shop> {
+    const migrated = migrateOrderingPaymentsSplit(
+      shop.orderingPayments,
+      shop.counterPaymentMethods,
+    );
+    if (!migrated) return shop;
+    shop.orderingPayments = migrated.orderingPayments;
+    shop.counterPaymentMethods = migrated.counterPaymentMethods;
+    return this.shops.save(shop);
+  }
+
+  private resolvePayCatalog(
+    shop: Shop,
+    channel: 'public' | 'counter',
+  ): ShopOrderingPayments {
+    if (channel === 'counter') {
+      return {
+        items: normalizeCounterPaymentMethods(shop.counterPaymentMethods),
+        methods: ['CASH', 'TRANSFER'],
+        transferInstructions: null,
+        whatsapp: null,
+      };
+    }
+    return (
+      normalizeOrderingPayments(shop.orderingPayments) ?? {
+        methods: ['CASH', 'TRANSFER'],
+        items: [
+          { id: 'op_cash', name: 'Efectivo', accountId: null, active: true },
+          { id: 'op_transfer', name: 'Transferencia', accountId: null, active: true },
+        ],
+        transferInstructions: null,
+        whatsapp: null,
+      }
+    );
   }
 
   private async buildOrderingConfig(
     shop: Shop,
-    opts: { includeAccountPrices: boolean },
+    opts: { includeAccountPrices: boolean; paymentsChannel: 'public' | 'counter' },
   ) {
     const hours = normalizeShopOrderingHours(shop.orderingHours);
     const takeawayHours = hours?.takeaway ?? null;
@@ -448,15 +495,7 @@ export class CustomerOrdersService implements OnModuleInit {
     const takeawayOpen = !forceClosed && takeawayEnabled;
     // Sin zonas no se puede completar un delivery: no ofrecerlo como abierto.
     const deliveryOpen = !forceClosed && deliveryEnabled && zones.length > 0;
-    const payments = normalizeOrderingPayments(shop.orderingPayments) ?? {
-      methods: ['CASH', 'TRANSFER'] as CustomerOrderPaymentMethod[],
-      items: [
-        { id: 'op_cash', name: 'Efectivo', accountId: null, active: true },
-        { id: 'op_transfer', name: 'Transferencia', accountId: null, active: true },
-      ],
-      transferInstructions: null,
-      whatsapp: null,
-    };
+    const payments = this.resolvePayCatalog(shop, opts.paymentsChannel);
     const publicPayments = {
       ...payments,
       items: (payments.items ?? []).filter((i) => i.active !== false),
@@ -552,6 +591,7 @@ export class CustomerOrdersService implements OnModuleInit {
     if (!shop || !shop.onlineOrderingEnabled) {
       throw new NotFoundException('Pedidos online no disponibles');
     }
+    await this.ensureShopPaymentSplit(shop);
     await this.maybeAutoCloseOrdering(shop);
     const hasOpenCaja = await this.closingsSvc.hasOpenDraft(shop.id);
     if (shop.orderingForceClosed || !hasOpenCaja) {
@@ -714,6 +754,7 @@ export class CustomerOrdersService implements OnModuleInit {
     if (!shop || !shop.onlineOrderingEnabled) {
       throw new NotFoundException('Pedidos online no disponibles');
     }
+    await this.ensureShopPaymentSplit(shop);
     const fulfillment =
       dto.fulfillment === CustomerOrderFulfillment.DELIVERY
         ? CustomerOrderFulfillment.DELIVERY
@@ -791,15 +832,8 @@ export class CustomerOrdersService implements OnModuleInit {
     }
 
     const isTable = dto.fulfillment === CustomerOrderFulfillment.TABLE;
-    const payments = normalizeOrderingPayments(shop.orderingPayments) ?? {
-      methods: ['CASH', 'TRANSFER'] as CustomerOrderPaymentMethod[],
-      items: [
-        { id: 'op_cash', name: 'Efectivo', accountId: null, active: true },
-        { id: 'op_transfer', name: 'Transferencia', accountId: null, active: true },
-      ],
-      transferInstructions: null,
-      whatsapp: null,
-    };
+    const payChannel = opts.response === 'staff' ? 'counter' : 'public';
+    const payments = this.resolvePayCatalog(shop, payChannel);
     const activeItems = (payments.items ?? []).filter((i) => i.active !== false);
     const payId = String(dto.paymentMethodId ?? '').trim();
     const payItem = payId
@@ -1649,9 +1683,12 @@ export class CustomerOrdersService implements OnModuleInit {
     const deliverateBucket = emptyBucket();
     let deliverateMatchedAmount = 0;
 
-    const payCatalog = normalizeOrderingPayments(shop.orderingPayments);
+    const payCatalogPublic = normalizeOrderingPayments(shop.orderingPayments);
+    const payCatalogCounter = normalizeCounterPaymentMethods(shop.counterPaymentMethods);
     const payItemById = new Map(
-      (payCatalog?.items ?? []).map((i) => [String(i.id), i] as const),
+      [...(payCatalogPublic?.items ?? []), ...payCatalogCounter].map(
+        (i) => [String(i.id), i] as const,
+      ),
     );
     type PayAgg = {
       paymentMethodId: string;
