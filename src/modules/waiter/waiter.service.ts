@@ -10,7 +10,16 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
-import { And, EntityManager, In, LessThan, MoreThanOrEqual, Repository } from 'typeorm';
+import {
+  And,
+  EntityManager,
+  In,
+  IsNull,
+  LessThan,
+  MoreThanOrEqual,
+  Not,
+  Repository,
+} from 'typeorm';
 import { isEntityActive } from '../../common/active.util';
 import {
   ComandaLineAudit,
@@ -44,6 +53,7 @@ import {
 import {
   normalizeTablePaymentMethods,
   classifyPaymentMethodKind,
+  resolvePaymentMethodKind,
   resolveWaiterCapProfile,
   type WaiterCapProfile,
 } from '../../common/shop-ordering';
@@ -61,12 +71,19 @@ import {
   shopShiftOwnershipRangeUtc,
   type ShopShift,
 } from '../../common/shop-shifts';
-import { resolveShopBusinessDate } from '../../common/business-date';
+import {
+  nextCalendarDate,
+  resolveShopBusinessDate,
+  zonedLocalToUtc,
+} from '../../common/business-date';
 import { isMysqlDuplicateKey, lockEntity } from '../../common/row-lock';
 
 function hashPin(pin: string): string {
   return createHash('sha256').update(String(pin).trim()).digest('hex');
 }
+
+/** Etiqueta de sesión sin mesa (mostrador). */
+const COUNTER_SESSION_LABEL = 'Mostrador';
 
 function calcTicketDiscount(
   subtotal: number,
@@ -210,7 +227,7 @@ export class WaiterService implements OnModuleInit {
           deletedAt DATETIME(6) NULL,
           active TINYINT(1) NOT NULL DEFAULT 1,
           shopId CHAR(36) NOT NULL,
-          salonTableId CHAR(36) NOT NULL,
+          salonTableId CHAR(36) NULL,
           waiterEmployeeId CHAR(36) NOT NULL,
           status VARCHAR(16) NOT NULL DEFAULT 'OPEN',
           covers INT NOT NULL DEFAULT 2,
@@ -335,6 +352,13 @@ export class WaiterService implements OnModuleInit {
       );
     } catch {
       /* already exists */
+    }
+    try {
+      await this.sessions.query(
+        `ALTER TABLE table_sessions MODIFY salonTableId CHAR(36) NULL`,
+      );
+    } catch {
+      /* already nullable / dialect */
     }
     try {
       await this.sessions.query(`
@@ -656,7 +680,12 @@ export class WaiterService implements OnModuleInit {
         orderCounts.set(r.sid, Number(r.cnt) || 0);
       }
     }
-    const byTable = new Map(openSessions.map((s) => [s.salonTableId, s]));
+    const byTable = new Map(
+      openSessions
+        .filter((s) => !!s.salonTableId)
+        .map((s) => [s.salonTableId as string, s]),
+    );
+    const counterSessions = openSessions.filter((s) => !s.salonTableId);
     const objectRows = (await this.mapObjects.find({ where: { shopId: shop.id } })).filter(
       (o) => isEntityActive(o.active),
     );
@@ -702,8 +731,22 @@ export class WaiterService implements OnModuleInit {
       };
     });
 
+    const counterDtos = counterSessions.map((session) => {
+      const orderCount = orderCounts.get(session.id) ?? 0;
+      return {
+        id: session.id,
+        label: COUNTER_SESSION_LABEL,
+        waiterEmployeeId: session.waiterEmployeeId,
+        openedAt: session.createdAt,
+        covers: Number(session.covers) || 1,
+        orderCount,
+        customerTicketPrinted: !!session.customerTicketPrinted,
+      };
+    });
+
     return {
       tables: tableDtos,
+      counterSessions: counterDtos,
       mapObjects: objectRows
         .slice()
         .sort((a, b) => a.sortOrder - b.sortOrder)
@@ -747,6 +790,331 @@ export class WaiterService implements OnModuleInit {
     const preferred = rows.filter(isWaiterLike);
     const list = preferred.length ? preferred : rows;
     return list.map((e) => ({ id: e.id, fullName: e.fullName }));
+  }
+
+  /**
+   * Historial de comprobantes (mesas/mostrador cerrados) con filtros por fecha.
+   * Staff JWT — Operación → Historial de comprobantes.
+   */
+  async listStaffReceipts(
+    user: AuthUser,
+    shopId: string,
+    opts?: {
+      from?: string | null;
+      to?: string | null;
+      q?: string | null;
+      channel?: string | null;
+      paymentKind?: string | null;
+      waiterEmployeeId?: string | null;
+      hasTip?: string | null;
+    },
+  ) {
+    this.shopsSvc.assertShopAccess(user, shopId);
+    const shop = await this.shops.findOne({ where: { id: shopId, active: true as any } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    if (!shop.waiterOrderingEnabled) {
+      throw new ForbiddenException(
+        'Comanda no disponible. Activála en Configuración → Comandas y guardá.',
+      );
+    }
+
+    const from = String(opts?.from ?? '').trim().slice(0, 10);
+    const to = String(opts?.to ?? '').trim().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      throw new BadRequestException('Indicá un período válido (desde / hasta)');
+    }
+    const tz = shop.timezone;
+    const fromAt = zonedLocalToUtc(`${from}T00:00:00`, tz);
+    const toAt = zonedLocalToUtc(`${nextCalendarDate(to)}T00:00:00`, tz);
+
+    const channel = String(opts?.channel ?? '').trim().toUpperCase();
+    const paymentKind = String(opts?.paymentKind ?? '').trim().toUpperCase();
+    const waiterEmployeeId = String(opts?.waiterEmployeeId ?? '').trim();
+    const hasTipRaw = String(opts?.hasTip ?? '').trim().toLowerCase();
+    const q = String(opts?.q ?? '').trim().toLowerCase();
+
+    const where: Record<string, unknown> = {
+      shopId: shop.id,
+      status: TableSessionStatus.CLOSED,
+      closedAt: And(MoreThanOrEqual(fromAt), LessThan(toAt)),
+    };
+    if (channel === 'COUNTER') where.salonTableId = IsNull();
+    else if (channel === 'TABLE') where.salonTableId = Not(IsNull());
+    if (waiterEmployeeId) where.waiterEmployeeId = waiterEmployeeId;
+
+    const closed = await this.sessions.find({
+      where: where as any,
+      order: { closedAt: 'DESC' },
+      take: 800,
+    });
+
+    const tableIds = [
+      ...new Set(
+        closed
+          .map((s) => s.salonTableId)
+          .filter((id): id is string => !!String(id ?? '').trim()),
+      ),
+    ];
+    const tables = tableIds.length
+      ? await this.tables.find({ where: { shopId: shop.id, id: In(tableIds) } })
+      : [];
+    const tableLabel = new Map(tables.map((t) => [t.id, t.label]));
+
+    const waiterIds = [
+      ...new Set(
+        closed
+          .map((s) => s.waiterEmployeeId)
+          .filter((id): id is string => !!String(id ?? '').trim()),
+      ),
+    ];
+    const waiters = waiterIds.length
+      ? await this.employees.find({ where: { shopId: shop.id, id: In(waiterIds) } })
+      : [];
+    const waiterName = new Map(waiters.map((e) => [e.id, e.fullName]));
+
+    const sessionIds = closed.map((s) => s.id);
+    const orderSumBySession = new Map<string, number>();
+    if (sessionIds.length) {
+      const raw = await this.orders
+        .createQueryBuilder('o')
+        .select('o.tableSessionId', 'sid')
+        .addSelect('COALESCE(SUM(o.total), 0)', 'total')
+        .where('o.shopId = :shopId', { shopId: shop.id })
+        .andWhere('o.tableSessionId IN (:...ids)', { ids: sessionIds })
+        .groupBy('o.tableSessionId')
+        .getRawMany<{ sid: string; total: string }>();
+      for (const row of raw) {
+        orderSumBySession.set(String(row.sid), Number(row.total) || 0);
+      }
+    }
+
+    const rows = closed
+      .map((s) => {
+        const tipAmount = Math.round((Number(s.tipAmount) || 0) * 100) / 100;
+        let payments = this.parseSessionPayments(s.payments);
+        if (!payments.length && s.paymentMethodId) {
+          const fromTicket = (Number(s.ticketTotal) || 0) + tipAmount;
+          const fromOrders = orderSumBySession.get(s.id) || 0;
+          const fallback = fromTicket > 0 ? fromTicket : fromOrders;
+          if (fallback > 0) {
+            payments = [
+              {
+                paymentMethodId: s.paymentMethodId,
+                paymentMethodName: s.paymentMethodName || 'Pago',
+                kind: classifyPaymentMethodKind(
+                  s.paymentMethodId,
+                  s.paymentMethodName || 'Pago',
+                ),
+                amount: Math.round(fallback * 100) / 100,
+              },
+            ];
+          }
+        }
+        const paidSum = payments.reduce((a, p) => a + p.amount, 0);
+        const fromOrders = orderSumBySession.get(s.id) || 0;
+        const storedTicket = Number(s.ticketTotal) || 0;
+        const fromPayments = Math.max(0, paidSum - tipAmount);
+        const ticketTotal =
+          Math.round(
+            (storedTicket > 0 ? storedTicket : fromPayments > 0 ? fromPayments : fromOrders) *
+              100,
+          ) / 100;
+        const label = s.salonTableId
+          ? tableLabel.get(s.salonTableId) ?? '—'
+          : COUNTER_SESSION_LABEL;
+        const channelKind = s.salonTableId ? 'TABLE' : 'COUNTER';
+        const hasActivity =
+          ticketTotal > 0 || tipAmount > 0 || payments.length > 0 || fromOrders > 0;
+        return {
+          sessionId: s.id,
+          channel: channelKind as 'TABLE' | 'COUNTER',
+          tableLabel: label,
+          covers: Number(s.covers) || 0,
+          waiterEmployeeId: s.waiterEmployeeId ?? null,
+          waiterName:
+            (s.waiterEmployeeId && waiterName.get(s.waiterEmployeeId)) || null,
+          openedAt: s.createdAt,
+          closedAt: s.closedAt,
+          ticketTotal,
+          tipAmount,
+          tipLabel: s.tipLabel ?? null,
+          payments,
+          paymentLabel: payments.map((p) => p.paymentMethodName).join(' · ') || '—',
+          hasActivity,
+        };
+      })
+      .filter((s) => s.hasActivity)
+      .filter((s) => {
+        if (hasTipRaw === 'yes' && !(s.tipAmount > 0)) return false;
+        if (hasTipRaw === 'no' && s.tipAmount > 0) return false;
+        if (paymentKind === 'CASH' || paymentKind === 'CARD' || paymentKind === 'TRANSFER') {
+          const hit = s.payments.some(
+            (p) =>
+              resolvePaymentMethodKind({
+                id: p.paymentMethodId,
+                name: p.paymentMethodName,
+                kind: p.kind ?? undefined,
+              }) === paymentKind,
+          );
+          if (!hit) return false;
+        }
+        if (q) {
+          const hay = [
+            s.tableLabel,
+            s.channel === 'COUNTER' ? 'mostrador' : 'mesa',
+            s.waiterName ?? '',
+            s.paymentLabel,
+            s.sessionId,
+          ]
+            .join(' ')
+            .toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        return true;
+      })
+      .map(({ hasActivity: _h, ...rest }) => rest);
+
+    const ticketSum = Math.round(rows.reduce((a, r) => a + r.ticketTotal, 0) * 100) / 100;
+    const tipSum = Math.round(rows.reduce((a, r) => a + r.tipAmount, 0) * 100) / 100;
+    return {
+      from,
+      to,
+      count: rows.length,
+      ticketTotal: ticketSum,
+      tipTotal: tipSum,
+      rows,
+    };
+  }
+
+  async getStaffReceipt(user: AuthUser, shopId: string, sessionId: string) {
+    this.shopsSvc.assertShopAccess(user, shopId);
+    const shop = await this.shops.findOne({ where: { id: shopId, active: true as any } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    if (!shop.waiterOrderingEnabled) {
+      throw new ForbiddenException(
+        'Comanda no disponible. Activála en Configuración → Comandas y guardá.',
+      );
+    }
+    const session = await this.sessions.findOne({
+      where: { id: sessionId, shopId: shop.id },
+    });
+    if (!session) throw new NotFoundException('Comprobante no encontrado');
+    if (session.status !== TableSessionStatus.CLOSED) {
+      throw new BadRequestException('El comprobante aún no está cerrado');
+    }
+    return this.sessionDetail(shop, session);
+  }
+
+  async exportStaffReceiptsExcel(
+    user: AuthUser,
+    shopId: string,
+    opts?: Parameters<WaiterService['listStaffReceipts']>[2],
+  ) {
+    const shop = await this.shops.findOne({ where: { id: shopId, active: true as any } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    const payload = await this.listStaffReceipts(user, shopId, opts);
+    const ExcelJS = await import('exceljs');
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Cash Register Closings';
+    const ws = wb.addWorksheet('Comprobantes');
+    ws.columns = [
+      { header: 'Cierre', key: 'cierre', width: 18 },
+      { header: 'Lugar', key: 'lugar', width: 16 },
+      { header: 'Canal', key: 'canal', width: 12 },
+      { header: 'Personas', key: 'personas', width: 10 },
+      { header: 'Mozo', key: 'mozo', width: 22 },
+      { header: 'Pago', key: 'pago', width: 24 },
+      { header: 'Propina', key: 'propina', width: 12 },
+      { header: 'Ticket', key: 'ticket', width: 12 },
+      { header: 'Apertura', key: 'apertura', width: 18 },
+    ];
+    ws.getRow(1).font = { bold: true };
+    const fmtDate = (iso: Date | string | null | undefined) => {
+      if (!iso) return '';
+      const d = iso instanceof Date ? iso : new Date(iso);
+      if (Number.isNaN(d.getTime())) return '';
+      return new Intl.DateTimeFormat('es-AR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+        timeZone: shop.timezone || undefined,
+      }).format(d);
+    };
+    for (const r of payload.rows) {
+      const place =
+        r.channel === 'COUNTER' || !r.tableLabel || r.tableLabel.toLowerCase() === 'mostrador'
+          ? 'Mostrador'
+          : `Mesa ${r.tableLabel}`;
+      ws.addRow({
+        cierre: fmtDate(r.closedAt),
+        lugar: place,
+        canal: r.channel === 'COUNTER' ? 'Mostrador' : 'Mesa',
+        personas: r.channel === 'COUNTER' ? '' : r.covers || '',
+        mozo: r.waiterName ?? '',
+        pago: r.paymentLabel || '',
+        propina: Number(r.tipAmount) || 0,
+        ticket: Number(r.ticketTotal) || 0,
+        apertura: fmtDate(r.openedAt),
+      });
+    }
+    ws.getColumn('propina').numFmt = '#,##0.00';
+    ws.getColumn('ticket').numFmt = '#,##0.00';
+    const buffer = Buffer.from(await wb.xlsx.writeBuffer());
+    const slug = String(shop.slug || shop.name || 'local')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 40) || 'local';
+    return {
+      buffer,
+      filename: `comprobantes-${slug}-${payload.from}_${payload.to}.xlsx`,
+    };
+  }
+
+  private parseSessionPayments(raw: unknown): Array<{
+    paymentMethodId: string;
+    paymentMethodName: string;
+    kind: 'CASH' | 'CARD' | 'TRANSFER' | null;
+    amount: number;
+  }> {
+    let list = raw;
+    if (typeof list === 'string') {
+      try {
+        list = JSON.parse(list);
+      } catch {
+        return [];
+      }
+    }
+    if (!Array.isArray(list)) return [];
+    return list
+      .map((p) => {
+        const row = p as {
+          paymentMethodId?: string;
+          paymentMethodName?: string;
+          kind?: string | null;
+          amount?: number;
+        };
+        const paymentMethodId = String(row.paymentMethodId ?? '').trim();
+        const paymentMethodName =
+          String(row.paymentMethodName ?? 'Pago').trim() || 'Pago';
+        const kindRaw = String(row.kind ?? '').trim().toUpperCase();
+        const kind =
+          kindRaw === 'CASH' || kindRaw === 'CARD' || kindRaw === 'TRANSFER'
+            ? kindRaw
+            : classifyPaymentMethodKind(paymentMethodId, paymentMethodName);
+        return {
+          paymentMethodId,
+          paymentMethodName,
+          kind,
+          amount: Math.round((Number(row.amount) || 0) * 100) / 100,
+        };
+      })
+      .filter((p) => p.paymentMethodId && p.amount > 0);
   }
 
   /** Tablero de monitoreo staff: mesas abiertas, últimos envíos y cambios del turno. */
@@ -823,7 +1191,11 @@ export class WaiterService implements OnModuleInit {
       : [];
     const allSessionsForLabels = [...openSessions, ...closedSessions];
     const allTableIds = [
-      ...new Set(allSessionsForLabels.map((s) => s.salonTableId)),
+      ...new Set(
+        allSessionsForLabels
+          .map((s) => s.salonTableId)
+          .filter((id): id is string => !!String(id ?? '').trim()),
+      ),
     ];
     const tables = allTableIds.length
       ? await this.tables.find({ where: { shopId: shop.id, id: In(allTableIds) } })
@@ -868,7 +1240,9 @@ export class WaiterService implements OnModuleInit {
       .map((session) => {
         const sessionOrders = ordersBySession.get(session.id) ?? [];
         if (!sessionOrders.length) return null;
-        const table = tableById.get(session.salonTableId);
+        const table = session.salonTableId
+          ? tableById.get(session.salonTableId)
+          : undefined;
         const sid = table?.sectorId ?? null;
         const newest = sessionOrders[0];
         const oldestFirst = [...sessionOrders].sort(
@@ -885,14 +1259,16 @@ export class WaiterService implements OnModuleInit {
         const total = sessionOrders.reduce((s, o) => s + (Number(o.total) || 0), 0);
         return {
           sessionId: session.id,
-          tableId: session.salonTableId,
-          tableLabel: table?.label ?? 'Mesa',
-          sectorName: sid
-            ? sectorName.get(sid) ?? 'Sector'
-            : table?.area === 'OUTSIDE'
-              ? 'Afuera'
-              : 'Adentro',
-          covers: Number(session.covers) || 2,
+          tableId: session.salonTableId ?? null,
+          tableLabel: this.sessionTableLabel(table),
+          sectorName: session.salonTableId
+            ? sid
+              ? sectorName.get(sid) ?? 'Sector'
+              : table?.area === 'OUTSIDE'
+                ? 'Afuera'
+                : 'Adentro'
+            : COUNTER_SESSION_LABEL,
+          covers: Number(session.covers) || (session.salonTableId ? 2 : 1),
           waiterName:
             (session.waiterEmployeeId && waiterName.get(session.waiterEmployeeId)) ||
             '—',
@@ -909,11 +1285,12 @@ export class WaiterService implements OnModuleInit {
 
     const recentOrders = shiftOrders.slice(0, 40).map((o) => {
       const session = sessionById.get(String(o.tableSessionId ?? ''));
-      const table = session ? tableById.get(session.salonTableId) : null;
+      const table =
+        session?.salonTableId ? tableById.get(session.salonTableId) : undefined;
       return {
         id: o.id,
         code: o.code,
-        tableLabel: table?.label ?? 'Mesa',
+        tableLabel: this.sessionTableLabel(table),
         waiterName:
           (session?.waiterEmployeeId && waiterName.get(session.waiterEmployeeId)) ||
           '—',
@@ -983,7 +1360,7 @@ export class WaiterService implements OnModuleInit {
   async openSession(
     slug: string,
     waiter: WaiterAuthPayload,
-    salonTableId: string,
+    salonTableId: string | null,
     coversRaw: number,
     waiterEmployeeIdRaw?: string | null,
   ) {
@@ -993,11 +1370,11 @@ export class WaiterService implements OnModuleInit {
     if (!Number.isFinite(covers) || covers < 1 || covers > 30) {
       throw new BadRequestException('Indicá entre 1 y 30 comensales');
     }
-    const table = await this.tables.findOne({
-      where: { id: salonTableId, shopId: shop.id },
-    });
-    if (!table || !isEntityActive(table.active)) {
-      throw new NotFoundException('Mesa no encontrada');
+
+    const tableId = String(salonTableId ?? '').trim() || null;
+    // Mostrador: sin mozo ni comensales (covers queda en 1 por compat).
+    if (!tableId) {
+      return this.openCounterSession(shop, 1, null);
     }
 
     let waiterEmployeeId = waiterEmployeeIdOrNull(waiter);
@@ -1016,6 +1393,13 @@ export class WaiterService implements OnModuleInit {
         }
         waiterEmployeeId = emp.id;
       }
+    }
+
+    const table = await this.tables.findOne({
+      where: { id: tableId, shopId: shop.id },
+    });
+    if (!table || !isEntityActive(table.active)) {
+      throw new NotFoundException('Mesa no encontrada');
     }
 
     const existing = await this.sessions.manager.transaction(async (manager) => {
@@ -1069,8 +1453,33 @@ export class WaiterService implements OnModuleInit {
       }
     });
 
-    const row = existing.session;
-    if (existing.created) {
+    return this.finalizeOpenedSession(shop, existing.session, existing.created);
+  }
+
+  /** Pedido de mostrador: sesión de comanda sin mesa (pueden coexistir varias). */
+  private async openCounterSession(
+    shop: Shop,
+    covers: number,
+    waiterEmployeeId: string | null,
+  ) {
+    const row = await this.sessions.save(
+      this.sessions.create({
+        shopId: shop.id,
+        salonTableId: null,
+        waiterEmployeeId,
+        status: TableSessionStatus.OPEN,
+        openSalonTableId: null,
+        covers,
+        customerTicketPrinted: false,
+        closedAt: null,
+        active: true,
+      }),
+    );
+    return this.finalizeOpenedSession(shop, row, true);
+  }
+
+  private async finalizeOpenedSession(shop: Shop, row: TableSession, created: boolean) {
+    if (created) {
       const auto = autoAssignPromosAtOpen(
         normalizeShopPromos(shop.promos),
         new Date(),
@@ -1084,8 +1493,20 @@ export class WaiterService implements OnModuleInit {
         await this.sessions.save(row);
       }
     }
-
     return this.sessionDetail(shop, row);
+  }
+
+  private async resolveSessionTable(
+    shopId: string,
+    session: TableSession,
+  ): Promise<SalonTable | null> {
+    const id = String(session.salonTableId ?? '').trim();
+    if (!id) return null;
+    return this.tables.findOne({ where: { id, shopId } });
+  }
+
+  private sessionTableLabel(table: SalonTable | null | undefined): string {
+    return (table?.label ?? '').trim() || COUNTER_SESSION_LABEL;
   }
 
   async getSession(slug: string, waiter: WaiterAuthPayload, sessionId: string) {
@@ -1153,10 +1574,11 @@ export class WaiterService implements OnModuleInit {
     if (session.status !== TableSessionStatus.OPEN) {
       throw new BadRequestException('La mesa ya está cerrada');
     }
-    const table = await this.tables.findOne({
-      where: { id: session.salonTableId, shopId: shop.id },
-    });
-    if (!table) throw new NotFoundException('Mesa no encontrada');
+    const table = await this.resolveSessionTable(shop.id, session);
+    if (session.salonTableId && !table) {
+      throw new NotFoundException('Mesa no encontrada');
+    }
+    const tableLabel = this.sessionTableLabel(table);
 
     let printKitchen = !!dto.printKitchen;
     let printCustomerTicket = !!dto.printCustomerTicket;
@@ -1184,10 +1606,10 @@ export class WaiterService implements OnModuleInit {
       extras: dto.extras,
       promos: dto.promos,
       customerNotes: dto.customerNotes,
-      salonTableId: table.id,
+      salonTableId: table?.id ?? null,
       tableSessionId: session.id,
       waiterEmployeeId: sessionWaiterId,
-      tableLabel: table.label,
+      tableLabel,
       waiterName,
       printKitchen,
       printCustomerTicket,
@@ -1239,9 +1661,7 @@ export class WaiterService implements OnModuleInit {
       where: { id: orderId, shopId: shop.id, tableSessionId: session.id },
     });
     if (!order) throw new NotFoundException('Envío no encontrado');
-    const table = await this.tables.findOne({
-      where: { id: session.salonTableId, shopId: shop.id },
-    });
+    const table = await this.resolveSessionTable(shop.id, session);
     const sessionWaiter = session.waiterEmployeeId
       ? await this.employees.findOne({
           where: { id: session.waiterEmployeeId, shopId: shop.id },
@@ -1249,7 +1669,7 @@ export class WaiterService implements OnModuleInit {
       : null;
     const result = await this.printAgent.reprintKitchenForOrder(shop, order, {
       reason: 'TABLE',
-      tableLabel: table?.label ?? null,
+      tableLabel: this.sessionTableLabel(table),
       waiterName: sessionWaiter?.fullName?.trim() || waiter.name,
     });
     return { ok: true, ...result };
@@ -1273,15 +1693,14 @@ export class WaiterService implements OnModuleInit {
         where: { shopId: shop.id, tableSessionId: session.id },
         order: { createdAt: 'ASC' },
       });
-      const table = await this.tables.findOne({
-        where: { id: session.salonTableId, shopId: shop.id },
-      });
+      const table = await this.resolveSessionTable(shop.id, session);
       const sessionWaiter = session.waiterEmployeeId
         ? await this.employees.findOne({
             where: { id: session.waiterEmployeeId, shopId: shop.id },
           })
         : null;
       const waiterName = sessionWaiter?.fullName?.trim() || waiter.name;
+      const tableLabel = this.sessionTableLabel(table);
       let printedOrders = 0;
       let pendingBefore = 0;
       for (const order of orders) {
@@ -1297,7 +1716,7 @@ export class WaiterService implements OnModuleInit {
         const job = await this.printAgent.enqueueCustomerOrder(shop, order, 'TABLE', {
           printKitchen: true,
           printCustomerTicket: false,
-          tableLabel: table?.label ?? null,
+          tableLabel,
           waiterName,
           kitchenItemsMode: 'MAINS_PENDING',
           kitchenBanner: '>>> PRINCIPALES',
@@ -1565,15 +1984,13 @@ export class WaiterService implements OnModuleInit {
       await orderRepo.save(order);
     }
 
-    const table = await this.tables.findOne({
-      where: { id: session.salonTableId, shopId: shop.id },
-    });
+    const table = await this.resolveSessionTable(shop.id, session);
     await manager.getRepository(ComandaLineAudit).save(
       manager.getRepository(ComandaLineAudit).create({
         shopId: shop.id,
         tableSessionId: session.id,
-        salonTableId: session.salonTableId,
-        tableLabel: table?.label ?? null,
+        salonTableId: session.salonTableId ?? null,
+        tableLabel: this.sessionTableLabel(table),
         customerOrderId: order.id,
         orderCode: order.code,
         action,
@@ -1791,7 +2208,13 @@ export class WaiterService implements OnModuleInit {
       take: 500,
     });
 
-    const tableIds = [...new Set(closed.map((s) => s.salonTableId))];
+    const tableIds = [
+      ...new Set(
+        closed
+          .map((s) => s.salonTableId)
+          .filter((id): id is string => !!String(id ?? '').trim()),
+      ),
+    ];
     const tables = tableIds.length
       ? await this.tables.find({ where: { shopId: shop.id, id: In(tableIds) } })
       : [];
@@ -1874,7 +2297,9 @@ export class WaiterService implements OnModuleInit {
           ticketTotal > 0 || tipAmount > 0 || payments.length > 0 || fromOrders > 0;
         return {
           sessionId: s.id,
-          tableLabel: tableLabel.get(s.salonTableId) ?? '—',
+          tableLabel: s.salonTableId
+            ? tableLabel.get(s.salonTableId) ?? '—'
+            : COUNTER_SESSION_LABEL,
           covers: Number(s.covers) || 0,
           openedAt: s.createdAt,
           closedAt: s.closedAt,
@@ -1938,9 +2363,7 @@ export class WaiterService implements OnModuleInit {
     if (!orders.length) {
       throw new BadRequestException('No hay envíos para imprimir');
     }
-    const table = await this.tables.findOne({
-      where: { id: session.salonTableId, shopId: shop.id },
-    });
+    const table = await this.resolveSessionTable(shop.id, session);
     const sessionWaiter = session.waiterEmployeeId
       ? await this.employees.findOne({
           where: { id: session.waiterEmployeeId, shopId: shop.id },
@@ -1989,9 +2412,9 @@ export class WaiterService implements OnModuleInit {
         discountLabel,
         total,
         promoBreakdown,
-        tableLabel: table?.label ?? null,
+        tableLabel: this.sessionTableLabel(table),
         waiterName,
-        covers: Number(session.covers) || 2,
+        covers: Number(session.covers) || (session.salonTableId ? 2 : 1),
       });
     } catch (err) {
       if (err instanceof BadRequestException) throw err;
@@ -2049,9 +2472,7 @@ export class WaiterService implements OnModuleInit {
   }
 
   private async sessionDetail(shop: Shop, session: TableSession) {
-    const table = await this.tables.findOne({
-      where: { id: session.salonTableId, shopId: shop.id },
-    });
+    const table = await this.resolveSessionTable(shop.id, session);
     const waiterEmp = session.waiterEmployeeId
       ? await this.employees.findOne({
           where: { id: session.waiterEmployeeId, shopId: shop.id },

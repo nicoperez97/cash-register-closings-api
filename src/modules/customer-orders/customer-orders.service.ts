@@ -714,7 +714,7 @@ export class CustomerOrdersService implements OnModuleInit {
       }>;
       promos?: Array<{ promoId: string; qty: number }>;
       customerNotes?: string | null;
-      salonTableId: string;
+      salonTableId?: string | null;
       tableSessionId: string;
       waiterEmployeeId?: string | null;
       tableLabel: string;
@@ -724,28 +724,30 @@ export class CustomerOrdersService implements OnModuleInit {
       response?: 'waiter' | 'guest';
     },
   ) {
+    const tableLabel = String(input.tableLabel || '').trim().slice(0, 80);
+    const isCounter = !String(input.salonTableId ?? '').trim();
     return this.createOrderForShop(
       shop,
       {
         fulfillment: CustomerOrderFulfillment.TABLE,
         items: input.items,
         extras: input.extras,
-        firstName: 'Mesa',
-        lastName: String(input.tableLabel || '').trim().slice(0, 80) || '—',
+        firstName: isCounter ? 'Mostrador' : 'Mesa',
+        lastName: tableLabel || (isCounter ? '' : '—'),
         phone: '',
         paymentMethod: CustomerOrderPaymentMethod.CASH,
         cashAmount: 0,
         customerNotes: input.customerNotes,
         printCustomerTicket: !!input.printCustomerTicket,
         printKitchen: input.printKitchen !== false,
-        salonTableId: input.salonTableId,
+        salonTableId: input.salonTableId ?? null,
         tableSessionId: input.tableSessionId,
         waiterEmployeeId: input.waiterEmployeeId ?? null,
-        tableLabel: input.tableLabel,
+        tableLabel: tableLabel || (isCounter ? 'Mostrador' : '—'),
         waiterName: input.waiterName,
       } as CreateCustomerOrderDto & {
         printKitchen?: boolean;
-        salonTableId?: string;
+        salonTableId?: string | null;
         tableSessionId?: string;
         waiterEmployeeId?: string | null;
         tableLabel?: string;
@@ -786,7 +788,7 @@ export class CustomerOrdersService implements OnModuleInit {
     shop: Shop,
     dto: CreateCustomerOrderDto & {
       printKitchen?: boolean;
-      salonTableId?: string;
+      salonTableId?: string | null;
       tableSessionId?: string;
       waiterEmployeeId?: string | null;
       tableLabel?: string;
@@ -1482,6 +1484,102 @@ export class CustomerOrdersService implements OnModuleInit {
     qb.take(take);
     const rows = await qb.getMany();
     return rows.map((r) => this.toDto(r));
+  }
+
+  async exportStaffExcel(
+    user: AuthUser,
+    shopId: string,
+    opts?: Parameters<CustomerOrdersService['listStaff']>[2],
+  ) {
+    this.assertShopAccess(user, shopId);
+    const shop = await this.shops.findOne({ where: { id: shopId, active: true as any } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    const rows = await this.listStaff(user, shopId, opts);
+    const ExcelJS = await import('exceljs');
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Cash Register Closings';
+    const ws = wb.addWorksheet('Pedidos');
+    ws.columns = [
+      { header: 'Fecha', key: 'fecha', width: 18 },
+      { header: 'Código', key: 'codigo', width: 10 },
+      { header: 'Cliente', key: 'cliente', width: 28 },
+      { header: 'Teléfono', key: 'telefono', width: 16 },
+      { header: 'Canal', key: 'canal', width: 12 },
+      { header: 'Estado', key: 'estado', width: 14 },
+      { header: 'Pago', key: 'pago', width: 16 },
+      { header: 'Acreditado', key: 'acreditado', width: 12 },
+      { header: 'Subtotal', key: 'subtotal', width: 12 },
+      { header: 'Delivery', key: 'delivery', width: 10 },
+      { header: 'Descuento', key: 'descuento', width: 10 },
+      { header: 'Total', key: 'total', width: 12 },
+      { header: 'Notas', key: 'notas', width: 28 },
+    ];
+    ws.getRow(1).font = { bold: true };
+    const statusLabel: Record<string, string> = {
+      PENDING: 'Pendiente',
+      ACCEPTED: 'Aceptado',
+      PREPARING: 'Preparando',
+      READY: 'Listo',
+      OUT_FOR_DELIVERY: 'En camino',
+      COMPLETED: 'Completado',
+      CANCELLED: 'Cancelado',
+    };
+    const channelLabel: Record<string, string> = {
+      TAKEAWAY: 'Take away',
+      DELIVERY: 'Delivery',
+      COUNTER: 'Mostrador',
+      TABLE: 'Mesa',
+    };
+    const payLabel: Record<string, string> = {
+      CASH: 'Efectivo',
+      CARD: 'Tarjeta',
+      TRANSFER: 'Transferencia',
+    };
+    const fmtDate = (iso: Date | string | null | undefined) => {
+      if (!iso) return '';
+      const d = iso instanceof Date ? iso : new Date(iso);
+      if (Number.isNaN(d.getTime())) return '';
+      return new Intl.DateTimeFormat('es-AR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+        timeZone: shop.timezone || undefined,
+      }).format(d);
+    };
+    for (const r of rows) {
+      ws.addRow({
+        fecha: fmtDate(r.createdAt),
+        codigo: r.code,
+        cliente: `${r.lastName}, ${r.firstName}`.replace(/^,\s*|,\s*$/g, '').trim(),
+        telefono: r.phone ?? '',
+        canal: channelLabel[r.fulfillment] ?? r.fulfillment,
+        estado: statusLabel[r.status] ?? r.status,
+        pago: r.paymentMethodName?.trim() || payLabel[r.paymentMethod] || r.paymentMethod,
+        acreditado: r.paymentAccreditedAt ? 'Sí' : 'No',
+        subtotal: Number(r.subtotal) || 0,
+        delivery: Number(r.deliveryFee) || 0,
+        descuento: Number(r.discountAmount) || 0,
+        total: Number(r.total) || 0,
+        notas: r.customerNotes ?? '',
+      });
+    }
+    for (const key of ['subtotal', 'delivery', 'descuento', 'total']) {
+      ws.getColumn(key).numFmt = '#,##0.00';
+    }
+    const buffer = Buffer.from(await wb.xlsx.writeBuffer());
+    const slug = String(shop.slug || shop.name || 'local')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 40) || 'local';
+    const from = String(opts?.from ?? '').trim().slice(0, 10) || 'inicio';
+    const to = String(opts?.to ?? '').trim().slice(0, 10) || 'hoy';
+    return { buffer, filename: `pedidos-${slug}-${from}_${to}.xlsx` };
   }
 
   /**

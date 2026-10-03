@@ -61,13 +61,17 @@ export class DineInService implements OnModuleInit {
   }
 
   private async issueToken(shop: Shop, session: TableSession): Promise<string> {
+    const salonTableId = String(session.salonTableId ?? '').trim();
+    if (!salonTableId) {
+      throw new BadRequestException('Sesión sin mesa');
+    }
     return this.jwt.signAsync(
       {
         typ: 'dine_in',
         shopId: shop.id,
         slug: shop.slug,
         tableSessionId: session.id,
-        salonTableId: session.salonTableId,
+        salonTableId,
       } satisfies DineInAuthPayload,
       { expiresIn: '12h' },
     );
@@ -97,7 +101,11 @@ export class DineInService implements OnModuleInit {
         orderCounts.set(r.sid, Number(r.cnt) || 0);
       }
     }
-    const byTable = new Map(openSessions.map((s) => [s.salonTableId, s]));
+    const byTable = new Map(
+      openSessions
+        .filter((s) => !!s.salonTableId)
+        .map((s) => [s.salonTableId as string, s]),
+    );
 
     const sectorIds = [
       ...new Set(
@@ -318,11 +326,12 @@ export class DineInService implements OnModuleInit {
       if (session.status !== TableSessionStatus.OPEN) {
         throw new BadRequestException('La mesa ya está cerrada');
       }
-      if (session.salonTableId !== guest.salonTableId) {
+      const sessionTableId = String(session.salonTableId ?? '').trim();
+      if (!sessionTableId || sessionTableId !== guest.salonTableId) {
         throw new UnauthorizedException('Sesión inválida');
       }
       const table = await this.tables.findOne({
-        where: { id: session.salonTableId, shopId: shop.id },
+        where: { id: sessionTableId, shopId: shop.id },
       });
       if (!table) throw new NotFoundException('Mesa no encontrada');
 
@@ -346,9 +355,12 @@ export class DineInService implements OnModuleInit {
   }
 
   private async sessionDetail(shop: Shop, session: TableSession) {
-    const table = await this.tables.findOne({
-      where: { id: session.salonTableId, shopId: shop.id },
-    });
+    const tableId = String(session.salonTableId ?? '').trim();
+    const table = tableId
+      ? await this.tables.findOne({
+          where: { id: tableId, shopId: shop.id },
+        })
+      : null;
     const orders = await this.orders.find({
       where: { shopId: shop.id, tableSessionId: session.id },
       order: { createdAt: 'ASC' },

@@ -108,9 +108,12 @@ class WaiterOrderExtraDto {
 }
 
 class OpenSessionDto {
-  @ApiProperty()
+  @ApiPropertyOptional({
+    description: 'Mesa a abrir. Omitir o null = pedido de mostrador (sin mesa).',
+  })
+  @IsOptional()
   @IsUUID()
-  salonTableId: string;
+  salonTableId?: string | null;
 
   @ApiProperty({ example: 2 })
   @Type(() => Number)
@@ -368,10 +371,11 @@ export class WaiterController {
     @CurrentWaiter() waiter: WaiterAuthPayload,
     @Body() dto: OpenSessionDto,
   ) {
+    const tableId = String(dto.salonTableId ?? '').trim() || null;
     return this.waiter.openSession(
       slug,
       waiter,
-      dto.salonTableId,
+      tableId,
       dto.covers,
       dto.waiterEmployeeId,
     );

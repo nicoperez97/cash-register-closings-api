@@ -19,6 +19,15 @@ import { AuthUser } from '../../common/decorators';
 import { ClosingSourceKind, ClosingStatus, GlobalRole, LedgerAccountType, Permission } from '../../common/enums';
 import { isGlobalAdmin, isSuperAdmin } from '../../common/guards';
 import { normalizeLogoUrl } from '../../common/drive-url';
+import {
+  buildPublicPagePwaManifest,
+  parsePublicPagePwaKind,
+  publicPagePwaKindMeta,
+} from '../../common/public-page-pwa';
+import {
+  parsePublicPagePwaIconSize,
+  renderPublicPagePwaIcon,
+} from '../../common/public-page-pwa-icon';
 import { isEntityActive } from '../../common/active.util';
 import { ShopLiveService } from '../shop-live/shop-live.service';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
@@ -751,6 +760,49 @@ export class ShopsService implements OnModuleInit {
 
   async findActiveBySlug(slug: string) {
     return this.shops.findOne({ where: { slug, active: true } });
+  }
+
+  /**
+   * Manifest PWA instalable para una página pública del local.
+   * `appOrigin` es opcional (contrato legacy); start_url/id/scope son paths relative.
+   */
+  async buildPublicPagePwaManifest(
+    slug: string,
+    kindRaw: string,
+    appOriginRaw?: string,
+  ) {
+    const kind = parsePublicPagePwaKind(kindRaw);
+    const shop = await this.shops.findOne({
+      where: { slug: String(slug ?? '').trim().toLowerCase(), active: true },
+    });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    return buildPublicPagePwaManifest(shop, kind, appOriginRaw);
+  }
+
+  /**
+   * PNG compuesto: logo del local + inicial de la página (badge).
+   * Usado por el manifest PWA y apple-touch-icon.
+   */
+  async renderPublicPagePwaIcon(
+    slug: string,
+    kindRaw: string,
+    sizeRaw: string,
+  ): Promise<Buffer> {
+    const kind = parsePublicPagePwaKind(kindRaw);
+    const size = parsePublicPagePwaIconSize(sizeRaw);
+    if (!size) throw new BadRequestException('Tamaño de ícono inválido');
+    const shop = await this.shops.findOne({
+      where: { slug: String(slug ?? '').trim().toLowerCase(), active: true },
+    });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    publicPagePwaKindMeta(kind).assertEnabled(shop);
+    const logo = await this.fetchPublicLogo(shop.id);
+    return renderPublicPagePwaIcon({
+      kind,
+      size,
+      accentColor: shop.accentColor,
+      logo,
+    });
   }
 
   /** Admin del local (shopRole) o admin/owner global, o manager con shops/shopConfig.manage. */

@@ -288,4 +288,32 @@ export class PublicShopsController {
     res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
     res.send(result.buffer);
   }
+
+  /** Manifest PWA de una página pública (carta, pedir, reservas, etc.). */
+  @Public()
+  @Get(':slug/manifests/:kind')
+  @Header('Content-Type', 'application/manifest+json; charset=utf-8')
+  @Header('Cache-Control', 'no-store')
+  publicPageManifest(
+    @Param('slug') slug: string,
+    @Param('kind') kind: string,
+    @Query('appOrigin') appOrigin?: string,
+  ) {
+    return this.shops.buildPublicPagePwaManifest(slug, kind, appOrigin);
+  }
+
+  /** Ícono PWA compuesto (logo del local + inicial de la página). */
+  @Public()
+  @Get(':slug/pwa-icons/:kind/:size')
+  async publicPagePwaIcon(
+    @Param('slug') slug: string,
+    @Param('kind') kind: string,
+    @Param('size') size: string,
+    @Res() res: Response,
+  ) {
+    const buffer = await this.shops.renderPublicPagePwaIcon(slug, kind, size);
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400');
+    res.send(buffer);
+  }
 }
