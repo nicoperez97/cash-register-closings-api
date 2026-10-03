@@ -6,10 +6,12 @@ import {
   Patch,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
+import type { Response } from 'express';
 import {
   AuthUser,
   CurrentUser,
@@ -133,6 +135,51 @@ export class CustomerOrdersController {
     @Query('shiftId') shiftId?: string,
   ) {
     return this.service.closingSummary(user, shopId, { businessDate, shiftId });
+  }
+
+  @Get('export.xlsx')
+  @RequirePermissions('customerOrders.read')
+  async exportExcel(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Res() res: Response,
+    @Query('status') status?: string,
+    @Query('scope') scope?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('q') q?: string,
+    @Query('fulfillment') fulfillment?: string,
+    @Query('paymentMethod') paymentMethod?: string,
+    @Query('accredited') accredited?: string,
+  ) {
+    const statuses = status
+      ? (status
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean) as CustomerOrderStatus[])
+      : undefined;
+    const fulfillments = Object.values(CustomerOrderFulfillment) as string[];
+    const payments = Object.values(CustomerOrderPaymentMethod) as string[];
+    const { buffer, filename } = await this.service.exportStaffExcel(user, shopId, {
+      status: statuses,
+      scope: scope === 'current-shift' ? 'current-shift' : undefined,
+      from,
+      to,
+      q,
+      fulfillment: fulfillments.includes(String(fulfillment ?? ''))
+        ? (fulfillment as CustomerOrderFulfillment)
+        : undefined,
+      paymentMethod: payments.includes(String(paymentMethod ?? ''))
+        ? (paymentMethod as CustomerOrderPaymentMethod)
+        : undefined,
+      accredited: accredited === 'yes' || accredited === 'no' ? accredited : undefined,
+    });
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
   }
 
   @Get(':id')

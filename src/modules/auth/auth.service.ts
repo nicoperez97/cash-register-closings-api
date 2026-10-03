@@ -57,6 +57,7 @@ import {
   normalizeOrderingPayments,
   normalizeShopMode,
   normalizeShopOrderingHours,
+  normalizeTablePaymentMethods,
   ShopMode,
 } from '../../common/shop-ordering';
 import { CatalogSeedService } from '../../common/catalog-seed.service';
@@ -986,6 +987,7 @@ export class AuthService implements OnModuleInit {
         counterPaymentMethods: normalizeCounterPaymentMethods(
           s.counterPaymentMethods ?? undefined,
         ),
+        tablePaymentMethods: normalizeTablePaymentMethods(s.tablePaymentMethods),
         deliveryZones: normalizeDeliveryZones(s.deliveryZones),
         orderingEta: normalizeOrderingEta(s.orderingEta),
         defaultChangeAmount: Number(s.defaultChangeAmount),

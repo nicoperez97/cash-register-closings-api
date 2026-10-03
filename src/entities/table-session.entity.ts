@@ -16,8 +16,9 @@ export class TableSession extends BaseEntity {
   @Column()
   shopId: string;
 
-  @Column({ type: 'varchar', length: 36 })
-  salonTableId: string;
+  /** Null = pedido de mostrador (sin mesa). */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  salonTableId?: string | null;
 
   /** Null cuando el cliente abre la mesa desde /pedir (sin mozo). */
   @Column({ type: 'varchar', length: 36, nullable: true })
@@ -108,9 +109,9 @@ export class TableSession extends BaseEntity {
   @JoinColumn({ name: 'shopId' })
   shop: Shop;
 
-  @ManyToOne(() => SalonTable)
+  @ManyToOne(() => SalonTable, { nullable: true })
   @JoinColumn({ name: 'salonTableId' })
-  salonTable: SalonTable;
+  salonTable?: SalonTable | null;
 
   @ManyToOne(() => Employee, { nullable: true })
   @JoinColumn({ name: 'waiterEmployeeId' })

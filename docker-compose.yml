@@ -23,6 +23,8 @@ services:
         # 3306 solo escucha en 127.0.0.1 (loopback) del host, para tunel SSH. No es accesible publicamente.
 
   api:
+    # API_IMAGE lo setea Actions (GHCR). Sin variable: build local (fallback).
+    image: ${API_IMAGE:-crc-api:local}
     build:
       context: ./api
       dockerfile: Dockerfile

@@ -26,6 +26,33 @@ import { DEFAULT_PAYMENT_CONCEPT_CATEGORIES } from '../../../common/concept-cate
 import { ShopMode } from '../../../common/shop-ordering';
 import { ToBoolean } from '../../../common/boolean.util';
 
+export class LinkedPaymentMethodDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  id?: string;
+
+  @ApiProperty()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(80)
+  name!: string;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @ValidateIf((_, v) => v != null && v !== '')
+  @IsString()
+  @MaxLength(36)
+  accountId?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @ToBoolean()
+  @IsBoolean()
+  active?: boolean;
+}
+
 export class PaymentConceptCategoriesDto {
   @ApiPropertyOptional({ enum: ConceptCategory, isArray: true })
   @IsOptional()
@@ -319,27 +346,23 @@ export class CreateShopDto {
 
   @ApiPropertyOptional({
     description: 'Medios de pago de mostrador (caja staff): nombre + accountId opcional',
+    type: [LinkedPaymentMethodDto],
   })
   @IsOptional()
   @IsArray()
-  counterPaymentMethods?: Array<{
-    id?: string;
-    name: string;
-    accountId?: string | null;
-    active?: boolean;
-  }> | null;
+  @ValidateNested({ each: true })
+  @Type(() => LinkedPaymentMethodDto)
+  counterPaymentMethods?: LinkedPaymentMethodDto[] | null;
 
   @ApiPropertyOptional({
     description: 'Medios de pago de mesa (comanda): nombre + accountId opcional',
+    type: [LinkedPaymentMethodDto],
   })
   @IsOptional()
   @IsArray()
-  tablePaymentMethods?: Array<{
-    id?: string;
-    name: string;
-    accountId?: string | null;
-    active?: boolean;
-  }> | null;
+  @ValidateNested({ each: true })
+  @Type(() => LinkedPaymentMethodDto)
+  tablePaymentMethods?: LinkedPaymentMethodDto[] | null;
 
   @ApiPropertyOptional({
     description:

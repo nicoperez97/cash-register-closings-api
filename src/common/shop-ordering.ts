@@ -241,7 +241,19 @@ export function syncOrderingPayItemsFromMethods(
   return out;
 }
 
+function asJsonObjectOrArray(raw: unknown): unknown {
+  if (typeof raw !== 'string') return raw;
+  const text = raw.trim();
+  if (!text) return null;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return raw;
+  }
+}
+
 export function normalizeTablePaymentMethods(raw: unknown): TablePaymentMethod[] {
+  raw = asJsonObjectOrArray(raw);
   if (!Array.isArray(raw)) {
     return [
       { id: 'tp_cash', name: 'Efectivo', accountId: null, active: true },
@@ -285,6 +297,7 @@ function defaultCounterPayItems(): CounterPaymentMethod[] {
 }
 
 export function normalizeCounterPaymentMethods(raw: unknown): CounterPaymentMethod[] {
+  raw = asJsonObjectOrArray(raw);
   if (!Array.isArray(raw)) {
     return defaultCounterPayItems();
   }
@@ -673,6 +686,7 @@ export function normalizeShopOrderingHours(raw: unknown): ShopOrderingHours | nu
 }
 
 export function normalizeOrderingPayments(raw: unknown): ShopOrderingPayments | null {
+  raw = asJsonObjectOrArray(raw);
   if (!raw || typeof raw !== 'object') return null;
   const o = raw as ShopOrderingPayments & { items?: unknown };
   const legacyMethods = Array.isArray(o.methods)
