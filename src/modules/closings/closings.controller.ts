@@ -308,6 +308,15 @@ export class ClosingsController {
     return this.closings.unlock(user, shopId, id);
   }
 
+  @Post('resync-movements')
+  @RequirePermissions('closings.update')
+  resyncMovements(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+  ) {
+    return this.closings.resyncMovements(user, shopId);
+  }
+
   @Delete(':id')
   @RequirePermissions('closings.update')
   remove(
