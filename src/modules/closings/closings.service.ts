@@ -1267,6 +1267,32 @@ export class ClosingsService implements OnModuleInit {
     }
   }
 
+  /**
+   * Re-sincroniza los movimientos de TODOS los cierres del local.
+   * Idempotente: cada cierre borra y regenera sus movimientos según la lógica y
+   * configuración actuales (ruteo de cuentas, conceptos, etc.). Sirve para
+   * reatribuir montos que quedaron en una cuenta equivocada (p. ej. «Delivery»).
+   */
+  async resyncMovements(user: AuthUser, shopId: string) {
+    if (!isGlobalAdmin(user.globalRole as GlobalRole)) {
+      throw new ForbiddenException(
+        'Solo un super admin puede re-sincronizar los movimientos de los cierres',
+      );
+    }
+    this.shops.assertShopAccess(user, shopId);
+    const closings = await this.closings.find({
+      where: { shopId },
+      select: { id: true },
+      order: { businessDate: 'ASC' },
+    });
+    let resynced = 0;
+    for (const c of closings) {
+      await this.syncMovements(c.id);
+      resynced += 1;
+    }
+    return { ok: true, total: closings.length, resynced };
+  }
+
   async previewReloadIncomes(user: AuthUser, shopId: string) {
     this.shops.assertShopAccess(user, shopId);
     assertCanViewClosingsList(user, shopId);
