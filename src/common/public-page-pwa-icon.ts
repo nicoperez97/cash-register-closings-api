@@ -1,9 +1,14 @@
-import { createCanvas, loadImage, type SKRSContext2D } from '@napi-rs/canvas';
+import { existsSync } from 'fs';
+import { join } from 'path';
+import { createCanvas, loadImage, GlobalFonts, type SKRSContext2D } from '@napi-rs/canvas';
 import type { PublicPagePwaKind } from './public-page-pwa';
 import { publicPagePwaKindMeta } from './public-page-pwa';
 
 export const PUBLIC_PAGE_PWA_ICON_SIZES = [180, 192, 512] as const;
 export type PublicPagePwaIconSize = (typeof PUBLIC_PAGE_PWA_ICON_SIZES)[number];
+
+const BADGE_FONT_FAMILY = 'PwaBadgeSans';
+let badgeFontReady: boolean | null = null;
 
 export function parsePublicPagePwaIconSize(raw: string): PublicPagePwaIconSize | null {
   const n = Number(String(raw ?? '').replace(/\.png$/i, '').trim());
@@ -67,8 +72,8 @@ export async function renderPublicPagePwaIcon(opts: {
 
   // Badge con inicial (esquina inferior derecha)
   const badgeR = size * 0.22;
-  const cx = size - badgeR - size * 0.06;
-  const cy = size - badgeR - size * 0.06;
+  const cx = size - badgeR - size * 0.08;
+  const cy = size - badgeR - size * 0.08;
   ctx.fillStyle = 'rgba(0,0,0,0.22)';
   ctx.beginPath();
   ctx.arc(cx + size * 0.012, cy + size * 0.012, badgeR, 0, Math.PI * 2);
@@ -81,13 +86,93 @@ export async function renderPublicPagePwaIcon(opts: {
   ctx.lineWidth = Math.max(2, size * 0.018);
   ctx.stroke();
 
-  ctx.fillStyle = '#ffffff';
-  ctx.font = `700 ${Math.round(badgeR * 1.15)}px system-ui, "Segoe UI", sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(letter, cx, cy + size * 0.01);
+  drawGlyphLetter(ctx, letter, cx, cy + size * 0.01, Math.round(badgeR * 1.15));
 
   return canvas.toBuffer('image/png');
+}
+
+function ensureBadgeFont(): boolean {
+  if (badgeFontReady != null) return badgeFontReady;
+  const candidates = [
+    join(__dirname, '..', '..', 'assets', 'fonts', 'DejaVuSans-Bold.ttf'),
+    join(process.cwd(), 'assets', 'fonts', 'DejaVuSans-Bold.ttf'),
+    '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+  ];
+  for (const fontPath of candidates) {
+    if (!existsSync(fontPath)) continue;
+    try {
+      GlobalFonts.registerFromPath(fontPath, BADGE_FONT_FAMILY);
+      badgeFontReady = true;
+      return true;
+    } catch {
+      // probar siguiente
+    }
+  }
+  badgeFontReady = false;
+  return false;
+}
+
+function fontSpec(px: number): string {
+  if (ensureBadgeFont()) {
+    return `700 ${px}px "${BADGE_FONT_FAMILY}"`;
+  }
+  return `700 ${px}px sans-serif`;
+}
+
+/** Dibuja la letra con fuente embebida; si no hay glifo, trazo vectorial. */
+function drawGlyphLetter(
+  ctx: SKRSContext2D,
+  letter: string,
+  cx: number,
+  cy: number,
+  px: number,
+): void {
+  const L = String(letter || '?').slice(0, 1).toUpperCase();
+  ctx.fillStyle = '#ffffff';
+  ctx.strokeStyle = '#ffffff';
+  ctx.font = fontSpec(px);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const width = ctx.measureText(L).width;
+  if (width > 1) {
+    ctx.fillText(L, cx, cy);
+    return;
+  }
+  drawVectorLetter(ctx, L, cx, cy, px);
+}
+
+function drawVectorLetter(
+  ctx: SKRSContext2D,
+  letter: string,
+  cx: number,
+  cy: number,
+  px: number,
+): void {
+  const stroke = Math.max(2, px * 0.18);
+  ctx.lineWidth = stroke;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  const r = px * 0.36;
+
+  if (letter === 'C') {
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, (-210 * Math.PI) / 180, (30 * Math.PI) / 180, false);
+    ctx.stroke();
+    return;
+  }
+
+  if (letter === 'O') {
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    return;
+  }
+
+  // Fallback genérico: barra vertical + tope (se lee como “I”/marca)
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - r);
+  ctx.lineTo(cx, cy + r);
+  ctx.stroke();
 }
 
 function drawCenteredLetter(
@@ -102,11 +187,7 @@ function drawCenteredLetter(
   ctx.beginPath();
   ctx.arc(size / 2, size / 2, size * 0.38, 0, Math.PI * 2);
   ctx.fill();
-  ctx.fillStyle = '#ffffff';
-  ctx.font = `700 ${Math.round(size * 0.48)}px system-ui, "Segoe UI", sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(letter, size / 2, size / 2 + size * 0.02);
+  drawGlyphLetter(ctx, letter, size / 2, size / 2 + size * 0.02, Math.round(size * 0.48));
 }
 
 function roundRect(
