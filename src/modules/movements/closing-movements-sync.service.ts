@@ -130,13 +130,19 @@ export class ClosingMovementsSyncService {
         const byId = accounts.find((a) => a.id === src.accountId);
         if (byId) return byId;
       }
-      // Fallback: nombre/código canónico (PVS, MP, DNI…) si la cuenta del local quedó sin accountId.
-      const name = String(src.name ?? '')
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .toLowerCase()
-        .trim();
+      const norm = (s?: string | null) =>
+        String(s ?? '')
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .toLowerCase()
+          .trim();
+      const name = norm(src.name);
       if (!name) return null;
+      // Si la cuenta del local quedó sin accountId, primero buscamos una cuenta con
+      // el MISMO nombre (p. ej. «Pedidos Ya» → cuenta «Pedidos Ya»). Así no se
+      // mezclan todas las apps de delivery en una única cuenta genérica «Delivery».
+      const byOwnName = accounts.find((a) => a.active && norm(a.name) === name);
+      if (byOwnName) return byOwnName;
       const byCode = (codes: string[], linked?: LinkedPaymentMethod) =>
         accounts.find(
           (a) =>
@@ -153,12 +159,11 @@ export class ClosingMovementsSyncService {
       if (name.includes('dni')) {
         return byCode(['DNI'], LinkedPaymentMethod.ACCOUNT_DNI);
       }
-      if (name.includes('delivery') || name.includes('pedidos') || name.includes('rappi')) {
-        return byCode(['DELIVERY'], LinkedPaymentMethod.DELIVERY);
-      }
       if (name.includes('transfer')) {
         return byCode(['TRANSFER'], LinkedPaymentMethod.TRANSFER);
       }
+      // Sin coincidencia por cuenta propia ni canal canónico: no inventamos destino
+      // (antes caía en la cuenta genérica «Delivery», mezclando Pedidos Ya/Rappi/etc.).
       return null;
     };
     for (const src of sourceRows) {
