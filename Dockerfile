@@ -23,6 +23,7 @@ COPY --from=builder --chown=node:node /app/dist ./dist
 COPY --chown=node:node package.json ./
 COPY --chown=node:node database ./database
 COPY --chown=node:node legacy-ipad ./legacy-ipad
+COPY --chown=node:node assets ./assets
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
  && mkdir -p /app/uploads \
