@@ -49,16 +49,23 @@ export class ClosingMovementsSyncService {
 
   async syncFromClosing(closing: CashClosing) {
     await this.movements.delete({ closingId: closing.id });
+    const rows = await this.planFromClosing(closing);
+    if (rows.length) {
+      await this.movements.save(rows.map((r) => this.movements.create(r)));
+    }
+  }
 
+  /** Arma los asientos del cierre según la config actual, sin persistir. */
+  async planFromClosing(closing: CashClosing): Promise<Partial<Movement>[]> {
     await this.catalogSeed.ensureShopCatalogs(closing.shopId);
 
     const accounts = await this.accounts.find({ where: { shopId: closing.shopId } });
-    if (!accounts.length) return;
+    if (!accounts.length) return [];
     const byCode = new Map(accounts.map((a) => [a.code, a]));
 
     const ingreso = byCode.get('INGRESO');
     const egreso = byCode.get('EGRESO');
-    if (!ingreso || !egreso) return;
+    if (!ingreso || !egreso) return [];
 
     const concepts = await this.concepts.find({
       where: { shopId: closing.shopId },
@@ -353,9 +360,198 @@ export class ClosingMovementsSyncService {
       });
     }
 
-    if (rows.length) {
-      await this.movements.save(rows.map((r) => this.movements.create(r)));
+    return rows;
+  }
+
+  async previewResyncMovements(shopId: string) {
+    await this.catalogSeed.ensureShopCatalogs(shopId);
+    const accounts = await this.accounts.find({ where: { shopId } });
+    const accountName = (id?: string | null) =>
+      (id ? accounts.find((a) => a.id === id)?.name : null) ?? null;
+
+    const closings = await this.closings.find({
+      where: { shopId },
+      relations: ['expenses', 'extraLines', 'sourceAmounts'],
+      order: { businessDate: 'ASC' },
+    });
+
+    const existingAll = await this.movements.find({
+      where: { shopId, active: true },
+      relations: ['fromAccount', 'toAccount'],
+    });
+    const liveExisting = existingAll.filter((m) => isLiveClosingMovement(m));
+    const byClosing = new Map<string, Movement[]>();
+    for (const m of liveExisting) {
+      if (!m.closingId) continue;
+      const list = byClosing.get(m.closingId) ?? [];
+      list.push(m);
+      byClosing.set(m.closingId, list);
     }
+
+    type DiffStatus = 'unchanged' | 'added' | 'removed' | 'changed';
+    type DiffItem = {
+      closingId: string;
+      businessDate: string;
+      status: DiffStatus;
+      label: string;
+      currentFromAccountId: string | null;
+      currentFromAccountName: string | null;
+      currentToAccountId: string | null;
+      currentToAccountName: string | null;
+      currentAmount: number;
+      plannedFromAccountId: string | null;
+      plannedFromAccountName: string | null;
+      plannedToAccountId: string | null;
+      plannedToAccountName: string | null;
+      plannedAmount: number;
+    };
+
+    const items: DiffItem[] = [];
+    const changedClosingIds = new Set<string>();
+    const balanceDeltas = new Map<string, number>();
+
+    const bump = (accountId: string | null | undefined, delta: number) => {
+      if (!accountId || Math.abs(delta) < 0.005) return;
+      balanceDeltas.set(accountId, (balanceDeltas.get(accountId) ?? 0) + delta);
+    };
+
+    const exactKey = (row: {
+      description?: string | null;
+      fromAccountId?: string | null;
+      toAccountId?: string | null;
+      amountUyu?: string | number | null;
+    }) =>
+      `${String(row.description ?? '').trim()}|${row.fromAccountId ?? ''}|${row.toAccountId ?? ''}|${n(row.amountUyu).toFixed(2)}`;
+
+    for (const closing of closings) {
+      const planned = await this.planFromClosing(closing);
+      const current = byClosing.get(closing.id) ?? [];
+      const unused = new Set(current.map((m) => m.id));
+
+      for (const p of planned) {
+        const exact = current.find((m) => unused.has(m.id) && exactKey(m) === exactKey(p));
+        if (exact) {
+          unused.delete(exact.id);
+          items.push({
+            closingId: closing.id,
+            businessDate: closing.businessDate,
+            status: 'unchanged',
+            label: String(p.description ?? ''),
+            currentFromAccountId: exact.fromAccountId ?? null,
+            currentFromAccountName: exact.fromAccount?.name ?? accountName(exact.fromAccountId),
+            currentToAccountId: exact.toAccountId ?? null,
+            currentToAccountName: exact.toAccount?.name ?? accountName(exact.toAccountId),
+            currentAmount: n(exact.amountUyu),
+            plannedFromAccountId: p.fromAccountId ?? null,
+            plannedFromAccountName: accountName(p.fromAccountId),
+            plannedToAccountId: p.toAccountId ?? null,
+            plannedToAccountName: accountName(p.toAccountId),
+            plannedAmount: n(p.amountUyu),
+          });
+          continue;
+        }
+
+        const soft = current.find(
+          (m) =>
+            unused.has(m.id) &&
+            this.channelKey(String(m.description ?? '')) ===
+              this.channelKey(String(p.description ?? '')),
+        );
+        if (soft) {
+          unused.delete(soft.id);
+          changedClosingIds.add(closing.id);
+          items.push({
+            closingId: closing.id,
+            businessDate: closing.businessDate,
+            status: 'changed',
+            label: String(p.description ?? soft.description ?? ''),
+            currentFromAccountId: soft.fromAccountId ?? null,
+            currentFromAccountName: soft.fromAccount?.name ?? accountName(soft.fromAccountId),
+            currentToAccountId: soft.toAccountId ?? null,
+            currentToAccountName: soft.toAccount?.name ?? accountName(soft.toAccountId),
+            currentAmount: n(soft.amountUyu),
+            plannedFromAccountId: p.fromAccountId ?? null,
+            plannedFromAccountName: accountName(p.fromAccountId),
+            plannedToAccountId: p.toAccountId ?? null,
+            plannedToAccountName: accountName(p.toAccountId),
+            plannedAmount: n(p.amountUyu),
+          });
+          // Quitar efecto actual, sumar efecto planificado.
+          bump(soft.fromAccountId, n(soft.amountUyu));
+          bump(soft.toAccountId, -n(soft.amountUyu));
+          bump(p.fromAccountId, -n(p.amountUyu));
+          bump(p.toAccountId, n(p.amountUyu));
+          continue;
+        }
+
+        changedClosingIds.add(closing.id);
+        items.push({
+          closingId: closing.id,
+          businessDate: closing.businessDate,
+          status: 'added',
+          label: String(p.description ?? ''),
+          currentFromAccountId: null,
+          currentFromAccountName: null,
+          currentToAccountId: null,
+          currentToAccountName: null,
+          currentAmount: 0,
+          plannedFromAccountId: p.fromAccountId ?? null,
+          plannedFromAccountName: accountName(p.fromAccountId),
+          plannedToAccountId: p.toAccountId ?? null,
+          plannedToAccountName: accountName(p.toAccountId),
+          plannedAmount: n(p.amountUyu),
+        });
+        bump(p.fromAccountId, -n(p.amountUyu));
+        bump(p.toAccountId, n(p.amountUyu));
+      }
+
+      for (const m of current) {
+        if (!unused.has(m.id)) continue;
+        changedClosingIds.add(closing.id);
+        items.push({
+          closingId: closing.id,
+          businessDate: closing.businessDate,
+          status: 'removed',
+          label: String(m.description ?? ''),
+          currentFromAccountId: m.fromAccountId ?? null,
+          currentFromAccountName: m.fromAccount?.name ?? accountName(m.fromAccountId),
+          currentToAccountId: m.toAccountId ?? null,
+          currentToAccountName: m.toAccount?.name ?? accountName(m.toAccountId),
+          currentAmount: n(m.amountUyu),
+          plannedFromAccountId: null,
+          plannedFromAccountName: null,
+          plannedToAccountId: null,
+          plannedToAccountName: null,
+          plannedAmount: 0,
+        });
+        bump(m.fromAccountId, n(m.amountUyu));
+        bump(m.toAccountId, -n(m.amountUyu));
+      }
+    }
+
+    const extras = [...balanceDeltas.entries()].map(([toAccountId, amount]) => ({
+      toAccountId,
+      amount,
+    }));
+    // projectBalances suma incoming en toAccount; acá el delta ya viene con signo
+    // por cuenta (from=negativo en bump invertido). Reusamos el helper pasando
+    // el delta directo como "incoming" por accountId.
+    const balances = this.projectBalances(accounts, liveExisting, extras).filter(
+      (b) => Math.abs(b.incoming) >= 0.005,
+    );
+
+    return {
+      closingsCount: closings.length,
+      changedClosingsCount: changedClosingIds.size,
+      items,
+      counts: {
+        unchanged: items.filter((i) => i.status === 'unchanged').length,
+        added: items.filter((i) => i.status === 'added').length,
+        removed: items.filter((i) => i.status === 'removed').length,
+        changed: items.filter((i) => i.status === 'changed').length,
+      },
+      balances,
+    };
   }
 
   /**

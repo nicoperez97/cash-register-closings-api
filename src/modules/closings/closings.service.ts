@@ -1268,20 +1268,41 @@ export class ClosingsService implements OnModuleInit {
   }
 
   /**
-   * Re-sincroniza los movimientos de TODOS los cierres del local.
-   * Idempotente: cada cierre borra y regenera sus movimientos según la lógica y
-   * configuración actuales (ruteo de cuentas, conceptos, etc.). Sirve para
-   * reatribuir montos que quedaron en una cuenta equivocada (p. ej. «Delivery»).
+   * Preview dry-run: compara movimientos actuales vs los que generaría la config
+   * actual (cuentas/conceptos), sin persistir.
    */
-  async resyncMovements(user: AuthUser, shopId: string) {
+  async previewResyncMovements(user: AuthUser, shopId: string) {
     if (!isGlobalAdmin(user.globalRole as GlobalRole)) {
       throw new ForbiddenException(
         'Solo un super admin puede re-sincronizar los movimientos de los cierres',
       );
     }
     this.shops.assertShopAccess(user, shopId);
+    return this.closingMovements.previewResyncMovements(shopId);
+  }
+
+  /**
+   * Re-sincroniza los movimientos de los cierres del local (o solo `closingIds`).
+   * Idempotente: cada cierre borra y regenera sus movimientos según la lógica y
+   * configuración actuales (ruteo de cuentas, conceptos, etc.). Sirve para
+   * reatribuir montos que quedaron en una cuenta equivocada (p. ej. «Delivery»).
+   */
+  async resyncMovements(user: AuthUser, shopId: string, closingIds?: string[]) {
+    if (!isGlobalAdmin(user.globalRole as GlobalRole)) {
+      throw new ForbiddenException(
+        'Solo un super admin puede re-sincronizar los movimientos de los cierres',
+      );
+    }
+    this.shops.assertShopAccess(user, shopId);
+    const ids =
+      closingIds == null
+        ? null
+        : closingIds.map((id) => String(id ?? '').trim()).filter(Boolean);
+    if (ids && !ids.length) {
+      return { ok: true, total: 0, resynced: 0 };
+    }
     const closings = await this.closings.find({
-      where: { shopId },
+      where: ids ? { shopId, id: In(ids) } : { shopId },
       select: { id: true },
       order: { businessDate: 'ASC' },
     });

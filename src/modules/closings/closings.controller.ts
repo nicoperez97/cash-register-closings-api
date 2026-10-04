@@ -313,8 +313,13 @@ export class ClosingsController {
   resyncMovements(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
+    @Query('commit') commit?: string,
+    @Body() body?: { closingIds?: string[] },
   ) {
-    return this.closings.resyncMovements(user, shopId);
+    const doCommit = commit === 'true' || commit === '1';
+    return doCommit
+      ? this.closings.resyncMovements(user, shopId, body?.closingIds)
+      : this.closings.previewResyncMovements(user, shopId);
   }
 
   @Delete(':id')
