@@ -166,16 +166,30 @@ export class ShopBackupService {
     force = false,
   ) {
     this.assertSuperAdmin(user);
-    const shop = await this.requireShop(shopId);
+    await this.requireShop(shopId);
     if (!file?.buffer?.length) {
-      throw new BadRequestException('Adjuntá un archivo Excel de backup (.xlsx)');
+      throw new BadRequestException('Adjuntá un archivo de backup (.xlsx o .sql)');
     }
 
-    const wb = new ExcelJS.Workbook();
-    try {
-      await wb.xlsx.load(file.buffer as any);
-    } catch {
-      throw new BadRequestException('No se pudo leer el Excel de backup');
+    const original = String(file.originalname || '').toLowerCase();
+    const asSql =
+      original.endsWith('.sql') || this.looksLikeSqlDump(file.buffer);
+
+    let wb: ExcelJS.Workbook;
+    if (asSql) {
+      try {
+        wb = this.workbookFromSqlDump(file.buffer.toString('utf8'));
+      } catch (e: any) {
+        if (e instanceof BadRequestException) throw e;
+        throw new BadRequestException(e?.message ?? 'No se pudo leer el SQL de backup');
+      }
+    } else {
+      wb = new ExcelJS.Workbook();
+      try {
+        await wb.xlsx.load(file.buffer as any);
+      } catch {
+        throw new BadRequestException('No se pudo leer el Excel de backup');
+      }
     }
 
     const meta = this.readKvSheet(wb, '_meta');
@@ -1039,7 +1053,6 @@ export class ShopBackupService {
       `-- name: ${opts.name.replace(/\n/g, ' ')}`,
       `-- modules: ${opts.modules}`,
       `-- exportedAt: ${new Date().toISOString()}`,
-      `-- Solo exportación (no ejecutar restore automático desde la UI).`,
       ``,
     ];
     for (const [table, rows] of opts.sheets) {
@@ -1058,6 +1071,134 @@ export class ShopBackupService {
       lines.push('');
     }
     return lines.join('\n');
+  }
+
+  private looksLikeSqlDump(buf: Buffer): boolean {
+    const head = buf.subarray(0, Math.min(buf.length, 120)).toString('utf8').trimStart();
+    return head.startsWith('-- Cash Register Closings shop backup');
+  }
+
+  private workbookFromSqlDump(text: string): ExcelJS.Workbook {
+    const { meta, sheets } = this.parseSqlDump(text);
+    if (!meta.shopId && !sheets.size) {
+      throw new BadRequestException('El SQL no parece un dump de backup del sistema');
+    }
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Cash Register Closings';
+    wb.created = new Date();
+    this.addKvSheet(wb, '_meta', {
+      version: meta.version || BACKUP_VERSION,
+      shopId: meta.shopId || '',
+      slug: meta.slug || '',
+      name: meta.name || '',
+      modules: meta.modules || 'all',
+      exportedAt: meta.exportedAt || new Date().toISOString(),
+    });
+    for (const [name, rows] of sheets) {
+      this.addRowsSheet(wb, name, rows);
+    }
+    return wb;
+  }
+
+  private parseSqlDump(text: string): {
+    meta: Record<string, string>;
+    sheets: Map<string, Row[]>;
+  } {
+    const meta: Record<string, string> = {};
+    const sheets = new Map<string, Row[]>();
+    const metaRe =
+      /^--\s*(version|shopId|slug|name|modules|exportedAt):\s*(.*)$/i;
+    const insertRe =
+      /^INSERT INTO `([^`]+)` \((.+)\) VALUES \((.+)\);\s*$/i;
+
+    for (const rawLine of text.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      const metaMatch = line.match(metaRe);
+      if (metaMatch) {
+        meta[metaMatch[1]] = metaMatch[2].trim();
+        continue;
+      }
+      const insertMatch = line.match(insertRe);
+      if (!insertMatch) continue;
+      const table = insertMatch[1];
+      const cols = this.parseSqlIdentList(insertMatch[2]);
+      const vals = this.parseSqlValueList(insertMatch[3]);
+      if (cols.length !== vals.length) {
+        throw new BadRequestException(
+          `SQL inválido en tabla ${table}: columnas y valores no coinciden`,
+        );
+      }
+      const row: Row = {};
+      for (let i = 0; i < cols.length; i++) {
+        row[cols[i]!] = vals[i] ?? null;
+      }
+      const list = sheets.get(table);
+      if (list) list.push(row);
+      else sheets.set(table, [row]);
+    }
+    return { meta, sheets };
+  }
+
+  private parseSqlIdentList(raw: string): string[] {
+    const out: string[] = [];
+    const re = /`([^`]+)`/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(raw))) out.push(m[1]!);
+    return out;
+  }
+
+  /** Parsea la lista de VALUES de un INSERT generado por buildSqlDump. */
+  private parseSqlValueList(raw: string): unknown[] {
+    const out: unknown[] = [];
+    let i = 0;
+    const s = raw;
+    const skipWs = () => {
+      while (i < s.length && /\s/.test(s[i]!)) i++;
+    };
+    while (i < s.length) {
+      skipWs();
+      if (i >= s.length) break;
+      if (/^NULL\b/i.test(s.slice(i))) {
+        out.push(null);
+        i += 4;
+      } else if (s[i] === "'") {
+        i++;
+        let buf = '';
+        while (i < s.length) {
+          const ch = s[i]!;
+          if (ch === '\\' && i + 1 < s.length) {
+            buf += s[i + 1]!;
+            i += 2;
+            continue;
+          }
+          if (ch === "'") {
+            if (s[i + 1] === "'") {
+              buf += "'";
+              i += 2;
+              continue;
+            }
+            i++;
+            break;
+          }
+          buf += ch;
+          i++;
+        }
+        out.push(buf);
+      } else {
+        const start = i;
+        while (i < s.length && s[i] !== ',') i++;
+        const token = s.slice(start, i).trim();
+        if (!token) {
+          throw new BadRequestException('SQL inválido: valor vacío en VALUES');
+        }
+        const n = Number(token);
+        out.push(Number.isFinite(n) ? n : token);
+      }
+      skipWs();
+      if (i < s.length && s[i] === ',') i++;
+    }
+    return out;
   }
 
   private sqlLiteral(v: unknown): string {

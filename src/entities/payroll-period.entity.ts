@@ -41,6 +41,14 @@ export class PayrollPeriod extends BaseEntity {
   @Column({ type: 'tinyint', default: 0 })
   splitByShift: boolean;
 
+  /** Si la liquidación suma horas de producción (empleados que producen comida). */
+  @Column({ type: 'tinyint', default: 1 })
+  includeProductionHours: boolean;
+
+  /** Si true, solo cuenta horas de producción (sin presentismo de salón). */
+  @Column({ type: 'tinyint', default: 0 })
+  productionOnly: boolean;
+
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })
   shop: Shop;

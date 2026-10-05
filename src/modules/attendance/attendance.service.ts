@@ -573,6 +573,22 @@ export class AttendanceService implements OnModuleInit {
     });
   }
 
+  async productionDaysForEmployees(
+    shopId: string,
+    employeeIds: string[],
+    from: string,
+    to: string,
+  ) {
+    if (!employeeIds.length) return [];
+    return this.prodDays.find({
+      where: {
+        shopId,
+        employeeId: In(employeeIds),
+        date: Between(from, to),
+      },
+    });
+  }
+
   private async requirePublicAttendanceShop(slug: string) {
     const shop = await this.shops.findActiveBySlug(String(slug ?? '').trim().toLowerCase());
     if (!shop || !shop.publicAttendanceEnabled) {

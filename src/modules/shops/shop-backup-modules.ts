@@ -485,7 +485,8 @@ export const BACKUP_MODULES: BackupModuleDef[] = [
     label: 'Cuentas',
     group: 'config',
     sheets: ['ledger_accounts', 'ledger_account_users'],
-    purgeSteps: ['ledger_account_users', 'ledger_accounts'],
+    // `payments` borra también pagos a socios / otros (no entran en los filtros parciales).
+    purgeSteps: ['payments', 'ledger_account_users', 'ledger_accounts'],
     alsoClears: [
       'movements',
       'expenses',
@@ -670,6 +671,9 @@ export function purgeStepsForModules(modules: BackupModuleId[] | 'all'): BackupP
     if (!def) continue;
     for (const s of def.purgeSteps) wanted.add(s);
   }
+  // Los pasos parciales (proveedor/servicio/empleado) dejan pagos a socios u otros
+  // con accountId/toAccountId; sin borrar todos, MySQL bloquea DELETE de ledger_accounts.
+  if (wanted.has('ledger_accounts')) wanted.add('payments');
   return PURGE_STEP_ORDER.filter((s) => wanted.has(s));
 }
 

@@ -375,9 +375,13 @@ export class ClosingMovementsSyncService {
       order: { businessDate: 'ASC' },
     });
 
+    // Hay que traer `closing`: sin eso isLiveClosingMovement trata como muertos
+    // los movimientos con closingId (closing queda null) y el preview cree que
+    // todo es "agregado". Los saldos "Hoy" deben incluir todos los movimientos
+    // vivos (cierres + gastos/ingresos/pases), no solo los del cierre.
     const existingAll = await this.movements.find({
       where: { shopId, active: true },
-      relations: ['fromAccount', 'toAccount'],
+      relations: ['fromAccount', 'toAccount', 'closing'],
     });
     const liveExisting = existingAll.filter((m) => isLiveClosingMovement(m));
     const byClosing = new Map<string, Movement[]>();

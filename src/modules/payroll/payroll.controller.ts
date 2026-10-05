@@ -43,6 +43,24 @@ class PayrollRangeDto {
   @IsOptional()
   @ToBoolean() @IsBoolean()
   splitByShift?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Si true (default), suma horas de producción de empleados que producen comida',
+  })
+  @IsOptional()
+  @ToBoolean()
+  @IsBoolean()
+  includeProductionHours?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Si true, liquidá solo con horas de producción (sin presentismo de salón)',
+  })
+  @IsOptional()
+  @ToBoolean()
+  @IsBoolean()
+  productionOnly?: boolean;
 }
 
 @ApiTags('payroll')
@@ -120,6 +138,8 @@ export class PayrollController {
       {
         attendanceBonusAmount: dto.attendanceBonusAmount,
         splitByShift: dto.splitByShift,
+        includeProductionHours: dto.includeProductionHours,
+        productionOnly: dto.productionOnly,
       },
     );
   }
