@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, IsNull, Repository } from 'typeorm';
 import { CashClosing } from '../../entities/cash-closing.entity';
 import { Movement } from '../../entities/movement.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
@@ -18,6 +18,13 @@ import { EXPENSE_CATEGORY_TO_CONCEPT, findCashDrawerAccount } from '../../common
 import { CatalogSeedService } from '../../common/catalog-seed.service';
 import { resolveShopBusinessDate } from '../../common/business-date';
 import { isLiveClosingMovement } from './movement-query.util';
+import {
+  findCashShortcutOrphan,
+  movementChannelKey,
+  movementExactKey,
+  sameMovementEconomics,
+  sameWithdrawalEconomics,
+} from './closing-movements-diff.util';
 import { ShopClosingSource } from '../../entities/shop-closing-source.entity';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
@@ -48,11 +55,99 @@ export class ClosingMovementsSyncService {
   }
 
   async syncFromClosing(closing: CashClosing) {
-    await this.movements.delete({ closingId: closing.id });
     const rows = await this.planFromClosing(closing);
+    // Huérfanos del mismo día (import Excel / libro sin closingId) que ya cubren el
+    // plan: si no los sacamos, delete+recreate duplica ingresos/retiros y rompe saldos
+    // (incl. socios ya drenados por dividendos).
+    await this.absorbOrphanPlanMatches(
+      closing.shopId,
+      rows,
+      closing.businessDate,
+      n(closing.cashAmount),
+    );
+    await this.movements.delete({ closingId: closing.id });
     if (rows.length) {
       await this.movements.save(rows.map((r) => this.movements.create(r)));
     }
+  }
+
+  /**
+   * Baja movimientos sin closingId que ya son el mismo asiento que el plan del cierre
+   * (fecha del asiento o del cierre + economía / retiro a mismo socio).
+   */
+  private async absorbOrphanPlanMatches(
+    shopId: string,
+    planned: Partial<Movement>[],
+    closingBusinessDate?: string,
+    legacyCashAmount?: number,
+  ): Promise<void> {
+    if (!planned.length) return;
+    const orphans = await this.movements.find({
+      where: { shopId, active: true, closingId: IsNull() },
+      relations: ['fromAccount'],
+    });
+    if (!orphans.length) return;
+    const unused = new Set(orphans.map((m) => m.id));
+    const removeIds: string[] = [];
+    const closingDay = String(closingBusinessDate ?? '').slice(0, 10);
+    const inDates = (m: Movement, dates: Set<string>) =>
+      dates.has(String(m.businessDate ?? '').slice(0, 10));
+
+    const cashIncome = planned.find(
+      (p) => movementChannelKey(String(p.description ?? '')) === 'cash_income',
+    );
+    const withdrawal = planned.find(
+      (p) => movementChannelKey(String(p.description ?? '')) === 'cash_withdrawal',
+    );
+    let cashShortcutId: string | null = null;
+    if (cashIncome && withdrawal?.toAccountId) {
+      const dates = new Set(
+        [String(cashIncome.businessDate ?? '').slice(0, 10), closingDay].filter(Boolean),
+      );
+      const pool = orphans.filter((m) => unused.has(m.id) && inDates(m, dates));
+      const shortcut = findCashShortcutOrphan(
+        pool,
+        unused,
+        withdrawal.toAccountId,
+        [n(cashIncome.amountUyu), n(withdrawal.amountUyu), Number(legacyCashAmount ?? 0)],
+        (m) => this.isIngresoAccount(m.fromAccount),
+      );
+      if (shortcut) {
+        unused.delete(shortcut.id);
+        removeIds.push(shortcut.id);
+        cashShortcutId = shortcut.id;
+      }
+    }
+
+    for (const p of planned) {
+      const pKey = movementChannelKey(String(p.description ?? ''));
+      if (
+        cashShortcutId &&
+        (pKey === 'cash_income' || pKey === 'cash_withdrawal')
+      ) {
+        continue;
+      }
+      const dates = new Set(
+        [String(p.businessDate ?? '').slice(0, 10), closingDay].filter(Boolean),
+      );
+      const pool = orphans.filter((m) => unused.has(m.id) && inDates(m, dates));
+      const hit =
+        pool.find((m) => movementExactKey(m) === movementExactKey(p)) ??
+        pool.find((m) => sameMovementEconomics(m, p)) ??
+        pool.find((m) => sameWithdrawalEconomics(m, p)) ??
+        pool.find(
+          (m) =>
+            movementChannelKey(String(m.description ?? '')) === pKey &&
+            (m.fromAccountId ?? null) === (p.fromAccountId ?? null) &&
+            (m.toAccountId ?? null) === (p.toAccountId ?? null),
+        );
+      if (!hit) continue;
+      unused.delete(hit.id);
+      removeIds.push(hit.id);
+    }
+    if (!removeIds.length) return;
+    await this.movements.update({ id: In(removeIds) }, { active: false });
+    await this.movements.softDelete({ id: In(removeIds) });
   }
 
   /** Arma los asientos del cierre según la config actual, sin persistir. */
@@ -268,8 +363,10 @@ export class ClosingMovementsSyncService {
       }
     }
 
+    // Misma cuenta que el depósito del cierre: si usamos otra (código EFECTIVO ≠
+    // fuente CASH), el preview acredita socios sin debitar "Efectivo Caja".
     const cashChannel = cashDest;
-    const cashDrawer = findCashDrawerAccount(accounts) ?? cashChannel;
+    const cashDrawer = cashChannel ?? findCashDrawerAccount(accounts);
 
     // Efectivo Caja → cuenta de quien se lo lleva (PARTNER).
     let partnerDestId: string | null = null;
@@ -385,11 +482,24 @@ export class ClosingMovementsSyncService {
     });
     const liveExisting = existingAll.filter((m) => isLiveClosingMovement(m));
     const byClosing = new Map<string, Movement[]>();
+    // Movimientos del libro sin cierre (Excel, dividendos, pases): ya cuentan en "Hoy".
+    const orphansByDate = new Map<string, Movement[]>();
+    const unusedOrphans = new Set<string>();
     for (const m of liveExisting) {
-      if (!m.closingId) continue;
-      const list = byClosing.get(m.closingId) ?? [];
+      if (m.closingId) {
+        const list = byClosing.get(m.closingId) ?? [];
+        list.push(m);
+        byClosing.set(m.closingId, list);
+        continue;
+      }
+      // No usar dividendos como suplentes de asientos del cierre (otro from/to).
+      if (movementChannelKey(String(m.description ?? '')) === 'dividend') continue;
+      const day = String(m.businessDate ?? '').slice(0, 10);
+      if (!day) continue;
+      const list = orphansByDate.get(day) ?? [];
       list.push(m);
-      byClosing.set(m.closingId, list);
+      orphansByDate.set(day, list);
+      unusedOrphans.add(m.id);
     }
 
     type DiffStatus = 'unchanged' | 'added' | 'removed' | 'changed';
@@ -419,72 +529,207 @@ export class ClosingMovementsSyncService {
       balanceDeltas.set(accountId, (balanceDeltas.get(accountId) ?? 0) + delta);
     };
 
-    const exactKey = (row: {
-      description?: string | null;
-      fromAccountId?: string | null;
-      toAccountId?: string | null;
-      amountUyu?: string | number | null;
-    }) =>
-      `${String(row.description ?? '').trim()}|${row.fromAccountId ?? ''}|${row.toAccountId ?? ''}|${n(row.amountUyu).toFixed(2)}`;
+    const claim = (unused: Set<string>, m: Movement) => {
+      unused.delete(m.id);
+      unusedOrphans.delete(m.id);
+    };
 
     for (const closing of closings) {
       const planned = await this.planFromClosing(closing);
       const current = byClosing.get(closing.id) ?? [];
       const unused = new Set(current.map((m) => m.id));
 
+      const pushUnchanged = (
+        m: Movement,
+        plannedRow: Partial<Movement>,
+        opts?: { claim?: boolean },
+      ) => {
+        if (opts?.claim !== false) claim(unused, m);
+        items.push({
+          closingId: closing.id,
+          businessDate: closing.businessDate,
+          status: 'unchanged',
+          label: String(plannedRow.description ?? m.description ?? ''),
+          currentFromAccountId: m.fromAccountId ?? null,
+          currentFromAccountName: m.fromAccount?.name ?? accountName(m.fromAccountId),
+          currentToAccountId: m.toAccountId ?? null,
+          currentToAccountName: m.toAccount?.name ?? accountName(m.toAccountId),
+          currentAmount: n(m.amountUyu),
+          plannedFromAccountId: plannedRow.fromAccountId ?? null,
+          plannedFromAccountName: accountName(plannedRow.fromAccountId),
+          plannedToAccountId: plannedRow.toAccountId ?? null,
+          plannedToAccountName: accountName(plannedRow.toAccountId),
+          plannedAmount: n(plannedRow.amountUyu),
+        });
+      };
+
+      const pushChanged = (m: Movement, plannedRow: Partial<Movement>) => {
+        claim(unused, m);
+        changedClosingIds.add(closing.id);
+        items.push({
+          closingId: closing.id,
+          businessDate: closing.businessDate,
+          status: 'changed',
+          label: String(plannedRow.description ?? m.description ?? ''),
+          currentFromAccountId: m.fromAccountId ?? null,
+          currentFromAccountName: m.fromAccount?.name ?? accountName(m.fromAccountId),
+          currentToAccountId: m.toAccountId ?? null,
+          currentToAccountName: m.toAccount?.name ?? accountName(m.toAccountId),
+          currentAmount: n(m.amountUyu),
+          plannedFromAccountId: plannedRow.fromAccountId ?? null,
+          plannedFromAccountName: accountName(plannedRow.fromAccountId),
+          plannedToAccountId: plannedRow.toAccountId ?? null,
+          plannedToAccountName: accountName(plannedRow.toAccountId),
+          plannedAmount: n(plannedRow.amountUyu),
+        });
+        // Quitar efecto actual, sumar efecto planificado.
+        bump(m.fromAccountId, n(m.amountUyu));
+        bump(m.toAccountId, -n(m.amountUyu));
+        bump(plannedRow.fromAccountId, -n(plannedRow.amountUyu));
+        bump(plannedRow.toAccountId, n(plannedRow.amountUyu));
+      };
+
+      const findIn = (
+        pool: Movement[],
+        unusedSet: Set<string>,
+        plannedRow: Partial<Movement>,
+        mode: 'exact' | 'relabel' | 'withdrawal' | 'sameLane' | 'soft',
+      ): Movement | undefined => {
+        const plannedKey = this.channelKey(String(plannedRow.description ?? ''));
+        return pool.find((m) => {
+          if (!unusedSet.has(m.id)) return false;
+          if (mode === 'exact') return movementExactKey(m) === movementExactKey(plannedRow);
+          if (mode === 'relabel') return sameMovementEconomics(m, plannedRow);
+          if (mode === 'withdrawal') return sameWithdrawalEconomics(m, plannedRow);
+          if (mode === 'sameLane') {
+            return (
+              this.channelKey(String(m.description ?? '')) === plannedKey &&
+              (m.fromAccountId ?? null) === (plannedRow.fromAccountId ?? null) &&
+              (m.toAccountId ?? null) === (plannedRow.toAccountId ?? null)
+            );
+          }
+          return this.channelKey(String(m.description ?? '')) === plannedKey;
+        });
+      };
+
+      const orphanPoolFor = (plannedRow: Partial<Movement>): Movement[] => {
+        // Retiros pueden fecharse el día del pick; el Excel suele estar en el día del cierre.
+        const days = new Set(
+          [
+            String(plannedRow.businessDate ?? closing.businessDate).slice(0, 10),
+            String(closing.businessDate).slice(0, 10),
+          ].filter(Boolean),
+        );
+        const out: Movement[] = [];
+        const seen = new Set<string>();
+        for (const day of days) {
+          for (const m of orphansByDate.get(day) ?? []) {
+            if (seen.has(m.id)) continue;
+            seen.add(m.id);
+            out.push(m);
+          }
+        }
+        return out;
+      };
+
+      // Excel histórico: "Ventas en efectivo" / "efectivo" = Ingreso → Socio
+      // (sin pasar por Efectivo Caja). Eso cubre efectivo del día + retiro.
+      const plannedCashIncome = planned.find(
+        (row) => movementChannelKey(String(row.description ?? '')) === 'cash_income',
+      );
+      const plannedWithdrawal = planned.find(
+        (row) => movementChannelKey(String(row.description ?? '')) === 'cash_withdrawal',
+      );
+      const shortcutPartnerId = plannedWithdrawal?.toAccountId ?? null;
+      const shortcutAmounts = [
+        plannedCashIncome ? n(plannedCashIncome.amountUyu) : 0,
+        plannedWithdrawal ? n(plannedWithdrawal.amountUyu) : 0,
+        n(closing.cashAmount),
+      ];
+      const shortcutPool = orphanPoolFor(plannedCashIncome ?? plannedWithdrawal ?? {});
+      const cashShortcut = findCashShortcutOrphan(
+        shortcutPool,
+        unusedOrphans,
+        shortcutPartnerId,
+        shortcutAmounts,
+        (m) => this.isIngresoAccount(m.fromAccount),
+      );
+
       for (const p of planned) {
-        const exact = current.find((m) => unused.has(m.id) && exactKey(m) === exactKey(p));
-        if (exact) {
-          unused.delete(exact.id);
-          items.push({
-            closingId: closing.id,
-            businessDate: closing.businessDate,
-            status: 'unchanged',
-            label: String(p.description ?? ''),
-            currentFromAccountId: exact.fromAccountId ?? null,
-            currentFromAccountName: exact.fromAccount?.name ?? accountName(exact.fromAccountId),
-            currentToAccountId: exact.toAccountId ?? null,
-            currentToAccountName: exact.toAccount?.name ?? accountName(exact.toAccountId),
-            currentAmount: n(exact.amountUyu),
-            plannedFromAccountId: p.fromAccountId ?? null,
-            plannedFromAccountName: accountName(p.fromAccountId),
-            plannedToAccountId: p.toAccountId ?? null,
-            plannedToAccountName: accountName(p.toAccountId),
-            plannedAmount: n(p.amountUyu),
-          });
+        const orphanPool = orphanPoolFor(p);
+        const pKey = movementChannelKey(String(p.description ?? ''));
+
+        // Atajo Excel Ingreso→Socio: cuenta como efectivo del día y como retiro.
+        if (
+          cashShortcut &&
+          (pKey === 'cash_income' || pKey === 'cash_withdrawal') &&
+          (pKey !== 'cash_withdrawal' || (p.toAccountId ?? null) === shortcutPartnerId)
+        ) {
+          const alreadyClaimed = !unusedOrphans.has(cashShortcut.id) && !unused.has(cashShortcut.id);
+          pushUnchanged(cashShortcut, p, { claim: !alreadyClaimed });
           continue;
         }
 
-        const soft = current.find(
-          (m) =>
-            unused.has(m.id) &&
-            this.channelKey(String(m.description ?? '')) ===
-              this.channelKey(String(p.description ?? '')),
-        );
+        // 1–2) Ligados al cierre, luego huérfanos (Excel / libro viejo).
+        const exact =
+          findIn(current, unused, p, 'exact') ?? findIn(orphanPool, unusedOrphans, p, 'exact');
+        if (exact) {
+          pushUnchanged(exact, p);
+          continue;
+        }
+
+        const relabel =
+          findIn(current, unused, p, 'relabel') ??
+          findIn(orphanPool, unusedOrphans, p, 'relabel');
+        if (relabel) {
+          pushUnchanged(relabel, p);
+          continue;
+        }
+
+        // Mismo retiro a socio (monto + destino). Si solo cambia la caja origen, es Distinto.
+        const withdrawal =
+          findIn(current, unused, p, 'withdrawal') ??
+          findIn(orphanPool, unusedOrphans, p, 'withdrawal');
+        if (withdrawal) {
+          if ((withdrawal.fromAccountId ?? null) === (p.fromAccountId ?? null)) {
+            pushUnchanged(withdrawal, p);
+          } else {
+            pushChanged(withdrawal, p);
+          }
+          continue;
+        }
+
+        // 3) Mismo carril + mismas cuentas, otro monto (cierre o huérfano).
+        // Efectivo del día legacy: el libro tiene el contado (sin restar apertura).
+        // Tiene que ir ANTES de sameLane; si no, lo marca Distinto (170k vs 148k).
+        if (pKey === 'cash_income') {
+          const legacyAmt = n(closing.cashAmount);
+          const legacy = current.find(
+            (m) =>
+              unused.has(m.id) &&
+              movementChannelKey(String(m.description ?? '')) === 'cash_income' &&
+              (m.fromAccountId ?? null) === (p.fromAccountId ?? null) &&
+              (m.toAccountId ?? null) === (p.toAccountId ?? null) &&
+              Math.abs(n(m.amountUyu) - legacyAmt) < 0.005,
+          );
+          if (legacy) {
+            pushUnchanged(legacy, p);
+            continue;
+          }
+        }
+
+        const sameLane =
+          findIn(current, unused, p, 'sameLane') ??
+          findIn(orphanPool, unusedOrphans, p, 'sameLane');
+        if (sameLane) {
+          pushChanged(sameLane, p);
+          continue;
+        }
+
+        // 4) Soft solo entre movimientos ya ligados al cierre (no robar huérfanos ajenos).
+        const soft = findIn(current, unused, p, 'soft');
         if (soft) {
-          unused.delete(soft.id);
-          changedClosingIds.add(closing.id);
-          items.push({
-            closingId: closing.id,
-            businessDate: closing.businessDate,
-            status: 'changed',
-            label: String(p.description ?? soft.description ?? ''),
-            currentFromAccountId: soft.fromAccountId ?? null,
-            currentFromAccountName: soft.fromAccount?.name ?? accountName(soft.fromAccountId),
-            currentToAccountId: soft.toAccountId ?? null,
-            currentToAccountName: soft.toAccount?.name ?? accountName(soft.toAccountId),
-            currentAmount: n(soft.amountUyu),
-            plannedFromAccountId: p.fromAccountId ?? null,
-            plannedFromAccountName: accountName(p.fromAccountId),
-            plannedToAccountId: p.toAccountId ?? null,
-            plannedToAccountName: accountName(p.toAccountId),
-            plannedAmount: n(p.amountUyu),
-          });
-          // Quitar efecto actual, sumar efecto planificado.
-          bump(soft.fromAccountId, n(soft.amountUyu));
-          bump(soft.toAccountId, -n(soft.amountUyu));
-          bump(p.fromAccountId, -n(p.amountUyu));
-          bump(p.toAccountId, n(p.amountUyu));
+          pushChanged(soft, p);
           continue;
         }
 
@@ -511,6 +756,9 @@ export class ClosingMovementsSyncService {
 
       for (const m of current) {
         if (!unused.has(m.id)) continue;
+        // Dividendos ligados por error al cierre: no son del plan; no proponer quitarlos.
+        if (movementChannelKey(String(m.description ?? '')) === 'dividend') continue;
+        if (m.beneficiaryAccountId) continue;
         changedClosingIds.add(closing.id);
         items.push({
           closingId: closing.id,
@@ -944,19 +1192,7 @@ export class ClosingMovementsSyncService {
   }
 
   private channelKey(name: string): string {
-    const nrm = name
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toLowerCase();
-    if (nrm.includes('pvs') || nrm.includes('posnet') || nrm.includes('tarjeta')) return 'card';
-    if (nrm.includes('mp') || nrm.includes('mercado')) return 'mp';
-    if (nrm.includes('efectivo') || nrm.includes('caja')) return 'cash';
-    if (nrm.includes('dni')) return 'dni';
-    if (nrm.includes('delivery') || nrm.includes('rappi') || nrm.includes('pedidosya')) {
-      return 'delivery';
-    }
-    if (nrm.includes('transfer')) return 'transfer';
-    return nrm.replace(/[^a-z0-9]+/g, '');
+    return movementChannelKey(name);
   }
 
   private projectBalances(
@@ -970,12 +1206,17 @@ export class ClosingMovementsSyncService {
     >();
     for (const a of accounts) {
       if (!a.active) continue;
-      if (a.type !== LedgerAccountType.PARTNER && a.type !== LedgerAccountType.CHANNEL) continue;
+      const isPartnerOrChannel =
+        a.type === LedgerAccountType.PARTNER || a.type === LedgerAccountType.CHANNEL;
+      // Misma regla que Saldos: Dividendos solo si listInBalances (legacy).
+      const isListedDividend =
+        a.type === LedgerAccountType.DIVIDENDS && Number(a.listInBalances ?? 1) !== 0;
+      if (!isPartnerOrChannel && !isListedDividend) continue;
       bal.set(a.id, {
         accountId: a.id,
         name: a.name,
         type: a.type,
-        current: 0,
+        current: Number(a.openingBalance ?? 0),
         incoming: 0,
       });
     }
@@ -995,7 +1236,12 @@ export class ClosingMovementsSyncService {
       const row = bal.get(extra.toAccountId);
       if (row) row.incoming += extra.amount;
     }
-    const rank = (t: string) => (t === LedgerAccountType.CHANNEL ? 0 : 1);
+    const rank = (t: string) => {
+      if (t === LedgerAccountType.CHANNEL) return 0;
+      if (t === LedgerAccountType.PARTNER) return 1;
+      if (t === LedgerAccountType.DIVIDENDS) return 2;
+      return 9;
+    };
     return [...bal.values()]
       .map((a) => ({
         accountId: a.accountId,
