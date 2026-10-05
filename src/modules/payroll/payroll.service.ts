@@ -28,6 +28,7 @@ import { ShopsService } from '../shops/shops.service';
 import { AttendanceService } from '../attendance/attendance.service';
 import { countCompletedAttendanceWeeks } from '../../common/shop-open-days';
 import { AttendanceDay } from '../../entities/attendance-day.entity';
+import { ProductionAttendanceDay } from '../../entities/production-attendance-day.entity';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
@@ -104,6 +105,22 @@ export class PayrollService implements OnModuleInit {
       await this.periods.query(`
         ALTER TABLE payroll_periods
           ADD COLUMN splitByShift TINYINT NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // ya existe
+    }
+    try {
+      await this.periods.query(`
+        ALTER TABLE payroll_periods
+          ADD COLUMN includeProductionHours TINYINT NOT NULL DEFAULT 1
+      `);
+    } catch {
+      // ya existe
+    }
+    try {
+      await this.periods.query(`
+        ALTER TABLE payroll_periods
+          ADD COLUMN productionOnly TINYINT NOT NULL DEFAULT 0
       `);
     } catch {
       // ya existe
@@ -244,6 +261,8 @@ export class PayrollService implements OnModuleInit {
       status: PayrollStatus.DRAFT,
       attendanceBonusAmount: DEFAULT_ATTENDANCE_BONUS,
       splitByShift: false,
+      includeProductionHours: true,
+      productionOnly: false,
       lines: [],
     };
   }
@@ -277,6 +296,8 @@ export class PayrollService implements OnModuleInit {
           ? DEFAULT_ATTENDANCE_BONUS
           : n(period.attendanceBonusAmount),
       splitByShift: !!period.splitByShift,
+      includeProductionHours: period.includeProductionHours !== false,
+      productionOnly: !!period.productionOnly,
       lines: (period.lines ?? []).map((l) => ({
         id: l.id,
         employeeId: l.employeeId,
@@ -351,6 +372,11 @@ export class PayrollService implements OnModuleInit {
     return this.getByRange(user, shopId, from, to);
   }
 
+  private productionHoursTotal(prodDays: ProductionAttendanceDay[]): number {
+    const total = prodDays.reduce((s, d) => s + n(d.hours), 0);
+    return Math.round(total * 100) / 100;
+  }
+
   private buildLineAmounts(
     empDays: AttendanceDay[],
     emp: Employee,
@@ -359,7 +385,53 @@ export class PayrollService implements OnModuleInit {
     bonusAmount: number,
     includePresentismo: boolean,
     filterShiftId?: string | null,
+    opts?: {
+      includeProductionHours?: boolean;
+      productionOnly?: boolean;
+      productionDays?: ProductionAttendanceDay[];
+      /** Si false, no suma horas de producción (p. ej. líneas de turno 2+). */
+      applyProductionHours?: boolean;
+    },
   ) {
+    const productionOnly = !!opts?.productionOnly;
+    const includeProduction =
+      productionOnly ||
+      (!!opts?.includeProductionHours && opts?.applyProductionHours !== false);
+    const prodDays =
+      includeProduction && emp.producesFood ? (opts?.productionDays ?? []) : [];
+    const productionHours = this.productionHoursTotal(prodDays);
+
+    if (productionOnly) {
+      const prodDates = new Set(
+        prodDays.filter((d) => n(d.hours) > 0).map((d) => d.date),
+      );
+      const daysWorked = prodDates.size;
+      const completedWeeks =
+        !includePresentismo || emp.countsForAttendanceBonus === false
+          ? 0
+          : countCompletedAttendanceWeeks(
+              range.from,
+              range.to,
+              shop?.closedWeekdays,
+              prodDates,
+            );
+      const hourlyRate = n(emp.baseSalary);
+      const mult = this.employeeHolidayMult(emp, shop);
+      const bonus = bonusAmount > 0 ? bonusAmount * completedWeeks : 0;
+      const salaryPart = hourlyRate * productionHours;
+      return {
+        daysWorked,
+        holidayDays: 0,
+        regularHours: productionHours,
+        holidayHours: 0,
+        hourlyRate,
+        mult,
+        overtimeAmount: 0,
+        bonus,
+        total: salaryPart + bonus,
+      };
+    }
+
     const shifts = normalizeShopShifts(shop?.shifts, shop?.openingTime);
     const days =
       filterShiftId != null && filterShiftId !== ''
@@ -384,6 +456,9 @@ export class PayrollService implements OnModuleInit {
       } else if (d.isPresent) {
         regularHours += hrs;
       }
+    }
+    if (includeProduction) {
+      regularHours += productionHours;
     }
     regularHours = Math.round(regularHours * 100) / 100;
     holidayHours = Math.round(holidayHours * 100) / 100;
@@ -436,12 +511,18 @@ export class PayrollService implements OnModuleInit {
     bonusOpts?: {
       attendanceBonusAmount?: number | null;
       splitByShift?: boolean;
+      includeProductionHours?: boolean;
+      productionOnly?: boolean;
     },
   ) {
     this.shops.assertShopAccess(user, shopId);
     const range = this.parseRange(from, to);
     const bonusAmount = this.resolveAttendanceBonusAmount(bonusOpts?.attendanceBonusAmount);
-    const splitByShift = !!bonusOpts?.splitByShift;
+    const productionOnly = !!bonusOpts?.productionOnly;
+    const includeProductionHours =
+      productionOnly || bonusOpts?.includeProductionHours !== false;
+    // Solo producción no se separa por turnos (las horas de cocina no tienen turno).
+    const splitByShift = productionOnly ? false : !!bonusOpts?.splitByShift;
 
     let period = await this.findOrCreateSlot(shopId, range);
     if (period?.status === PayrollStatus.LOCKED) {
@@ -460,6 +541,8 @@ export class PayrollService implements OnModuleInit {
           status: PayrollStatus.DRAFT,
           attendanceBonusAmount: money(bonusAmount),
           splitByShift,
+          includeProductionHours,
+          productionOnly,
           active: true,
         }),
       );
@@ -470,6 +553,8 @@ export class PayrollService implements OnModuleInit {
       period.toDate = range.to;
       period.attendanceBonusAmount = money(bonusAmount);
       period.splitByShift = splitByShift;
+      period.includeProductionHours = includeProductionHours;
+      period.productionOnly = productionOnly;
       await this.periods.save(period);
     }
 
@@ -482,18 +567,35 @@ export class PayrollService implements OnModuleInit {
     const employees = includeInactive
       ? allEmployees
       : allEmployees.filter((e) => isEntityActive(e.active));
+    const employeeIds = employees.map((e) => e.id);
     const days = await this.attendance.daysForEmployees(
       shopId,
-      employees.map((e) => e.id),
+      employeeIds,
       range.from,
       range.to,
     );
+    const prodDays =
+      includeProductionHours || productionOnly
+        ? await this.attendance.productionDaysForEmployees(
+            shopId,
+            employeeIds,
+            range.from,
+            range.to,
+          )
+        : [];
 
     await this.lines.delete({ periodId: period.id });
 
     const created: PayrollLine[] = [];
     for (const emp of employees) {
       const empDaysAll = days.filter((d) => d.employeeId === emp.id);
+      const empProdDays = prodDays.filter((d) => d.employeeId === emp.id);
+      const hourOpts = {
+        includeProductionHours,
+        productionOnly,
+        productionDays: empProdDays,
+        applyProductionHours: true as boolean,
+      };
 
       if (!splitByShift) {
         const amounts = this.buildLineAmounts(
@@ -503,6 +605,8 @@ export class PayrollService implements OnModuleInit {
           range,
           bonusAmount,
           true,
+          null,
+          hourOpts,
         );
         created.push(
           this.lines.create({
@@ -541,6 +645,8 @@ export class PayrollService implements OnModuleInit {
         range,
         bonusAmount,
         true,
+        null,
+        hourOpts,
       ).bonus;
 
       targets.forEach((shift, idx) => {
@@ -553,6 +659,11 @@ export class PayrollService implements OnModuleInit {
           bonusAmount,
           false,
           shift.id,
+          {
+            ...hourOpts,
+            // Horas de producción van en la 1ª línea del empleado.
+            applyProductionHours: idx === 0,
+          },
         );
         const bonus = idx === 0 ? personPresentismo : 0;
         const total =
