@@ -389,12 +389,15 @@ export class CreateShopDto {
     color?: string | null;
   }> | null;
 
-  @ApiPropertyOptional({ description: 'Textos ETA de la landing pública' })
+  @ApiPropertyOptional({
+    description:
+      'ETA en minutos de la landing /pedir: { takeaway?: { min, max }, delivery?: { min, max } }. También acepta texto legacy.',
+  })
   @IsOptional()
   @IsObject()
   orderingEta?: {
-    takeaway?: string | null;
-    delivery?: string | null;
+    takeaway?: { min?: number; max?: number } | string | null;
+    delivery?: { min?: number; max?: number } | string | null;
   } | null;
 
   @ApiPropertyOptional({
