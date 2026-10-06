@@ -163,7 +163,10 @@ export class ShopsController {
         takeaway?: Record<string, unknown> | null;
         delivery?: Record<string, unknown> | null;
       } | null;
-      orderingEta?: { takeaway?: string | null; delivery?: string | null } | null;
+      orderingEta?: {
+        takeaway?: { min?: number; max?: number } | string | null;
+        delivery?: { min?: number; max?: number } | string | null;
+      } | null;
       deliveryZones?: Array<{
         id?: string;
         name: string;

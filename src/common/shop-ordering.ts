@@ -500,9 +500,15 @@ export type DeliveryZone = {
   color?: string | null;
 };
 
+/** Rango de demora estimada en minutos (landing /pedir). */
+export type OrderingEtaRange = {
+  min: number;
+  max: number;
+};
+
 export type ShopOrderingEta = {
-  takeaway?: string | null;
-  delivery?: string | null;
+  takeaway?: OrderingEtaRange | null;
+  delivery?: OrderingEtaRange | null;
 };
 
 /** Extra opcional del pedido online (adherido a ítems de la carta). */
@@ -820,11 +826,52 @@ export function zonesHavePolygons(zones: DeliveryZone[]): boolean {
   return zones.some((z) => (z.polygon?.length ?? 0) >= 3);
 }
 
+/** Acepta `{ min, max }`, número o texto legacy (`"20 - 30 min"`, `"40 a 70"`, `"10"`). */
+export function parseOrderingEtaRange(raw: unknown): OrderingEtaRange | null {
+  if (raw == null || raw === '') return null;
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) {
+    const n = Math.min(999, Math.max(1, Math.round(raw)));
+    return { min: n, max: n };
+  }
+  if (typeof raw === 'object' && !Array.isArray(raw)) {
+    const o = raw as { min?: unknown; max?: unknown };
+    const min = Number(o.min);
+    if (!Number.isFinite(min) || min <= 0) return null;
+    const maxRaw = Number(o.max);
+    const lo = Math.min(999, Math.max(1, Math.round(min)));
+    const hi =
+      Number.isFinite(maxRaw) && maxRaw > 0
+        ? Math.min(999, Math.max(1, Math.round(maxRaw)))
+        : lo;
+    return { min: Math.min(lo, hi), max: Math.max(lo, hi) };
+  }
+  if (typeof raw === 'string') {
+    const nums =
+      raw
+        .trim()
+        .match(/\d+/g)
+        ?.map((x) => Number(x))
+        .filter((n) => Number.isFinite(n) && n > 0) ?? [];
+    if (!nums.length) return null;
+    const lo = Math.min(999, Math.max(1, Math.round(nums[0])));
+    const hi =
+      nums.length >= 2 ? Math.min(999, Math.max(1, Math.round(nums[1]))) : lo;
+    return { min: Math.min(lo, hi), max: Math.max(lo, hi) };
+  }
+  return null;
+}
+
+export function formatOrderingEtaRange(r: OrderingEtaRange | null | undefined): string | null {
+  if (!r) return null;
+  if (r.min === r.max) return `${r.min} min`;
+  return `${r.min} - ${r.max} min`;
+}
+
 export function normalizeOrderingEta(raw: unknown): ShopOrderingEta | null {
   if (!raw || typeof raw !== 'object') return null;
-  const o = raw as ShopOrderingEta;
-  const takeaway = String(o.takeaway ?? '').trim().slice(0, 80) || null;
-  const delivery = String(o.delivery ?? '').trim().slice(0, 80) || null;
+  const o = raw as Record<string, unknown>;
+  const takeaway = parseOrderingEtaRange(o.takeaway);
+  const delivery = parseOrderingEtaRange(o.delivery);
   if (!takeaway && !delivery) return null;
   return { takeaway, delivery };
 }

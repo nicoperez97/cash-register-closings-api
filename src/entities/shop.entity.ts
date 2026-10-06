@@ -200,7 +200,7 @@ export class Shop extends BaseEntity {
   @Column({ type: 'simple-json', nullable: true })
   deliveryZones?: DeliveryZone[] | null;
 
-  /** Textos ETA mostrados en la landing pública. */
+  /** ETA en minutos (rango min–max) para take away / delivery en /pedir. */
   @Column({ type: 'simple-json', nullable: true })
   orderingEta?: ShopOrderingEta | null;
 
