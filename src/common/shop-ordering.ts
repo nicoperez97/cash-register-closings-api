@@ -36,6 +36,11 @@ export type OrderingPaymentMethodItem = {
   kind?: OrderingPaymentKind;
   /** Canales donde se muestra (web pública). Default: Retiro + Delivery. */
   fulfillments?: OrderingPaymentFulfillment[];
+  /**
+   * Si true, en /pedir o mostrador pide “con cuánto abona”.
+   * Si falta, se deriva: efectivo real por nombre/id.
+   */
+  askCashTender?: boolean;
 };
 
 export type ShopOrderingPayments = {
@@ -102,6 +107,24 @@ export function resolvePaymentMethodKind(
   return classifyPaymentMethodKind(item.id, item.name);
 }
 
+/** Heurística legacy: solo “efectivo real” por id/nombre. */
+export function inferAskCashTender(
+  item: Pick<OrderingPaymentMethodItem, 'id' | 'name' | 'kind'>,
+): boolean {
+  if (resolvePaymentMethodKind(item) !== 'CASH') return false;
+  return /efectivo|cash|contado|op_cash|tp_cash|cp_cash/.test(
+    `${item.id} ${item.name}`.toLowerCase(),
+  );
+}
+
+/** Prefiere `askCashTender` explícito; si falta, heurística por id/nombre. */
+export function resolveAskCashTender(
+  item: Pick<OrderingPaymentMethodItem, 'id' | 'name' | 'kind' | 'askCashTender'>,
+): boolean {
+  if (typeof item.askCashTender === 'boolean') return item.askCashTender;
+  return inferAskCashTender(item);
+}
+
 const DEFAULT_PAY_FULFILLMENTS: OrderingPaymentFulfillment[] = ['TAKEAWAY', 'DELIVERY'];
 
 function normalizePayFulfillments(raw: unknown): OrderingPaymentFulfillment[] {
@@ -123,6 +146,7 @@ function defaultOrderingPayItems(): OrderingPaymentMethodItem[] {
       active: true,
       kind: 'CASH',
       fulfillments: [...DEFAULT_PAY_FULFILLMENTS],
+      askCashTender: true,
     },
     {
       id: 'op_transfer',
@@ -131,6 +155,7 @@ function defaultOrderingPayItems(): OrderingPaymentMethodItem[] {
       active: true,
       kind: 'TRANSFER',
       fulfillments: [...DEFAULT_PAY_FULFILLMENTS],
+      askCashTender: false,
     },
   ];
 }
@@ -149,6 +174,12 @@ function normalizeOrderingPayItems(raw: unknown): OrderingPaymentMethodItem[] {
     used.add(id);
     const accountId = String(r.accountId ?? '').trim().slice(0, 36) || null;
     const kind = resolvePaymentMethodKind({ id, name, kind: r.kind });
+    const askCashTender = resolveAskCashTender({
+      id,
+      name,
+      kind,
+      askCashTender: r.askCashTender,
+    });
     out.push({
       id,
       name,
@@ -156,6 +187,7 @@ function normalizeOrderingPayItems(raw: unknown): OrderingPaymentMethodItem[] {
       active: r.active !== false,
       kind,
       fulfillments: normalizePayFulfillments(r.fulfillments),
+      askCashTender,
     });
   }
   return out;
@@ -174,6 +206,7 @@ function orderingItemsFromLegacyMethods(
       active: wantCash,
       kind: 'CASH',
       fulfillments: [...DEFAULT_PAY_FULFILLMENTS],
+      askCashTender: true,
     },
     {
       id: 'op_transfer',
@@ -182,6 +215,7 @@ function orderingItemsFromLegacyMethods(
       active: wantTransfer,
       kind: 'TRANSFER',
       fulfillments: [...DEFAULT_PAY_FULFILLMENTS],
+      askCashTender: false,
     },
   ];
 }
@@ -291,8 +325,20 @@ export function normalizeTablePaymentMethods(raw: unknown): TablePaymentMethod[]
 
 function defaultCounterPayItems(): CounterPaymentMethod[] {
   return [
-    { id: 'cp_cash', name: 'Efectivo', accountId: null, active: true },
-    { id: 'cp_transfer', name: 'Transferencia', accountId: null, active: true },
+    {
+      id: 'cp_cash',
+      name: 'Efectivo',
+      accountId: null,
+      active: true,
+      askCashTender: true,
+    },
+    {
+      id: 'cp_transfer',
+      name: 'Transferencia',
+      accountId: null,
+      active: true,
+      askCashTender: false,
+    },
   ];
 }
 
@@ -317,6 +363,12 @@ export function normalizeCounterPaymentMethods(raw: unknown): CounterPaymentMeth
       name,
       accountId,
       active: r.active !== false,
+      askCashTender: resolveAskCashTender({
+        id,
+        name,
+        kind: r.kind,
+        askCashTender: r.askCashTender,
+      }),
     });
   }
   if (!out.length) return defaultCounterPayItems();
