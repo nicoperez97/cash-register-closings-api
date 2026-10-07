@@ -36,6 +36,7 @@ import { shiftWindowFallback } from '../../common/employee-shift.util';
 import { CreateShopDto, UpdateShopDto } from './dto/shop.dto';
 import { PosnetType, ShopPosnet } from '../../common/posnet';
 import {
+  defaultDeliveryZones,
   migrateOrderingPaymentsSplit,
   normalizeCounterPaymentMethods,
   normalizeDeliveryZones,
@@ -1107,7 +1108,10 @@ export class ShopsService implements OnModuleInit {
         ),
         tablePaymentMethods: normalizeTablePaymentMethods(dto.tablePaymentMethods),
         waiterCapabilities: normalizeWaiterCapabilities(dto.waiterCapabilities),
-        deliveryZones: normalizeDeliveryZones(dto.deliveryZones),
+        deliveryZones: (() => {
+          const zones = normalizeDeliveryZones(dto.deliveryZones);
+          return zones.length ? zones : defaultDeliveryZones();
+        })(),
         orderingEta: normalizeOrderingEta(dto.orderingEta),
         orderingExtras: normalizeOrderingExtras(dto.orderingExtras),
         discountPresets: normalizeDiscountPresets(dto.discountPresets),
@@ -1259,6 +1263,11 @@ export class ShopsService implements OnModuleInit {
     }
     if (dto.deliveryZones !== undefined) {
       shop.deliveryZones = normalizeDeliveryZones(dto.deliveryZones);
+    } else if (
+      dto.deliveryEnabled === true &&
+      normalizeDeliveryZones(shop.deliveryZones).length === 0
+    ) {
+      shop.deliveryZones = defaultDeliveryZones();
     }
     if (dto.orderingEta !== undefined) {
       shop.orderingEta = normalizeOrderingEta(dto.orderingEta);
@@ -1531,6 +1540,11 @@ export class ShopsService implements OnModuleInit {
     }
     if (dto.deliveryZones !== undefined) {
       shop.deliveryZones = normalizeDeliveryZones(dto.deliveryZones);
+    } else if (
+      dto.deliveryEnabled === true &&
+      normalizeDeliveryZones(shop.deliveryZones).length === 0
+    ) {
+      shop.deliveryZones = defaultDeliveryZones();
     }
     if (dto.orderingPayments !== undefined) {
       const prev = normalizeOrderingPayments(shop.orderingPayments);
