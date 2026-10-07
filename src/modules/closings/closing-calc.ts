@@ -46,10 +46,21 @@ export function cashDayCollection(
 }
 
 /**
+ * Hueco positivo del declarado vs POS que se explica por egresos
+ * (el egreso vuelve al declarado; no es desvío de caja).
+ */
+export function expenseExplainedPosGap(
+  rawDifference: number,
+  expensesTotal = 0,
+): number {
+  return Math.min(Math.max(0, closingNum(expensesTotal)), Math.max(0, rawDifference));
+}
+
+/**
  * calculated = recaudación efectivo + otros canales + extraIncome;
  * declared: si el cliente manda total con “contado” (sin restar apertura ni sumar egresos),
  * se ajusta a la misma recaudación; si no, = calculated.
- * difference = declarado − caja sistema.
+ * difference = (declarado − caja sistema) menos la parte explicada por egresos.
  */
 export function calcClosingTotals(
   dto: ClosingCalcInput,
@@ -76,10 +87,12 @@ export function calcClosingTotals(
     declared =
       closingNum(dto.declaredTotal) + (cashCollected - closingNum(dto.cashAmount));
   }
+  const rawDifference = declared - closingNum(dto.posSystemAmount);
+  const explained = expenseExplainedPosGap(rawDifference, expensesTotal);
   return {
     calculatedTotal: calculated,
     declaredTotal: declared,
-    difference: declared - closingNum(dto.posSystemAmount),
+    difference: rawDifference - explained,
   };
 }
 

@@ -89,6 +89,36 @@ describe('calcClosingTotals', () => {
     expect(r.declaredTotal).toBe(260_000);
     expect(r.difference).toBe(0);
   });
+
+  it('egresos que inflan el declarado no cuentan como diferencia vs POS', () => {
+    // Contado = apertura, solo cobros electrónicos + egreso cargado.
+    const r = calcClosingTotals(
+      {
+        posSystemAmount: 69_600,
+        cashAmount: 15_000,
+        cashOpeningAmount: 15_000,
+      },
+      69_600,
+      5_000,
+    );
+    expect(r.calculatedTotal).toBe(74_600);
+    expect(r.declaredTotal).toBe(74_600);
+    expect(r.difference).toBe(0);
+  });
+
+  it('si hay desvío real además del egreso, la diferencia es el resto', () => {
+    const r = calcClosingTotals(
+      {
+        posSystemAmount: 67_600,
+        cashAmount: 15_000,
+        cashOpeningAmount: 15_000,
+      },
+      69_600,
+      5_000,
+    );
+    // bruto 74600 − POS 67600 = 7000; egreso explica 5000 → diff 2000
+    expect(r.difference).toBe(2_000);
+  });
 });
 
 describe('extraIncomeFromLines', () => {
