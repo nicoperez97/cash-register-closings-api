@@ -1,7 +1,9 @@
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { extname } from 'path';
 import { normalizeLogoUrl } from './drive-url';
 import { resolveUploadPath } from './uploads';
+
+const LOGO_FILE_EXTS = ['.jpg', '.jpeg', '.png', '.webp', '.gif'] as const;
 
 const EMAIL_SAFE_MIME = new Set(['image/jpeg', 'image/png', 'image/gif']);
 
@@ -22,6 +24,39 @@ function mimeFromLogoPath(relativePath: string): string {
 function isEmailSafeMime(contentType: string): boolean {
   const base = contentType.split(';')[0].trim().toLowerCase();
   return EMAIL_SAFE_MIME.has(base);
+}
+
+function readUploadedLogoWithFallback(
+  relativePath: string,
+): { buffer: Buffer; contentType: string } | null {
+  const tryPath = (path: string): { buffer: Buffer; contentType: string } | null => {
+    const abs = resolveUploadPath(path);
+    if (!abs || !existsSync(abs)) return null;
+    try {
+      const buf = readFileSync(abs);
+      if (!buf.length) return null;
+      return { buffer: buf, contentType: mimeFromLogoPath(path) };
+    } catch {
+      return null;
+    }
+  };
+
+  const direct = tryPath(relativePath);
+  if (direct) return direct;
+
+  const normalized = relativePath.trim().replace(/\\/g, '/');
+  const slash = normalized.lastIndexOf('/');
+  if (slash < 0) return null;
+  const dir = normalized.slice(0, slash);
+  const base = normalized.slice(slash + 1).replace(/\.[^.]+$/, '');
+  if (!base) return null;
+  for (const ext of LOGO_FILE_EXTS) {
+    const candidate = `${dir}/${base}${ext}`;
+    if (candidate === normalized) continue;
+    const hit = tryPath(candidate);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 /** Sniff por magic bytes (Content-Type de CDNs a veces miente). */
@@ -99,14 +134,10 @@ export async function loadEmailSafeShopLogo(
   let contentType = 'image/jpeg';
 
   if (isUploadedLogoPath(raw)) {
-    const abs = resolveUploadPath(raw);
-    if (!abs) return null;
-    try {
-      buffer = readFileSync(abs);
-      contentType = mimeFromLogoPath(raw);
-    } catch {
-      return null;
-    }
+    const resolved = readUploadedLogoWithFallback(raw);
+    if (!resolved) return null;
+    buffer = resolved.buffer;
+    contentType = resolved.contentType;
   } else {
     const url = normalizeLogoUrl(raw) ?? raw;
     if (!/^https?:\/\//i.test(url)) return null;
