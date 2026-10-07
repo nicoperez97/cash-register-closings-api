@@ -504,9 +504,17 @@ export class CustomerOrdersService implements OnModuleInit {
     const takeawayEnabled = shop.takeawayEnabled !== false;
     const deliveryEnabled = !!shop.deliveryEnabled;
     const zones = normalizeDeliveryZones(shop.deliveryZones);
-    const takeawayOpen = !forceClosed && takeawayEnabled;
+    const now = new Date();
+    const takeawayOpen =
+      !forceClosed &&
+      takeawayEnabled &&
+      isOrderingChannelOpenNow(takeawayHours, now, shop.timezone);
     // Sin zonas no se puede completar un delivery: no ofrecerlo como abierto.
-    const deliveryOpen = !forceClosed && deliveryEnabled && zones.length > 0;
+    const deliveryOpen =
+      !forceClosed &&
+      deliveryEnabled &&
+      zones.length > 0 &&
+      isOrderingChannelOpenNow(deliveryHours, now, shop.timezone);
     const payments = this.resolvePayCatalog(shop, opts.paymentsChannel);
     const publicPayments = {
       ...payments,
