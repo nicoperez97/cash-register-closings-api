@@ -51,6 +51,14 @@ export class LinkedPaymentMethodDto {
   @ToBoolean()
   @IsBoolean()
   active?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Si true, pide “con cuánto abona” en mostrador / checkout',
+  })
+  @IsOptional()
+  @ToBoolean()
+  @IsBoolean()
+  askCashTender?: boolean;
 }
 
 export class PaymentConceptCategoriesDto {
@@ -337,6 +345,7 @@ export class CreateShopDto {
       active?: boolean;
       kind?: 'CASH' | 'TRANSFER' | 'CARD';
       fulfillments?: Array<'TAKEAWAY' | 'DELIVERY'>;
+      askCashTender?: boolean;
     }>;
     transferCbu?: string | null;
     transferAlias?: string | null;

@@ -184,6 +184,7 @@ export class ShopsController {
           active?: boolean;
           kind?: 'CASH' | 'TRANSFER' | 'CARD';
           fulfillments?: Array<'TAKEAWAY' | 'DELIVERY'>;
+          askCashTender?: boolean;
         }>;
         transferCbu?: string | null;
         transferAlias?: string | null;
@@ -195,6 +196,7 @@ export class ShopsController {
         name: string;
         accountId?: string | null;
         active?: boolean;
+        askCashTender?: boolean;
       }> | null;
       tablePaymentMethods?: Array<{
         id?: string;

@@ -64,6 +64,7 @@ import {
   normalizeShopOrderingHours,
   normalizeTablePaymentMethods,
   classifyPaymentMethodKind,
+  resolveAskCashTender,
   resolvePaymentMethodKind,
   type ShopOrderingPayments,
 } from '../../common/shop-ordering';
@@ -1128,12 +1129,7 @@ export class CustomerOrdersService implements OnModuleInit {
     const total = Math.max(0, Math.round((subtotal - discountAmount + deliveryFee) * 100) / 100);
 
     const needsCashTender =
-      !isTable &&
-      paymentMethod === CustomerOrderPaymentMethod.CASH &&
-      (!payItem ||
-        /efectivo|cash|contado|op_cash|tp_cash/.test(
-          `${payItem.id} ${payItem.name}`.toLowerCase(),
-        ));
+      !isTable && !!payItem && resolveAskCashTender(payItem);
     let cashAmountValue: number | null = null;
     if (!isTable && paymentMethod === CustomerOrderPaymentMethod.CASH) {
       if (needsCashTender) {
@@ -1145,6 +1141,12 @@ export class CustomerOrdersService implements OnModuleInit {
       } else {
         cashAmountValue = total;
       }
+    } else if (!isTable && needsCashTender) {
+      const cash = Number(dto.cashAmount);
+      if (!Number.isFinite(cash) || cash < total) {
+        throw new BadRequestException('Indicá con cuánto abonás (debe cubrir el total)');
+      }
+      cashAmountValue = cash;
     }
 
     const isCounter = dto.fulfillment === CustomerOrderFulfillment.COUNTER;
