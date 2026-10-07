@@ -80,8 +80,10 @@ import {
   resolveUploadPath,
   saveUploadFile,
 } from '../../common/uploads';
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { extname } from 'path';
+
+const LOGO_FILE_EXTS = ['.jpg', '.jpeg', '.png', '.webp', '.gif'] as const;
 
 const SHOP_ADMIN_ROLES = new Set([
   GlobalRole.OWNER,
@@ -1905,15 +1907,22 @@ export class ShopsService implements OnModuleInit {
     if (!raw) return null;
 
     if (isUploadedLogoPath(raw)) {
-      const abs = resolveUploadPath(raw);
-      if (!abs) return null;
-      try {
-        const buffer = readFileSync(abs);
-        if (!buffer.length) return null;
-        return { buffer, contentType: mimeFromLogoPath(raw) };
-      } catch {
-        return null;
+      const fromDisk = this.readUploadedLogoFile(raw);
+      if (fromDisk) return fromDisk;
+
+      // DB dice logo.png pero el archivo quedó como .jpg (u otra extensión).
+      const healed = this.findUploadedLogoAlternate(raw);
+      if (healed) {
+        if (shop && shop.logoUrl !== healed.relativePath) {
+          shop.logoUrl = healed.relativePath;
+          await this.shops.save(shop).catch(() => undefined);
+        }
+        return {
+          buffer: healed.buffer,
+          contentType: mimeFromLogoPath(healed.relativePath),
+        };
       }
+      return null;
     }
 
     const url = normalizeLogoUrl(raw) ?? raw;
@@ -1933,6 +1942,46 @@ export class ShopsService implements OnModuleInit {
     } catch {
       return null;
     }
+  }
+
+  private readUploadedLogoFile(
+    relativePath: string,
+  ): { buffer: Buffer; contentType: string } | null {
+    const abs = resolveUploadPath(relativePath);
+    if (!abs || !existsSync(abs)) return null;
+    try {
+      const buffer = readFileSync(abs);
+      if (!buffer.length) return null;
+      return { buffer, contentType: mimeFromLogoPath(relativePath) };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Busca el mismo logo con otra extensión en el mismo directorio. */
+  private findUploadedLogoAlternate(
+    relativePath: string,
+  ): { relativePath: string; buffer: Buffer } | null {
+    const normalized = relativePath.trim().replace(/\\/g, '/');
+    const slash = normalized.lastIndexOf('/');
+    if (slash < 0) return null;
+    const dir = normalized.slice(0, slash);
+    const base = normalized.slice(slash + 1).replace(/\.[^.]+$/, '');
+    if (!base) return null;
+    for (const ext of LOGO_FILE_EXTS) {
+      const candidate = `${dir}/${base}${ext}`;
+      if (candidate === normalized) continue;
+      const abs = resolveUploadPath(candidate);
+      if (!abs || !existsSync(abs)) continue;
+      try {
+        const buffer = readFileSync(abs);
+        if (!buffer.length) continue;
+        return { relativePath: candidate, buffer };
+      } catch {
+        // siguiente extensión
+      }
+    }
+    return null;
   }
 
   /**

@@ -217,6 +217,10 @@ export function buildPublicPagePwaManifest(
   const name = `${meta.fullLabel} · ${shop.name}`;
   const shortName = meta.shortLabel;
 
+  const shopLogo = String(shop.logoUrl ?? '').trim()
+    ? `/api/v1/public/shops/${encodeURIComponent(shop.id)}/logo`
+    : null;
+
   return {
     name,
     short_name: shortName,
@@ -232,6 +236,8 @@ export function buildPublicPagePwaManifest(
     scope: startPath,
     start_url: startPath,
     categories: ['business', 'food'],
+    /** Logo puro del local (favicon de la pestaña). Los `icons` llevan badge de página. */
+    shop_logo: shopLogo,
     icons: buildPublicPagePwaIcons(shop.slug, kind),
   };
 }
