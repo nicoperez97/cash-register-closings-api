@@ -500,6 +500,47 @@ export type DeliveryZone = {
   color?: string | null;
 };
 
+/** Casco Urbano (La Plata) — diamante exterior. */
+const DEFAULT_ZONE_CASCO_URBANO_POLYGON: DeliveryZonePoint[] = [
+  { lat: -34.923148, lng: -57.994172 },
+  { lat: -34.888939, lng: -57.956575 },
+  { lat: -34.920614, lng: -57.9152 },
+  { lat: -34.953729, lng: -57.95258 },
+];
+
+/** Casco Urbano Corto — diamante interior (área más chica / más barata). */
+const DEFAULT_ZONE_CASCO_CORTO_POLYGON: DeliveryZonePoint[] = [
+  { lat: -34.922378, lng: -57.974402 },
+  { lat: -34.905273, lng: -57.955603 },
+  { lat: -34.921111, lng: -57.934916 },
+  { lat: -34.937668, lng: -57.953606 },
+];
+
+/**
+ * Zonas iniciales de delivery (La Plata): Casco Urbano $4500 y Casco Urbano Corto $3500.
+ * Se usan al crear un local o al habilitar delivery sin zonas cargadas.
+ */
+export function defaultDeliveryZones(): DeliveryZone[] {
+  return [
+    {
+      id: 'z_default_casco_urbano',
+      name: 'Casco Urbano',
+      fee: 4500,
+      note: null,
+      polygon: DEFAULT_ZONE_CASCO_URBANO_POLYGON.map((p) => ({ ...p })),
+      color: '#C62828',
+    },
+    {
+      id: 'z_default_casco_corto',
+      name: 'Casco Urbano Corto',
+      fee: 3500,
+      note: null,
+      polygon: DEFAULT_ZONE_CASCO_CORTO_POLYGON.map((p) => ({ ...p })),
+      color: '#2E7D32',
+    },
+  ];
+}
+
 /** Rango de demora estimada en minutos (landing /pedir). */
 export type OrderingEtaRange = {
   min: number;
@@ -948,17 +989,49 @@ export function isOrderingChannelOpenNow(
   return dayWindowsOpenAt(wins, cur);
 }
 
+/** Línea de horario compacto para /pedir (días + franjas separados). */
+export type OrderingHoursSummaryLine = {
+  days: string;
+  times: string;
+};
+
+/**
+ * Resumen compacto para /pedir.
+ * Agrupa días corridos (Lun→Dom) con las mismas franjas.
+ */
 export function formatOrderingHoursSummary(
   hours: OrderingHoursByWeekday | null | undefined,
-): string[] {
+): OrderingHoursSummaryLine[] {
   if (!hours) return [];
   const labels = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
-  const lines: string[] = [];
-  for (let d = 0; d <= 6; d++) {
+  // Semana empezando en lunes (como en el local).
+  const order = [1, 2, 3, 4, 5, 6, 0];
+  const entries: Array<{ day: number; times: string } | null> = order.map((d) => {
     const wins = hours[String(d)];
-    if (!wins?.length) continue;
-    const ranges = wins.map((w) => `${w.open} a ${w.close}hs`).join(', ');
-    lines.push(`${labels[d]} ${ranges}`);
+    if (!wins?.length) return null;
+    return {
+      day: d,
+      times: wins.map((w) => `${w.open} a ${w.close}`).join(' · '),
+    };
+  });
+
+  const lines: OrderingHoursSummaryLine[] = [];
+  let i = 0;
+  while (i < entries.length) {
+    const cur = entries[i];
+    if (!cur) {
+      i += 1;
+      continue;
+    }
+    let j = i;
+    while (j + 1 < entries.length && entries[j + 1]?.times === cur.times) {
+      j += 1;
+    }
+    const startLabel = labels[entries[i]!.day];
+    const endLabel = labels[entries[j]!.day];
+    const days = i === j ? startLabel : `${startLabel} a ${endLabel}`;
+    lines.push({ days, times: cur.times });
+    i = j + 1;
   }
   return lines;
 }
