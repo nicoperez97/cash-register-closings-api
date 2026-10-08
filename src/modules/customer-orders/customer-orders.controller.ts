@@ -91,6 +91,7 @@ export class CustomerOrdersController {
     @Query('scope') scope?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
+    @Query('shiftIds') shiftIds?: string,
     @Query('q') q?: string,
     @Query('fulfillment') fulfillment?: string,
     @Query('paymentMethod') paymentMethod?: string,
@@ -102,6 +103,12 @@ export class CustomerOrdersController {
           .map((s) => s.trim())
           .filter(Boolean) as CustomerOrderStatus[])
       : undefined;
+    const parsedShiftIds = shiftIds
+      ? shiftIds
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : undefined;
     const fulfillments = Object.values(CustomerOrderFulfillment) as string[];
     const payments = Object.values(CustomerOrderPaymentMethod) as string[];
     return this.service.listStaff(user, shopId, {
@@ -109,6 +116,7 @@ export class CustomerOrdersController {
       scope: scope === 'current-shift' ? 'current-shift' : undefined,
       from,
       to,
+      shiftIds: parsedShiftIds,
       q,
       fulfillment: fulfillments.includes(String(fulfillment ?? ''))
         ? (fulfillment as CustomerOrderFulfillment)
@@ -147,6 +155,7 @@ export class CustomerOrdersController {
     @Query('scope') scope?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
+    @Query('shiftIds') shiftIds?: string,
     @Query('q') q?: string,
     @Query('fulfillment') fulfillment?: string,
     @Query('paymentMethod') paymentMethod?: string,
@@ -158,6 +167,12 @@ export class CustomerOrdersController {
           .map((s) => s.trim())
           .filter(Boolean) as CustomerOrderStatus[])
       : undefined;
+    const parsedShiftIds = shiftIds
+      ? shiftIds
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : undefined;
     const fulfillments = Object.values(CustomerOrderFulfillment) as string[];
     const payments = Object.values(CustomerOrderPaymentMethod) as string[];
     const { buffer, filename } = await this.service.exportStaffExcel(user, shopId, {
@@ -165,6 +180,7 @@ export class CustomerOrdersController {
       scope: scope === 'current-shift' ? 'current-shift' : undefined,
       from,
       to,
+      shiftIds: parsedShiftIds,
       q,
       fulfillment: fulfillments.includes(String(fulfillment ?? ''))
         ? (fulfillment as CustomerOrderFulfillment)

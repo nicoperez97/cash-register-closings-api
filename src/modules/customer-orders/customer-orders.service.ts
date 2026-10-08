@@ -45,6 +45,7 @@ import {
   previousShiftOf,
   resolveCurrentShift,
   shiftClosedBetween,
+  shiftRunsOnWeekday,
   shopShiftOwnershipRangeUtc,
   weekdayFromIsoDate,
   type ShopShift,
@@ -1358,6 +1359,7 @@ export class CustomerOrdersService implements OnModuleInit {
       scope?: 'current-shift';
       from?: string;
       to?: string;
+      shiftIds?: string[];
       q?: string;
       fulfillment?: CustomerOrderFulfillment;
       paymentMethod?: CustomerOrderPaymentMethod;
@@ -1395,6 +1397,13 @@ export class CustomerOrdersService implements OnModuleInit {
     }
 
     const shop = await this.shops.findOne({ where: { id: shopId } });
+    const shiftIds = [
+      ...new Set(
+        (opts?.shiftIds ?? [])
+          .map((id) => String(id ?? '').trim())
+          .filter(Boolean),
+      ),
+    ];
     if (opts?.scope === 'current-shift' && shop) {
       const shifts = normalizeShopShifts(shop.shifts as ShopShift[] | null, shop.openingTime);
       const date = resolveShopBusinessDate(new Date(), {
@@ -1457,6 +1466,57 @@ export class CustomerOrdersService implements OnModuleInit {
           to: range.to,
         });
       }
+    } else if (shiftIds.length && shop) {
+      const shifts = normalizeShopShifts(shop.shifts as ShopShift[] | null, shop.openingTime);
+      const selected = shifts.filter((s) => shiftIds.includes(s.id));
+      const today = resolveShopBusinessDate(new Date(), {
+        timezone: shop.timezone,
+        openingTime: shop.openingTime,
+      });
+      let from =
+        opts?.from && /^\d{4}-\d{2}-\d{2}$/.test(opts.from) ? opts.from : today;
+      let to = opts?.to && /^\d{4}-\d{2}-\d{2}$/.test(opts.to) ? opts.to : from;
+      if (to < from) {
+        const tmp = from;
+        from = to;
+        to = tmp;
+      }
+      const ranges: Array<{ from: Date; to: Date }> = [];
+      let day = from;
+      let dayCount = 0;
+      const maxDays = 62;
+      while (day <= to && dayCount < maxDays) {
+        const weekday = weekdayFromIsoDate(day);
+        if (weekday != null) {
+          for (const s of selected) {
+            if (!shiftRunsOnWeekday(s, weekday)) continue;
+            ranges.push(
+              shopShiftOwnershipRangeUtc(day, s, shifts, {
+                timezone: shop.timezone,
+              }),
+            );
+          }
+        }
+        day = nextCalendarDate(day);
+        dayCount += 1;
+      }
+      if (!selected.length || !ranges.length) {
+        qb.andWhere('1 = 0');
+      } else {
+        qb.andWhere(
+          new Brackets((b) => {
+            ranges.forEach((r, i) => {
+              b.orWhere(
+                `(o.createdAt >= :shiftFrom${i} AND o.createdAt < :shiftTo${i})`,
+                {
+                  [`shiftFrom${i}`]: r.from,
+                  [`shiftTo${i}`]: r.to,
+                },
+              );
+            });
+          }),
+        );
+      }
     } else if ((opts?.from || opts?.to) && shop) {
       const from =
         opts.from && /^\d{4}-\d{2}-\d{2}$/.test(opts.from) ? opts.from : null;
@@ -1490,7 +1550,11 @@ export class CustomerOrdersService implements OnModuleInit {
 
     qb.orderBy('o.createdAt', 'DESC');
     const take =
-      opts?.scope === 'current-shift' ? 300 : opts?.from || opts?.to || q ? 800 : 200;
+      opts?.scope === 'current-shift'
+        ? 300
+        : opts?.from || opts?.to || shiftIds.length || q
+          ? 800
+          : 200;
     qb.take(take);
     const rows = await qb.getMany();
     return rows.map((r) => this.toDto(r));
