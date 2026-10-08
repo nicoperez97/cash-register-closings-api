@@ -41,6 +41,9 @@ import {
   findShopShift,
   normalizeShopShifts,
   resolveCurrentShift,
+  shiftRunsOnWeekday,
+  shiftsOnWeekday,
+  weekdayFromIsoDate,
 } from '../../common/shop-shifts';
 import { resolveShopBusinessDate } from '../../common/business-date';
 import { CreateClosingDto, UpdateClosingDto } from './dto/closing.dto';
@@ -505,17 +508,50 @@ export class ClosingsService implements OnModuleInit {
     }
   }
 
-  private async resolveClosingShift(shopId: string, shiftId?: string | null) {
+  private async resolveClosingShift(
+    shopId: string,
+    shiftId?: string | null,
+    businessDate?: string | null,
+  ) {
     const shop = await this.shops.getShopEntity(shopId);
     if (!shop) throw new NotFoundException('Local no encontrado');
     const shifts = normalizeShopShifts(shop.shifts, shop.openingTime);
-    const shift = shiftId
-      ? findShopShift(shifts, shiftId)
-      : resolveCurrentShift(shifts, new Date(), shop.timezone);
-    if (!shift || (shiftId && shift.id !== shiftId)) {
-      throw new BadRequestException('Turno inválido para este local');
+    const dateKey = String(businessDate ?? '').slice(0, 10);
+    const weekday = dateKey ? weekdayFromIsoDate(dateKey) : null;
+
+    if (shiftId) {
+      const shift = findShopShift(shifts, shiftId);
+      if (!shift || shift.id !== shiftId) {
+        throw new BadRequestException('Turno inválido para este local');
+      }
+      if (weekday != null && !shiftRunsOnWeekday(shift, weekday)) {
+        throw new BadRequestException('Ese turno no corre en la fecha elegida');
+      }
+      return shift;
     }
-    return shift;
+
+    if (weekday != null) {
+      const onDay = shiftsOnWeekday(shifts, weekday);
+      if (!onDay.length) {
+        throw new BadRequestException('No hay turnos para esa fecha');
+      }
+      const current = resolveCurrentShift(shifts, new Date(), shop.timezone);
+      return onDay.find((s) => s.id === current.id) ?? onDay[0];
+    }
+
+    return resolveCurrentShift(shifts, new Date(), shop.timezone);
+  }
+
+  private resolveOpenBusinessDate(
+    shop: { timezone?: string | null; openingTime?: string | null },
+    raw?: string | null,
+  ): string {
+    const requested = String(raw ?? '').trim().slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(requested)) return requested;
+    return resolveShopBusinessDate(new Date(), {
+      timezone: shop.timezone,
+      openingTime: shop.openingTime,
+    });
   }
 
   private toDto(
@@ -848,7 +884,8 @@ export class ClosingsService implements OnModuleInit {
 
   /**
    * Abre la caja del turno: crea un cierre DRAFT con efectivo de apertura
-   * y habilita pedidos online.
+   * y habilita pedidos online. Día y turno se pueden elegir; no se reabre un
+   * día/turno que ya tenga cierre enviado o bloqueado (evita duplicados).
    */
   async openRegister(user: AuthUser, shopId: string, dto: OpenClosingDto) {
     this.shops.assertShopAccess(user, shopId);
@@ -858,15 +895,12 @@ export class ClosingsService implements OnModuleInit {
     const existingDraft = await this.findOpenDraft(shopId);
     if (existingDraft) {
       throw new ConflictException(
-        `Ya hay una caja abierta (${existingDraft.shiftName || 'turno'} · ${existingDraft.businessDate}). Generá el cierre antes de abrir otra.`,
+        `Ya hay una caja abierta (${existingDraft.shiftName || 'turno'} · ${existingDraft.businessDate}). Generá el cierre o cambiá día/turno de esa caja antes de abrir otra.`,
       );
     }
 
-    const shift = await this.resolveClosingShift(shopId, dto.shiftId);
-    const businessDate = resolveShopBusinessDate(new Date(), {
-      timezone: shop.timezone,
-      openingTime: shop.openingTime,
-    });
+    const businessDate = this.resolveOpenBusinessDate(shop, dto.businessDate);
+    const shift = await this.resolveClosingShift(shopId, dto.shiftId, businessDate);
     const dateKey = closingDateKey(businessDate, shift.id);
     const suggested = await this.resolveSuggestedOpening(shopId);
     const opening = this.resolveOpeningAmount(dto.cashOpeningAmount, suggested.amount);
@@ -874,6 +908,7 @@ export class ClosingsService implements OnModuleInit {
     if (exists) {
       if (exists.status === ClosingStatus.DRAFT) {
         // Misma caja (p.ej. carrera o getOpen desfasado): reutilizar.
+        exists.businessDate = businessDate;
         exists.cashOpeningAmount = money(opening);
         exists.cashLeftInRegister = money(opening);
         exists.shiftId = shift.id;
@@ -883,15 +918,9 @@ export class ClosingsService implements OnModuleInit {
         await this.shops.setOrderingOpen(shopId, true);
         return this.toDto(exists);
       }
-      // Ya hay un cierre confirmado de este turno: liberar la clave única para
-      // poder abrir de nuevo (pedidos / segunda tanda). El cierre anterior sigue
-      // en el historial con businessDateKey archivada.
-      exists.businessDateKey = markDeletedUnique(
-        exists.businessDateKey || dateKey,
-        exists.id,
-        80,
+      throw new ConflictException(
+        `Ya hay un cierre para ${businessDate} · ${shift.name}. Elegí otro día o turno.`,
       );
-      await this.closings.save(exists);
     }
 
     const closing = await this.closings.save(
@@ -928,6 +957,54 @@ export class ClosingsService implements OnModuleInit {
 
     await this.shops.setOrderingOpen(shopId, true);
     return this.toDto(closing);
+  }
+
+  /**
+   * Cambia día, turno y/o efectivo de la caja abierta (DRAFT) sin enviarla.
+   */
+  async updateOpenRegister(user: AuthUser, shopId: string, dto: OpenClosingDto) {
+    this.shops.assertShopAccess(user, shopId);
+    const shop = await this.shops.getShopEntity(shopId);
+    if (!shop) throw new NotFoundException('Local no encontrado');
+
+    const row = await this.findOpenDraft(shopId);
+    if (!row) throw new NotFoundException('No hay caja abierta');
+
+    const businessDate =
+      dto.businessDate !== undefined && dto.businessDate !== null && String(dto.businessDate).trim()
+        ? this.resolveOpenBusinessDate(shop, dto.businessDate)
+        : row.businessDate;
+    const shift = await this.resolveClosingShift(
+      shopId,
+      dto.shiftId !== undefined ? dto.shiftId : row.shiftId,
+      businessDate,
+    );
+    const dateKey = closingDateKey(businessDate, shift.id);
+    if (dateKey !== row.businessDateKey) {
+      const clash = await this.closings.findOne({ where: { shopId, businessDateKey: dateKey } });
+      if (clash && clash.id !== row.id) {
+        throw new ConflictException(
+          `Ya hay un cierre para ${businessDate} · ${shift.name}. Elegí otro día o turno.`,
+        );
+      }
+    }
+
+    row.businessDate = businessDate;
+    row.businessDateKey = dateKey;
+    row.shiftId = shift.id;
+    row.shiftName = shift.name;
+    if (dto.cashOpeningAmount !== undefined && dto.cashOpeningAmount !== null) {
+      const prevOpening = n(row.cashOpeningAmount);
+      const opening = this.resolveOpeningAmount(dto.cashOpeningAmount, prevOpening);
+      const prevLeft = n(row.cashLeftInRegister);
+      row.cashOpeningAmount = money(opening);
+      // Si todavía no tocaron “dejar en caja”, mantenerlo alineado a la apertura.
+      if (Math.abs(prevLeft - prevOpening) < 0.005) {
+        row.cashLeftInRegister = money(opening);
+      }
+    }
+    await this.closings.save(row);
+    return this.toDto(row);
   }
 
   async create(user: AuthUser, shopId: string, dto: CreateClosingDto) {

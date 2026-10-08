@@ -257,6 +257,16 @@ export class ClosingsController {
     return this.closings.openRegister(user, shopId, dto);
   }
 
+  @Patch('open')
+  @RequireAnyPermissions('closings.create', 'orderingCatalog.manage', 'customerOrders.manage')
+  updateOpenRegister(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: OpenClosingDto,
+  ) {
+    return this.closings.updateOpenRegister(user, shopId, dto);
+  }
+
   @Get(':id')
   @RequirePermissions('closings.read')
   getOne(
