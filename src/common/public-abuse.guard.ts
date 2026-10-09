@@ -107,7 +107,7 @@ export class PublicAbuseGuard implements CanActivate {
     } else if (isOrderLookup) {
       this.hit(
         `co-lookup:${ip}`,
-        12,
+        30,
         60_000,
         'Demasiadas consultas de pedidos. Esperá un momento.',
       );
@@ -117,7 +117,7 @@ export class PublicAbuseGuard implements CanActivate {
       if (phone.length >= 6) {
         this.hit(
           `co-lookup-phone:${phone.slice(-10)}`,
-          8,
+          20,
           60 * 60_000,
           'Demasiadas consultas con este celular. Probá más tarde.',
         );
