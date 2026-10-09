@@ -1328,23 +1328,23 @@ export class CustomerOrdersService implements OnModuleInit {
     return { count };
   }
 
-  async lookupPublic(slug: string, phone: string, code: string) {
+  async lookupPublic(slug: string, phone: string, code?: string) {
     const shop = await this.shops.findOne({ where: { slug, active: true as any } });
     // Lookup de pedidos ya hechos: no exige que /pedir siga activo.
     if (!shop) {
       throw new NotFoundException('No encontramos ese pedido');
     }
     const variants = this.phoneLookupVariants(phone);
-    const normalizedCode = String(code ?? '').trim().toUpperCase();
-    if (!variants.length || !normalizedCode) {
-      throw new BadRequestException('Ingresá celular y código de pedido');
+    if (!variants.length) {
+      throw new BadRequestException('Ingresá el celular');
     }
+    const normalizedCode = String(code ?? '').trim().toUpperCase();
     const order = await this.orders.findOne({
-      where: variants.map((p) => ({
-        shopId: shop.id,
-        code: normalizedCode,
-        phone: p,
-      })),
+      where: variants.map((p) =>
+        normalizedCode
+          ? { shopId: shop.id, code: normalizedCode, phone: p }
+          : { shopId: shop.id, phone: p },
+      ),
       order: { createdAt: 'DESC' },
     });
     if (!order) throw new NotFoundException('No encontramos ese pedido');

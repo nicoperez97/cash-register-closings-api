@@ -53,7 +53,7 @@ export class PublicCustomerOrdersController {
   lookup(
     @Param('slug') slug: string,
     @Query('phone') phone: string,
-    @Query('code') code: string,
+    @Query('code') code?: string,
   ) {
     return this.service.lookupPublic(slug, phone, code);
   }
