@@ -51,6 +51,7 @@ export type UpdateShopPreferencesDto = {
   mutedNotificationTypes?: string[] | null;
   mutedAppNotificationTypes?: string[] | null;
   mutedEmailNotificationTypes?: string[] | null;
+  salonFloorMonitorEnabled?: boolean;
 };
 
 @Injectable()
@@ -111,6 +112,14 @@ export class ProfileService implements OnModuleInit {
       await this.userShops.query(`
         ALTER TABLE user_shops
           ADD COLUMN mutedEmailNotificationTypes JSON NULL
+      `);
+    } catch {
+      // ya existe
+    }
+    try {
+      await this.userShops.query(`
+        ALTER TABLE user_shops
+          ADD COLUMN salonFloorMonitorEnabled TINYINT(1) NOT NULL DEFAULT 0
       `);
     } catch {
       // ya existe
@@ -256,6 +265,7 @@ export class ProfileService implements OnModuleInit {
       mutedEmailNotificationTypes: Array.isArray(link?.mutedEmailNotificationTypes)
         ? link!.mutedEmailNotificationTypes
         : [],
+      salonFloorMonitorEnabled: !!link?.salonFloorMonitorEnabled,
       eligibleNotifications: eligibleNotificationsPayload({
         link,
         globalRole: user.globalRole,
@@ -312,22 +322,31 @@ export class ProfileService implements OnModuleInit {
       );
     }
     this.applyMuteDto(link, dto);
+    if (dto.salonFloorMonitorEnabled !== undefined) {
+      link.salonFloorMonitorEnabled = !!dto.salonFloorMonitorEnabled;
+    }
     await this.userShops.save(link);
     return this.getShopPreferencesForUser(shopId, actor.id);
   }
 
-  /** Solo mutes App/Mail de un usuario en el local (admin). */
+  /** Solo mutes App/Mail / monitor de salón de un usuario en el local (admin). */
   async updateShopNotificationMutesForUser(
     shopId: string,
     userId: string,
     dto: Pick<
       UpdateShopPreferencesDto,
-      'mutedNotificationTypes' | 'mutedAppNotificationTypes' | 'mutedEmailNotificationTypes'
+      | 'mutedNotificationTypes'
+      | 'mutedAppNotificationTypes'
+      | 'mutedEmailNotificationTypes'
+      | 'salonFloorMonitorEnabled'
     >,
   ) {
     const link = await this.userShops.findOne({ where: { userId, shopId } });
     if (!link) throw new NotFoundException('El usuario no pertenece a este local');
     this.applyMuteDto(link, dto);
+    if (dto.salonFloorMonitorEnabled !== undefined) {
+      link.salonFloorMonitorEnabled = !!dto.salonFloorMonitorEnabled;
+    }
     await this.userShops.save(link);
     return this.getShopPreferencesForUser(shopId, userId);
   }

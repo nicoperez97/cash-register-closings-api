@@ -285,6 +285,15 @@ class UpdateUserNotificationPreferencesDto {
   @IsArray()
   @IsString({ each: true })
   mutedEmailNotificationTypes?: string[] | null;
+
+  @ApiPropertyOptional({
+    description:
+      'Chip flotante de reservas y lista de espera en toda la app, con sonido al llegar algo nuevo',
+  })
+  @IsOptional()
+  @ToBoolean()
+  @IsBoolean()
+  salonFloorMonitorEnabled?: boolean;
 }
 
 @ApiTags('users')

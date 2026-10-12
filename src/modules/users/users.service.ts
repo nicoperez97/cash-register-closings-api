@@ -312,6 +312,14 @@ export class UsersService implements OnModuleInit {
     } catch {
       // columna ya existe
     }
+    try {
+      await this.userShops.query(`
+        ALTER TABLE user_shops
+          ADD COLUMN salonFloorMonitorEnabled TINYINT(1) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // columna ya existe
+    }
     const userCols: Array<[string, string]> = [
       ['avatarUrl', 'VARCHAR(500) NULL'],
       ['phone', 'VARCHAR(40) NULL'],

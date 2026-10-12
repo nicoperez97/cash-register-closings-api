@@ -139,6 +139,12 @@ export class UserShop {
   @Column({ type: 'json', nullable: true })
   mutedEmailNotificationTypes?: string[] | null;
 
+  /**
+   * Chip flotante de reservas + lista de espera en toda la app, con sonido al llegar algo nuevo.
+   */
+  @Column({ type: 'tinyint', default: 0 })
+  salonFloorMonitorEnabled: boolean;
+
   @ManyToOne(() => User, (u) => u.userShops, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'userId' })
   user: User;
