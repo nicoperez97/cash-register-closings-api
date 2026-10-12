@@ -112,6 +112,10 @@ export class Shop extends BaseEntity {
   @Column({ type: 'tinyint', default: 0 })
   publicAttendanceEnabled: boolean;
 
+  /** Página pública de fichaje por PIN (sin historial). */
+  @Column({ type: 'tinyint', default: 0 })
+  publicAttendanceCheckInEnabled: boolean;
+
   /** Página pública de normas pre/post servicio. */
   @Column({ type: 'tinyint', default: 0 })
   publicServiceRulesEnabled: boolean;

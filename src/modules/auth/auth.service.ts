@@ -965,6 +965,7 @@ export class AuthService implements OnModuleInit {
         tipsEnabled: !!s.tipsEnabled,
         settlementsEnabled: settleShopIds.has(s.id),
         publicAttendanceEnabled: !!s.publicAttendanceEnabled,
+        publicAttendanceCheckInEnabled: !!s.publicAttendanceCheckInEnabled,
         publicServiceRulesEnabled: !!s.publicServiceRulesEnabled,
         serviceDefaultCheckIn: s.serviceDefaultCheckIn || '18:00',
         serviceDefaultCheckOut: s.serviceDefaultCheckOut || '00:00',

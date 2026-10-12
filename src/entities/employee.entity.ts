@@ -130,6 +130,10 @@ export class Employee extends BaseEntity {
   @Column({ type: 'varchar', length: 4, nullable: true })
   waiterPinPrefix?: string | null;
 
+  /** PIN en claro para que admin lo vea al editar (auth usa el hash). */
+  @Column({ type: 'varchar', length: 6, nullable: true })
+  waiterPinClear?: string | null;
+
   @ManyToOne(() => Shop)
   @JoinColumn({ name: 'shopId' })
   shop: Shop;

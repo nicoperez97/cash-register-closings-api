@@ -160,6 +160,14 @@ export class EmployeesService implements OnModuleInit {
     try {
       await this.employees.query(`
         ALTER TABLE employees
+          ADD COLUMN waiterPinClear VARCHAR(6) NULL
+      `);
+    } catch {
+      // ya existe
+    }
+    try {
+      await this.employees.query(`
+        ALTER TABLE employees
           ADD COLUMN jobRoles JSON NULL
       `);
     } catch {
@@ -236,6 +244,8 @@ export class EmployeesService implements OnModuleInit {
       serviceCheckOut: e.serviceCheckOut ?? null,
       hasWaiterPin: !!e.waiterPinHash,
       waiterPinPrefix: e.waiterPinPrefix ?? null,
+      /** PIN actual (solo si se guardó tras esta feature; PINs viejos quedan solo con hash). */
+      waiterPinCurrent: e.waiterPinClear ?? null,
       active: isEntityActive(e.active),
     };
   }
@@ -246,10 +256,12 @@ export class EmployeesService implements OnModuleInit {
     if (pin === null) {
       row.waiterPinHash = null;
       row.waiterPinPrefix = null;
+      row.waiterPinClear = null;
       return;
     }
     row.waiterPinHash = hashWaiterPin(pin);
     row.waiterPinPrefix = pin.slice(-2);
+    row.waiterPinClear = pin;
   }
 
   async list(user: AuthUser, shopId: string, includeInactive = false) {

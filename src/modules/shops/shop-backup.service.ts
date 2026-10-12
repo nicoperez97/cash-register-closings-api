@@ -722,6 +722,7 @@ export class ShopBackupService {
           serviceCheckOut: e.serviceCheckOut ?? '',
           waiterPinHash: e.waiterPinHash ?? '',
           waiterPinPrefix: e.waiterPinPrefix ?? '',
+          waiterPinClear: e.waiterPinClear ?? '',
           active: e.active ? 1 : 0,
         })),
       );
@@ -1368,6 +1369,7 @@ export class ShopBackupService {
           serviceCheckOut: this.emptyToNull(r.serviceCheckOut),
           waiterPinHash: this.emptyToNull(r.waiterPinHash),
           waiterPinPrefix: this.emptyToNull(r.waiterPinPrefix),
+          waiterPinClear: this.emptyToNull(r.waiterPinClear),
           active: this.toBool(r.active, true),
         }),
       );

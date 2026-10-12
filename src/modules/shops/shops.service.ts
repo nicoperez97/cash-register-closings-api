@@ -296,6 +296,14 @@ export class ShopsService implements OnModuleInit {
     try {
       await this.shops.query(`
         ALTER TABLE shops
+          ADD COLUMN publicAttendanceCheckInEnabled TINYINT(1) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.shops.query(`
+        ALTER TABLE shops
           ADD COLUMN publicServiceRulesEnabled TINYINT(1) NOT NULL DEFAULT 0
       `);
     } catch {
@@ -1085,6 +1093,7 @@ export class ShopsService implements OnModuleInit {
         waitingListEnabled: dto.waitingListEnabled ?? true,
         tipsEnabled: dto.tipsEnabled ?? false,
         publicAttendanceEnabled: dto.publicAttendanceEnabled ?? false,
+        publicAttendanceCheckInEnabled: dto.publicAttendanceCheckInEnabled ?? false,
         publicServiceRulesEnabled: dto.publicServiceRulesEnabled ?? false,
         /** Legacy mirror of shift window (entrada/retirada ya no se configuran aparte). */
         serviceDefaultCheckIn: serviceFromShift.checkIn,
@@ -1217,6 +1226,9 @@ export class ShopsService implements OnModuleInit {
     }
     if (dto.publicAttendanceEnabled !== undefined) {
       shop.publicAttendanceEnabled = dto.publicAttendanceEnabled;
+    }
+    if (dto.publicAttendanceCheckInEnabled !== undefined) {
+      shop.publicAttendanceCheckInEnabled = dto.publicAttendanceCheckInEnabled;
     }
     if (dto.publicServiceRulesEnabled !== undefined) {
       shop.publicServiceRulesEnabled = dto.publicServiceRulesEnabled;
@@ -1478,6 +1490,7 @@ export class ShopsService implements OnModuleInit {
     if (dto.waitingListEnabled !== undefined) this.live.tick(id, 'waiting');
     if (
       dto.publicAttendanceEnabled !== undefined ||
+      dto.publicAttendanceCheckInEnabled !== undefined ||
       dto.serviceAttendanceWithHours !== undefined ||
       dto.shifts !== undefined ||
       dto.openingTime !== undefined
@@ -2054,6 +2067,7 @@ export class ShopsService implements OnModuleInit {
       tipsEnabled: !!s.tipsEnabled,
       settlementsEnabled: false,
       publicAttendanceEnabled: !!s.publicAttendanceEnabled,
+      publicAttendanceCheckInEnabled: !!s.publicAttendanceCheckInEnabled,
       publicServiceRulesEnabled: !!s.publicServiceRulesEnabled,
       serviceDefaultCheckIn: s.serviceDefaultCheckIn || '18:00',
       serviceDefaultCheckOut: s.serviceDefaultCheckOut || '00:00',

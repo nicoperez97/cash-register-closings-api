@@ -229,6 +229,13 @@ export class CreateShopDto {
   @ToBoolean() @IsBoolean()
   publicAttendanceEnabled?: boolean;
 
+  @ApiPropertyOptional({
+    description: 'Página pública de fichaje por PIN (sin historial ni listados)',
+  })
+  @IsOptional()
+  @ToBoolean() @IsBoolean()
+  publicAttendanceCheckInEnabled?: boolean;
+
   @ApiPropertyOptional({ description: 'Página pública de normas pre/post servicio' })
   @IsOptional()
   @ToBoolean() @IsBoolean()
