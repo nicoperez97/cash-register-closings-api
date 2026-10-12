@@ -1027,6 +1027,7 @@ export class AuthService implements OnModuleInit {
         mutedNotificationTypes: Array.isArray(link?.mutedNotificationTypes)
           ? link!.mutedNotificationTypes
           : [],
+        salonFloorMonitorEnabled: !!link?.salonFloorMonitorEnabled,
         isStockAdmin: !!link?.isStockAdmin,
         isBeverageStockAdmin: !!link?.isBeverageStockAdmin,
         isShortageAdmin: !!link?.isShortageAdmin,

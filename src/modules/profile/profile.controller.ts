@@ -20,6 +20,7 @@ import { Type } from 'class-transformer';
 import {
   Allow,
   IsArray,
+  IsBoolean,
   IsObject,
   IsOptional,
   IsString,
@@ -28,6 +29,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Response } from 'express';
+import { ToBoolean } from '../../common/boolean.util';
 import { memoryStorage } from 'multer';
 import { AuthUser, CurrentUser, Public } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
@@ -134,6 +136,15 @@ class UpdateShopPreferencesDto {
   @IsArray()
   @IsString({ each: true })
   mutedEmailNotificationTypes?: string[] | null;
+
+  @ApiPropertyOptional({
+    description:
+      'Chip flotante de reservas y lista de espera en toda la app, con sonido al llegar algo nuevo',
+  })
+  @IsOptional()
+  @ToBoolean()
+  @IsBoolean()
+  salonFloorMonitorEnabled?: boolean;
 }
 
 @ApiTags('profile')
