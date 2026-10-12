@@ -12,6 +12,7 @@ export const PUBLIC_PAGE_PWA_KINDS = [
   'reservationLookup',
   'waiting',
   'attendance',
+  'attendanceCheckIn',
   'serviceRules',
 ] as const;
 
@@ -157,6 +158,20 @@ const KIND_META: Record<PublicPagePwaKind, PublicPagePwaKindMeta> = {
     assertEnabled: (shop) => {
       if (!shop.publicAttendanceEnabled) {
         throw new NotFoundException('Presentismo público no disponible en este local');
+      }
+    },
+  },
+  attendanceCheckIn: {
+    pathPrefix: 'fichar',
+    fullLabel: 'Fichar',
+    shortLabel: 'Fichar',
+    iconLetter: 'F',
+    descriptionSuffix: 'Fichaje por código',
+    defaultTheme: '#1D65A0',
+    backgroundColor: '#ffffff',
+    assertEnabled: (shop) => {
+      if (!shop.publicAttendanceCheckInEnabled) {
+        throw new NotFoundException('Fichaje no disponible en este local');
       }
     },
   },

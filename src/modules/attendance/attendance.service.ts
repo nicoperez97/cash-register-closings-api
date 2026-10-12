@@ -1,11 +1,19 @@
-import { BadRequestException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+  OnModuleInit,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { createHash } from 'crypto';
 import { Between, In, Repository } from 'typeorm';
 import { AttendanceDay } from '../../entities/attendance-day.entity';
 import { Employee } from '../../entities/employee.entity';
 import { ProductionAttendanceDay } from '../../entities/production-attendance-day.entity';
 import { AuthUser } from '../../common/decorators';
 import { isEntityActive } from '../../common/active.util';
+import { resolveShopBusinessDate } from '../../common/business-date';
 import { ShopLiveService } from '../shop-live/shop-live.service';
 import { ShopsService } from '../shops/shops.service';
 import {
@@ -17,6 +25,7 @@ import {
   findShopShift,
   normalizeShopShifts,
   resolveCurrentShift,
+  shiftsOnWeekday,
 } from '../../common/shop-shifts';
 import {
   employeeTypeForShift,
@@ -26,6 +35,10 @@ import {
   shiftWindowFallback,
   weekdayOf,
 } from '../../common/employee-shift.util';
+
+function hashEmployeePin(pin: string): string {
+  return createHash('sha256').update(String(pin).trim()).digest('hex');
+}
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 
@@ -595,6 +608,189 @@ export class AttendanceService implements OnModuleInit {
       throw new NotFoundException('Presentismo no disponible en este local');
     }
     return shop;
+  }
+
+  private async requirePublicCheckInShop(slug: string) {
+    const shop = await this.shops.findActiveBySlug(String(slug ?? '').trim().toLowerCase());
+    if (!shop || !shop.publicAttendanceCheckInEnabled) {
+      throw new NotFoundException('Fichaje no disponible en este local');
+    }
+    return shop;
+  }
+
+  /** Bootstrap del kiosco (sin PIN): solo identidad del local. */
+  async publicCheckInBootstrap(slug: string) {
+    const shop = await this.requirePublicCheckInShop(slug);
+    return {
+      shop: {
+        id: shop.id,
+        name: shop.name,
+        slug: shop.slug,
+        logoUrl: shop.logoUrl ?? null,
+        accentColor: shop.accentColor ?? null,
+        accentSecondary: shop.accentSecondary ?? null,
+      },
+    };
+  }
+
+  /**
+   * Fichar: PIN → elegir turno pendiente → (opcional) horas → marca presente.
+   * Preview si falta turno o faltan horas; save con shiftId (+ horas si aplica).
+   */
+  async publicCheckIn(
+    slug: string,
+    pinRaw: string,
+    opts?: {
+      checkInAt?: string | null;
+      checkOutAt?: string | null;
+      shiftId?: string | null;
+    },
+  ) {
+    const shop = await this.requirePublicCheckInShop(slug);
+    const pin = String(pinRaw ?? '').trim();
+    if (!/^\d{4,6}$/.test(pin)) {
+      throw new UnauthorizedException('PIN incorrecto');
+    }
+    const hash = hashEmployeePin(pin);
+    const employees = await this.employees.find({
+      where: { shopId: shop.id, waiterPinHash: hash },
+    });
+    const employee = employees.find((e) => isEntityActive(e.active));
+    if (!employee) throw new UnauthorizedException('PIN incorrecto');
+
+    const date = resolveShopBusinessDate(new Date(), {
+      timezone: shop.timezone,
+      openingTime: shop.openingTime,
+    });
+    const weekday = weekdayOf(date);
+    const closed = Array.isArray(shop.closedWeekdays) ? shop.closedWeekdays : [];
+    if (weekday != null && closed.includes(weekday)) {
+      throw new BadRequestException('No disponible');
+    }
+
+    const allShifts = normalizeShopShifts(shop.shifts, shop.openingTime);
+    const dayShifts = weekday == null ? allShifts : shiftsOnWeekday(allShifts, weekday);
+    const eligible = dayShifts.filter((s) => employeeWorksShift(employee, s.id));
+    if (!eligible.length) {
+      throw new BadRequestException('No disponible');
+    }
+
+    const shiftIds = eligible.map((s) => s.id);
+    const dayRows = await this.days.find({
+      where: { employeeId: employee.id, date, shiftId: In(shiftIds) },
+    });
+    const presentIds = new Set(dayRows.filter((r) => r.isPresent).map((r) => r.shiftId));
+    const pending = eligible.filter((s) => !presentIds.has(s.id));
+    if (!pending.length) {
+      return {
+        ok: true as const,
+        alreadyMarked: true,
+        displayName: employee.fullName,
+        date,
+      };
+    }
+
+    const current = resolveCurrentShift(allShifts, new Date(), shop.timezone);
+    const defaultShift = pending.find((s) => s.id === current.id) ?? pending[0];
+    const requestedId = String(opts?.shiftId ?? '').trim();
+    const targetShift = requestedId
+      ? pending.find((s) => s.id === requestedId)
+      : defaultShift;
+    if (!targetShift) {
+      throw new BadRequestException('Turno no disponible');
+    }
+
+    const withHours = this.withHours(shop);
+    const hasTimes =
+      opts?.checkInAt !== undefined &&
+      opts?.checkInAt !== null &&
+      String(opts.checkInAt).trim() !== '' &&
+      opts?.checkOutAt !== undefined &&
+      opts?.checkOutAt !== null &&
+      String(opts.checkOutAt).trim() !== '';
+
+    const shiftOptions = pending.map((s) => {
+      const d = this.overtimeBaseline(shop, employee, s.id, date);
+      return {
+        id: s.id,
+        name: s.name,
+        opensAt: s.opensAt,
+        closesAt: s.closesAt,
+        checkInAt: d.checkIn,
+        checkOutAt: d.checkOut,
+      };
+    });
+
+    const defaults = this.overtimeBaseline(shop, employee, targetShift.id, date);
+    const isSave = !!requestedId && (!withHours || hasTimes);
+    if (!isSave) {
+      return {
+        ok: true as const,
+        needsTimes: true as const,
+        alreadyMarked: false,
+        displayName: employee.fullName,
+        date,
+        withHours,
+        defaultShiftId: defaultShift.id,
+        shiftId: targetShift.id,
+        shifts: shiftOptions,
+        checkInAt: defaults.checkIn,
+        checkOutAt: defaults.checkOut,
+      };
+    }
+
+    let row = dayRows.find((r) => r.shiftId === targetShift.id) ?? null;
+    if (row?.isHoliday && !row.isPresent) {
+      throw new BadRequestException('No disponible');
+    }
+    if (row?.isPresent) {
+      return {
+        ok: true as const,
+        alreadyMarked: true,
+        displayName: employee.fullName,
+        date,
+      };
+    }
+
+    const checkInAt = hasTimes ? parseHhMm(opts!.checkInAt) : defaults.checkIn;
+    const checkOutAt = hasTimes ? parseHhMm(opts!.checkOutAt) : defaults.checkOut;
+    if (withHours && (!checkInAt || !checkOutAt)) {
+      throw new BadRequestException('Horario inválido');
+    }
+
+    if (!row) {
+      row = this.days.create({
+        shopId: shop.id,
+        employeeId: employee.id,
+        date,
+        shiftId: targetShift.id,
+        isPresent: false,
+        isHoliday: false,
+        overtimeHours: '0',
+        checkInAt: null,
+        checkOutAt: null,
+        active: true,
+      });
+    }
+    row.shiftId = targetShift.id;
+    this.applyShift(
+      row,
+      {
+        isPresent: true,
+        checkInAt: withHours ? checkInAt : null,
+        checkOutAt: withHours ? checkOutAt : null,
+      },
+      defaults,
+      withHours,
+    );
+    await this.days.save(row);
+    this.live.tick(shop.id, 'attendance');
+    return {
+      ok: true as const,
+      alreadyMarked: false,
+      displayName: employee.fullName,
+      date,
+    };
   }
 
   async publicEmployeeList(slug: string) {

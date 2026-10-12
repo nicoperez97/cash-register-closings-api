@@ -30,6 +30,8 @@ import {
   IsString,
   IsUUID,
   Matches,
+  MaxLength,
+  MinLength,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -38,6 +40,31 @@ import { PermissionsGuard } from '../../common/guards';
 import { AttendanceService } from './attendance.service';
 import { AttendanceExcelImportService } from './attendance-excel-import.service';
 import { ToBoolean } from '../../common/boolean.util';
+
+class PublicAttendanceCheckInDto {
+  @ApiProperty({ example: '1234' })
+  @IsString()
+  @MinLength(4)
+  @MaxLength(6)
+  pin: string;
+
+  @ApiPropertyOptional({ description: 'Turno a fichar (obligatorio al guardar)' })
+  @IsOptional()
+  @IsString()
+  shiftId?: string;
+
+  @ApiPropertyOptional({ example: '18:00' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
+  checkInAt?: string;
+
+  @ApiPropertyOptional({ example: '00:00' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
+  checkOutAt?: string;
+}
 
 class UpsertAttendanceDto {
   @ApiProperty() @IsUUID() employeeId: string;
@@ -259,6 +286,23 @@ export class PublicAttendanceController {
   @Get(':slug/attendance')
   list(@Param('slug') slug: string) {
     return this.attendance.publicEmployeeList(slug);
+  }
+
+  /** Kiosco de fichaje: bootstrap (sin PIN). Debe ir antes de :employeeId. */
+  @Public()
+  @Get(':slug/attendance/check-in')
+  checkInBootstrap(@Param('slug') slug: string) {
+    return this.attendance.publicCheckInBootstrap(slug);
+  }
+
+  @Public()
+  @Post(':slug/attendance/check-in')
+  checkIn(@Param('slug') slug: string, @Body() dto: PublicAttendanceCheckInDto) {
+    return this.attendance.publicCheckIn(slug, dto.pin, {
+      shiftId: dto.shiftId,
+      checkInAt: dto.checkInAt,
+      checkOutAt: dto.checkOutAt,
+    });
   }
 
   @Public()
