@@ -42,8 +42,8 @@ function hashWaiterPin(pin: string): string {
 function normalizeWaiterPinInput(raw: string | null): string | null {
   if (raw === null || raw === '') return null;
   const pin = String(raw).trim();
-  if (!/^\d{4,6}$/.test(pin)) {
-    throw new BadRequestException('El código mozo debe tener 4 a 6 dígitos');
+  if (!/^\d{4}$/.test(pin)) {
+    throw new BadRequestException('El código de empleado debe tener 4 dígitos');
   }
   return pin;
 }
@@ -250,7 +250,34 @@ export class EmployeesService implements OnModuleInit {
     };
   }
 
-  private applyWaiterPin(row: Employee, waiterPin: string | null | undefined) {
+  /** PIN único por local (mismo hash → mismo código). */
+  private async assertWaiterPinUnique(
+    shopId: string,
+    pin: string,
+    excludeEmployeeId?: string,
+  ) {
+    const hash = hashWaiterPin(pin);
+    const clash = await this.employees.findOne({
+      where: excludeEmployeeId
+        ? { shopId, waiterPinHash: hash, id: Not(excludeEmployeeId) }
+        : { shopId, waiterPinHash: hash },
+      select: ['id', 'fullName'],
+    });
+    if (clash) {
+      const who = String(clash.fullName ?? '').trim();
+      throw new BadRequestException(
+        who
+          ? `Ese código ya lo usa ${who} en este local`
+          : 'Ese código ya lo usa otro empleado de este local',
+      );
+    }
+  }
+
+  private async applyWaiterPin(
+    row: Employee,
+    waiterPin: string | null | undefined,
+    opts?: { excludeEmployeeId?: string },
+  ) {
     if (waiterPin === undefined) return;
     const pin = normalizeWaiterPinInput(waiterPin);
     if (pin === null) {
@@ -259,6 +286,7 @@ export class EmployeesService implements OnModuleInit {
       row.waiterPinClear = null;
       return;
     }
+    await this.assertWaiterPinUnique(row.shopId, pin, opts?.excludeEmployeeId);
     row.waiterPinHash = hashWaiterPin(pin);
     row.waiterPinPrefix = pin.slice(-2);
     row.waiterPinClear = pin;
@@ -410,7 +438,7 @@ export class EmployeesService implements OnModuleInit {
       serviceCheckOut: parseHhMm(dto.serviceCheckOut),
       active: dto.active ?? true,
     });
-    this.applyWaiterPin(row, dto.waiterPin);
+    await this.applyWaiterPin(row, dto.waiterPin);
     const saved = await this.employees.save(row);
     await this.salaries.recordHistory({
       shopId,
@@ -508,7 +536,7 @@ export class EmployeesService implements OnModuleInit {
     if (dto.serviceCheckIn !== undefined) row.serviceCheckIn = parseHhMm(dto.serviceCheckIn);
     if (dto.serviceCheckOut !== undefined) row.serviceCheckOut = parseHhMm(dto.serviceCheckOut);
     if (dto.active !== undefined) row.active = dto.active;
-    this.applyWaiterPin(row, dto.waiterPin);
+    await this.applyWaiterPin(row, dto.waiterPin, { excludeEmployeeId: id });
 
     const producesFood = !!row.producesFood;
     if (dto.supervisorEmployeeId !== undefined) {

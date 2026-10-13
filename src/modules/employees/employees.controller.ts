@@ -152,12 +152,12 @@ class CreateEmployeeDto {
   @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
   serviceCheckOut?: string | null;
   @ApiPropertyOptional({
-    description: 'PIN mozo 4–6 dígitos; vacío/null borra el PIN',
+    description: 'PIN empleado 4 dígitos; vacío/null borra el PIN',
   })
   @IsOptional()
   @ValidateIf((_, v) => v != null && v !== '')
   @IsString()
-  @Matches(/^\d{4,6}$/)
+  @Matches(/^\d{4}$/)
   waiterPin?: string | null;
   @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() active?: boolean;
 }
@@ -216,12 +216,12 @@ class UpdateEmployeeDto {
   @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
   serviceCheckOut?: string | null;
   @ApiPropertyOptional({
-    description: 'PIN mozo 4–6 dígitos; vacío/null borra el PIN',
+    description: 'PIN empleado 4 dígitos; vacío/null borra el PIN',
   })
   @IsOptional()
   @ValidateIf((_, v) => v != null && v !== '')
   @IsString()
-  @Matches(/^\d{4,6}$/)
+  @Matches(/^\d{4}$/)
   waiterPin?: string | null;
   @ApiPropertyOptional() @IsOptional() @ToBoolean() @IsBoolean() active?: boolean;
 }

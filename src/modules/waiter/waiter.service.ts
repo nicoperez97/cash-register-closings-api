@@ -509,7 +509,7 @@ export class WaiterService implements OnModuleInit {
   async login(slug: string, pinRaw: string) {
     const shop = await this.requireShop(slug);
     const pin = String(pinRaw ?? '').trim();
-    if (!/^\d{4,6}$/.test(pin)) {
+    if (!/^\d{4}$/.test(pin)) {
       throw new UnauthorizedException('PIN incorrecto');
     }
     const hash = hashPin(pin);
