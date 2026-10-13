@@ -1034,6 +1034,7 @@ export class AuthService implements OnModuleInit {
         isShortageAdmin: !!link?.isShortageAdmin,
         isReservationAdmin: !!link?.isReservationAdmin,
         isCustomerOrdersAdmin: !!link?.isCustomerOrdersAdmin,
+        isAttendanceCheckInAdmin: !!link?.isAttendanceCheckInAdmin,
         orderingConfigVisibility: normalizeOrderingConfigVisibility(
           link?.orderingConfigVisibility as Partial<Record<string, unknown>> | null,
         ),

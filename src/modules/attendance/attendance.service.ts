@@ -11,11 +11,14 @@ import { Between, In, Repository } from 'typeorm';
 import { AttendanceDay } from '../../entities/attendance-day.entity';
 import { Employee } from '../../entities/employee.entity';
 import { ProductionAttendanceDay } from '../../entities/production-attendance-day.entity';
+import { UserShop } from '../../entities/user-shop.entity';
 import { AuthUser } from '../../common/decorators';
 import { isEntityActive } from '../../common/active.util';
 import { resolveShopBusinessDate } from '../../common/business-date';
+import { NotificationType } from '../../common/enums';
 import { ShopLiveService } from '../shop-live/shop-live.service';
 import { ShopsService } from '../shops/shops.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import {
   computeOvertimeHours,
   parseHhMm,
@@ -29,6 +32,7 @@ import {
 } from '../../common/shop-shifts';
 import {
   employeeTypeForShift,
+  employeeWorksFixedShift,
   employeeWorksShift,
   normalizeShiftAssignments,
   shiftServiceSchedule,
@@ -50,8 +54,10 @@ export class AttendanceService implements OnModuleInit {
     @InjectRepository(Employee) private readonly employees: Repository<Employee>,
     @InjectRepository(ProductionAttendanceDay)
     private readonly prodDays: Repository<ProductionAttendanceDay>,
+    @InjectRepository(UserShop) private readonly userShops: Repository<UserShop>,
     private readonly shops: ShopsService,
     private readonly live: ShopLiveService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async onModuleInit() {
@@ -670,7 +676,7 @@ export class AttendanceService implements OnModuleInit {
 
     const allShifts = normalizeShopShifts(shop.shifts, shop.openingTime);
     const dayShifts = weekday == null ? allShifts : shiftsOnWeekday(allShifts, weekday);
-    const eligible = dayShifts.filter((s) => employeeWorksShift(employee, s.id));
+    const eligible = dayShifts.filter((s) => employeeWorksFixedShift(employee, s.id));
     if (!eligible.length) {
       throw new BadRequestException('No disponible');
     }
@@ -785,12 +791,52 @@ export class AttendanceService implements OnModuleInit {
     );
     await this.days.save(row);
     this.live.tick(shop.id, 'attendance');
+    void this.notifyCheckInAdmins(shop.id, shop.name, {
+      displayName: employee.fullName,
+      date,
+      shiftName: targetShift.name,
+      checkInAt: withHours ? checkInAt : null,
+      checkOutAt: withHours ? checkOutAt : null,
+    }).catch(() => undefined);
     return {
       ok: true as const,
       alreadyMarked: false,
       displayName: employee.fullName,
       date,
     };
+  }
+
+  private async notifyCheckInAdmins(
+    shopId: string,
+    shopName: string,
+    opts: {
+      displayName: string;
+      date: string;
+      shiftName: string;
+      checkInAt?: string | null;
+      checkOutAt?: string | null;
+    },
+  ) {
+    const links = await this.userShops.find({ where: { shopId } });
+    const userIds = [
+      ...new Set(links.filter((l) => !!l.isAttendanceCheckInAdmin).map((l) => l.userId)),
+    ];
+    if (!userIds.length) return;
+    const name = String(opts.displayName ?? '').trim() || 'Empleado';
+    const shift = String(opts.shiftName ?? '').trim() || 'turno';
+    const hours =
+      opts.checkInAt && opts.checkOutAt
+        ? ` · ${opts.checkInAt}–${opts.checkOutAt}`
+        : '';
+    await this.notifications.createMany(
+      userIds.map((userId) => ({
+        userId,
+        shopId,
+        type: NotificationType.ATTENDANCE_CHECK_IN,
+        title: 'Fichaje registrado',
+        body: `${shopName}: ${name} fichó ${shift} (${opts.date})${hours}`,
+      })),
+    );
   }
 
   async publicEmployeeList(slug: string) {

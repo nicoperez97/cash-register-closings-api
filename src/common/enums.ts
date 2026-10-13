@@ -103,6 +103,8 @@ export enum NotificationType {
   PAYMENT_DELETED = 'PAYMENT_DELETED',
   /** Productor cargó un gasto a reintegrar. */
   REIMBURSEMENT_CREATED = 'REIMBURSEMENT_CREATED',
+  /** Empleado fichó presente en /fichar. */
+  ATTENDANCE_CHECK_IN = 'ATTENDANCE_CHECK_IN',
 }
 
 /** Etiquetas para UI de configuración de mails del local. */
@@ -129,6 +131,7 @@ export const NOTIFICATION_TYPE_LABELS: Record<NotificationType, string> = {
   [NotificationType.PAYMENT_UPDATED]: 'Pagos · editados',
   [NotificationType.PAYMENT_DELETED]: 'Pagos · eliminados',
   [NotificationType.REIMBURSEMENT_CREATED]: 'Reintegros · gasto de productor',
+  [NotificationType.ATTENDANCE_CHECK_IN]: 'Presentismo · fichaje',
 };
 
 export const ALL_NOTIFICATION_TYPES: NotificationType[] = Object.values(NotificationType);

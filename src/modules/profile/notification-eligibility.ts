@@ -38,6 +38,10 @@ const SHORTAGE_TYPES: NotificationType[] = [
 
 const RESERVATION_TYPES: NotificationType[] = [NotificationType.RESERVATION_REQUEST];
 
+const ATTENDANCE_CHECK_IN_TYPES: NotificationType[] = [
+  NotificationType.ATTENDANCE_CHECK_IN,
+];
+
 function hasCustomerOrdersAdmin(
   link: UserShop | null | undefined,
   globalRole: GlobalRole,
@@ -74,6 +78,9 @@ export function eligibleNotificationTypes(opts: {
   }
   if (link?.isReservationAdmin) {
     for (const t of RESERVATION_TYPES) set.add(t);
+  }
+  if (link?.isAttendanceCheckInAdmin) {
+    for (const t of ATTENDANCE_CHECK_IN_TYPES) set.add(t);
   }
 
   return [...set];

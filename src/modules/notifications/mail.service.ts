@@ -215,6 +215,9 @@ export class MailService {
     if (type === NotificationType.CUSTOMER_ORDER_CREATED) {
       return { path: '/customer-orders', label: 'Ver pedidos online' };
     }
+    if (type === NotificationType.ATTENDANCE_CHECK_IN) {
+      return { path: '/attendance', label: 'Ver presentismo' };
+    }
     if (String(type).startsWith('MOVEMENT_')) {
       return { path: '/movements', label: 'Ver gastos' };
     }

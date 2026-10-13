@@ -50,6 +50,9 @@ function deepLinkFor(
   if (type === NotificationType.PRODUCTION_HOURS_LOGGED) {
     return `/production-attendance${queryString({ shop })}`;
   }
+  if (type === NotificationType.ATTENDANCE_CHECK_IN) {
+    return `/attendance${queryString({ shop })}`;
+  }
   if (
     type === NotificationType.STOCK_BELOW_MINIMUM ||
     type === NotificationType.STOCK_SHARED
@@ -183,7 +186,8 @@ export class NotificationsService implements OnModuleInit {
             'MOVEMENT_DELETED',
             'PAYMENT_UPDATED',
             'PAYMENT_DELETED',
-            'REIMBURSEMENT_CREATED'
+            'REIMBURSEMENT_CREATED',
+            'ATTENDANCE_CHECK_IN'
           ) NOT NULL
       `);
     } catch {

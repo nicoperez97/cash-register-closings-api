@@ -67,6 +67,10 @@ export class UserShop {
   @Column({ default: false })
   isCustomerOrdersAdmin: boolean;
 
+  /** Recibe notificaciones cuando un empleado ficha en /fichar. */
+  @Column({ default: false })
+  isAttendanceCheckInAdmin: boolean;
+
   /**
    * Nivel por bloque en Pedidos → Configurar: none | read | manage.
    * Keys: caja, channels, payments, items, extras.
