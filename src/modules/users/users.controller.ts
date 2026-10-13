@@ -102,6 +102,12 @@ class CreateUserDto {
   @ToBoolean() @IsBoolean()
   isCustomerOrdersAdmin?: boolean;
   @ApiPropertyOptional({
+    description: 'Si es true, recibe notificaciones cuando un empleado ficha en /fichar',
+  })
+  @IsOptional()
+  @ToBoolean() @IsBoolean()
+  isAttendanceCheckInAdmin?: boolean;
+  @ApiPropertyOptional({
     description:
       'Nivel por bloque en Pedidos → Configurar (none | read | manage). Keys: caja, channels, payments, items, extras',
     type: 'object',
@@ -217,6 +223,12 @@ class UpdateUserDto {
   @IsOptional()
   @ToBoolean() @IsBoolean()
   isCustomerOrdersAdmin?: boolean;
+  @ApiPropertyOptional({
+    description: 'Si es true, recibe notificaciones cuando un empleado ficha en /fichar',
+  })
+  @IsOptional()
+  @ToBoolean() @IsBoolean()
+  isAttendanceCheckInAdmin?: boolean;
   @ApiPropertyOptional({
     description:
       'Nivel por bloque en Pedidos → Configurar (none | read | manage). Keys: caja, channels, payments, items, extras',
