@@ -165,6 +165,28 @@ export function employeeWorksShift(
   return assignments.some((a) => a.shiftId === shiftId);
 }
 
+/**
+ * Turno fijo del empleado (para /fichar).
+ * Con asignaciones: solo las marcadas FIXED.
+ * Sin asignaciones: legacy FIXED = sí; ROTATING = no.
+ */
+export function employeeWorksFixedShift(
+  emp: {
+    type?: string | null;
+    shiftAssignments?: EmployeeShiftAssignment[] | null;
+  },
+  shiftId?: string | null,
+): boolean {
+  if (!shiftId) return false;
+  const assignments = normalizeShiftAssignments(emp.shiftAssignments);
+  if (!assignments.length) {
+    return normalizeEmployeeType(emp.type) === EmployeeType.FIXED;
+  }
+  return assignments.some(
+    (a) => a.shiftId === shiftId && a.type === EmployeeType.FIXED,
+  );
+}
+
 /** Tipo legacy derivado de las asignaciones (para listados sin turno). */
 export function deriveEmployeeType(
   assignments: EmployeeShiftAssignment[],

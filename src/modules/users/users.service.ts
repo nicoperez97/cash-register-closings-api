@@ -84,6 +84,8 @@ export class CreateUserBody {
   isReservationAdmin?: boolean;
   /** Administrador de pedidos online: recibe notificaciones de pedidos. */
   isCustomerOrdersAdmin?: boolean;
+  /** Administrador de fichaje: recibe notificaciones cuando alguien ficha. */
+  isAttendanceCheckInAdmin?: boolean;
   /** Qué ve en Pedidos → Configurar (true = visible). */
   orderingConfigVisibility?: Partial<OrderingConfigVisibility> | null;
   /** Nivel por sección de Configuración del local (none | read | manage). */
@@ -124,6 +126,8 @@ export class UpdateUserBody {
   isReservationAdmin?: boolean;
   /** Administrador de pedidos online: recibe notificaciones de pedidos. */
   isCustomerOrdersAdmin?: boolean;
+  /** Administrador de fichaje: recibe notificaciones cuando alguien ficha. */
+  isAttendanceCheckInAdmin?: boolean;
   /** Qué ve en Pedidos → Configurar (true = visible). */
   orderingConfigVisibility?: Partial<OrderingConfigVisibility> | null;
   /** Nivel por sección de Configuración del local (none | read | manage). */
@@ -220,6 +224,14 @@ export class UsersService implements OnModuleInit {
       await this.userShops.query(`
         ALTER TABLE user_shops
           ADD COLUMN isCustomerOrdersAdmin TINYINT(1) NOT NULL DEFAULT 0
+      `);
+    } catch {
+      // columna ya existe
+    }
+    try {
+      await this.userShops.query(`
+        ALTER TABLE user_shops
+          ADD COLUMN isAttendanceCheckInAdmin TINYINT(1) NOT NULL DEFAULT 0
       `);
     } catch {
       // columna ya existe
@@ -448,6 +460,7 @@ export class UsersService implements OnModuleInit {
         isShortageAdmin: !!link?.isShortageAdmin,
         isReservationAdmin: !!link?.isReservationAdmin,
         isCustomerOrdersAdmin: !!link?.isCustomerOrdersAdmin,
+        isAttendanceCheckInAdmin: !!link?.isAttendanceCheckInAdmin,
         orderingConfigVisibility: this.linkOrderingConfigVisibility(link),
         shopConfigVisibility: this.linkShopConfigVisibility(link),
         reportsProductsVisibility: this.linkReportsProductsVisibility(link),
@@ -533,6 +546,8 @@ export class UsersService implements OnModuleInit {
           isReservationAdmin: defaultShopId === shopId ? !!dto.isReservationAdmin : false,
           isCustomerOrdersAdmin:
             defaultShopId === shopId ? !!dto.isCustomerOrdersAdmin : false,
+          isAttendanceCheckInAdmin:
+            defaultShopId === shopId ? !!dto.isAttendanceCheckInAdmin : false,
           orderingConfigVisibility,
           shopConfigVisibility,
           reportsProductsVisibility,
@@ -684,6 +699,8 @@ export class UsersService implements OnModuleInit {
                 isShortageAdmin: shopId === sid ? !!dto.isShortageAdmin : false,
                 isReservationAdmin: shopId === sid ? !!dto.isReservationAdmin : false,
                 isCustomerOrdersAdmin: shopId === sid ? !!dto.isCustomerOrdersAdmin : false,
+                isAttendanceCheckInAdmin:
+                  shopId === sid ? !!dto.isAttendanceCheckInAdmin : false,
                 orderingConfigVisibility,
                 shopConfigVisibility,
                 reportsProductsVisibility,
@@ -733,6 +750,9 @@ export class UsersService implements OnModuleInit {
             if (shopId === sid && dto.isCustomerOrdersAdmin !== undefined) {
               exists.isCustomerOrdersAdmin = !!dto.isCustomerOrdersAdmin;
             }
+            if (shopId === sid && dto.isAttendanceCheckInAdmin !== undefined) {
+              exists.isAttendanceCheckInAdmin = !!dto.isAttendanceCheckInAdmin;
+            }
             if (shopId === sid && dto.requireClosingFiles !== undefined) {
               exists.requireClosingFiles = !!dto.requireClosingFiles;
             }
@@ -759,6 +779,9 @@ export class UsersService implements OnModuleInit {
         );
         const prevCustomerOrdersAdmin = new Map(
           links.map((l) => [l.shopId, !!l.isCustomerOrdersAdmin]),
+        );
+        const prevAttendanceCheckInAdmin = new Map(
+          links.map((l) => [l.shopId, !!l.isAttendanceCheckInAdmin]),
         );
         const prevOrderingConfigVisibility = new Map(
           links.map((l) => [l.shopId, this.linkOrderingConfigVisibility(l)]),
@@ -821,6 +844,10 @@ export class UsersService implements OnModuleInit {
             shopId === sid && dto.isCustomerOrdersAdmin !== undefined
               ? !!dto.isCustomerOrdersAdmin
               : (prevCustomerOrdersAdmin.get(sid) ?? false);
+          const attendanceCheckInAdmin =
+            shopId === sid && dto.isAttendanceCheckInAdmin !== undefined
+              ? !!dto.isAttendanceCheckInAdmin
+              : (prevAttendanceCheckInAdmin.get(sid) ?? false);
           const requireClosingFiles =
             shopId === sid && dto.requireClosingFiles !== undefined
               ? !!dto.requireClosingFiles
@@ -852,6 +879,7 @@ export class UsersService implements OnModuleInit {
               isShortageAdmin: shortageAdmin,
               isReservationAdmin: reservationAdmin,
               isCustomerOrdersAdmin: customerOrdersAdmin,
+              isAttendanceCheckInAdmin: attendanceCheckInAdmin,
               orderingConfigVisibility,
               shopConfigVisibility,
               reportsProductsVisibility,
@@ -875,6 +903,7 @@ export class UsersService implements OnModuleInit {
         dto.isShortageAdmin !== undefined ||
         dto.isReservationAdmin !== undefined ||
         dto.isCustomerOrdersAdmin !== undefined ||
+        dto.isAttendanceCheckInAdmin !== undefined ||
         dto.requireClosingFiles !== undefined ||
         dto.canEditExpenses !== undefined ||
         dto.canEditPayments !== undefined)
@@ -919,6 +948,9 @@ export class UsersService implements OnModuleInit {
         if (dto.isCustomerOrdersAdmin !== undefined) {
           link.isCustomerOrdersAdmin = !!dto.isCustomerOrdersAdmin;
         }
+        if (dto.isAttendanceCheckInAdmin !== undefined) {
+          link.isAttendanceCheckInAdmin = !!dto.isAttendanceCheckInAdmin;
+        }
         if (dto.requireClosingFiles !== undefined) {
           link.requireClosingFiles = !!dto.requireClosingFiles;
         }
@@ -947,6 +979,7 @@ export class UsersService implements OnModuleInit {
             isShortageAdmin: !!dto.isShortageAdmin,
             isReservationAdmin: !!dto.isReservationAdmin,
             isCustomerOrdersAdmin: !!dto.isCustomerOrdersAdmin,
+            isAttendanceCheckInAdmin: !!dto.isAttendanceCheckInAdmin,
             orderingConfigVisibility: this.resolveOrderingConfigVisibilityFromDto(dto),
             shopConfigVisibility: this.resolveShopConfigVisibilityFromDto(dto),
             reportsProductsVisibility: this.resolveReportsProductsVisibilityFromDto(dto),
@@ -1029,6 +1062,7 @@ export class UsersService implements OnModuleInit {
       isShortageAdmin: !!link?.isShortageAdmin,
       isReservationAdmin: !!link?.isReservationAdmin,
       isCustomerOrdersAdmin: !!link?.isCustomerOrdersAdmin,
+      isAttendanceCheckInAdmin: !!link?.isAttendanceCheckInAdmin,
       orderingConfigVisibility: this.linkOrderingConfigVisibility(link),
       shopConfigVisibility: this.linkShopConfigVisibility(link),
       reportsProductsVisibility: this.linkReportsProductsVisibility(link),

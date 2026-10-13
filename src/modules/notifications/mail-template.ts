@@ -138,6 +138,12 @@ const TYPE_META: Record<string, TypeMeta> = {
     toneSoft: '#e0f2f1',
     hint: 'Se actualizaron horas de producción.',
   },
+  [NotificationType.ATTENDANCE_CHECK_IN]: {
+    label: 'Fichaje',
+    tone: '#1565c0',
+    toneSoft: '#e3f2fd',
+    hint: 'Un empleado marcó presente desde Fichar.',
+  },
   [NotificationType.REIMBURSEMENT_CREATED]: {
     label: 'Reintegros',
     tone: '#ef6c00',

@@ -1,0 +1,31 @@
+-- Admin de fichaje: notificaciones cuando alguien marca presente en /fichar.
+ALTER TABLE user_shops
+  ADD COLUMN isAttendanceCheckInAdmin TINYINT(1) NOT NULL DEFAULT 0;
+
+-- Tipo de notificación (si el motor usa ENUM; el API también lo amplia en onModuleInit).
+ALTER TABLE notifications
+  MODIFY COLUMN type ENUM(
+    'PAYMENT_VALIDATE',
+    'PAYMENT_PAY',
+    'PAYMENT_REJECTED',
+    'PAYMENT_PAID',
+    'CLOSING_CREATED',
+    'CASH_WITHDRAWAL_PICKED',
+    'PRODUCTION_HOURS_LOGGED',
+    'STOCK_BELOW_MINIMUM',
+    'STOCK_SHARED',
+    'BEVERAGE_STOCK_BELOW_MINIMUM',
+    'BEVERAGE_STOCK_SHARED',
+    'SHORTAGE_CREATED',
+    'SHORTAGE_LEVEL_LOW',
+    'SHORTAGE_RESOLVED',
+    'RESERVATION_REQUEST',
+    'CUSTOMER_ORDER_CREATED',
+    'MOVEMENT_CREATED',
+    'MOVEMENT_UPDATED',
+    'MOVEMENT_DELETED',
+    'PAYMENT_UPDATED',
+    'PAYMENT_DELETED',
+    'REIMBURSEMENT_CREATED',
+    'ATTENDANCE_CHECK_IN'
+  ) NOT NULL;
