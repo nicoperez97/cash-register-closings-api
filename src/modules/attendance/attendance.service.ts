@@ -654,7 +654,7 @@ export class AttendanceService implements OnModuleInit {
   ) {
     const shop = await this.requirePublicCheckInShop(slug);
     const pin = String(pinRaw ?? '').trim();
-    if (!/^\d{4,6}$/.test(pin)) {
+    if (!/^\d{4}$/.test(pin)) {
       throw new UnauthorizedException('PIN incorrecto');
     }
     const hash = hashEmployeePin(pin);
@@ -688,11 +688,19 @@ export class AttendanceService implements OnModuleInit {
     const presentIds = new Set(dayRows.filter((r) => r.isPresent).map((r) => r.shiftId));
     const pending = eligible.filter((s) => !presentIds.has(s.id));
     if (!pending.length) {
+      const present = dayRows.filter((r) => r.isPresent);
+      const first = present[0];
       return {
         ok: true as const,
         alreadyMarked: true,
-        displayName: employee.fullName,
         date,
+        checkInAt: first?.checkInAt ?? null,
+        checkOutAt: first?.checkOutAt ?? null,
+        marks: present.map((r) => ({
+          shiftId: r.shiftId,
+          checkInAt: r.checkInAt ?? null,
+          checkOutAt: r.checkOutAt ?? null,
+        })),
       };
     }
 
@@ -753,8 +761,16 @@ export class AttendanceService implements OnModuleInit {
       return {
         ok: true as const,
         alreadyMarked: true,
-        displayName: employee.fullName,
         date,
+        checkInAt: row.checkInAt ?? null,
+        checkOutAt: row.checkOutAt ?? null,
+        marks: [
+          {
+            shiftId: row.shiftId,
+            checkInAt: row.checkInAt ?? null,
+            checkOutAt: row.checkOutAt ?? null,
+          },
+        ],
       };
     }
 
@@ -801,8 +817,9 @@ export class AttendanceService implements OnModuleInit {
     return {
       ok: true as const,
       alreadyMarked: false,
-      displayName: employee.fullName,
       date,
+      checkInAt: withHours ? checkInAt : null,
+      checkOutAt: withHours ? checkOutAt : null,
     };
   }
 
