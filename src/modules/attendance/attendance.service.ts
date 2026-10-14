@@ -755,8 +755,15 @@ export class AttendanceService implements OnModuleInit {
     });
     const weekday = weekdayOf(date);
     const closed = Array.isArray(shop.closedWeekdays) ? shop.closedWeekdays : [];
+    const shopPayload = {
+      id: shop.id,
+      name: shop.name,
+      accentColor: shop.accentColor ?? null,
+      accentSecondary: shop.accentSecondary ?? null,
+      logoUrl: shop.logoUrl ?? null,
+    };
     if (weekday != null && closed.includes(weekday)) {
-      return { date, withHours, employees: [] as const };
+      return { date, withHours, shop: shopPayload, employees: [] as const };
     }
     const allShifts = normalizeShopShifts(shop.shifts, shop.openingTime);
     const dayShifts = weekday == null ? allShifts : shiftsOnWeekday(allShifts, weekday);
@@ -812,13 +819,7 @@ export class AttendanceService implements OnModuleInit {
     return {
       date,
       withHours,
-      shop: {
-        id: shop.id,
-        name: shop.name,
-        accentColor: shop.accentColor ?? null,
-        accentSecondary: shop.accentSecondary ?? null,
-        logoUrl: shop.logoUrl ?? null,
-      },
+      shop: shopPayload,
       employees: out,
     };
   }
