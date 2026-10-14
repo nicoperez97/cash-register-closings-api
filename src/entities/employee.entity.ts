@@ -92,6 +92,10 @@ export class Employee extends BaseEntity {
   @Column({ type: 'tinyint', default: 1 })
   countsForAttendanceBonus: boolean;
 
+  /** Si aparece en Asistencia → Fichar (admin) y puede fichar por PIN en /fichar. */
+  @Column({ type: 'tinyint', default: 1 })
+  showInFichar: boolean;
+
   /** Si produce comida → aparece en asistencia de producción. */
   @Column({ type: 'tinyint', default: 0 })
   producesFood: boolean;

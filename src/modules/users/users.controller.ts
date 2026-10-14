@@ -29,7 +29,12 @@ import {
   MinLength,
   ValidateIf,
 } from 'class-validator';
-import { CurrentUser, AuthUser, RequireManageUsers } from '../../common/decorators';
+import {
+  CurrentUser,
+  AuthUser,
+  RequireManageUsers,
+  RequireViewUsers,
+} from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
 import { GlobalRole } from '../../common/enums';
 import { UsersService } from './users.service';
@@ -319,7 +324,7 @@ export class UsersController {
   ) {}
 
   @Get()
-  @RequireManageUsers()
+  @RequireViewUsers()
   list(@CurrentUser() user: AuthUser, @Query('shopId') shopId?: string) {
     return this.users.list(user, shopId);
   }
@@ -395,7 +400,7 @@ export class UsersController {
   }
 
   @Get(':id')
-  @RequireManageUsers()
+  @RequireViewUsers()
   one(
     @CurrentUser() user: AuthUser,
     @Param('id') id: string,

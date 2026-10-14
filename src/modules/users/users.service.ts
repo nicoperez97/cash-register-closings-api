@@ -19,6 +19,8 @@ import { isGlobalAdmin, isSuperAdmin } from '../../common/guards';
 import { markDeletedUnique } from '../../common/soft-delete.util';
 import { parseCommissionPercent } from '../../common/account-commission';
 import {
+  applyComandaScreenSplit,
+  applyCustomerOrdersScreenSplit,
   deriveModulesFromRole,
   ModulePermissionsMap,
   sanitizeModulePermissions,
@@ -360,6 +362,20 @@ export class UsersService implements OnModuleInit {
     throw new ForbiddenException('Solo un administrador del local puede gestionar usuarios');
   }
 
+  /** Ver usuarios del local: users.read / users.manage / admin del local. */
+  assertShopUserViewer(user: AuthUser, shopId: string) {
+    if (isSuperAdmin(user.globalRole as GlobalRole)) return;
+    if (!user.shopIds.includes(shopId)) {
+      throw new ForbiddenException('Sin acceso a este local');
+    }
+    if (isGlobalAdmin(user.globalRole as GlobalRole)) return;
+    const perms = user.shopPermissions?.[shopId] ?? [];
+    if (perms.includes('users.manage') || perms.includes('users.read')) return;
+    const role = (user.shopRoles?.[shopId] ?? user.globalRole) as GlobalRole;
+    if (SHOP_ADMIN_ROLES.has(role)) return;
+    throw new ForbiddenException('Sin permiso para ver usuarios de este local');
+  }
+
   canManageUsersSomewhere(user: AuthUser): boolean {
     if (isGlobalAdmin(user.globalRole as GlobalRole)) return true;
     if (user.permissions.includes('users.manage')) return true;
@@ -370,6 +386,12 @@ export class UsersService implements OnModuleInit {
     });
   }
 
+  canViewUsersSomewhere(user: AuthUser): boolean {
+    if (this.canManageUsersSomewhere(user)) return true;
+    if (user.permissions.includes('users.read')) return true;
+    return user.shopIds.some((id) => user.shopPermissions?.[id]?.includes('users.read'));
+  }
+
   managedShopIds(user: AuthUser): string[] | null {
     // Solo Super admin ve usuarios de todos los locales.
     if (isSuperAdmin(user.globalRole as GlobalRole)) return null;
@@ -378,18 +400,19 @@ export class UsersService implements OnModuleInit {
     }
     return user.shopIds.filter((id) => {
       if (user.shopPermissions?.[id]?.includes('users.manage')) return true;
+      if (user.shopPermissions?.[id]?.includes('users.read')) return true;
       const role = (user.shopRoles?.[id] ?? user.globalRole) as GlobalRole;
       return SHOP_ADMIN_ROLES.has(role);
     });
   }
 
   async list(actor: AuthUser, shopId?: string) {
-    if (!this.canManageUsersSomewhere(actor)) {
+    if (!this.canViewUsersSomewhere(actor)) {
       throw new ForbiddenException('Sin permiso para ver usuarios');
     }
 
     if (shopId) {
-      this.assertShopUserAdmin(actor, shopId);
+      this.assertShopUserViewer(actor, shopId);
       return this.listByShop(shopId);
     }
 
@@ -1023,7 +1046,7 @@ export class UsersService implements OnModuleInit {
   }
 
   async one(actor: AuthUser, id: string, shopId?: string) {
-    if (!this.canManageUsersSomewhere(actor)) {
+    if (!this.canViewUsersSomewhere(actor)) {
       throw new ForbiddenException('Sin permiso');
     }
     const u = await this.users.findOne({ where: { id } });
@@ -1192,6 +1215,14 @@ export class UsersService implements OnModuleInit {
       ) {
         modules.reportsSales = 'read';
       }
+      if (
+        !Object.prototype.hasOwnProperty.call(link.modulePermissions, 'attendanceFichar') &&
+        modules.attendance === 'manage'
+      ) {
+        modules.attendanceFichar = 'manage';
+      }
+      applyCustomerOrdersScreenSplit(modules);
+      applyComandaScreenSplit(modules);
       return modules;
     }
     const role = (link?.shopRole ?? globalRole) as GlobalRole;

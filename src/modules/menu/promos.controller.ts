@@ -21,6 +21,7 @@ export class PromosController {
   @RequireAnyPermissions(
     'shops.manage',
     'orderingCatalog.manage',
+    'promos.read',
     'promos.manage',
     'customerOrders.manage',
   )

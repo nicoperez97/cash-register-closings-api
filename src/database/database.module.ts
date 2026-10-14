@@ -8,8 +8,21 @@ import { DatabaseService } from './database.service';
  * Uniques viejos que también sirven de índice a una FK.
  * TypeORM quiere dropearlos al sumar shiftId; MySQL no deja si no hay otro índice
  * en la columna de la FK. Preparamos índices + unique nuevo antes del synchronize.
+ *
+ * También repara customer_orders.code vacíos: el unique (shopId, code) no se puede
+ * crear si hay varias filas con code='' (p. ej. datos viejos / imports).
  */
 async function ensureFkIndexesBeforeSync(ds: DataSource) {
+  try {
+    await ds.query(`
+      UPDATE customer_orders
+      SET code = CONCAT('E', UPPER(LEFT(REPLACE(id, '-', ''), 7)))
+      WHERE code IS NULL OR TRIM(code) = ''
+    `);
+  } catch {
+    // tabla todavía no existe
+  }
+
   const stmts = [
     `CREATE INDEX IDX_attendance_days_employeeId ON attendance_days (employeeId)`,
     // payroll_lines: unique viejo (periodId, employeeId) → FKs necesitan índices propios

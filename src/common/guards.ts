@@ -7,7 +7,14 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AuthGuard } from '@nestjs/passport';
-import { AuthUser, IS_PUBLIC_KEY, MANAGE_USERS_KEY, PERMISSIONS_ANY_KEY, PERMISSIONS_KEY } from './decorators';
+import {
+  AuthUser,
+  IS_PUBLIC_KEY,
+  MANAGE_USERS_KEY,
+  PERMISSIONS_ANY_KEY,
+  PERMISSIONS_KEY,
+  VIEW_USERS_KEY,
+} from './decorators';
 import { GlobalRole, Permission, ROLE_PERMISSIONS } from './enums';
 
 const SHOP_ADMIN_ROLES = new Set<GlobalRole>([GlobalRole.OWNER, GlobalRole.ADMIN]);
@@ -49,6 +56,20 @@ export class PermissionsGuard implements CanActivate {
       if (!user) throw new UnauthorizedException();
       if (!canManageUsersSomewhere(user)) {
         throw new ForbiddenException('Sin permiso para gestionar usuarios');
+      }
+      return true;
+    }
+
+    const viewUsers = this.reflector.getAllAndOverride<boolean>(VIEW_USERS_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (viewUsers) {
+      const req = context.switchToHttp().getRequest();
+      const user = req.user as AuthUser | undefined;
+      if (!user) throw new UnauthorizedException();
+      if (!canViewUsersSomewhere(user)) {
+        throw new ForbiddenException('Sin permiso para ver usuarios');
       }
       return true;
     }
@@ -189,4 +210,11 @@ export function canManageUsersSomewhere(user: AuthUser): boolean {
     const role = (user.shopRoles?.[id] ?? user.globalRole) as GlobalRole;
     return SHOP_ADMIN_ROLES.has(role);
   });
+}
+
+/** Ver listado de usuarios: users.read / users.manage / admin del local. */
+export function canViewUsersSomewhere(user: AuthUser): boolean {
+  if (canManageUsersSomewhere(user)) return true;
+  if (user.permissions.includes('users.read')) return true;
+  return user.shopIds.some((id) => user.shopPermissions?.[id]?.includes('users.read'));
 }

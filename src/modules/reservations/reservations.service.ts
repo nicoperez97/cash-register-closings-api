@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
   OnModuleInit,
@@ -18,6 +19,7 @@ import {
   WaitingListStatus,
 } from '../../entities/waiting-list-entry.entity';
 import { Shop } from '../../entities/shop.entity';
+import { UserShop } from '../../entities/user-shop.entity';
 import { AuthUser } from '../../common/decorators';
 import { ShopsService } from '../shops/shops.service';
 import { ShopLiveService } from '../shop-live/shop-live.service';
@@ -71,6 +73,7 @@ export class ReservationsService implements OnModuleInit {
     @InjectRepository(WaitingListEntry)
     private readonly waiting: Repository<WaitingListEntry>,
     @InjectRepository(Shop) private readonly shopsRepo: Repository<Shop>,
+    @InjectRepository(UserShop) private readonly userShops: Repository<UserShop>,
     @InjectRepository(ReservationRequest)
     private readonly requests: Repository<ReservationRequest>,
     private readonly shops: ShopsService,
@@ -272,6 +275,100 @@ export class ReservationsService implements OnModuleInit {
       throw new BadRequestException('Teléfono inválido');
     }
     return phone;
+  }
+
+  /**
+   * Snapshot del chip flotante. Solo requiere que el admin (o el propio usuario)
+   * haya habilitado `salonFloorMonitorEnabled` en ese local — no hace falta
+   * permiso de módulo reservas / lista de espera.
+   */
+  async salonFloorMonitor(user: AuthUser, shopId: string) {
+    this.shops.assertShopAccess(user, shopId);
+    const link = await this.userShops.findOne({ where: { userId: user.id, shopId } });
+    if (!link?.salonFloorMonitorEnabled) {
+      throw new ForbiddenException('Monitor de salón no habilitado para este usuario');
+    }
+    const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
+    if (!shop || !isEntityActive(shop.active)) {
+      throw new NotFoundException('Local no encontrado');
+    }
+    const reservationsOn = shop.reservationsEnabled !== false;
+    const waitingOn = shop.waitingListEnabled !== false;
+    const businessDate = resolveShopCalendarDate(new Date(), {
+      timezone: shop.timezone,
+    });
+
+    let openReservations = 0;
+    const preview: Array<{
+      kind: 'reservation' | 'waiting';
+      id: string;
+      label: string;
+      partySize: number;
+    }> = [];
+
+    if (reservationsOn) {
+      const dayRows = await this.reservations
+        .createQueryBuilder('r')
+        .where('r.shopId = :shopId', { shopId })
+        .andWhere('r.active = true')
+        .andWhere('r.businessDate = :businessDate', { businessDate })
+        .andWhere('r.status IN (:...statuses)', {
+          statuses: [...ACTIVE_RESERVATION_STATUSES],
+        })
+        .orderBy('r.createdAt', 'DESC')
+        .getMany();
+      const openRows = dayRows.filter(
+        (r) =>
+          r.status === ReservationStatus.CONFIRMED ||
+          r.status == null ||
+          (r.status as string) === '',
+      );
+      openReservations = openRows.length;
+      for (const row of openRows.slice(0, 5)) {
+        preview.push({
+          kind: 'reservation',
+          id: row.id,
+          label: (row.guestName ?? '').trim() || 'Sin nombre',
+          partySize: Number(row.partySize || 0) || 1,
+        });
+      }
+    }
+
+    let waitingParties = 0;
+    if (waitingOn) {
+      const waitingRows = await this.waiting
+        .createQueryBuilder('w')
+        .where('w.shopId = :shopId', { shopId })
+        .andWhere('w.active = true')
+        .andWhere('w.status IN (:...open)', {
+          open: [WaitingListStatus.WAITING, WaitingListStatus.READY],
+        })
+        .orderBy(
+          `CASE WHEN w.status = '${WaitingListStatus.READY}' THEN 0 ELSE 1 END`,
+          'ASC',
+        )
+        .addOrderBy('w.createdAt', 'ASC')
+        .getMany();
+      waitingParties = waitingRows.length;
+      for (const row of waitingRows.slice(0, 3)) {
+        preview.push({
+          kind: 'waiting',
+          id: row.id,
+          label: (row.guestName ?? '').trim() || 'Sin nombre',
+          partySize: Number(row.partySize || 0) || 1,
+        });
+      }
+    }
+
+    return {
+      shopId,
+      businessDate,
+      reservationsEnabled: reservationsOn,
+      waitingListEnabled: waitingOn,
+      openReservations,
+      waitingParties,
+      preview,
+    };
   }
 
   async listReservations(user: AuthUser, shopId: string, date?: string) {

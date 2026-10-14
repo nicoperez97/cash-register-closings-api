@@ -45,8 +45,31 @@ class PublicAttendanceCheckInDto {
   @ApiProperty({ example: '1234' })
   @IsString()
   @MinLength(4)
-  @MaxLength(6)
+  @MaxLength(4)
   pin: string;
+
+  @ApiPropertyOptional({ description: 'Turno a fichar (obligatorio al guardar)' })
+  @IsOptional()
+  @IsString()
+  shiftId?: string;
+
+  @ApiPropertyOptional({ example: '18:00' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
+  checkInAt?: string;
+
+  @ApiPropertyOptional({ example: '00:00' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
+  checkOutAt?: string;
+}
+
+class AdminAttendanceCheckInDto {
+  @ApiProperty()
+  @IsUUID()
+  employeeId: string;
 
   @ApiPropertyOptional({ description: 'Turno a fichar (obligatorio al guardar)' })
   @IsOptional()
@@ -254,6 +277,28 @@ export class AttendanceController {
     return doCommit
       ? this.excelImport.commit(user, shopId, file)
       : this.excelImport.preview(user, shopId, file);
+  }
+
+  /** Kiosco admin: pendientes de entrada/salida del día de negocio. */
+  @Get('check-in')
+  @RequirePermissions('attendance.checkIn')
+  checkInPending(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
+    return this.attendance.adminCheckInPending(user, shopId);
+  }
+
+  @Post('check-in')
+  @RequirePermissions('attendance.checkIn')
+  checkIn(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Body() dto: AdminAttendanceCheckInDto,
+  ) {
+    return this.attendance.adminCheckIn(user, shopId, {
+      employeeId: dto.employeeId,
+      shiftId: dto.shiftId,
+      checkInAt: dto.checkInAt,
+      checkOutAt: dto.checkOutAt,
+    });
   }
 
   @Post()

@@ -19,6 +19,7 @@ export type ModuleKey =
   | 'transactions'
   | 'incomes'
   | 'attendance'
+  | 'attendanceFichar'
   | 'productionAttendance'
   | 'employees'
   | 'candidates'
@@ -43,9 +44,13 @@ export type ModuleKey =
   | 'shortages'
   | 'orders'
   | 'customerOrders'
+  | 'customerOrdersHistory'
+  | 'customerOrdersMonitor'
   | 'orderingCatalog'
   | 'promos'
   | 'comanda'
+  | 'comandaMonitor'
+  | 'comandaReceiptsHistory'
   | 'integrations'
   | 'tips'
   | 'reimbursements'
@@ -88,7 +93,7 @@ export const MODULE_DEFS: ModuleDef[] = [
     levels: [
       { value: 'none', label: 'Ninguno' },
       { value: 'create', label: 'Solo crear' },
-      { value: 'read', label: 'Ver' },
+      { value: 'read', label: 'Ver (sin ABM)' },
       { value: 'update', label: 'Editar' },
       { value: 'lock', label: 'Bloquear' },
     ],
@@ -98,8 +103,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'A Retirar',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -107,8 +112,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Rendiciones',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -116,7 +121,7 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Reportes · Cierres',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
+      { value: 'read', label: 'Ver (sin ABM)' },
       { value: 'export', label: 'Exportar' },
     ],
   },
@@ -157,8 +162,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Gastos',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -166,8 +171,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Movimientos entre cuentas',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -175,8 +180,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'División de socios',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -184,8 +189,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Divisiones',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -209,8 +214,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Ingresos',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -219,8 +224,17 @@ export const MODULE_DEFS: ModuleDef[] = [
     levels: [
       { value: 'none', label: 'Ninguno' },
       { value: 'self', label: 'Solo mis horas (producción)' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
+    ],
+  },
+  {
+    key: 'attendanceFichar',
+    label: 'Fichar',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -228,8 +242,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Horas de cocina',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -237,8 +251,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Empleados',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -246,8 +260,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'CVs / Candidatos',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -255,8 +269,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Liquidaciones',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -264,8 +278,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Comisiones',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -273,7 +287,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Cuentas',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -281,7 +296,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Conceptos',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -289,8 +305,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Reservas',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -298,8 +314,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Mesas',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -307,8 +323,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Diagrama',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -316,8 +332,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Reglas',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -325,8 +341,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Horarios',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -334,8 +350,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Lista de espera',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -343,8 +359,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Pagos · Proveedores',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -352,8 +368,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Pagos · Servicios',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -361,8 +377,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Pagos · Empleados',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -370,8 +386,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Pagos · Socios',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -379,8 +395,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Proveedores',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -388,8 +404,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Servicios',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -397,8 +413,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Stock alimentos',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -406,8 +422,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Stock bebidas',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -415,8 +431,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Stock faltantes',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -424,17 +440,34 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Pedidos',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
     key: 'customerOrders',
-    label: 'Pedidos online',
+    label: 'Pedidos clientes',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
+    ],
+  },
+  {
+    key: 'customerOrdersHistory',
+    label: 'Historial de pedidos',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
+    ],
+  },
+  {
+    key: 'customerOrdersMonitor',
+    label: 'Monitor pedidos',
     levels: [
       { value: 'none', label: 'Ninguno' },
       { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
     ],
   },
   {
@@ -442,7 +475,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Carta',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -450,7 +484,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Promos',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -458,7 +493,25 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Comanda',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
+    ],
+  },
+  {
+    key: 'comandaMonitor',
+    label: 'Monitor comanda',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver' },
+    ],
+  },
+  {
+    key: 'comandaReceiptsHistory',
+    label: 'Historial de comprobantes',
+    levels: [
+      { value: 'none', label: 'Ninguno' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -466,8 +519,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Integraciones',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -475,9 +528,9 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Propinas',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
+      { value: 'read', label: 'Ver (sin ABM)' },
       { value: 'create', label: 'Cargar' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -486,8 +539,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     levels: [
       { value: 'none', label: 'Ninguno' },
       { value: 'self', label: 'Solo mis gastos' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar (marcar pagos)' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -495,8 +548,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Vacaciones',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -504,8 +557,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Normas de servicio',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -593,8 +646,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Local / POS',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -602,8 +655,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Configuración del local',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
   {
@@ -611,7 +664,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Usuarios',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'manage', label: 'Gestionar' },
+      { value: 'read', label: 'Ver (sin ABM)' },
+      { value: 'manage', label: 'Todo (con ABM)' },
     ],
   },
 ];
@@ -627,6 +681,10 @@ export function expandModulePermissions(
   modules: ModulePermissionsMap | null | undefined,
 ): Permission[] {
   if (!modules || !Object.keys(modules).length) return [];
+  const normalized = { ...(modules as Record<string, string>) };
+  applyCustomerOrdersScreenSplit(normalized);
+  applyComandaScreenSplit(normalized);
+  modules = normalized as ModulePermissionsMap;
   const set = new Set<Permission>();
 
   switch (modules.closings) {
@@ -706,6 +764,10 @@ export function expandModulePermissions(
       add(set, 'attendance.read', 'attendance.manage');
       break;
   }
+  // Fichar: Ver ve pendientes; Todo marca entrada/salida (checkIn).
+  if (modules.attendanceFichar === 'read' || modules.attendanceFichar === 'manage') {
+    add(set, 'attendance.checkIn');
+  }
   pair('productionAttendance', 'productionAttendance.read', 'productionAttendance.manage');
   pair('employees', 'employees.read', 'employees.manage');
   pair('candidates', 'candidates.read', 'candidates.manage');
@@ -740,10 +802,18 @@ export function expandModulePermissions(
   pair('shortages', 'shortages.read', 'shortages.manage');
   pair('orders', 'orders.read', 'orders.manage');
   pair('customerOrders', 'customerOrders.read', 'customerOrders.manage');
+  pair('customerOrdersHistory', 'customerOrdersHistory.read', 'customerOrdersHistory.manage');
+  if (modules.customerOrdersMonitor === 'read') add(set, 'customerOrdersMonitor.read');
   pair('integrations', 'integrations.read', 'integrations.manage');
-  if (modules.orderingCatalog === 'manage') add(set, 'orderingCatalog.manage');
-  if (modules.promos === 'manage') add(set, 'promos.manage');
-  if (modules.comanda === 'manage') add(set, 'comanda.manage');
+  pair('orderingCatalog', 'orderingCatalog.read', 'orderingCatalog.manage');
+  pair('promos', 'promos.read', 'promos.manage');
+  pair('comanda', 'comanda.read', 'comanda.manage');
+  if (modules.comandaMonitor === 'read') add(set, 'comandaMonitor.read');
+  pair(
+    'comandaReceiptsHistory',
+    'comandaReceiptsHistory.read',
+    'comandaReceiptsHistory.manage',
+  );
   switch (modules.tips) {
     case 'read':
       add(set, 'tips.read');
@@ -820,11 +890,13 @@ export function expandModulePermissions(
     add(set, 'suppliers.read', 'services.read');
   }
 
-  if (modules.accounts === 'manage') {
-    add(set, 'accounts.manage', 'expenses.read', 'accountTransfers.read', 'incomes.read', 'movements.read');
+  if (modules.accounts === 'read' || modules.accounts === 'manage') {
+    add(set, 'accounts.read', 'expenses.read', 'accountTransfers.read', 'incomes.read', 'movements.read');
+    if (modules.accounts === 'manage') add(set, 'accounts.manage');
   }
-  if (modules.concepts === 'manage') {
-    add(set, 'concepts.manage', 'expenses.read', 'accountTransfers.read', 'incomes.read', 'movements.read');
+  if (modules.concepts === 'read' || modules.concepts === 'manage') {
+    add(set, 'concepts.read', 'expenses.read', 'accountTransfers.read', 'incomes.read', 'movements.read');
+    if (modules.concepts === 'manage') add(set, 'concepts.manage');
   }
   if (modules.shop === 'read') add(set, 'shops.read');
   if (modules.shop === 'manage') add(set, 'shops.read', 'shops.manage');
@@ -836,7 +908,7 @@ export function expandModulePermissions(
       : undefined;
   if (shopConfigLevel === 'read') add(set, 'shopConfig.read');
   if (shopConfigLevel === 'manage') add(set, 'shopConfig.read', 'shopConfig.manage');
-  if (modules.users === 'manage') add(set, 'users.manage');
+  pair('users', 'users.read', 'users.manage');
 
   return [...set];
 }
@@ -905,6 +977,7 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
         : 'none',
     incomes: level('incomes.read', 'incomes.manage'),
     attendance: attendance(),
+    attendanceFichar: has('attendance.checkIn') || has('attendance.manage') ? 'manage' : 'none',
     productionAttendance:
       level('productionAttendance.read', 'productionAttendance.manage') !== 'none'
         ? level('productionAttendance.read', 'productionAttendance.manage')
@@ -956,9 +1029,26 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
     shortages: level('shortages.read', 'shortages.manage'),
     orders: level('orders.read', 'orders.manage'),
     customerOrders: level('customerOrders.read', 'customerOrders.manage'),
-    orderingCatalog: has('orderingCatalog.manage') ? 'manage' : 'none',
-    promos: has('promos.manage') || has('orderingCatalog.manage') ? 'manage' : 'none',
-    comanda: has('comanda.manage') ? 'manage' : 'none',
+    customerOrdersHistory: level(
+      'customerOrdersHistory.read',
+      'customerOrdersHistory.manage',
+    ),
+    customerOrdersMonitor: has('customerOrdersMonitor.read') ? 'read' : 'none',
+    orderingCatalog: level('orderingCatalog.read', 'orderingCatalog.manage'),
+    promos:
+      level('promos.read', 'promos.manage') !== 'none'
+        ? level('promos.read', 'promos.manage')
+        : has('orderingCatalog.manage')
+          ? 'manage'
+          : has('orderingCatalog.read')
+            ? 'read'
+            : 'none',
+    comanda: level('comanda.read', 'comanda.manage'),
+    comandaMonitor: has('comandaMonitor.read') ? 'read' : 'none',
+    comandaReceiptsHistory: level(
+      'comandaReceiptsHistory.read',
+      'comandaReceiptsHistory.manage',
+    ),
     integrations: level('integrations.read', 'integrations.manage'),
     tips: (() => {
       if (has('tips.manage')) return 'manage';
@@ -987,8 +1077,8 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
     publicWaiting: has('publicWaiting.read') || has('publicPages.read') ? 'read' : 'none',
     publicAttendance: has('publicAttendance.read') || has('publicPages.read') ? 'read' : 'none',
     publicNormas: has('publicNormas.read') || has('publicPages.read') ? 'read' : 'none',
-    accounts: has('accounts.manage') ? 'manage' : 'none',
-    concepts: has('concepts.manage') ? 'manage' : 'none',
+    accounts: level('accounts.read', 'accounts.manage'),
+    concepts: level('concepts.read', 'concepts.manage'),
     shop: has('shops.manage') ? 'manage' : has('shops.read') ? 'read' : 'none',
     shopConfig: has('shopConfig.manage')
       ? 'manage'
@@ -999,8 +1089,33 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
           : has('shops.read')
             ? 'read'
             : 'none',
-    users: has('users.manage') ? 'manage' : 'none',
+    users: level('users.read', 'users.manage'),
   };
+}
+
+/** Pedidos clientes → historial + monitor (si faltan claves nuevas). */
+export function applyCustomerOrdersScreenSplit(raw: Record<string, string>): void {
+  const parent = raw.customerOrders;
+  if (!parent || parent === 'none') return;
+  if (!Object.prototype.hasOwnProperty.call(raw, 'customerOrdersHistory')) {
+    raw.customerOrdersHistory = parent === 'manage' || parent === 'read' ? parent : 'read';
+  }
+  if (!Object.prototype.hasOwnProperty.call(raw, 'customerOrdersMonitor')) {
+    raw.customerOrdersMonitor = 'read';
+  }
+}
+
+/** Comanda → monitor + historial de comprobantes (si faltan claves nuevas). */
+export function applyComandaScreenSplit(raw: Record<string, string>): void {
+  const parent = raw.comanda;
+  if (!parent || parent === 'none') return;
+  // Soft: mapa viejo solo con comanda también abría monitor + historial.
+  if (!Object.prototype.hasOwnProperty.call(raw, 'comandaReceiptsHistory')) {
+    raw.comandaReceiptsHistory = parent === 'manage' ? 'manage' : 'read';
+  }
+  if (!Object.prototype.hasOwnProperty.call(raw, 'comandaMonitor')) {
+    raw.comandaMonitor = 'read';
+  }
 }
 
 /** Normaliza mapa: solo keys conocidas; default none omitido. */
@@ -1038,6 +1153,13 @@ export function sanitizeModulePermissions(
     // Migración soft al guardar: Local/POS antiguo incluía config del local.
     rawInput.shopConfig = rawInput.shop;
   }
+  // Legacy: Presentismo Todo incluía Fichar admin; si no hay clave, heredar.
+  if (
+    !Object.prototype.hasOwnProperty.call(rawInput, 'attendanceFichar') &&
+    rawInput.attendance === 'manage'
+  ) {
+    rawInput.attendanceFichar = 'manage';
+  }
   // Legacy: un solo módulo "salon" → Mesas / Diagrama / Reglas / Horarios.
   const legacySalon = rawInput.salon;
   if (legacySalon && legacySalon !== 'none') {
@@ -1063,6 +1185,10 @@ export function sanitizeModulePermissions(
     }
     delete rawInput.payments;
   }
+  // Legacy: Pedidos clientes agrupado → historial + monitor.
+  applyCustomerOrdersScreenSplit(rawInput);
+  // Legacy: Comanda agrupada → monitor + historial de comprobantes.
+  applyComandaScreenSplit(rawInput);
   const out: ModulePermissionsMap = {};
   for (const def of MODULE_DEFS) {
     if (def.key === 'users' && !allowUsers) continue;

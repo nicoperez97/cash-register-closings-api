@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -83,7 +84,11 @@ export class CustomerOrdersController {
   }
 
   @Get()
-  @RequirePermissions('customerOrders.read')
+  @RequireAnyPermissions(
+    'customerOrders.read',
+    'customerOrdersHistory.read',
+    'customerOrdersMonitor.read',
+  )
   list(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -146,7 +151,11 @@ export class CustomerOrdersController {
   }
 
   @Get('export.xlsx')
-  @RequirePermissions('customerOrders.read')
+  @RequireAnyPermissions(
+    'customerOrders.read',
+    'customerOrdersHistory.read',
+    'customerOrdersMonitor.read',
+  )
   async exportExcel(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -199,7 +208,11 @@ export class CustomerOrdersController {
   }
 
   @Get(':id')
-  @RequirePermissions('customerOrders.read')
+  @RequireAnyPermissions(
+    'customerOrders.read',
+    'customerOrdersHistory.read',
+    'customerOrdersMonitor.read',
+  )
   get(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -237,5 +250,15 @@ export class CustomerOrdersController {
     @Param('id') id: string,
   ) {
     return this.service.desacreditPayment(user, shopId, id);
+  }
+
+  @Delete(':id')
+  @RequirePermissions('customerOrdersHistory.manage')
+  remove(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+  ) {
+    return this.service.removeStaff(user, shopId, id);
   }
 }

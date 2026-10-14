@@ -275,6 +275,7 @@ export class AccountsController {
     'accountTransfers.read',
     'incomes.read',
     'movements.read',
+    'accounts.read',
     'accounts.manage',
     'closings.read',
     'closings.create',
@@ -357,7 +358,7 @@ export class AccountsController {
   }
 
   @Get(':id/balance')
-  @RequirePermissions('accounts.manage')
+  @RequireAnyPermissions('accounts.read', 'accounts.manage')
   balance(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,

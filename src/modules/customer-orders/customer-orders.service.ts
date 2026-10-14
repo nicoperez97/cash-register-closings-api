@@ -32,6 +32,7 @@ import { AuthUser } from '../../common/decorators';
 import { GlobalRole, NotificationType } from '../../common/enums';
 import { isEntityActive } from '../../common/active.util';
 import { isGlobalAdmin } from '../../common/guards';
+import { markDeletedUnique } from '../../common/soft-delete.util';
 import {
   nextCalendarDate,
   normalizeOpeningTime,
@@ -141,7 +142,7 @@ export class CustomerOrdersService implements OnModuleInit {
           deletedAt DATETIME(6) NULL,
           active TINYINT(1) NOT NULL DEFAULT 1,
           shopId CHAR(36) NOT NULL,
-          code VARCHAR(12) NOT NULL,
+          code VARCHAR(40) NOT NULL,
           status VARCHAR(24) NOT NULL DEFAULT 'PENDING',
           fulfillment VARCHAR(16) NOT NULL,
           items JSON NOT NULL,
@@ -241,6 +242,13 @@ export class CustomerOrdersService implements OnModuleInit {
       );
     } catch {
       /* already exists */
+    }
+    try {
+      await this.orders.query(
+        `ALTER TABLE customer_orders MODIFY COLUMN code VARCHAR(40) NOT NULL`,
+      );
+    } catch {
+      /* dialecto / ya aplicado */
     }
   }
 
@@ -2471,6 +2479,30 @@ export class CustomerOrdersService implements OnModuleInit {
     });
     this.live.tick(shopId, 'customer-orders');
     return this.toDto(order);
+  }
+
+  /**
+   * Soft-delete de un pedido de historial (take away / delivery / mostrador).
+   * No revierte movimientos de caja ya generados; eso queda para una función aparte.
+   */
+  async removeStaff(user: AuthUser, shopId: string, id: string) {
+    this.assertShopAccess(user, shopId);
+    const row = await this.orders.findOne({ where: { id, shopId } });
+    if (!row) throw new NotFoundException('Pedido no encontrado');
+    if (row.fulfillment === CustomerOrderFulfillment.TABLE) {
+      throw new BadRequestException(
+        'Los envíos de mesa se borran desde Historial de comprobantes',
+      );
+    }
+    row.code = markDeletedUnique(row.code, row.id, 40);
+    if (row.clientRequestId) {
+      row.clientRequestId = markDeletedUnique(row.clientRequestId, row.id, 64);
+    }
+    row.active = false;
+    await this.orders.save(row);
+    await this.orders.softRemove(row);
+    this.live.tick(shopId, 'customer-orders');
+    return { ok: true };
   }
 
   private async notifyStaffNewOrder(shop: Shop, order: CustomerOrder) {

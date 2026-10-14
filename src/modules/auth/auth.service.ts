@@ -33,6 +33,8 @@ import { isGlobalAdmin, isSuperAdmin } from '../../common/guards';
 import { AuthUser } from '../../common/decorators';
 import {
   ALL_PERMISSIONS_LIST,
+  applyComandaScreenSplit,
+  applyCustomerOrdersScreenSplit,
   deriveModulesFromRole,
   expandModulePermissions,
   ModulePermissionsMap,
@@ -847,6 +849,16 @@ export class AuthService implements OnModuleInit {
         ) {
           modules.reportsSales = 'read';
         }
+        // Legacy: Presentismo Todo incluía Fichar admin.
+        if (
+          !Object.prototype.hasOwnProperty.call(link.modulePermissions, 'attendanceFichar') &&
+          modules.attendance === 'manage'
+        ) {
+          modules.attendanceFichar = 'manage';
+        }
+        // Legacy: Pedidos / Comanda agrupados → pantallas separadas.
+        applyCustomerOrdersScreenSplit(modules as Record<string, string>);
+        applyComandaScreenSplit(modules as Record<string, string>);
       } else {
         modules = deriveModulesFromRole(effectiveRole);
       }
