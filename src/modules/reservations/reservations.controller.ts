@@ -440,6 +440,15 @@ export class ReservationsController {
     return this.reservations.reservationsSummary(user, shopId, from, to);
   }
 
+  /**
+   * Chip flotante: cualquier miembro del local con monitor habilitado
+   * (no exige permisos de módulo reservas / lista de espera).
+   */
+  @Get('salon-floor-monitor')
+  salonFloorMonitor(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
+    return this.reservations.salonFloorMonitor(user, shopId);
+  }
+
   @Get('reservations')
   @RequirePermissions('reservations.read')
   listReservations(

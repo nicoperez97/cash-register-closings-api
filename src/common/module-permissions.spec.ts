@@ -110,4 +110,85 @@ describe('sanitizeModulePermissions', () => {
     });
     expect(out.orders).toBe('manage');
   });
+
+  it('customerOrders manage → historial manage + monitor read (legacy)', () => {
+    const out = sanitizeModulePermissions({ customerOrders: 'manage' });
+    expect(out.customerOrders).toBe('manage');
+    expect(out.customerOrdersHistory).toBe('manage');
+    expect(out.customerOrdersMonitor).toBe('read');
+    const perms = expandModulePermissions(out);
+    expect(perms).toEqual(
+      expect.arrayContaining([
+        'customerOrders.manage',
+        'customerOrdersHistory.manage',
+        'customerOrdersMonitor.read',
+      ]),
+    );
+  });
+
+  it('comanda manage → historial manage + monitor read (legacy)', () => {
+    const out = sanitizeModulePermissions({ comanda: 'manage' });
+    expect(out.comanda).toBe('manage');
+    expect(out.comandaReceiptsHistory).toBe('manage');
+    expect(out.comandaMonitor).toBe('read');
+    const perms = expandModulePermissions(out);
+    expect(perms).toEqual(
+      expect.arrayContaining([
+        'comanda.read',
+        'comanda.manage',
+        'comandaReceiptsHistory.manage',
+        'comandaMonitor.read',
+      ]),
+    );
+  });
+
+  it('comanda read → comanda.read + historial/monitor soft', () => {
+    const out = sanitizeModulePermissions({ comanda: 'read' });
+    expect(out.comanda).toBe('read');
+    expect(out.comandaReceiptsHistory).toBe('read');
+    expect(out.comandaMonitor).toBe('read');
+    const perms = expandModulePermissions(out);
+    expect(perms).toEqual(
+      expect.arrayContaining([
+        'comanda.read',
+        'comandaReceiptsHistory.read',
+        'comandaMonitor.read',
+      ]),
+    );
+    expect(perms).not.toContain('comanda.manage');
+  });
+
+  it('accounts/concepts/users/carta/promos: Ver otorga .read sin .manage', () => {
+    const perms = expandModulePermissions({
+      accounts: 'read',
+      concepts: 'read',
+      users: 'read',
+      orderingCatalog: 'read',
+      promos: 'read',
+    });
+    expect(perms).toEqual(
+      expect.arrayContaining([
+        'accounts.read',
+        'concepts.read',
+        'users.read',
+        'orderingCatalog.read',
+        'promos.read',
+      ]),
+    );
+    expect(perms).not.toContain('accounts.manage');
+    expect(perms).not.toContain('concepts.manage');
+    expect(perms).not.toContain('users.manage');
+    expect(perms).not.toContain('orderingCatalog.manage');
+    expect(perms).not.toContain('promos.manage');
+  });
+
+  it('no pisa historial/monitor si ya están configurados', () => {
+    const out = sanitizeModulePermissions({
+      customerOrders: 'manage',
+      customerOrdersHistory: 'read',
+      customerOrdersMonitor: 'none',
+    });
+    expect(out.customerOrdersHistory).toBe('read');
+    expect(out.customerOrdersMonitor).toBeUndefined();
+  });
 });

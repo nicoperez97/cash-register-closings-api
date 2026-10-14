@@ -62,7 +62,8 @@ export class CustomerOrder extends BaseEntity {
   @Column()
   shopId: string;
 
-  @Column({ type: 'varchar', length: 12 })
+  /** 6 chars vivos; al soft-delete se alarga con sufijo `__DELETED__…`. */
+  @Column({ type: 'varchar', length: 40 })
   code: string;
 
   /** Idempotencia del POS/outbox: reenviar el mismo id no duplica el pedido. */

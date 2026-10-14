@@ -11,6 +11,7 @@ import { Between, In, Repository } from 'typeorm';
 import { AttendanceDay } from '../../entities/attendance-day.entity';
 import { Employee } from '../../entities/employee.entity';
 import { ProductionAttendanceDay } from '../../entities/production-attendance-day.entity';
+import { Shop } from '../../entities/shop.entity';
 import { UserShop } from '../../entities/user-shop.entity';
 import { AuthUser } from '../../common/decorators';
 import { isEntityActive } from '../../common/active.util';
@@ -42,6 +43,12 @@ import {
 
 function hashEmployeePin(pin: string): string {
   return createHash('sha256').update(String(pin).trim()).digest('hex');
+}
+
+/** tinyint puede venir como 0/1; default true si null/undefined. */
+function employeeShowsInFichar(emp: { showInFichar?: boolean | number | null }): boolean {
+  if (emp.showInFichar === undefined || emp.showInFichar === null) return true;
+  return !!emp.showInFichar;
 }
 
 const n = (v?: string | number | null) => Number(v ?? 0);
@@ -354,6 +361,11 @@ export class AttendanceService implements OnModuleInit {
     return this.employeeShiftDefaults(shop, emp, shiftId, date);
   }
 
+  /**
+   * @param fillMissingDefaults Si true (default), al marcar presente sin punch
+   * parcial rellena entrada/salida con defaults del turno. Si el DTO trae solo
+   * una hora, no completa la otra (fichaje en dos pasos).
+   */
   private applyShift(
     row: AttendanceDay,
     dto: {
@@ -363,6 +375,7 @@ export class AttendanceService implements OnModuleInit {
     },
     defaults: { checkIn: string; checkOut: string },
     withHours: boolean,
+    opts?: { fillMissingDefaults?: boolean },
   ) {
     if (dto.isPresent !== undefined) row.isPresent = dto.isPresent;
     if (!withHours) {
@@ -383,17 +396,50 @@ export class AttendanceService implements OnModuleInit {
     if (dto.checkOutAt !== undefined) {
       row.checkOutAt = parseHhMm(dto.checkOutAt);
     }
-    if (!row.checkInAt) row.checkInAt = defaults.checkIn;
-    if (!row.checkOutAt) row.checkOutAt = defaults.checkOut;
-    row.overtimeHours = String(
-      computeOvertimeHours({
-        isPresent: true,
-        checkInAt: row.checkInAt,
-        checkOutAt: row.checkOutAt,
-        defaultCheckIn: defaults.checkIn,
-        defaultCheckOut: defaults.checkOut,
-      }),
-    );
+    const hasInField = dto.checkInAt !== undefined;
+    const hasOutField = dto.checkOutAt !== undefined;
+    const innVal = hasInField ? parseHhMm(dto.checkInAt) : row.checkInAt;
+    const outVal = hasOutField ? parseHhMm(dto.checkOutAt) : row.checkOutAt;
+    // Punch/edición de un solo lado: no inventar la otra hora con defaults.
+    const partial =
+      (hasInField && !hasOutField) ||
+      (!hasInField && hasOutField) ||
+      (hasInField &&
+        hasOutField &&
+        ((!!innVal && !outVal) || (!innVal && !!outVal)));
+    const fill = opts?.fillMissingDefaults !== false && !partial;
+    if (fill) {
+      if (!row.checkInAt) row.checkInAt = defaults.checkIn;
+      if (!row.checkOutAt) row.checkOutAt = defaults.checkOut;
+    }
+    if (row.checkInAt && row.checkOutAt) {
+      row.overtimeHours = String(
+        computeOvertimeHours({
+          isPresent: true,
+          checkInAt: row.checkInAt,
+          checkOutAt: row.checkOutAt,
+          defaultCheckIn: defaults.checkIn,
+          defaultCheckOut: defaults.checkOut,
+        }),
+      );
+    } else {
+      row.overtimeHours = '0';
+    }
+  }
+
+  /** Estado de fichaje de una fila (con o sin horas). */
+  private punchState(
+    row: AttendanceDay | null | undefined,
+    withHours: boolean,
+  ): 'empty' | 'inOnly' | 'complete' {
+    if (!withHours) {
+      return row?.isPresent ? 'complete' : 'empty';
+    }
+    const inn = String(row?.checkInAt ?? '').trim();
+    const out = String(row?.checkOutAt ?? '').trim();
+    if (inn && out) return 'complete';
+    if (inn) return 'inOnly';
+    return 'empty';
   }
 
   async upsertDay(
@@ -639,10 +685,7 @@ export class AttendanceService implements OnModuleInit {
     };
   }
 
-  /**
-   * Fichar: PIN → elegir turno pendiente → (opcional) horas → marca presente.
-   * Preview si falta turno o faltan horas; save con shiftId (+ horas si aplica).
-   */
+  /** Fichar público por PIN (misma lógica que admin, sin employeeId). */
   async publicCheckIn(
     slug: string,
     pinRaw: string,
@@ -661,9 +704,140 @@ export class AttendanceService implements OnModuleInit {
     const employees = await this.employees.find({
       where: { shopId: shop.id, waiterPinHash: hash },
     });
-    const employee = employees.find((e) => isEntityActive(e.active));
+    const employee = employees.find(
+      (e) => isEntityActive(e.active) && employeeShowsInFichar(e),
+    );
     if (!employee) throw new UnauthorizedException('PIN incorrecto');
+    return this.punchAttendance(shop, employee, opts);
+  }
 
+  /** Fichar desde admin (sesión JWT): elige empleado, sin PIN. */
+  async adminCheckIn(
+    user: AuthUser,
+    shopId: string,
+    opts: {
+      employeeId: string;
+      checkInAt?: string | null;
+      checkOutAt?: string | null;
+      shiftId?: string | null;
+    },
+  ) {
+    this.shops.assertShopAccess(user, shopId);
+    const shop = await this.shops.getShopEntity(shopId);
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    const employee = await this.employees.findOne({
+      where: { id: opts.employeeId, shopId },
+    });
+    if (!employee || !isEntityActive(employee.active) || !employeeShowsInFichar(employee)) {
+      throw new NotFoundException('Empleado no encontrado');
+    }
+    return this.punchAttendance(shop, employee, {
+      shiftId: opts.shiftId,
+      checkInAt: opts.checkInAt,
+      checkOutAt: opts.checkOutAt,
+      /** Admin: fijos y rotativos del turno. El kiosco público sigue solo fijos. */
+      includeRotating: true,
+    });
+  }
+
+  /**
+   * Empleados con fichaje pendiente hoy (entrada o salida faltante).
+   * Para el kiosco admin (fijos y rotativos).
+   */
+  async adminCheckInPending(user: AuthUser, shopId: string) {
+    this.shops.assertShopAccess(user, shopId);
+    const shop = await this.shops.getShopEntity(shopId);
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    const withHours = this.withHours(shop);
+    const date = resolveShopBusinessDate(new Date(), {
+      timezone: shop.timezone,
+      openingTime: shop.openingTime,
+    });
+    const weekday = weekdayOf(date);
+    const closed = Array.isArray(shop.closedWeekdays) ? shop.closedWeekdays : [];
+    if (weekday != null && closed.includes(weekday)) {
+      return { date, withHours, employees: [] as const };
+    }
+    const allShifts = normalizeShopShifts(shop.shifts, shop.openingTime);
+    const dayShifts = weekday == null ? allShifts : shiftsOnWeekday(allShifts, weekday);
+    const employees = await this.listEmployees(shopId, 'active');
+    const out: Array<{
+      employeeId: string;
+      fullName: string;
+      shiftId: string;
+      shiftName: string;
+      employeeType: 'FIXED' | 'ROTATING';
+      punchPhase: 'checkIn' | 'checkOut';
+      checkInAt: string | null;
+      checkOutAt: string | null;
+      defaultCheckIn: string;
+      defaultCheckOut: string;
+    }> = [];
+    for (const emp of employees) {
+      if (!employeeShowsInFichar(emp)) continue;
+      const eligible = dayShifts.filter((s) => employeeWorksShift(emp, s.id));
+      if (!eligible.length) continue;
+      const shiftIds = eligible.map((s) => s.id);
+      const dayRows = await this.days.find({
+        where: { employeeId: emp.id, date, shiftId: In(shiftIds) },
+      });
+      for (const s of eligible) {
+        const row = dayRows.find((r) => r.shiftId === s.id) ?? null;
+        if (row?.isHoliday && !row.isPresent) continue;
+        const state = this.punchState(row, withHours);
+        if (state === 'complete') continue;
+        const defaults = this.overtimeBaseline(shop, emp, s.id, date);
+        out.push({
+          employeeId: emp.id,
+          fullName: emp.fullName,
+          shiftId: s.id,
+          shiftName: s.name,
+          employeeType: employeeTypeForShift(emp, s.id),
+          punchPhase: state === 'inOnly' ? 'checkOut' : 'checkIn',
+          checkInAt: row?.checkInAt ?? null,
+          checkOutAt: row?.checkOutAt ?? null,
+          defaultCheckIn: defaults.checkIn,
+          defaultCheckOut: defaults.checkOut,
+        });
+      }
+    }
+    out.sort((a, b) => {
+      const typeOrd = Number(a.employeeType === 'ROTATING') - Number(b.employeeType === 'ROTATING');
+      if (typeOrd) return typeOrd;
+      return (
+        a.fullName.localeCompare(b.fullName, 'es') ||
+        a.shiftName.localeCompare(b.shiftName, 'es')
+      );
+    });
+    return {
+      date,
+      withHours,
+      shop: {
+        id: shop.id,
+        name: shop.name,
+        accentColor: shop.accentColor ?? null,
+        accentSecondary: shop.accentSecondary ?? null,
+        logoUrl: shop.logoUrl ?? null,
+      },
+      employees: out,
+    };
+  }
+
+  /**
+   * Motor compartido: entrada y salida por separado (inmutable en kiosco).
+   * Preview sin shiftId o sin la hora del paso; save con shiftId + hora del paso.
+   */
+  private async punchAttendance(
+    shop: Shop,
+    employee: Employee,
+    opts?: {
+      checkInAt?: string | null;
+      checkOutAt?: string | null;
+      shiftId?: string | null;
+      /** Si true, incluye turnos rotativos (admin). Público: solo fijos. */
+      includeRotating?: boolean;
+    },
+  ) {
     const date = resolveShopBusinessDate(new Date(), {
       timezone: shop.timezone,
       openingTime: shop.openingTime,
@@ -676,27 +850,37 @@ export class AttendanceService implements OnModuleInit {
 
     const allShifts = normalizeShopShifts(shop.shifts, shop.openingTime);
     const dayShifts = weekday == null ? allShifts : shiftsOnWeekday(allShifts, weekday);
-    const eligible = dayShifts.filter((s) => employeeWorksFixedShift(employee, s.id));
+    const eligible = dayShifts.filter((s) =>
+      opts?.includeRotating
+        ? employeeWorksShift(employee, s.id)
+        : employeeWorksFixedShift(employee, s.id),
+    );
     if (!eligible.length) {
       throw new BadRequestException('No disponible');
     }
 
+    const withHours = this.withHours(shop);
     const shiftIds = eligible.map((s) => s.id);
     const dayRows = await this.days.find({
       where: { employeeId: employee.id, date, shiftId: In(shiftIds) },
     });
-    const presentIds = new Set(dayRows.filter((r) => r.isPresent).map((r) => r.shiftId));
-    const pending = eligible.filter((s) => !presentIds.has(s.id));
+
+    const pending = eligible.filter((s) => {
+      const row = dayRows.find((r) => r.shiftId === s.id);
+      return this.punchState(row, withHours) !== 'complete';
+    });
+
     if (!pending.length) {
-      const present = dayRows.filter((r) => r.isPresent);
-      const first = present[0];
+      const done = dayRows.filter((r) => this.punchState(r, withHours) === 'complete');
+      const first = done[0];
       return {
         ok: true as const,
+        status: 'alreadyMarked' as const,
         alreadyMarked: true,
         date,
         checkInAt: first?.checkInAt ?? null,
         checkOutAt: first?.checkOutAt ?? null,
-        marks: present.map((r) => ({
+        marks: done.map((r) => ({
           shiftId: r.shiftId,
           checkInAt: r.checkInAt ?? null,
           checkOutAt: r.checkOutAt ?? null,
@@ -714,70 +898,97 @@ export class AttendanceService implements OnModuleInit {
       throw new BadRequestException('Turno no disponible');
     }
 
-    const withHours = this.withHours(shop);
-    const hasTimes =
-      opts?.checkInAt !== undefined &&
-      opts?.checkInAt !== null &&
-      String(opts.checkInAt).trim() !== '' &&
-      opts?.checkOutAt !== undefined &&
-      opts?.checkOutAt !== null &&
-      String(opts.checkOutAt).trim() !== '';
+    let row = dayRows.find((r) => r.shiftId === targetShift.id) ?? null;
+    if (row?.isHoliday && !row.isPresent) {
+      throw new BadRequestException('No disponible');
+    }
+
+    const state = this.punchState(row, withHours);
+    if (state === 'complete') {
+      return {
+        ok: true as const,
+        status: 'alreadyMarked' as const,
+        alreadyMarked: true,
+        date,
+        checkInAt: row?.checkInAt ?? null,
+        checkOutAt: row?.checkOutAt ?? null,
+        marks: [
+          {
+            shiftId: row!.shiftId,
+            checkInAt: row!.checkInAt ?? null,
+            checkOutAt: row!.checkOutAt ?? null,
+          },
+        ],
+      };
+    }
+
+    const punchPhase: 'checkIn' | 'checkOut' = state === 'inOnly' ? 'checkOut' : 'checkIn';
+    const defaults = this.overtimeBaseline(shop, employee, targetShift.id, date);
 
     const shiftOptions = pending.map((s) => {
+      const r = dayRows.find((d) => d.shiftId === s.id);
+      const st = this.punchState(r, withHours);
       const d = this.overtimeBaseline(shop, employee, s.id, date);
       return {
         id: s.id,
         name: s.name,
         opensAt: s.opensAt,
         closesAt: s.closesAt,
-        checkInAt: d.checkIn,
-        checkOutAt: d.checkOut,
+        punchPhase: (st === 'inOnly' ? 'checkOut' : 'checkIn') as 'checkIn' | 'checkOut',
+        checkInAt: r?.checkInAt ?? d.checkIn,
+        checkOutAt: r?.checkOutAt ?? d.checkOut,
+        recordedCheckInAt: r?.checkInAt ?? null,
+        recordedCheckOutAt: r?.checkOutAt ?? null,
       };
     });
 
-    const defaults = this.overtimeBaseline(shop, employee, targetShift.id, date);
-    const isSave = !!requestedId && (!withHours || hasTimes);
+    const rawIn = String(opts?.checkInAt ?? '').trim();
+    const rawOut = String(opts?.checkOutAt ?? '').trim();
+    const hasIn = !!rawIn;
+    const hasOut = !!rawOut;
+
+    const isSave =
+      !!requestedId &&
+      (!withHours || (punchPhase === 'checkIn' ? hasIn : hasOut));
+
     if (!isSave) {
       return {
         ok: true as const,
+        status: (punchPhase === 'checkIn' ? 'needsCheckIn' : 'needsCheckOut') as
+          | 'needsCheckIn'
+          | 'needsCheckOut',
         needsTimes: true as const,
+        punchPhase,
         alreadyMarked: false,
-        displayName: employee.fullName,
         date,
         withHours,
         defaultShiftId: defaultShift.id,
         shiftId: targetShift.id,
         shifts: shiftOptions,
-        checkInAt: defaults.checkIn,
-        checkOutAt: defaults.checkOut,
+        checkInAt: punchPhase === 'checkIn' ? defaults.checkIn : row?.checkInAt ?? null,
+        checkOutAt: punchPhase === 'checkOut' ? defaults.checkOut : row?.checkOutAt ?? null,
       };
     }
 
-    let row = dayRows.find((r) => r.shiftId === targetShift.id) ?? null;
-    if (row?.isHoliday && !row.isPresent) {
-      throw new BadRequestException('No disponible');
-    }
-    if (row?.isPresent) {
-      return {
-        ok: true as const,
-        alreadyMarked: true,
-        date,
-        checkInAt: row.checkInAt ?? null,
-        checkOutAt: row.checkOutAt ?? null,
-        marks: [
-          {
-            shiftId: row.shiftId,
-            checkInAt: row.checkInAt ?? null,
-            checkOutAt: row.checkOutAt ?? null,
-          },
-        ],
-      };
-    }
-
-    const checkInAt = hasTimes ? parseHhMm(opts!.checkInAt) : defaults.checkIn;
-    const checkOutAt = hasTimes ? parseHhMm(opts!.checkOutAt) : defaults.checkOut;
-    if (withHours && (!checkInAt || !checkOutAt)) {
-      throw new BadRequestException('Horario inválido');
+    if (withHours) {
+      if (punchPhase === 'checkIn') {
+        if (hasOut && !hasIn) {
+          throw new BadRequestException('Primero registrá la entrada');
+        }
+        if (row?.checkInAt) {
+          throw new BadRequestException('La entrada ya está registrada');
+        }
+      } else {
+        if (hasIn) {
+          throw new BadRequestException('La entrada ya está registrada y no se puede cambiar');
+        }
+        if (!row?.checkInAt) {
+          throw new BadRequestException('Primero registrá la entrada');
+        }
+        if (row.checkOutAt) {
+          throw new BadRequestException('La salida ya está registrada');
+        }
+      }
     }
 
     if (!row) {
@@ -795,13 +1006,78 @@ export class AttendanceService implements OnModuleInit {
       });
     }
     row.shiftId = targetShift.id;
+
+    if (!withHours) {
+      this.applyShift(row, { isPresent: true }, defaults, withHours);
+      await this.days.save(row);
+      this.live.tick(shop.id, 'attendance');
+      void this.notifyCheckInAdmins(shop.id, shop.name, {
+        displayName: employee.fullName,
+        date,
+        shiftName: targetShift.name,
+        checkInAt: null,
+        checkOutAt: null,
+        kind: 'present',
+      }).catch(() => undefined);
+      return {
+        ok: true as const,
+        status: 'complete' as const,
+        alreadyMarked: false,
+        date,
+        checkInAt: null,
+        checkOutAt: null,
+        marks: [
+          {
+            shiftId: row.shiftId,
+            checkInAt: null,
+            checkOutAt: null,
+          },
+        ],
+      };
+    }
+
+    if (punchPhase === 'checkIn') {
+      const checkInAt = parseHhMm(rawIn);
+      if (!checkInAt) throw new BadRequestException('Horario inválido');
+      this.applyShift(
+        row,
+        { isPresent: true, checkInAt, checkOutAt: undefined },
+        defaults,
+        withHours,
+      );
+      await this.days.save(row);
+      this.live.tick(shop.id, 'attendance');
+      void this.notifyCheckInAdmins(shop.id, shop.name, {
+        displayName: employee.fullName,
+        date,
+        shiftName: targetShift.name,
+        checkInAt,
+        checkOutAt: null,
+        kind: 'checkIn',
+      }).catch(() => undefined);
+      return {
+        ok: true as const,
+        status: 'needsCheckOut' as const,
+        alreadyMarked: false,
+        punchPhase: 'checkOut' as const,
+        date,
+        checkInAt,
+        checkOutAt: null,
+        marks: [
+          {
+            shiftId: row.shiftId,
+            checkInAt,
+            checkOutAt: null,
+          },
+        ],
+      };
+    }
+
+    const checkOutAt = parseHhMm(rawOut);
+    if (!checkOutAt) throw new BadRequestException('Horario inválido');
     this.applyShift(
       row,
-      {
-        isPresent: true,
-        checkInAt: withHours ? checkInAt : null,
-        checkOutAt: withHours ? checkOutAt : null,
-      },
+      { isPresent: true, checkOutAt, checkInAt: undefined },
       defaults,
       withHours,
     );
@@ -811,15 +1087,24 @@ export class AttendanceService implements OnModuleInit {
       displayName: employee.fullName,
       date,
       shiftName: targetShift.name,
-      checkInAt: withHours ? checkInAt : null,
-      checkOutAt: withHours ? checkOutAt : null,
+      checkInAt: row.checkInAt ?? null,
+      checkOutAt,
+      kind: 'checkOut',
     }).catch(() => undefined);
     return {
       ok: true as const,
+      status: 'complete' as const,
       alreadyMarked: false,
       date,
-      checkInAt: withHours ? checkInAt : null,
-      checkOutAt: withHours ? checkOutAt : null,
+      checkInAt: row.checkInAt ?? null,
+      checkOutAt,
+      marks: [
+        {
+          shiftId: row.shiftId,
+          checkInAt: row.checkInAt ?? null,
+          checkOutAt,
+        },
+      ],
     };
   }
 
@@ -832,6 +1117,7 @@ export class AttendanceService implements OnModuleInit {
       shiftName: string;
       checkInAt?: string | null;
       checkOutAt?: string | null;
+      kind?: 'checkIn' | 'checkOut' | 'present';
     },
   ) {
     const links = await this.userShops.find({ where: { shopId } });
@@ -841,17 +1127,28 @@ export class AttendanceService implements OnModuleInit {
     if (!userIds.length) return;
     const name = String(opts.displayName ?? '').trim() || 'Empleado';
     const shift = String(opts.shiftName ?? '').trim() || 'turno';
-    const hours =
-      opts.checkInAt && opts.checkOutAt
+    let detail = '';
+    if (opts.kind === 'checkIn' && opts.checkInAt) detail = ` · entrada ${opts.checkInAt}`;
+    else if (opts.kind === 'checkOut' && opts.checkOutAt) {
+      detail = opts.checkInAt
         ? ` · ${opts.checkInAt}–${opts.checkOutAt}`
-        : '';
+        : ` · salida ${opts.checkOutAt}`;
+    } else if (opts.checkInAt && opts.checkOutAt) {
+      detail = ` · ${opts.checkInAt}–${opts.checkOutAt}`;
+    }
+    const verb =
+      opts.kind === 'checkIn'
+        ? 'marcó entrada'
+        : opts.kind === 'checkOut'
+          ? 'marcó salida'
+          : 'fichó';
     await this.notifications.createMany(
       userIds.map((userId) => ({
         userId,
         shopId,
         type: NotificationType.ATTENDANCE_CHECK_IN,
         title: 'Fichaje registrado',
-        body: `${shopName}: ${name} fichó ${shift} (${opts.date})${hours}`,
+        body: `${shopName}: ${name} ${verb} ${shift} (${opts.date})${detail}`,
       })),
     );
   }

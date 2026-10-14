@@ -21,6 +21,7 @@ import {
   Repository,
 } from 'typeorm';
 import { isEntityActive } from '../../common/active.util';
+import { markDeletedUnique } from '../../common/soft-delete.util';
 import {
   ComandaLineAudit,
   COMANDA_LINE_REASONS,
@@ -1003,6 +1004,47 @@ export class WaiterService implements OnModuleInit {
       throw new BadRequestException('El comprobante aún no está cerrado');
     }
     return this.sessionDetail(shop, session);
+  }
+
+  /**
+   * Soft-delete de un comprobante cerrado (mesa/mostrador) y sus envíos.
+   * No revierte movimientos de caja ya generados.
+   */
+  async removeStaffReceipt(user: AuthUser, shopId: string, sessionId: string) {
+    this.shopsSvc.assertShopAccess(user, shopId);
+    const shop = await this.shops.findOne({ where: { id: shopId, active: true as any } });
+    if (!shop) throw new NotFoundException('Local no encontrado');
+    if (!shop.waiterOrderingEnabled) {
+      throw new ForbiddenException(
+        'Comanda no disponible. Activála en Configuración → Comandas y guardá.',
+      );
+    }
+    const session = await this.sessions.findOne({
+      where: { id: sessionId, shopId: shop.id },
+    });
+    if (!session) throw new NotFoundException('Comprobante no encontrado');
+    if (session.status !== TableSessionStatus.CLOSED) {
+      throw new BadRequestException('Solo se pueden borrar comprobantes cerrados');
+    }
+
+    const childOrders = await this.orders.find({
+      where: { shopId: shop.id, tableSessionId: session.id },
+    });
+    for (const order of childOrders) {
+      order.code = markDeletedUnique(order.code, order.id, 40);
+      if (order.clientRequestId) {
+        order.clientRequestId = markDeletedUnique(order.clientRequestId, order.id, 64);
+      }
+      order.active = false;
+      await this.orders.save(order);
+      await this.orders.softRemove(order);
+    }
+
+    session.active = false;
+    await this.sessions.save(session);
+    await this.sessions.softRemove(session);
+    this.live.tick(shop.id, 'customer-orders');
+    return { ok: true };
   }
 
   async exportStaffReceiptsExcel(

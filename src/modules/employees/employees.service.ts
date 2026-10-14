@@ -144,6 +144,14 @@ export class EmployeesService implements OnModuleInit {
     try {
       await this.employees.query(`
         ALTER TABLE employees
+          ADD COLUMN showInFichar TINYINT NOT NULL DEFAULT 1
+      `);
+    } catch {
+      // ya existe
+    }
+    try {
+      await this.employees.query(`
+        ALTER TABLE employees
           ADD COLUMN waiterPinHash VARCHAR(64) NULL
       `);
     } catch {
@@ -232,6 +240,8 @@ export class EmployeesService implements OnModuleInit {
         e.countsForAttendanceBonus === undefined || e.countsForAttendanceBonus === null
           ? true
           : !!e.countsForAttendanceBonus,
+      showInFichar:
+        e.showInFichar === undefined || e.showInFichar === null ? true : !!e.showInFichar,
       producesFood: !!e.producesFood,
       supervisorEmployeeId: e.supervisorEmployeeId ?? null,
       bankAlias: e.bankAlias?.trim() || null,
@@ -380,6 +390,7 @@ export class EmployeesService implements OnModuleInit {
         days?: unknown;
       }> | null;
       countsForAttendanceBonus?: boolean;
+      showInFichar?: boolean;
       producesFood?: boolean;
       jobRoles?: string[] | null;
       supervisorEmployeeId?: string | null;
@@ -429,6 +440,7 @@ export class EmployeesService implements OnModuleInit {
       jobRoles: roles.length ? roles : null,
       countsForAttendanceBonus:
         dto.countsForAttendanceBonus === undefined ? true : !!dto.countsForAttendanceBonus,
+      showInFichar: dto.showInFichar === undefined ? true : !!dto.showInFichar,
       producesFood,
       supervisorEmployeeId: producesFood ? (dto.supervisorEmployeeId ?? null) : null,
       bankAlias: dto.bankAlias?.trim() || null,
@@ -473,6 +485,7 @@ export class EmployeesService implements OnModuleInit {
         days?: unknown;
       }> | null;
       countsForAttendanceBonus?: boolean;
+      showInFichar?: boolean;
       producesFood?: boolean;
       jobRoles?: string[] | null;
       supervisorEmployeeId?: string | null;
@@ -513,6 +526,9 @@ export class EmployeesService implements OnModuleInit {
     }
     if (dto.countsForAttendanceBonus !== undefined) {
       row.countsForAttendanceBonus = !!dto.countsForAttendanceBonus;
+    }
+    if (dto.showInFichar !== undefined) {
+      row.showInFichar = !!dto.showInFichar;
     }
     if (dto.jobRoles !== undefined || dto.producesFood !== undefined) {
       let roles =

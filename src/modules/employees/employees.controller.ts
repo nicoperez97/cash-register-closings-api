@@ -99,6 +99,10 @@ class CreateEmployeeDto {
   @IsOptional()
   @ToBoolean() @IsBoolean()
   countsForAttendanceBonus?: boolean;
+  @ApiPropertyOptional({ description: 'Si aparece en Asistencia → Fichar y puede fichar por PIN' })
+  @IsOptional()
+  @ToBoolean() @IsBoolean()
+  showInFichar?: boolean;
   @ApiPropertyOptional({ description: 'Si produce comida (asistencia en producción)' })
   @IsOptional()
   @ToBoolean() @IsBoolean()
@@ -181,6 +185,10 @@ class UpdateEmployeeDto {
   @IsOptional()
   @ToBoolean() @IsBoolean()
   countsForAttendanceBonus?: boolean;
+  @ApiPropertyOptional({ description: 'Si aparece en Asistencia → Fichar y puede fichar por PIN' })
+  @IsOptional()
+  @ToBoolean() @IsBoolean()
+  showInFichar?: boolean;
   @ApiPropertyOptional()
   @IsOptional()
   @ToBoolean() @IsBoolean()

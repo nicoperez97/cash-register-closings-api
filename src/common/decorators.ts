@@ -16,6 +16,10 @@ export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
 export const MANAGE_USERS_KEY = 'manage_users';
 export const RequireManageUsers = () => SetMetadata(MANAGE_USERS_KEY, true);
 
+/** Ver usuarios (sin ABM): users.read / users.manage / admin del local. */
+export const VIEW_USERS_KEY = 'view_users';
+export const RequireViewUsers = () => SetMetadata(VIEW_USERS_KEY, true);
+
 export type AuthUser = {
   id: string;
   email: string;

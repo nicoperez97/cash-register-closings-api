@@ -108,6 +108,7 @@ export class ConceptsController {
     'expenses.read',
     'accountTransfers.read',
     'movements.read',
+    'concepts.read',
     'concepts.manage',
     'payments.read',
     'shopConfig.read',
@@ -140,7 +141,7 @@ export class ConceptsController {
   }
 
   @Get('export.xlsx')
-  @RequirePermissions('concepts.manage')
+  @RequireAnyPermissions('concepts.read', 'concepts.manage')
   async exportExcel(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
