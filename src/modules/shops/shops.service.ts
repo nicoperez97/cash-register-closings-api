@@ -927,15 +927,15 @@ export class ShopsService implements OnModuleInit {
     const sets: string[] = [];
     const params: unknown[] = [];
     if (patch.counterPaymentMethods !== undefined) {
-      sets.push('counterPaymentMethods = ?');
+      sets.push('counterPaymentMethods = CAST(? AS JSON)');
       params.push(JSON.stringify(patch.counterPaymentMethods));
     }
     if (patch.orderingPayments !== undefined) {
-      sets.push('orderingPayments = ?');
+      sets.push('orderingPayments = CAST(? AS JSON)');
       params.push(JSON.stringify(patch.orderingPayments));
     }
     if (patch.tablePaymentMethods !== undefined) {
-      sets.push('tablePaymentMethods = ?');
+      sets.push('tablePaymentMethods = CAST(? AS JSON)');
       params.push(JSON.stringify(patch.tablePaymentMethods));
     }
     if (!sets.length) return;
