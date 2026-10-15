@@ -197,6 +197,7 @@ export class ShopsController {
         accountId?: string | null;
         active?: boolean;
         askCashTender?: boolean;
+        discountPercent?: number | null;
       }> | null;
       tablePaymentMethods?: Array<{
         id?: string;

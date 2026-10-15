@@ -59,6 +59,19 @@ export class LinkedPaymentMethodDto {
   @ToBoolean()
   @IsBoolean()
   askCashTender?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Porcentaje de descuento automático al elegir este medio en mostrador (1–100). Solo medios de mostrador.',
+    nullable: true,
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v != null && v !== '')
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  discountPercent?: number | null;
 }
 
 export class PaymentConceptCategoriesDto {
