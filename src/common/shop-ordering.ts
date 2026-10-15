@@ -41,6 +41,11 @@ export type OrderingPaymentMethodItem = {
    * Si falta, se deriva: efectivo real por nombre/id.
    */
   askCashTender?: boolean;
+  /**
+   * % de descuento automático al elegir este medio en mostrador.
+   * Solo se usa/persiste en medios de mostrador. null/0 = sin descuento.
+   */
+  discountPercent?: number | null;
 };
 
 export type ShopOrderingPayments = {
@@ -323,6 +328,13 @@ export function normalizeTablePaymentMethods(raw: unknown): TablePaymentMethod[]
   return out;
 }
 
+/** Normaliza % de descuento automático de un medio de mostrador (1–100 o null). */
+export function normalizePaymentDiscountPercent(raw: unknown): number | null {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.min(100, Math.round(n * 100) / 100);
+}
+
 function defaultCounterPayItems(): CounterPaymentMethod[] {
   return [
     {
@@ -331,6 +343,7 @@ function defaultCounterPayItems(): CounterPaymentMethod[] {
       accountId: null,
       active: true,
       askCashTender: true,
+      discountPercent: null,
     },
     {
       id: 'cp_transfer',
@@ -338,6 +351,7 @@ function defaultCounterPayItems(): CounterPaymentMethod[] {
       accountId: null,
       active: true,
       askCashTender: false,
+      discountPercent: null,
     },
   ];
 }
@@ -369,6 +383,7 @@ export function normalizeCounterPaymentMethods(raw: unknown): CounterPaymentMeth
         kind: r.kind,
         askCashTender: r.askCashTender,
       }),
+      discountPercent: normalizePaymentDiscountPercent(r.discountPercent),
     });
   }
   if (!out.length) return defaultCounterPayItems();
