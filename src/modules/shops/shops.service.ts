@@ -912,6 +912,37 @@ export class ShopsService implements OnModuleInit {
     }
   }
 
+  /**
+   * UPDATE explícito de columnas JSON de medios de pago.
+   * TypeORM + MySQL JSON a veces no marca dirty en save() y el cambio no llega a DB.
+   */
+  private async forcePersistPaymentMethodsJson(
+    shopId: string,
+    patch: {
+      counterPaymentMethods?: CounterPaymentMethod[] | null;
+      orderingPayments?: ShopOrderingPayments | null;
+      tablePaymentMethods?: TablePaymentMethod[] | null;
+    },
+  ): Promise<void> {
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    if (patch.counterPaymentMethods !== undefined) {
+      sets.push('counterPaymentMethods = ?');
+      params.push(JSON.stringify(patch.counterPaymentMethods));
+    }
+    if (patch.orderingPayments !== undefined) {
+      sets.push('orderingPayments = ?');
+      params.push(JSON.stringify(patch.orderingPayments));
+    }
+    if (patch.tablePaymentMethods !== undefined) {
+      sets.push('tablePaymentMethods = ?');
+      params.push(JSON.stringify(patch.tablePaymentMethods));
+    }
+    if (!sets.length) return;
+    params.push(shopId);
+    await this.shops.query(`UPDATE shops SET ${sets.join(', ')} WHERE id = ?`, params);
+  }
+
   async mine(user: AuthUser) {
     if (!user.shopIds.length) return [];
     const list = await this.shops.find({
@@ -1263,14 +1294,22 @@ export class ShopsService implements OnModuleInit {
     if (dto.orderingHours !== undefined) {
       shop.orderingHours = normalizeShopOrderingHours(dto.orderingHours);
     }
+    const paymentJsonPatch: {
+      counterPaymentMethods?: CounterPaymentMethod[] | null;
+      orderingPayments?: ShopOrderingPayments | null;
+      tablePaymentMethods?: TablePaymentMethod[] | null;
+    } = {};
     if (dto.orderingPayments !== undefined) {
       shop.orderingPayments = normalizeOrderingPayments(dto.orderingPayments);
+      paymentJsonPatch.orderingPayments = shop.orderingPayments ?? null;
     }
     if (dto.counterPaymentMethods !== undefined) {
       shop.counterPaymentMethods = normalizeCounterPaymentMethods(dto.counterPaymentMethods);
+      paymentJsonPatch.counterPaymentMethods = shop.counterPaymentMethods ?? null;
     }
     if (dto.tablePaymentMethods !== undefined) {
       shop.tablePaymentMethods = normalizeTablePaymentMethods(dto.tablePaymentMethods);
+      paymentJsonPatch.tablePaymentMethods = shop.tablePaymentMethods ?? null;
     }
     if (dto.waiterCapabilities !== undefined) {
       shop.waiterCapabilities = normalizeWaiterCapabilities(dto.waiterCapabilities);
@@ -1468,6 +1507,7 @@ export class ShopsService implements OnModuleInit {
     }
 
     await this.saveShop(shop);
+    await this.forcePersistPaymentMethodsJson(id, paymentJsonPatch);
     if (smtpPasswordPatch !== undefined) {
       // Solo actualizar si vino null (borrar) o string no vacío
       if (smtpPasswordPatch === null || smtpPasswordPatch) {
@@ -1561,6 +1601,11 @@ export class ShopsService implements OnModuleInit {
     ) {
       shop.deliveryZones = defaultDeliveryZones();
     }
+    const paymentJsonPatch: {
+      counterPaymentMethods?: CounterPaymentMethod[] | null;
+      orderingPayments?: ShopOrderingPayments | null;
+      tablePaymentMethods?: TablePaymentMethod[] | null;
+    } = {};
     if (dto.orderingPayments !== undefined) {
       const prev = normalizeOrderingPayments(shop.orderingPayments);
       const incoming = dto.orderingPayments ?? {};
@@ -1592,12 +1637,15 @@ export class ShopsService implements OnModuleInit {
         whatsapp:
           incoming.whatsapp !== undefined ? incoming.whatsapp : (prev?.whatsapp ?? null),
       });
+      paymentJsonPatch.orderingPayments = shop.orderingPayments ?? null;
     }
     if (dto.counterPaymentMethods !== undefined) {
       shop.counterPaymentMethods = normalizeCounterPaymentMethods(dto.counterPaymentMethods);
+      paymentJsonPatch.counterPaymentMethods = shop.counterPaymentMethods ?? null;
     }
     if (dto.tablePaymentMethods !== undefined) {
       shop.tablePaymentMethods = normalizeTablePaymentMethods(dto.tablePaymentMethods);
+      paymentJsonPatch.tablePaymentMethods = shop.tablePaymentMethods ?? null;
     }
     if (dto.waiterCapabilities !== undefined) {
       shop.waiterCapabilities = normalizeWaiterCapabilities(dto.waiterCapabilities);
@@ -1638,6 +1686,7 @@ export class ShopsService implements OnModuleInit {
       shop.menu = { menus };
     }
     await this.saveShop(shop);
+    await this.forcePersistPaymentMethodsJson(id, paymentJsonPatch);
     return this.toDto(shop, { emailSmtpConfigured: await this.hasSmtpPassword(id) });
   }
 

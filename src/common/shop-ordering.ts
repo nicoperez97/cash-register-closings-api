@@ -122,11 +122,20 @@ export function inferAskCashTender(
   );
 }
 
+/** Normaliza askCashTender desde JSON/MySQL (bool, 0/1, "true"/"false"). */
+export function coerceAskCashTenderFlag(raw: unknown): boolean | undefined {
+  if (typeof raw === 'boolean') return raw;
+  if (raw === 1 || raw === '1' || raw === 'true' || raw === 'TRUE') return true;
+  if (raw === 0 || raw === '0' || raw === 'false' || raw === 'FALSE') return false;
+  return undefined;
+}
+
 /** Prefiere `askCashTender` explícito; si falta, heurística por id/nombre. */
 export function resolveAskCashTender(
   item: Pick<OrderingPaymentMethodItem, 'id' | 'name' | 'kind' | 'askCashTender'>,
 ): boolean {
-  if (typeof item.askCashTender === 'boolean') return item.askCashTender;
+  const coerced = coerceAskCashTenderFlag(item.askCashTender);
+  if (typeof coerced === 'boolean') return coerced;
   return inferAskCashTender(item);
 }
 
