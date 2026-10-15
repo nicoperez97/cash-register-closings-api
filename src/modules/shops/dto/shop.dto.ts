@@ -19,7 +19,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { PosnetType } from '../../../common/posnet';
 import { ConceptCategory } from '../../../common/enums';
 import { DEFAULT_PAYMENT_CONCEPT_CATEGORIES } from '../../../common/concept-categories';
@@ -66,8 +66,12 @@ export class LinkedPaymentMethodDto {
     nullable: true,
   })
   @IsOptional()
-  @ValidateIf((_, v) => v != null && v !== '')
-  @Type(() => Number)
+  @Transform(({ value }) => {
+    if (value === null || value === undefined || value === '') return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  })
+  @ValidateIf((_, v) => v != null)
   @IsNumber()
   @Min(0)
   @Max(100)

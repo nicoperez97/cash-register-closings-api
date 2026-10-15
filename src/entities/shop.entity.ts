@@ -186,7 +186,7 @@ export class Shop extends BaseEntity {
   orderingPayments?: ShopOrderingPayments | null;
 
   /** Medios de pago del mostrador (caja staff). */
-  @Column({ type: 'simple-json', nullable: true })
+  @Column({ type: 'json', nullable: true })
   counterPaymentMethods?: CounterPaymentMethod[] | null;
 
   /** Medios de pago al cerrar mesa (comanda), con cuenta opcional. */
