@@ -89,6 +89,7 @@ import { userShopCanReceiveCustomerOrders } from '../profile/notification-eligib
 import { IntegrationsService } from '../integrations/integrations.service';
 import { ClosingsService } from '../closings/closings.service';
 import { StockService } from '../stock/stock.service';
+import { ShopClosingSource } from '../../entities/shop-closing-source.entity';
 import { isMysqlDuplicateKey, lockEntity } from '../../common/row-lock';
 import {
   CreateCustomerOrderDto,
@@ -122,6 +123,8 @@ export class CustomerOrdersService implements OnModuleInit {
     private readonly tableSessions: Repository<TableSession>,
     @InjectRepository(Reservation)
     private readonly reservations: Repository<Reservation>,
+    @InjectRepository(ShopClosingSource)
+    private readonly closingSources: Repository<ShopClosingSource>,
     private readonly live: ShopLiveService,
     private readonly notifications: NotificationsService,
     private readonly printAgent: PrintAgentService,
@@ -312,7 +315,11 @@ export class CustomerOrdersService implements OnModuleInit {
   private resolveLineUnitPrice(
     item: ShopMenuItem & { unitPrice: number },
     row: { unitPrice?: number | null },
-    opts: { response: 'public' | 'staff' | 'waiter' | 'guest'; accountId: string | null },
+    opts: {
+      response: 'public' | 'staff' | 'waiter' | 'guest';
+      accountId: string | null;
+      fallbackAccountIds?: string[] | null;
+    },
   ): number {
     const allowStaffPrice = opts.response === 'staff' || opts.response === 'waiter';
     if (allowStaffPrice && row.unitPrice != null && Number.isFinite(Number(row.unitPrice))) {
@@ -329,10 +336,27 @@ export class CustomerOrdersService implements OnModuleInit {
       return asked;
     }
     if (allowStaffPrice) {
-      const resolved = resolveItemUnitPrice(item, opts.accountId);
+      const resolved = resolveItemUnitPrice(item, opts.accountId, opts.fallbackAccountIds);
       if (resolved != null) return resolved;
     }
     return item.unitPrice;
+  }
+
+  /** Si el medio apunta a una cuenta del local, también probar su ledger (precios legacy). */
+  private async priceAccountLookupKeys(
+    shopId: string,
+    paymentAccountId: string | null,
+  ): Promise<{ accountId: string | null; fallbackAccountIds: string[] }> {
+    const accountId = String(paymentAccountId ?? '').trim() || null;
+    if (!accountId) return { accountId: null, fallbackAccountIds: [] };
+    const source = await this.closingSources.findOne({
+      where: { shopId, id: accountId, active: true as any },
+    });
+    const ledger = String(source?.accountId ?? '').trim();
+    return {
+      accountId,
+      fallbackAccountIds: ledger && ledger !== accountId ? [ledger] : [],
+    };
   }
 
   private toDto(o: CustomerOrder) {
@@ -913,10 +937,13 @@ export class CustomerOrdersService implements OnModuleInit {
       }
     }
 
-    const priceAccountId =
+    const priceLookup =
       opts.response === 'staff' || opts.response === 'waiter'
-        ? String(payItem?.accountId ?? '').trim() || null
-        : null;
+        ? await this.priceAccountLookupKeys(
+            shop.id,
+            String(payItem?.accountId ?? '').trim() || null,
+          )
+        : { accountId: null as string | null, fallbackAccountIds: [] as string[] };
     const catalog = this.menuItemIndex(shop);
     const lines: CustomerOrderLine[] = [];
     let subtotal = 0;
@@ -928,7 +955,8 @@ export class CustomerOrdersService implements OnModuleInit {
       const qty = Math.max(1, Math.min(99, Number(row.qty) || 1));
       const unitPrice = this.resolveLineUnitPrice(found, row, {
         response: opts.response,
-        accountId: priceAccountId,
+        accountId: priceLookup.accountId,
+        fallbackAccountIds: priceLookup.fallbackAccountIds,
       });
       subtotal += unitPrice * qty;
       const allowedRemoved = new Set(

@@ -13,6 +13,7 @@ import { ShopsModule } from '../shops/shops.module';
 import { IntegrationsModule } from '../integrations/integrations.module';
 import { ClosingsModule } from '../closings/closings.module';
 import { StockModule } from '../stock/stock.module';
+import { ShopClosingSource } from '../../entities/shop-closing-source.entity';
 import {
   CustomerOrdersController,
   PublicCustomerOrdersController,
@@ -28,6 +29,7 @@ import { CustomerOrdersService } from './customer-orders.service';
       User,
       TableSession,
       Reservation,
+      ShopClosingSource,
     ]),
     ShopsModule,
     ShopLiveModule,
