@@ -2075,11 +2075,13 @@ export class PaymentsService implements OnModuleInit {
 
   private async resolveInvoiceParse(
     file: Express.Multer.File,
-  ): Promise<ParsedInvoice & { engine?: 'classic' | 'gemini'; geminiWarning?: string | null }> {
+  ): Promise<
+    ParsedInvoice & { engine?: 'classic' | 'gemini' | 'groq'; geminiWarning?: string | null }
+  > {
     if (this.gemini.isEnabled()) {
       const ai = await this.gemini.parseInvoice(file);
       if (ai.ok) {
-        return { ...ai.data, engine: 'gemini', geminiWarning: null };
+        return { ...ai.data, engine: ai.engine, geminiWarning: null };
       }
       const classic = await ocrAndParseInvoice(file);
       return { ...classic, engine: 'classic', geminiWarning: ai.message };
@@ -2088,7 +2090,7 @@ export class PaymentsService implements OnModuleInit {
     return {
       ...classic,
       engine: 'classic',
-      geminiWarning: 'Gemini no está configurado. Se usó el parseo local.',
+      geminiWarning: 'No hay IA configurada (Gemini/Groq). Se usó el parseo local.',
     };
   }
 

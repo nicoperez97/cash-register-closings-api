@@ -311,7 +311,7 @@ export class MenuService {
     try {
       let menuPayload: ShopMenu | null = null;
       let rawText = '';
-      let engine: 'classic' | 'gemini' = 'classic';
+      let engine: 'classic' | 'gemini' | 'groq' = 'classic';
       let geminiWarning: string | null = null;
 
       if (this.gemini.isEnabled()) {
@@ -319,14 +319,14 @@ export class MenuService {
         if (ai.ok && menuHasItems(ai.data.menu)) {
           menuPayload = ai.data.menu;
           rawText = ai.data.rawText;
-          engine = 'gemini';
+          engine = ai.engine;
         } else if (!ai.ok) {
           geminiWarning = ai.message;
         } else {
-          geminiWarning = 'Gemini no encontró ítems claros. Se usó el parseo local.';
+          geminiWarning = 'La IA no encontró ítems claros. Se usó el parseo local.';
         }
       } else {
-        geminiWarning = 'Gemini no está configurado. Se usó el parseo local.';
+        geminiWarning = 'No hay IA configurada (Gemini/Groq). Se usó el parseo local.';
       }
 
       if (!menuPayload) {
@@ -366,7 +366,9 @@ export class MenuService {
   ) {
     this.shops.assertOrderingCatalogManage(user, shopId);
     if (!this.gemini.isEnabled()) {
-      throw new BadRequestException('Gemini no está configurado (falta GEMINI_API_KEY).');
+      throw new BadRequestException(
+        'No hay IA configurada (falta GEMINI_API_KEY o GROQ_API_KEY).',
+      );
     }
     const items = (body?.items ?? [])
       .map((it) => ({

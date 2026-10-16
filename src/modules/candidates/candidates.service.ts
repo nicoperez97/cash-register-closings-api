@@ -123,14 +123,16 @@ export class CandidatesService implements OnModuleInit {
     user: AuthUser,
     shopId: string,
     files: Express.Multer.File | Express.Multer.File[],
-  ): Promise<ParsedCv & { engine?: 'classic' | 'gemini'; geminiWarning?: string | null }> {
+  ): Promise<
+    ParsedCv & { engine?: 'classic' | 'gemini' | 'groq'; geminiWarning?: string | null }
+  > {
     this.shops.assertShopAccess(user, shopId);
     const list = (Array.isArray(files) ? files : [files]).filter((f) => !!f?.buffer?.length);
 
     if (this.gemini.isEnabled()) {
       const ai = await this.gemini.parseCv(list);
       if (ai.ok) {
-        return { ...ai.data, engine: 'gemini', geminiWarning: null };
+        return { ...ai.data, engine: ai.engine, geminiWarning: null };
       }
       const classic = await ocrAndParseCv(files);
       return { ...classic, engine: 'classic', geminiWarning: ai.message };
@@ -140,7 +142,7 @@ export class CandidatesService implements OnModuleInit {
     return {
       ...classic,
       engine: 'classic',
-      geminiWarning: 'Gemini no está configurado. Se usó el parseo local.',
+      geminiWarning: 'No hay IA configurada (Gemini/Groq). Se usó el parseo local.',
     };
   }
 

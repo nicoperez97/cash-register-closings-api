@@ -319,7 +319,9 @@ export class ServiceRulesService implements OnModuleInit {
       throw new BadRequestException('Subí un PDF, una imagen o un .txt con las normas');
     }
     if (!this.gemini.isEnabled()) {
-      throw new BadRequestException('Gemini no está configurado (falta GEMINI_API_KEY).');
+      throw new BadRequestException(
+        'No hay IA configurada (falta GEMINI_API_KEY o GROQ_API_KEY).',
+      );
     }
     const ai = await this.gemini.parseServiceRules(file);
     if (!ai.ok) {

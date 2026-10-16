@@ -55,12 +55,20 @@ export default () => {
     /** Gemini (opcional): mejora parseo de cartas, CV y facturas. Free tier en AI Studio. */
     gemini: {
       apiKey: (env.GEMINI_API_KEY ?? '').trim(),
-      model: (env.GEMINI_MODEL ?? 'gemini-3.8-flash').trim() || 'gemini-3.8-flash',
+      model: (env.GEMINI_MODEL ?? 'gemini-3.6-flash').trim() || 'gemini-3.6-flash',
       /** Modelos a probar si el principal responde 503/alta demanda (coma-separados). */
-      fallbackModels: (env.GEMINI_FALLBACK_MODELS ?? 'gemini-3.6-flash,gemini-flash-latest')
+      fallbackModels: (
+        env.GEMINI_FALLBACK_MODELS ??
+        'gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-flash-latest'
+      )
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean),
+    },
+    /** Groq (opcional): respaldo free si Gemini falla. Visión; PDF se rasteriza. */
+    groq: {
+      apiKey: (env.GROQ_API_KEY ?? '').trim(),
+      model: (env.GROQ_MODEL ?? 'qwen/qwen3.8-27b').trim() || 'qwen/qwen3.8-27b',
     },
     /**
      * Google Sign-In (opcional). Mismo Client ID (tipo Web) en front y API.
