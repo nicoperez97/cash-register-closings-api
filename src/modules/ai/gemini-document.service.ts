@@ -210,7 +210,7 @@ export class GeminiDocumentService {
     timeoutMs: number,
   ): Promise<GeminiResult<T>> {
     const models = this.modelChain();
-    const maxAttemptsPerModel = 3;
+    const maxAttemptsPerModel = 2;
     let lastKind: 'quota' | 'not_found' | 'transient' | 'error' | 'empty' = 'error';
 
     for (let mi = 0; mi < models.length; mi++) {
@@ -243,21 +243,24 @@ export class GeminiDocumentService {
           break;
         }
 
-        if (attempt < maxAttemptsPerModel) {
-          const base = 800 * Math.pow(2, attempt - 1);
-          const jitter = Math.floor(Math.random() * 400);
-          const delay = Math.min(6_000, base + jitter);
-          this.logger.warn(
-            `Gemini ocupado (${model}), reintento ${attempt + 1}/${maxAttemptsPerModel} en ${delay}ms`,
-          );
-          await this.sleep(delay);
-          continue;
+        // 503 / high demand: no quemar 3 reintentos en el mismo modelo; pasar al siguiente.
+        const highDemand = /high demand|unavailable|overloaded/i.test(res.detail || '');
+        if (highDemand || attempt >= maxAttemptsPerModel) {
+          if (mi < models.length - 1) {
+            this.logger.warn(
+              `Gemini ocupado en ${model}; probando fallback ${models[mi + 1]}`,
+            );
+          }
+          break;
         }
-        if (mi < models.length - 1) {
-          this.logger.warn(
-            `Gemini sigue ocupado en ${model}; probando fallback ${models[mi + 1]}`,
-          );
-        }
+
+        const base = 800 * Math.pow(2, attempt - 1);
+        const jitter = Math.floor(Math.random() * 400);
+        const delay = Math.min(4_000, base + jitter);
+        this.logger.warn(
+          `Gemini ocupado (${model}), reintento ${attempt + 1}/${maxAttemptsPerModel} en ${delay}ms`,
+        );
+        await this.sleep(delay);
       }
     }
 
