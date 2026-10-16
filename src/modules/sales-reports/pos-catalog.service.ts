@@ -170,7 +170,7 @@ export class PosCatalogService implements OnModuleInit {
       confidence: number;
       reason: string;
     }> = [];
-    let source: 'gemini' | 'local' = 'local';
+    let source: 'gemini' | 'groq' | 'local' = 'local';
     let warnings: string[] = [];
 
     const gemini = await this.gemini.suggestPosMenuLinks({
@@ -186,7 +186,7 @@ export class PosCatalogService implements OnModuleInit {
       })),
     });
     if (gemini.ok) {
-      source = 'gemini';
+      source = gemini.engine;
       suggestions = gemini.data.suggestions;
       warnings = gemini.data.warnings;
     } else {

@@ -6,33 +6,55 @@ import {
 } from '../menu/menu-parse.util';
 import { ParsedCv } from '../candidates/cv-ocr.parser';
 import { ParsedInvoice } from '../payments/invoice-ocr.parser';
+import { GroqDocumentService } from './groq-document.service';
 
 type InlinePart = { inlineData: { mimeType: string; data: string } };
 type TextPart = { text: string };
 
+export type AiEngine = 'gemini' | 'groq';
+
 export type GeminiFailReason = 'disabled' | 'quota' | 'error' | 'empty';
 
 export type GeminiResult<T> =
-  | { ok: true; data: T }
+  | { ok: true; data: T; engine: AiEngine }
   | { ok: false; reason: GeminiFailReason; message: string };
 
 @Injectable()
 export class GeminiDocumentService {
   private readonly logger = new Logger(GeminiDocumentService.name);
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    private readonly groq: GroqDocumentService,
+  ) {}
 
+  /** True si hay Gemini y/o Groq configurados. */
   isEnabled(): boolean {
-    return !!this.config.get<string>('gemini.apiKey');
+    return !!this.apiKey() || this.groq.isEnabled();
   }
 
   private model(): string {
-    return this.config.get<string>('gemini.model') || 'gemini-3.8-flash';
+    return this.config.get<string>('gemini.model') || 'gemini-3.6-flash';
   }
 
   private fallbackModels(): string[] {
     const list = this.config.get<string[]>('gemini.fallbackModels');
-    return Array.isArray(list) ? list : ['gemini-3.6-flash', 'gemini-flash-latest'];
+    return Array.isArray(list)
+      ? list
+      : [
+          'gemini-3.5-flash-lite',
+          'gemini-3.1-flash-lite',
+          'gemini-3.8-flash',
+          'gemini-flash-latest',
+        ];
+  }
+
+  private notConfiguredMessage(): string {
+    return 'No hay IA configurada (GEMINI_API_KEY / GROQ_API_KEY).';
+  }
+
+  private ok<T>(data: T, engine: AiEngine): GeminiResult<T> {
+    return { ok: true, data, engine };
   }
 
   private modelChain(): string[] {
@@ -182,16 +204,11 @@ export class GeminiDocumentService {
     }
   }
 
-  private async generateJson<T>(
+  private async generateJsonGeminiOnly<T>(
     parts: Array<TextPart | InlinePart>,
     system: string,
-    timeoutMs = 55_000,
+    timeoutMs: number,
   ): Promise<GeminiResult<T>> {
-    const key = this.apiKey();
-    if (!key) {
-      return this.fail('disabled', 'Gemini no está configurado (falta GEMINI_API_KEY).');
-    }
-
     const models = this.modelChain();
     const maxAttemptsPerModel = 3;
     let lastKind: 'quota' | 'not_found' | 'transient' | 'error' | 'empty' = 'error';
@@ -208,26 +225,24 @@ export class GeminiDocumentService {
           if (mi > 0 || attempt > 1) {
             this.logger.log(`Gemini OK con ${model} (intento ${attempt})`);
           }
-          return { ok: true, data: res.data };
+          return this.ok(res.data, 'gemini');
         }
         lastKind = res.kind;
 
         if (res.kind === 'quota') {
+          // Cuota del proyecto: no probar más modelos Gemini; el caller puede usar Groq.
           return this.fail(
             'quota',
             'Se agotó la cuota diaria de Gemini. Se usó el parseo local.',
           );
         }
         if (res.kind === 'not_found') {
-          // Probar siguiente modelo sin esperar.
           break;
         }
         if (res.kind === 'empty' || res.kind === 'error') {
-          // No reintentar respuestas “definitivas”; pasar al siguiente modelo.
           break;
         }
 
-        // transient (503 / high demand / abort): backoff + jitter, luego otro modelo.
         if (attempt < maxAttemptsPerModel) {
           const base = 800 * Math.pow(2, attempt - 1);
           const jitter = Math.floor(Math.random() * 400);
@@ -252,7 +267,7 @@ export class GeminiDocumentService {
     if (lastKind === 'not_found') {
       return this.fail(
         'error',
-        `El modelo Gemini configurado no está disponible. Probá GEMINI_MODEL=gemini-3.8-flash. Se usó el parseo local.`,
+        `El modelo Gemini configurado no está disponible. Probá GEMINI_MODEL=gemini-3.6-flash. Se usó el parseo local.`,
       );
     }
     return this.fail(
@@ -261,11 +276,52 @@ export class GeminiDocumentService {
     );
   }
 
+  /** Gemini (cadena de modelos) y, si falla o no hay clave, Groq. */
+  private async generateJson<T>(
+    parts: Array<TextPart | InlinePart>,
+    system: string,
+    timeoutMs = 55_000,
+  ): Promise<GeminiResult<T>> {
+    const hasGemini = !!this.apiKey();
+    const hasGroq = this.groq.isEnabled();
+    if (!hasGemini && !hasGroq) {
+      return this.fail('disabled', this.notConfiguredMessage());
+    }
+
+    let geminiFail: GeminiResult<T> | null = null;
+    if (hasGemini) {
+      geminiFail = await this.generateJsonGeminiOnly<T>(parts, system, timeoutMs);
+      if (geminiFail.ok) return geminiFail;
+      this.logger.warn(
+        `Gemini falló (${geminiFail.reason}); ${hasGroq ? 'probando Groq' : 'sin Groq'}`,
+      );
+    }
+
+    if (hasGroq) {
+      const groqRes = await this.groq.generateJson<T>(parts, system, timeoutMs);
+      if (groqRes.ok) {
+        this.logger.log('IA OK con Groq (respaldo)');
+        return this.ok(groqRes.data, 'groq');
+      }
+      if (!geminiFail) {
+        return this.fail(groqRes.reason, groqRes.message);
+      }
+      return this.fail(
+        geminiFail.reason === 'quota' ? 'quota' : groqRes.reason === 'quota' ? 'quota' : geminiFail.reason,
+        geminiFail.reason === 'quota'
+          ? 'Se agotó la cuota de Gemini y Groq tampoco pudo responder. Se usó el parseo local.'
+          : `${geminiFail.message.replace(/\s*Se usó el parseo local\.?/gi, '').trim()} Groq tampoco pudo. Se usó el parseo local.`,
+      );
+    }
+
+    return geminiFail!;
+  }
+
   async parseMenu(
     file: Express.Multer.File,
   ): Promise<GeminiResult<{ menu: ShopMenu; rawText: string }>> {
     if (!this.isEnabled()) {
-      return this.fail('disabled', 'Gemini no está configurado (falta GEMINI_API_KEY).');
+      return this.fail('disabled', this.notConfiguredMessage());
     }
     const part = this.filePart(file);
     if (!part) return this.fail('empty', 'No se pudo leer el archivo para Gemini.');
@@ -335,7 +391,7 @@ Reglas:
       .flatMap((s) => [s.name, ...s.items.map((it) => `${it.name} ${it.priceLabel || it.price || ''}`)])
       .join('\n')
       .slice(0, 12000);
-    return { ok: true, data: { menu, rawText } };
+    return this.ok({ menu, rawText }, data.engine);
   }
 
   /**
@@ -345,7 +401,7 @@ Reglas:
     items: Array<{ id: string; name: string; description?: string | null }>,
   ): Promise<GeminiResult<Array<{ id: string; removableIngredients: string[] }>>> {
     if (!this.isEnabled()) {
-      return this.fail('disabled', 'Gemini no está configurado (falta GEMINI_API_KEY).');
+      return this.fail('disabled', this.notConfiguredMessage());
     }
     const cleaned = items
       .map((it) => ({
@@ -369,6 +425,7 @@ Reglas:
 - Incluí todos los ids del input.`;
 
     const out: Array<{ id: string; removableIngredients: string[] }> = [];
+    let engine: AiEngine = 'gemini';
     const chunkSize = 40;
     for (let i = 0; i < cleaned.length; i += chunkSize) {
       const chunk = cleaned.slice(i, i + chunkSize);
@@ -387,6 +444,7 @@ Reglas:
         if (!out.length) return data;
         break;
       }
+      engine = data.engine;
       const byId = new Map(
         (data.data.items ?? [])
           .map((row) => {
@@ -403,12 +461,12 @@ Reglas:
         });
       }
     }
-    return { ok: true, data: out };
+    return this.ok(out, engine);
   }
 
   async parseCv(files: Express.Multer.File[]): Promise<GeminiResult<ParsedCv>> {
     if (!this.isEnabled()) {
-      return this.fail('disabled', 'Gemini no está configurado (falta GEMINI_API_KEY).');
+      return this.fail('disabled', this.notConfiguredMessage());
     }
     const parts: Array<TextPart | InlinePart> = [
       {
@@ -430,9 +488,8 @@ birthDate ISO YYYY-MM-DD si se puede. rawText: resumen corto del texto leído.`;
     if (!firstName && !lastName && !data.data.email) {
       return this.fail('empty', 'Gemini no extrajo datos del CV. Se usó el parseo local.');
     }
-    return {
-      ok: true,
-      data: {
+    return this.ok(
+      {
         firstName: firstName || 'Sin',
         lastName: lastName || 'nombre',
         email: data.data.email ?? null,
@@ -452,7 +509,8 @@ birthDate ISO YYYY-MM-DD si se puede. rawText: resumen corto del texto leído.`;
         languages: Array.isArray(data.data.languages) ? data.data.languages : [],
         rawText: String(data.data.rawText ?? '').slice(0, 20000),
       },
-    };
+      data.engine,
+    );
   }
 
   async parseServiceRules(file: Express.Multer.File): Promise<
@@ -464,7 +522,7 @@ birthDate ISO YYYY-MM-DD si se puede. rawText: resumen corto del texto leído.`;
     }>
   > {
     if (!this.isEnabled()) {
-      return this.fail('disabled', 'Gemini no está configurado (falta GEMINI_API_KEY).');
+      return this.fail('disabled', this.notConfiguredMessage());
     }
     const part = this.filePart(file);
     if (!part) return this.fail('empty', 'No se pudo leer el archivo para Gemini.');
@@ -555,12 +613,12 @@ Reglas:
     if (!categories.length) {
       return this.fail('empty', 'Gemini no encontró normas en el archivo.');
     }
-    return { ok: true, data: { categories } };
+    return this.ok({ categories }, data.engine);
   }
 
   async parseInvoice(file: Express.Multer.File): Promise<GeminiResult<ParsedInvoice>> {
     if (!this.isEnabled()) {
-      return this.fail('disabled', 'Gemini no está configurado (falta GEMINI_API_KEY).');
+      return this.fail('disabled', this.notConfiguredMessage());
     }
     const part = this.filePart(file);
     if (!part) return this.fail('empty', 'No se pudo leer el archivo para Gemini.');
@@ -575,9 +633,8 @@ taxId = CUIT (XX-XXXXXXXX-X). invoiceType = A/B/C/etc. Montos numéricos con dec
     if (!data.data.taxId && data.data.totalAmount == null && !data.data.invoiceNumber) {
       return this.fail('empty', 'Gemini no extrajo la factura. Se usó el parseo local.');
     }
-    return {
-      ok: true,
-      data: {
+    return this.ok(
+      {
         legalName: data.data.legalName ?? null,
         taxId: data.data.taxId ?? null,
         invoiceType: data.data.invoiceType ?? null,
@@ -589,7 +646,8 @@ taxId = CUIT (XX-XXXXXXXX-X). invoiceType = A/B/C/etc. Montos numéricos con dec
         totalAmount: data.data.totalAmount ?? null,
         rawText: String(data.data.rawText ?? '').slice(0, 12000),
       },
-    };
+      data.engine,
+    );
   }
 
   async parseClosingStepAmount(
@@ -603,7 +661,7 @@ taxId = CUIT (XX-XXXXXXXX-X). invoiceType = A/B/C/etc. Montos numéricos con dec
     }>
   > {
     if (!this.isEnabled()) {
-      return this.fail('disabled', 'Gemini no está configurado (falta GEMINI_API_KEY).');
+      return this.fail('disabled', this.notConfiguredMessage());
     }
     const part = this.filePart(file);
     if (!part) return this.fail('empty', 'No se pudo leer el archivo para Gemini.');
@@ -647,14 +705,14 @@ Reglas:
     if (amount != null && amount < 0) {
       return this.fail('empty', 'Gemini devolvió un total inválido.');
     }
-    return {
-      ok: true,
-      data: {
+    return this.ok(
+      {
         amount,
         label: String(data.data.label ?? '').trim().slice(0, 80) || null,
         note: String(data.data.note ?? '').trim().slice(0, 240) || null,
       },
-    };
+      data.engine,
+    );
   }
 
   async analyzeLedgerImport(digest: unknown): Promise<
@@ -667,7 +725,7 @@ Reglas:
     }>
   > {
     if (!this.isEnabled()) {
-      return this.fail('disabled', 'Gemini no está configurado (falta GEMINI_API_KEY).');
+      return this.fail('disabled', this.notConfiguredMessage());
     }
     const system = `Sos un analista del libro diario de un local gastronómico (Uruguay/Argentina).
 Te pasan un resumen de un Excel (cuenta emisora, receptora, concepto, importe) y el tipo ya detectado (kind).
@@ -741,16 +799,16 @@ Reglas:
     if (!summary) {
       return this.fail('empty', 'Gemini no devolvió un análisis del Excel.');
     }
-    return {
-      ok: true,
-      data: {
+    return this.ok(
+      {
         summary,
         findings: strList(data.data.findings, 6),
         accounts,
         warnings: strList(data.data.warnings, 4),
         kindFixes,
       },
-    };
+      data.engine,
+    );
   }
 
   /**
@@ -769,7 +827,7 @@ Reglas:
     }>
   > {
     if (!this.isEnabled()) {
-      return this.fail('disabled', 'Gemini no está configurado (falta GEMINI_API_KEY).');
+      return this.fail('disabled', this.notConfiguredMessage());
     }
     const system = `Sos un experto en carta y POS de un local gastronómico (Uruguay/Argentina).
 Te pasan platos del reporte de ventas (código + nombre) y la lista de rubros del local.
@@ -843,7 +901,7 @@ Reglas:
       .map((x) => String(x ?? '').trim())
       .filter(Boolean)
       .slice(0, 4);
-    return { ok: true, data: { labels, warnings } };
+    return this.ok({ labels, warnings }, data.engine);
   }
 
   async suggestPosMenuLinks(digest: {
@@ -866,7 +924,7 @@ Reglas:
     }>
   > {
     if (!this.isEnabled()) {
-      return this.fail('disabled', 'Gemini no está configurado (falta GEMINI_API_KEY).');
+      return this.fail('disabled', this.notConfiguredMessage());
     }
     const system = `Sos un experto en gastronomía. Vas a enlazar platos del POS (código + nombre) con ítems de la carta digital del local.
 Devolvé SOLO JSON:
@@ -931,6 +989,6 @@ Reglas:
       .map((x) => String(x ?? '').trim())
       .filter(Boolean)
       .slice(0, 4);
-    return { ok: true, data: { suggestions, warnings } };
+    return this.ok({ suggestions, warnings }, data.engine);
   }
 }

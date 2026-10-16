@@ -79,7 +79,7 @@ const FIELD_TO_KEY: Record<PosPaymentField | string, keyof PaymentBreakdown> = {
   other: 'otherAmount',
 };
 
-export type SalesReportProductSource = 'catalog' | 'seed' | 'gemini' | 'none';
+export type SalesReportProductSource = 'catalog' | 'seed' | 'gemini' | 'groq' | 'none';
 
 export interface SalesReportProductPreview {
   productCode: string;
@@ -603,7 +603,7 @@ export class SalesReportImportService {
           p.category = g.category;
           p.subcategory = g.subcategory ?? null;
           if (g.productName) p.productName = g.productName;
-          p.source = 'gemini';
+          p.source = ai.engine;
         }
         if (ai.data.warnings?.length) {
           geminiWarning = ai.data.warnings.join(' ');
