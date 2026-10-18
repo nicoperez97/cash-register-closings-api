@@ -29,12 +29,23 @@ export type ShopMenuItem = {
    * Si el medio de pago tiene accountId y hay fila acá, se usa ese monto.
    */
   accountPrices?: MenuItemAccountPrice[];
+  /** Visible en /pedir y carta pública. */
   available?: boolean;
+  /**
+   * Operativo (comanda / mostrador). Default true.
+   * Si está apagado, no aparece en comanda ni en mostrador.
+   */
+  active?: boolean;
   /**
    * Si este ítem suma a las unidades del cierre (ej. paninos).
    * Si no viene, hereda de la sección; si tampoco, cuenta (compat).
    */
   countsAsUnits?: boolean;
+  /**
+   * Rubro POS (`pos_categories.id`) para reportes / filtros de carta y monitor.
+   * No es la sección de la carta ni el sector de cocina.
+   */
+  categoryId?: string | null;
   /** Compat: primera foto (o legacy). Preferí `images`. */
   imageUrl?: string | null;
   /** Fotos del ítem en orden de visualización. */
@@ -226,6 +237,22 @@ export function menuItemCountsAsUnitsMap(menus: ShopMenuDoc[] | ShopMenu[]): Map
         const id = String(it.id ?? '').trim();
         if (!id) continue;
         map.set(id, resolveCountsAsUnits(it, sec));
+      }
+    }
+  }
+  return map;
+}
+
+/** Mapa menuItemId → rubro POS (`categoryId`). */
+export function menuItemCategoryMap(menus: ShopMenuDoc[] | ShopMenu[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const menu of menus ?? []) {
+    for (const sec of menu.sections ?? []) {
+      for (const it of sec.items ?? []) {
+        const id = String(it.id ?? '').trim();
+        const categoryId = String(it.categoryId ?? '').trim();
+        if (!id || !categoryId) continue;
+        map.set(id, categoryId);
       }
     }
   }
@@ -663,9 +690,18 @@ export function normalizeShopMenu(raw?: ShopMenu | null): ShopMenu {
       usedItemIds.add(id);
       const available =
         it?.available === undefined || it?.available === null ? true : !!it.available;
+      const active =
+        (it as { active?: unknown })?.active === undefined ||
+        (it as { active?: unknown })?.active === null
+          ? true
+          : !!(it as { active?: unknown }).active;
       const countsAsUnits = normalizeOptionalBool(
         (it as { countsAsUnits?: unknown })?.countsAsUnits,
       );
+      const categoryId =
+        String((it as { categoryId?: unknown })?.categoryId ?? '')
+          .trim()
+          .slice(0, 36) || null;
       const { images, imageUrl } = normalizeItemImages(it as { imageUrl?: unknown; images?: unknown });
       const kitchenSectorIds = normalizeKitchenSectorIds(it);
       const accountPrices = normalizeMenuAccountPrices(
@@ -679,7 +715,9 @@ export function normalizeShopMenu(raw?: ShopMenu | null): ShopMenu {
         priceLabel: String(it?.priceLabel ?? '').trim().slice(0, 48) || null,
         accountPrices: accountPrices.length ? accountPrices : undefined,
         available,
+        active,
         ...(countsAsUnits !== undefined ? { countsAsUnits } : {}),
+        categoryId,
         imageUrl,
         images,
         removableIngredients: normalizeRemovableIngredients(

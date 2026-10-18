@@ -294,7 +294,10 @@ export class CustomerOrdersService implements OnModuleInit {
     return `X${Date.now().toString(36).slice(-7).toUpperCase()}`;
   }
 
-  private menuItemIndex(shop: Shop): Map<string, ShopMenuItem & { unitPrice: number }> {
+  private menuItemIndex(
+    shop: Shop,
+    channel: 'public' | 'staff' = 'public',
+  ): Map<string, ShopMenuItem & { unitPrice: number }> {
     const map = new Map<string, ShopMenuItem & { unitPrice: number }>();
     for (const menu of normalizeShopMenus(shop.menu)) {
       for (const sec of menu.sections ?? []) {
@@ -303,7 +306,9 @@ export class CustomerOrdersService implements OnModuleInit {
           if (!id) continue;
           const price = it.price == null ? null : Number(it.price);
           if (price == null || !Number.isFinite(price) || price < 0) continue;
-          if (it.available === false) continue;
+          // Público: Online. Comanda/mostrador: Activo.
+          if (channel === 'public' && it.available === false) continue;
+          if (channel === 'staff' && it.active === false) continue;
           map.set(id, { ...it, unitPrice: Math.round(price) });
         }
       }
@@ -605,7 +610,12 @@ export class CustomerOrdersService implements OnModuleInit {
         sections: (m.sections ?? []).map((sec) => ({
           name: sec.name,
           items: (sec.items ?? [])
-            .filter((it) => it.available !== false && it.price != null && !soldOut.has(String(it.id ?? '')))
+            .filter((it) => {
+              if (it.price == null || soldOut.has(String(it.id ?? ''))) return false;
+              // Mostrador: Activo. /pedir: Online.
+              if (opts.paymentsChannel === 'counter') return it.active !== false;
+              return it.available !== false;
+            })
             .map((it) => {
               const images = (it.images ?? []).map((img) => ({
                 id: img.id,
@@ -712,7 +722,12 @@ export class CustomerOrdersService implements OnModuleInit {
         sections: (m.sections ?? []).map((sec) => ({
           name: sec.name,
           items: (sec.items ?? [])
-            .filter((it) => it.available !== false && it.price != null && !soldOut.has(String(it.id ?? '')))
+            .filter(
+              (it) =>
+                it.active !== false &&
+                it.price != null &&
+                !soldOut.has(String(it.id ?? '')),
+            )
             .map((it) => {
               const images = (it.images ?? []).map((img) => ({
                 id: img.id,
@@ -944,7 +959,10 @@ export class CustomerOrdersService implements OnModuleInit {
             String(payItem?.accountId ?? '').trim() || null,
           )
         : { accountId: null as string | null, fallbackAccountIds: [] as string[] };
-    const catalog = this.menuItemIndex(shop);
+    const catalog = this.menuItemIndex(
+      shop,
+      opts.response === 'staff' || opts.response === 'waiter' ? 'staff' : 'public',
+    );
     const lines: CustomerOrderLine[] = [];
     let subtotal = 0;
     for (const row of dto.items ?? []) {
