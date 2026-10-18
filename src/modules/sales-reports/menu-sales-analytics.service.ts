@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { AuthUser } from '../../common/decorators';
 import { resolveShopCalendarDate } from '../../common/business-date';
 import {
@@ -8,8 +8,10 @@ import {
   CustomerOrderLine,
   CustomerOrderStatus,
 } from '../../entities/customer-order.entity';
+import { PosCategory } from '../../entities/pos-category.entity';
 import { PosProduct } from '../../entities/pos-product.entity';
 import { PosSaleTicketLine } from '../../entities/pos-sale-ticket-line.entity';
+import { normalizeShopMenus } from '../menu/menu-parse.util';
 import { ShopsService } from '../shops/shops.service';
 import type {
   SalesCategoryRow,
@@ -61,8 +63,8 @@ export type MenuPosLinkedPreview = {
 
 /**
  * Ventas de carta: pedidos online + mostrador + comanda (customer_orders).
- * Los platos Restosoft enlazados (pos_products.menuItemId) aportan código/rubro
- * y aparecen aunque no hayan vendido en el período.
+ * Rubro: primero el asignado en Carta (`categoryId` → pos_categories);
+ * si no hay, el del plato Restosoft enlazado (pos_products).
  * Opcional: merge de ventas POS enlazadas (Traer de ventas POS).
  */
 @Injectable()
@@ -74,6 +76,8 @@ export class MenuSalesAnalyticsService {
     private readonly products: Repository<PosProduct>,
     @InjectRepository(PosSaleTicketLine)
     private readonly posLines: Repository<PosSaleTicketLine>,
+    @InjectRepository(PosCategory)
+    private readonly categories: Repository<PosCategory>,
     private readonly shops: ShopsService,
   ) {}
 
@@ -86,6 +90,7 @@ export class MenuSalesAnalyticsService {
     const byMenuItem = await this.loadLinkedMap(shopId);
     const shop = await this.shops.getShopEntity(shopId);
     const menuNameById = this.menuNameMap(shop?.menu);
+    const menuCatByItem = await this.loadMenuCategoryMap(shopId, shop?.menu);
 
     const cartaSummary = await this.summary(user, shopId, {
       ...filters,
@@ -112,7 +117,7 @@ export class MenuSalesAnalyticsService {
 
     const items: MenuPosLinkedPreviewRow[] = [];
     for (const [menuItemId, pos] of byMenuItem) {
-      const category = pos.category ?? null;
+      const category = this.resolveCategory(menuItemId, pos.category, menuCatByItem);
       const subcategory = pos.subcategory ?? null;
       if (filters.category && (category || 'Sin rubro') !== filters.category) continue;
       if (filters.subcategory && (subcategory || 'Sin subrubro') !== filters.subcategory) {
@@ -168,6 +173,7 @@ export class MenuSalesAnalyticsService {
     const tz = shop?.timezone ?? null;
 
     const byMenuItem = await this.loadLinkedMap(shopId);
+    const menuCatByItem = await this.loadMenuCategoryMap(shopId, shop?.menu);
 
     const from = filters.from;
     const to = filters.to;
@@ -219,7 +225,7 @@ export class MenuSalesAnalyticsService {
 
     // Catálogo enlazado: aparece aunque no venda (si pasa filtros de rubro/texto).
     for (const [menuItemId, pos] of byMenuItem) {
-      const category = pos.category ?? null;
+      const category = this.resolveCategory(menuItemId, pos.category, menuCatByItem);
       const subcategory = pos.subcategory ?? null;
       if (filters.category && (category || 'Sin rubro') !== filters.category) continue;
       if (filters.subcategory && (subcategory || 'Sin subrubro') !== filters.subcategory) {
@@ -262,8 +268,8 @@ export class MenuSalesAnalyticsService {
         const menuItemId = String(line?.menuItemId ?? '').trim() || null;
         const linkedPos = menuItemId ? byMenuItem.get(menuItemId) : undefined;
 
-        // Filtro por rubro / texto.
-        const category = linkedPos?.category ?? null;
+        // Filtro por rubro / texto. Prioridad: rubro de Carta, luego POS enlazado.
+        const category = this.resolveCategory(menuItemId, linkedPos?.category ?? null, menuCatByItem);
         const subcategory = linkedPos?.subcategory ?? null;
         const productName =
           linkedPos?.productName ?? (String(line?.name ?? '').trim() || null);
@@ -287,6 +293,8 @@ export class MenuSalesAnalyticsService {
           subcategory,
           menuItemId,
         });
+        // Si el bucket nació sin rubro de carta y ahora sí hay, actualizalo.
+        if (category && !bucket.category) bucket.category = category;
         bucket.qty += qty;
         bucket.amount += amount;
         bucket.ticketIds.add(order.id);
@@ -358,7 +366,7 @@ export class MenuSalesAnalyticsService {
           if (!menuItemId) continue;
           const pos = byMenuItem.get(menuItemId);
           if (!pos) continue;
-          const category = pos.category ?? null;
+          const category = this.resolveCategory(menuItemId, pos.category, menuCatByItem);
           const subcategory = pos.subcategory ?? null;
           if (filters.category && (category || 'Sin rubro') !== filters.category) continue;
           if (filters.subcategory && (subcategory || 'Sin subrubro') !== filters.subcategory) {
@@ -377,6 +385,7 @@ export class MenuSalesAnalyticsService {
             subcategory,
             menuItemId,
           });
+          if (category && !bucket.category) bucket.category = category;
           const qty = n(row.qty);
           const amount = n(row.amount);
           bucket.qty += qty;
@@ -636,6 +645,53 @@ export class MenuSalesAnalyticsService {
       });
     }
     return byMenuItem;
+  }
+
+  /** menuItemId → nombre de rubro (Carta → pos_categories). */
+  private async loadMenuCategoryMap(
+    shopId: string,
+    menu: unknown,
+  ): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    const idToCatId = new Map<string, string>();
+    for (const m of normalizeShopMenus(menu)) {
+      for (const sec of m.sections ?? []) {
+        for (const it of sec.items ?? []) {
+          const id = String(it.id ?? '').trim();
+          const catId = String(it.categoryId ?? '').trim();
+          if (id && catId) idToCatId.set(id, catId);
+        }
+      }
+    }
+    if (!idToCatId.size) return out;
+    const catIds = [...new Set(idToCatId.values())];
+    const rows = await this.categories.find({
+      where: { shopId, id: In(catIds), active: true },
+      select: ['id', 'name'],
+    });
+    const nameById = new Map(
+      rows.map((c) => [c.id, String(c.name ?? '').trim()] as const).filter(([, n]) => !!n),
+    );
+    for (const [mid, catId] of idToCatId) {
+      const name = nameById.get(catId);
+      if (name) out.set(mid, name);
+    }
+    return out;
+  }
+
+  /** Preferí rubro de Carta; si no hay, el del POS enlazado. */
+  private resolveCategory(
+    menuItemId: string | null | undefined,
+    posCategory: string | null | undefined,
+    menuCatByItem: Map<string, string>,
+  ): string | null {
+    const mid = String(menuItemId ?? '').trim();
+    if (mid) {
+      const fromMenu = menuCatByItem.get(mid);
+      if (fromMenu) return fromMenu;
+    }
+    const fromPos = String(posCategory ?? '').trim();
+    return fromPos || null;
   }
 
   private menuNameMap(menu: unknown): Map<string, string> {

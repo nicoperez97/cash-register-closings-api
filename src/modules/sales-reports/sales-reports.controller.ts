@@ -298,13 +298,18 @@ export class SalesReportsController {
   }
 
   @Get('shops/:shopId/pos-categories')
-  @RequireAnyPermissions('reportsProducts.read', 'shops.manage')
+  @RequireAnyPermissions(
+    'reportsProducts.read',
+    'shops.manage',
+    'orderingCatalog.read',
+    'orderingCatalog.manage',
+  )
   listCategories(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
     return this.catalog.listCategories(user, shopId);
   }
 
   @Post('shops/:shopId/pos-categories')
-  @RequirePermissions('shops.manage')
+  @RequireAnyPermissions('shops.manage', 'orderingCatalog.manage')
   createCategory(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -314,7 +319,7 @@ export class SalesReportsController {
   }
 
   @Patch('shops/:shopId/pos-categories/:id')
-  @RequirePermissions('shops.manage')
+  @RequireAnyPermissions('shops.manage', 'orderingCatalog.manage')
   updateCategory(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
@@ -325,7 +330,7 @@ export class SalesReportsController {
   }
 
   @Delete('shops/:shopId/pos-categories/:id')
-  @RequirePermissions('shops.manage')
+  @RequireAnyPermissions('shops.manage', 'orderingCatalog.manage')
   removeCategory(
     @CurrentUser() user: AuthUser,
     @Param('shopId') shopId: string,
