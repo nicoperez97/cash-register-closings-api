@@ -10,6 +10,7 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
+import { randomBytes } from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
 import { User } from '../../entities/user.entity';
 import { Shop } from '../../entities/shop.entity';
@@ -279,10 +280,10 @@ export class AuthService implements OnModuleInit {
       if (seen.has(user.id)) continue;
       seen.add(user.id);
 
-      if (user.email !== DEMO_ADMIN_EMAIL) {
-        user.email = DEMO_ADMIN_EMAIL;
-        await this.users.save(user);
-      }
+      // Seeds viejos dejaban password "demo": se pisa por una aleatoria (la demo no usa password).
+      user.email = DEMO_ADMIN_EMAIL;
+      user.passwordHash = await bcrypt.hash(randomBytes(24).toString('hex'), 10);
+      await this.users.save(user);
 
       const links = await this.userShops.find({ where: { userId: user.id } });
       for (const link of links) {
@@ -297,7 +298,7 @@ export class AuthService implements OnModuleInit {
   /** Local demo + admin de local + catálogo / carta / mensajes de muestra. */
   private async ensureDemoAdminReady() {
     await this.ensurePaninoShop();
-    const passwordHash = await bcrypt.hash('demo', 10);
+    const passwordHash = await bcrypt.hash(randomBytes(24).toString('hex'), 10);
     let user =
       (await this.users.findOne({ where: { email: DEMO_ADMIN_EMAIL } })) ??
       (await this.users.findOne({ where: { email: 'demo.admin@cierres.com' } })) ??
@@ -624,6 +625,10 @@ export class AuthService implements OnModuleInit {
       select: ['id', 'email', 'fullName', 'globalRole', 'passwordHash', 'active'],
     });
     if (!user) throw new UnauthorizedException('Credenciales inválidas');
+    // El admin demo solo entra por /auth/demo (token marcado isDemo, solo lectura).
+    if (user.id === DEMO_ADMIN_USER_ID || user.email === DEMO_ADMIN_EMAIL) {
+      throw new UnauthorizedException('Credenciales inválidas');
+    }
     if (!isEntityActive(user.active)) {
       throw new UnauthorizedException(
         'Usuario desactivado. Contactá a un administrador.',
@@ -788,6 +793,10 @@ export class AuthService implements OnModuleInit {
   }
 
   async buildAuthUser(userId: string): Promise<AuthUser> {
+    // TypeORM ignora `id: undefined` en el where y devolvería el primer usuario.
+    if (typeof userId !== 'string' || !userId.trim()) {
+      throw new UnauthorizedException('Sesión inválida');
+    }
     const user = await this.users.findOne({ where: { id: userId } });
     if (!user || !isEntityActive(user.active)) {
       throw new UnauthorizedException('Usuario desactivado');

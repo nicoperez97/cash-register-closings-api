@@ -1,3 +1,4 @@
+import { servableMime } from '../../common/uploads';
 import {
   BadRequestException,
   Body,
@@ -239,7 +240,7 @@ export class ReimbursementsController {
       shopId,
       id,
     );
-    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Type', servableMime(mime));
     res.setHeader(
       'Content-Disposition',
       `inline; filename="${encodeURIComponent(fileName)}"`,

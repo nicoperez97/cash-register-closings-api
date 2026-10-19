@@ -1,3 +1,4 @@
+import { servableMime } from '../../common/uploads';
 import {
   BadRequestException,
   Body,
@@ -77,7 +78,7 @@ export class OrdersController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const { stream, fileName, mime } = await this.orders.downloadInvoice(user, shopId, id);
-    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Type', servableMime(mime));
     res.setHeader(
       'Content-Disposition',
       `inline; filename="${encodeURIComponent(fileName)}"`,

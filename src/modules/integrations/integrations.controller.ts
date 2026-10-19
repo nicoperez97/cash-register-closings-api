@@ -15,6 +15,7 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import type { Request } from 'express';
+import { createHash, timingSafeEqual } from 'crypto';
 import {
   AuthUser,
   CurrentUser,
@@ -25,6 +26,13 @@ import {
 import { PermissionsGuard } from '../../common/guards';
 import { UpsertDeliverateConfigDto } from './dto/deliverate.dto';
 import { IntegrationsService } from './integrations.service';
+
+/** Comparación en tiempo constante (no filtra el secreto por timing). */
+function secretsMatch(provided: string, secret: string): boolean {
+  const a = createHash('sha256').update(provided).digest();
+  const b = createHash('sha256').update(secret).digest();
+  return timingSafeEqual(a, b);
+}
 
 function requestApiOrigin(
   req: Request,
@@ -70,7 +78,7 @@ export class IntegrationsWebhookController {
     const secret = String(process.env.DELIVERATE_WEBHOOK_SECRET ?? '').trim();
     if (secret) {
       const provided = String(token ?? headerSecret ?? '').trim();
-      if (provided !== secret) {
+      if (!secretsMatch(provided, secret)) {
         this.logger.warn('Deliverate webhook rechazado: token inválido o ausente');
         throw new UnauthorizedException('Webhook no autorizado');
       }
