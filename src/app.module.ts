@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
+import { SentryGlobalFilter, SentryModule } from '@sentry/nestjs/setup';
 import { ConfigModule } from './config/config.module';
 import { DatabaseModule } from './database/database.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -43,12 +44,14 @@ import { ProfileModule } from './modules/profile/profile.module';
 import { PartnerSplitsModule } from './modules/partner-splits/partner-splits.module';
 import { UploadsModule } from './modules/uploads/uploads.module';
 import { IntegrationsModule } from './modules/integrations/integrations.module';
+import { HealthModule } from './modules/health/health.module';
 import { JwtAuthGuard, PermissionsGuard } from './common/guards';
 import { PublicAbuseGuard } from './common/public-abuse.guard';
 import { QueryFailedExceptionFilter } from './common/filters/query-failed-exception.filter';
 
 @Module({
   imports: [
+    SentryModule.forRoot(),
     ConfigModule,
     ScheduleModule.forRoot(),
     DatabaseModule,
@@ -92,8 +95,11 @@ import { QueryFailedExceptionFilter } from './common/filters/query-failed-except
     ProfileModule,
     PartnerSplitsModule,
     UploadsModule,
+    HealthModule,
   ],
   providers: [
+    // Sentry primero (sin SENTRY_DSN no envía nada; solo reporta 5xx inesperados).
+    { provide: APP_FILTER, useClass: SentryGlobalFilter },
     { provide: APP_FILTER, useClass: QueryFailedExceptionFilter },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },
