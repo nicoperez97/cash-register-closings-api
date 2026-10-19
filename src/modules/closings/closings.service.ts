@@ -8,7 +8,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { EntityManager, In, Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
 import { CashClosing } from '../../entities/cash-closing.entity';
 import { ClosingExpense } from '../../entities/closing-expense.entity';
@@ -61,6 +61,8 @@ import { ClosingPosnetAmount } from '../../common/posnet';
 import { CashWithdrawalsService } from './cash-withdrawals.service';
 import { ClosingStepFilesService } from './closing-step-files.service';
 import { TipsService } from '../tips/tips.service';
+import { isMysqlDuplicateKey, lockEntity } from '../../common/row-lock';
+import { moneyTransaction, repoFor } from '../../common/transaction';
 
 const n = (v?: number | string | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
@@ -615,14 +617,46 @@ export class ClosingsService implements OnModuleInit {
     };
   }
 
-  private async syncMovements(closingId: string) {
-    const full = await this.closings.findOne({
+  /**
+   * Regenera asientos del libro y pendiente de A Retirar desde el cierre guardado.
+   * Con `manager` corre en la transacción del llamador (ve los hijos recién escritos);
+   * sin él abre una propia, así nunca queda el libro a medio regenerar.
+   */
+  private async syncMovements(closingId: string, manager?: EntityManager) {
+    if (!manager) {
+      const head = await this.closings.findOne({
+        where: { id: closingId },
+        select: { id: true, shopId: true },
+      });
+      if (!head) return;
+      await this.closingMovements.ensureCatalogs(head.shopId);
+      await moneyTransaction(this.closings.manager, (m) => this.syncMovements(closingId, m));
+      return;
+    }
+    const full = await manager.getRepository(CashClosing).findOne({
       where: { id: closingId },
       relations: ['expenses', 'extraLines', 'sourceAmounts'],
     });
     if (!full) return;
-    await this.closingMovements.syncFromClosing(full);
-    await this.cashWithdrawals.syncFromClosing(full);
+    await this.closingMovements.syncFromClosing(full, manager);
+    await this.cashWithdrawals.syncFromClosing(full, manager);
+  }
+
+  /** Bloquea el cierre (FOR UPDATE) y lo recarga con hijos dentro de la transacción. */
+  private async lockClosing(
+    manager: EntityManager,
+    shopId: string,
+    id: string,
+  ): Promise<CashClosing | null> {
+    const locked = await lockEntity(manager, CashClosing, 'c', 'c.id = :id AND c.shopId = :shopId', {
+      id,
+      shopId,
+    });
+    if (!locked) return null;
+    return manager.getRepository(CashClosing).findOne({
+      where: { id, shopId },
+      relations: ['expenses', 'extraLines', 'sourceAmounts'],
+    });
   }
 
   private async declaredFromSources(shopId: string, dto: Partial<CreateClosingDto>): Promise<number> {
@@ -953,7 +987,15 @@ export class ClosingsService implements OnModuleInit {
         submittedAt: null,
         active: true,
       }),
-    );
+    ).catch((err) => {
+      // Doble clic en «Abrir caja»: el índice único (local + día/turno) frena el segundo.
+      if (isMysqlDuplicateKey(err)) {
+        throw new ConflictException(
+          `Ya hay un cierre para ${businessDate} · ${shift.name}. Actualizá la pantalla.`,
+        );
+      }
+      throw err;
+    });
 
     await this.shops.setOrderingOpen(shopId, true);
     return this.toDto(closing);
@@ -1062,37 +1104,49 @@ export class ClosingsService implements OnModuleInit {
       withdrawn.cashWithdrawnByUserId,
       normalized.cashWithdrawnToAccountId,
     );
-    const closing = await this.closings.save(this.closings.create({
-      id: closingId,
-      shopId, businessDate: normalized.businessDate, businessDateKey: dateKey,
-      shiftId: shift.id, shiftName: shift.name,
-      kind: asEvent ? ClosingKind.EVENT : ClosingKind.REGULAR,
-      eventName: asEvent ? eventName : null,
-      posSystemAmount: money(n(normalized.posSystemAmount)), cardAmount: money(n(normalized.cardAmount)),
-      cashAmount: money(n(normalized.cashAmount)), mercadoPagoAmount: money(n(normalized.mercadoPagoAmount)),
-      deliveryAppsAmount: money(n(normalized.deliveryAppsAmount)), transferAmount: money(n(normalized.transferAmount)),
-      accountDniAmount: money(n(normalized.accountDniAmount)), otherAmount: money(n(normalized.otherAmount)),
-      posnetAmounts,
-      unitsSold: normalized.unitsSold ?? null, coversCount: normalized.coversCount ?? null,
-      averageTicket: normalized.averageTicket != null ? money(normalized.averageTicket) : null,
-      cashOpeningAmount: money(n(normalized.cashOpeningAmount)),
-      cashLeftInRegister: money(n(normalized.cashLeftInRegister)), cashPendingPickup: money(n(normalized.cashPendingPickup)),
-      cashWithdrawn: money(n(normalized.cashWithdrawn)),
-      cashWithdrawnByUserId: withdrawn.cashWithdrawnByUserId,
-      cashWithdrawnByEmployeeId: withdrawn.cashWithdrawnByEmployeeId,
-      cashWithdrawnByName: withdrawn.cashWithdrawnByName,
-      cashWithdrawnToAccountId,
-      cashChangeContributions: this.normalizeCashChangeContributions(
-        normalized.cashChangeContributions,
-      ),
-      tipsAmount: money(n(normalized.tipsAmount)), declaredTotal: money(totals.declaredTotal),
-      calculatedTotal: money(totals.calculatedTotal), difference: money(totals.difference),
-      differenceReason: normalized.differenceReason ?? null, notes: normalized.notes ?? null,
-      evidenceUrl: normalized.evidenceUrl ?? null,
-      status: ClosingStatus.SUBMITTED, createdByUserId: user.id, submittedAt: new Date(), active: true,
-    }));
-    await this.replaceChildren(closing.id, normalized as CreateClosingDto, shopId);
-    await this.syncMovements(closing.id);
+    await this.closingMovements.ensureCatalogs(shopId);
+    const closing = await moneyTransaction(this.closings.manager, async (manager) => {
+      const closingsRepo = manager.getRepository(CashClosing);
+      const saved = await closingsRepo.save(closingsRepo.create({
+        id: closingId,
+        shopId, businessDate: normalized.businessDate, businessDateKey: dateKey,
+        shiftId: shift.id, shiftName: shift.name,
+        kind: asEvent ? ClosingKind.EVENT : ClosingKind.REGULAR,
+        eventName: asEvent ? eventName : null,
+        posSystemAmount: money(n(normalized.posSystemAmount)), cardAmount: money(n(normalized.cardAmount)),
+        cashAmount: money(n(normalized.cashAmount)), mercadoPagoAmount: money(n(normalized.mercadoPagoAmount)),
+        deliveryAppsAmount: money(n(normalized.deliveryAppsAmount)), transferAmount: money(n(normalized.transferAmount)),
+        accountDniAmount: money(n(normalized.accountDniAmount)), otherAmount: money(n(normalized.otherAmount)),
+        posnetAmounts,
+        unitsSold: normalized.unitsSold ?? null, coversCount: normalized.coversCount ?? null,
+        averageTicket: normalized.averageTicket != null ? money(normalized.averageTicket) : null,
+        cashOpeningAmount: money(n(normalized.cashOpeningAmount)),
+        cashLeftInRegister: money(n(normalized.cashLeftInRegister)), cashPendingPickup: money(n(normalized.cashPendingPickup)),
+        cashWithdrawn: money(n(normalized.cashWithdrawn)),
+        cashWithdrawnByUserId: withdrawn.cashWithdrawnByUserId,
+        cashWithdrawnByEmployeeId: withdrawn.cashWithdrawnByEmployeeId,
+        cashWithdrawnByName: withdrawn.cashWithdrawnByName,
+        cashWithdrawnToAccountId,
+        cashChangeContributions: this.normalizeCashChangeContributions(
+          normalized.cashChangeContributions,
+        ),
+        tipsAmount: money(n(normalized.tipsAmount)), declaredTotal: money(totals.declaredTotal),
+        calculatedTotal: money(totals.calculatedTotal), difference: money(totals.difference),
+        differenceReason: normalized.differenceReason ?? null, notes: normalized.notes ?? null,
+        evidenceUrl: normalized.evidenceUrl ?? null,
+        status: ClosingStatus.SUBMITTED, createdByUserId: user.id, submittedAt: new Date(), active: true,
+      }));
+      await this.replaceChildren(saved.id, normalized as CreateClosingDto, shopId, manager);
+      await this.syncMovements(saved.id, manager);
+      return saved;
+    }).catch((err) => {
+      // Doble envío concurrente del mismo día/turno: el índice único frena el segundo.
+      if (isMysqlDuplicateKey(err)) {
+        throw new ConflictException('Ya existe un cierre para esa fecha y turno');
+      }
+      throw err;
+    });
+    // Propinas: best-effort y fuera de la transacción (su error no debe deshacer el cierre).
     if (!asEvent) {
       await this.syncTipsFromClosing(user, shopId, closing.id, normalized as CreateClosingDto);
     }
@@ -1107,10 +1161,48 @@ export class ClosingsService implements OnModuleInit {
 
   async update(user: AuthUser, shopId: string, id: string, dto: UpdateClosingDto) {
     this.shops.assertShopAccess(user, shopId);
-    const row = await this.closings.findOne({
-      where: { id, shopId },
-      relations: ['expenses', 'extraLines', 'sourceAmounts'],
+    await this.closingMovements.ensureCatalogs(shopId);
+    // Lectura, cálculo y escritura bajo FOR UPDATE del cierre: un doble envío del mismo
+    // borrador espera al primero y lo ve ya SUBMITTED (no re-notifica ni duplica asientos).
+    const { row, kind, wasDraft, merged } = await moneyTransaction(
+      this.closings.manager,
+      (manager) => this.applyUpdate(manager, user, shopId, id, dto),
+    ).catch((err) => {
+      if (isMysqlDuplicateKey(err)) {
+        throw new ConflictException('Ya existe un cierre para esa fecha y turno');
+      }
+      throw err;
     });
+    // Propinas: best-effort y fuera de la transacción (su error no debe deshacer el cierre).
+    if (kind !== ClosingKind.EVENT) {
+      await this.syncTipsFromClosing(user, shopId, row.id, merged);
+    }
+    if (wasDraft && kind !== ClosingKind.EVENT) {
+      await this.shops.setOrderingOpen(shopId, false).catch((err) => {
+        this.logger.warn(
+          `No se pudo cerrar pedidos al enviar cierre ${row.id}: ${(err as Error)?.message ?? err}`,
+        );
+      });
+      const submitted = await this.getOne(user, shopId, id);
+      void this.notifyAdminsClosingCreated(user, shopId, submitted).catch((err) => {
+        this.logger.warn(
+          `No se pudo notificar cierre ${row.id}: ${(err as Error)?.message ?? err}`,
+        );
+      });
+      return submitted;
+    }
+    return this.getOne(user, shopId, id);
+  }
+
+  private async applyUpdate(
+    manager: EntityManager,
+    user: AuthUser,
+    shopId: string,
+    id: string,
+    dto: UpdateClosingDto,
+  ) {
+    const closingsRepo = manager.getRepository(CashClosing);
+    const row = await this.lockClosing(manager, shopId, id);
     if (!row) throw new NotFoundException('Cierre no encontrado');
     if (row.status === ClosingStatus.LOCKED && !isGlobalAdmin(user.globalRole as GlobalRole)) {
       throw new BadRequestException('El cierre está bloqueado');
@@ -1133,7 +1225,7 @@ export class ClosingsService implements OnModuleInit {
       closingId: row.id,
     });
     if (nextKey !== row.businessDateKey) {
-      const clash = await this.closings.findOne({
+      const clash = await closingsRepo.findOne({
         where: { shopId, businessDateKey: nextKey },
       });
       if (clash && clash.id !== row.id) {
@@ -1277,7 +1369,7 @@ export class ClosingsService implements OnModuleInit {
       row.status = ClosingStatus.SUBMITTED;
       row.submittedAt = new Date();
     }
-    await this.closings.save(row);
+    await closingsRepo.save(row);
     if (dto.expenses || dto.extraLines || dto.sourceAmounts) {
       await this.replaceChildren(row.id, {
         expenses: dto.expenses ?? row.expenses?.map((e) => ({
@@ -1289,27 +1381,10 @@ export class ClosingsService implements OnModuleInit {
         })),
         extraLines: dto.extraLines ?? row.extraLines?.map((e) => ({ type: e.type, label: e.label, amount: n(e.amount), meta: e.meta ?? undefined })),
         sourceAmounts: dto.sourceAmounts,
-      }, shopId);
+      }, shopId, manager);
     }
-    await this.syncMovements(row.id);
-    if (kind !== ClosingKind.EVENT) {
-      await this.syncTipsFromClosing(user, shopId, row.id, merged);
-    }
-    if (wasDraft && kind !== ClosingKind.EVENT) {
-      await this.shops.setOrderingOpen(shopId, false).catch((err) => {
-        this.logger.warn(
-          `No se pudo cerrar pedidos al enviar cierre ${row.id}: ${(err as Error)?.message ?? err}`,
-        );
-      });
-      const submitted = await this.getOne(user, shopId, id);
-      void this.notifyAdminsClosingCreated(user, shopId, submitted).catch((err) => {
-        this.logger.warn(
-          `No se pudo notificar cierre ${row.id}: ${(err as Error)?.message ?? err}`,
-        );
-      });
-      return submitted;
-    }
-    return this.getOne(user, shopId, id);
+    await this.syncMovements(row.id, manager);
+    return { row, kind, wasDraft, merged };
   }
 
   private async syncTipsFromClosing(
@@ -1413,14 +1488,14 @@ export class ClosingsService implements OnModuleInit {
 
   async lock(user: AuthUser, shopId: string, id: string) {
     this.shops.assertShopAccess(user, shopId);
-    const row = await this.closings.findOne({
-      where: { id, shopId },
-      relations: ['expenses', 'extraLines', 'sourceAmounts'],
+    await this.closingMovements.ensureCatalogs(shopId);
+    await moneyTransaction(this.closings.manager, async (manager) => {
+      const row = await this.lockClosing(manager, shopId, id);
+      if (!row) throw new NotFoundException('Cierre no encontrado');
+      row.status = ClosingStatus.LOCKED;
+      await manager.getRepository(CashClosing).save(row);
+      await this.syncMovements(row.id, manager);
     });
-    if (!row) throw new NotFoundException('Cierre no encontrado');
-    row.status = ClosingStatus.LOCKED;
-    await this.closings.save(row);
-    await this.syncMovements(row.id);
     return this.getOne(user, shopId, id);
   }
 
@@ -1447,22 +1522,34 @@ export class ClosingsService implements OnModuleInit {
     // Sin relaciones: el softRemove/save no debe cascadear a los hijos (ya se borran
     // abajo por closingId). Además ClosingSourceAmount no tiene columna de borrado,
     // por lo que un softRemove en cascada tiraba MissingDeleteDateColumnError (500).
-    const row = await this.closings.findOne({ where: { id, shopId } });
-    if (!row) throw new NotFoundException('Cierre no encontrado');
-    await this.closingMovements.removeFromClosing(id);
-    await this.cashWithdrawals.cancelForClosing(id);
-    await this.expenses.delete({ closingId: id });
-    await this.extras.delete({ closingId: id });
-    await this.sourceAmounts.delete({ closingId: id });
-    await this.stepFiles.deleteForClosing(shopId, id);
-    row.businessDateKey = markDeletedUnique(
-      row.businessDateKey || closingDateKey(row.businessDate),
-      row.id,
-      80,
-    );
-    row.active = false;
-    await this.closings.save(row);
-    await this.closings.softRemove(row);
+    // Libro + A Retirar + hijos + baja del cierre: todo o nada.
+    await moneyTransaction(this.closings.manager, async (manager) => {
+      const row = await lockEntity(manager, CashClosing, 'c', 'c.id = :id AND c.shopId = :shopId', {
+        id,
+        shopId,
+      });
+      if (!row) throw new NotFoundException('Cierre no encontrado');
+      await this.closingMovements.removeFromClosing(id, manager);
+      await this.cashWithdrawals.cancelForClosing(id, manager);
+      await manager.getRepository(ClosingExpense).delete({ closingId: id });
+      await manager.getRepository(ClosingExtraLine).delete({ closingId: id });
+      await manager.getRepository(ClosingSourceAmount).delete({ closingId: id });
+      row.businessDateKey = markDeletedUnique(
+        row.businessDateKey || closingDateKey(row.businessDate),
+        row.id,
+        80,
+      );
+      row.active = false;
+      const closingsRepo = manager.getRepository(CashClosing);
+      await closingsRepo.save(row);
+      await closingsRepo.softRemove(row);
+    });
+    // Archivos en disco: después del COMMIT (un rollback no puede restaurarlos).
+    await this.stepFiles.deleteForClosing(shopId, id).catch((err) => {
+      this.logger.warn(
+        `No se pudieron borrar adjuntos del cierre ${id}: ${(err as Error)?.message ?? err}`,
+      );
+    });
     return { ok: true };
   }
 
@@ -1474,11 +1561,15 @@ export class ClosingsService implements OnModuleInit {
       sourceAmounts?: CreateClosingDto['sourceAmounts'];
     },
     shopId: string,
+    manager?: EntityManager,
   ) {
+    const expenses = repoFor(this.expenses, manager);
+    const extras = repoFor(this.extras, manager);
+    const sourceAmounts = repoFor(this.sourceAmounts, manager);
     if (dto.expenses) {
-      await this.expenses.delete({ closingId });
+      await expenses.delete({ closingId });
       if (dto.expenses.length) {
-        await this.expenses.save(dto.expenses.map((e) => this.expenses.create({
+        await expenses.save(dto.expenses.map((e) => expenses.create({
           closingId,
           label: e.label,
           amount: money(n(e.amount)),
@@ -1489,15 +1580,15 @@ export class ClosingsService implements OnModuleInit {
       }
     }
     if (dto.extraLines) {
-      await this.extras.delete({ closingId });
+      await extras.delete({ closingId });
       if (dto.extraLines.length) {
-        await this.extras.save(dto.extraLines.map((e) => this.extras.create({
+        await extras.save(dto.extraLines.map((e) => extras.create({
           closingId, type: e.type, label: e.label, amount: money(n(e.amount)), meta: e.meta ?? null,
         })));
       }
     }
     if (dto.sourceAmounts) {
-      const existing = await this.sourceAmounts.find({ where: { closingId } });
+      const existing = await sourceAmounts.find({ where: { closingId } });
       const settledKeep = existing.filter((s) => !!s.settledAt);
       const settledBySourceId = new Map(
         settledKeep
@@ -1505,7 +1596,7 @@ export class ClosingsService implements OnModuleInit {
           .map((s) => [s.sourceId as string, s]),
       );
       if (settledKeep.length) {
-        await this.sourceAmounts
+        await sourceAmounts
           .createQueryBuilder()
           .delete()
           .from(ClosingSourceAmount)
@@ -1513,7 +1604,7 @@ export class ClosingsService implements OnModuleInit {
           .andWhere('settledAt IS NULL')
           .execute();
       } else {
-        await this.sourceAmounts.delete({ closingId });
+        await sourceAmounts.delete({ closingId });
       }
       const defs = await this.sources.find({ where: { shopId } });
       const byId = new Map(defs.map((s) => [s.id, s]));
@@ -1538,7 +1629,7 @@ export class ClosingsService implements OnModuleInit {
             settled.posnetAmounts = posnetAmounts;
             return settled;
           }
-          return this.sourceAmounts.create({
+          return sourceAmounts.create({
             closingId,
             sourceId: src.id,
             name: src.name,
@@ -1554,7 +1645,7 @@ export class ClosingsService implements OnModuleInit {
         .filter((r): r is NonNullable<typeof r> => !!r);
       const leftoverSettled = settledKeep.filter((s) => !incomingSettledIds.has(s.id));
       const toSave = [...rows, ...leftoverSettled];
-      if (toSave.length) await this.sourceAmounts.save(toSave);
+      if (toSave.length) await sourceAmounts.save(toSave);
     }
   }
 

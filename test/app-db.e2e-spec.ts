@@ -108,4 +108,138 @@ describeDb('App e2e (DB real)', () => {
       .set(auth);
     expect([401, 403]).toContain(adminOnly.status);
   });
+
+  /**
+   * Rollback real: se fuerza un error a mitad del flujo (después de escribir el cierre o
+   * el claim del pago) y se verifica en MySQL que no quedó nada a medias.
+   */
+  describe('transacciones de plata (rollback en MySQL)', () => {
+    const marker = `rollback-e2e-${Date.now()}`;
+    const count = async (sql: string, params: unknown[]): Promise<number> => {
+      const { DataSource } = await import('typeorm');
+      const rows: Array<{ c: number | string }> = await app.get(DataSource).query(sql, params);
+      return Number(rows?.[0]?.c ?? 0);
+    };
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('cierre: si falla el sync de movimientos no queda ni el cierre ni sus gastos/extras', async () => {
+      const { ClosingMovementsSyncService } =
+        await import('../src/modules/movements/closing-movements-sync.service');
+      const sync = app.get(ClosingMovementsSyncService);
+      const token = await tokenFor('admin@cierres.com');
+      const auth = { Authorization: `Bearer ${token}` };
+      // Fecha fija y vieja: no choca con datos del seed.
+      const businessDate = '2001-02-03';
+      const liveClosings = () =>
+        count(
+          'SELECT COUNT(*) AS c FROM cash_closings WHERE shopId = ? AND businessDate = ? AND active = 1 AND deletedAt IS NULL',
+          [PANINO, businessDate],
+        );
+      expect(await liveClosings()).toBe(0);
+
+      const body = {
+        businessDate,
+        posSystemAmount: 1000,
+        cashAmount: 1000,
+        expenses: [{ label: `${marker}-gasto`, amount: 50 }],
+        extraLines: [{ type: 'OTHER', label: `${marker}-extra`, amount: 20 }],
+      };
+      jest.spyOn(sync, 'syncFromClosing').mockRejectedValueOnce(new Error('forced sync failure'));
+      const failed = await request(app.getHttpServer())
+        .post(api(`/shops/${PANINO}/closings`))
+        .set(auth)
+        .send(body);
+      expect(failed.status).toBeGreaterThanOrEqual(500);
+
+      expect(await liveClosings()).toBe(0);
+      expect(
+        await count('SELECT COUNT(*) AS c FROM closing_expenses WHERE label = ?', [
+          `${marker}-gasto`,
+        ]),
+      ).toBe(0);
+      expect(
+        await count('SELECT COUNT(*) AS c FROM closing_extra_lines WHERE label = ?', [
+          `${marker}-extra`,
+        ]),
+      ).toBe(0);
+
+      // Control: sin el error, el mismo cierre sí se guarda (el test no es vacuo).
+      const ok = await request(app.getHttpServer())
+        .post(api(`/shops/${PANINO}/closings`))
+        .set(auth)
+        .send(body);
+      expect(ok.status).toBe(201);
+      expect(await liveClosings()).toBe(1);
+      expect(
+        await count('SELECT COUNT(*) AS c FROM closing_expenses WHERE closingId = ?', [ok.body.id]),
+      ).toBe(1);
+
+      // Limpieza (soft delete + baja de hijos y asientos) para poder re-correr.
+      const del = await request(app.getHttpServer())
+        .delete(api(`/shops/${PANINO}/closings/${ok.body.id}`))
+        .set(auth);
+      expect(del.status).toBe(200);
+      expect(await liveClosings()).toBe(0);
+    });
+
+    it('pago: si falla el egreso, el pago sigue VALIDATED y sin movimiento', async () => {
+      const { DataSource } = await import('typeorm');
+      const { MovementsService } = await import('../src/modules/movements/movements.service');
+      const { Payment } = await import('../src/entities/payment.entity');
+      const { PaymentMethod, PaymentStatus } = await import('../src/common/enums');
+      const ds = app.get(DataSource);
+      const token = await tokenFor('admin@cierres.com');
+      const auth = { Authorization: `Bearer ${token}` };
+
+      const [account] = (await ds.query(
+        "SELECT id FROM ledger_accounts WHERE shopId = ? AND active = 1 AND type <> 'SYSTEM' AND deletedAt IS NULL ORDER BY name LIMIT 1",
+        [PANINO],
+      )) as Array<{ id: string }>;
+      expect(account?.id).toBeTruthy();
+
+      const payments = ds.getRepository(Payment);
+      const payment = await payments.save(
+        payments.create({
+          shopId: PANINO,
+          title: `${marker}-pago`,
+          amount: '123.00',
+          accountId: account.id,
+          paymentMethod: PaymentMethod.CASH,
+          status: PaymentStatus.VALIDATED,
+          validatedAt: new Date(),
+          active: true,
+        }),
+      );
+
+      jest
+        .spyOn(app.get(MovementsService), 'create')
+        .mockRejectedValueOnce(new Error('forced movement failure'));
+      const failed = await request(app.getHttpServer())
+        .post(api(`/shops/${PANINO}/payments/${payment.id}/pay`))
+        .set(auth)
+        .send({ paidAt: '2001-02-03', accountId: account.id, paymentMethod: 'cash' });
+      expect(failed.status).toBeGreaterThanOrEqual(500);
+
+      const after = await payments.findOne({ where: { id: payment.id } });
+      expect(after?.status).toBe(PaymentStatus.VALIDATED);
+      expect(after?.movementId ?? null).toBeNull();
+      expect(after?.paidAt ?? null).toBeNull();
+      // Ni el saldo pendiente de un parcial ni un egreso suelto.
+      expect(
+        await count('SELECT COUNT(*) AS c FROM payments WHERE title = ? AND active = 1', [
+          `${marker}-pago`,
+        ]),
+      ).toBe(1);
+      expect(
+        await count('SELECT COUNT(*) AS c FROM movements WHERE description LIKE ?', [
+          `%${marker}-pago%`,
+        ]),
+      ).toBe(0);
+
+      await payments.softRemove(after!);
+    });
+  });
 });

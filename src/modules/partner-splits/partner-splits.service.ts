@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import { PartnerSplitConfig } from '../../entities/partner-split-config.entity';
 import { PartnerSplitRun } from '../../entities/partner-split-run.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
@@ -12,6 +12,7 @@ import { LedgerAccountType, PaymentStatus } from '../../common/enums';
 import { parseCommissionPercent } from '../../common/account-commission';
 import { ShopsService } from '../shops/shops.service';
 import { MovementsService } from '../movements/movements.service';
+import { repoFor, withAdvisoryLock } from '../../common/transaction';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => (Math.round(Number(v || 0) * 100) / 100).toFixed(2);
@@ -106,19 +107,56 @@ export class PartnerSplitsService implements OnModuleInit {
   async saveConfig(user: AuthUser, shopId: string, incoming: PartnerSplitConfigDto) {
         this.shops.assertShopAccess(user, shopId);
     const config = this.normalizeConfig(incoming);
-    let row = await this.configs.findOne({ where: { shopId, active: true } });
+    await this.persistConfig(shopId, config);
+    return this.buildPreview(user, shopId, config);
+  }
+
+  private async persistConfig(
+    shopId: string,
+    config: ReturnType<PartnerSplitsService['normalizeConfig']>,
+    manager?: EntityManager,
+  ) {
+    const configs = repoFor(this.configs, manager);
+    let row = await configs.findOne({ where: { shopId, active: true } });
     if (!row) {
-      row = this.configs.create({ shopId, active: true });
+      row = configs.create({ shopId, active: true });
     }
     row.partnerAccountIds = config.partnerAccountIds;
     row.channelLeaves = config.channelLeaves;
     row.extras = config.extras;
-    await this.configs.save(row);
-    return this.buildPreview(user, shopId, config);
+    await configs.save(row);
+  }
+
+  /**
+   * Las divisiones leen saldos y escriben pases/pagos en base a ellos: dos «Aplicar»
+   * a la vez (doble clic, dos admins) duplicarían los pases. Se serializan por local
+   * y todo el lote (pases + pagos + config + historial) va en una transacción.
+   */
+  private lockSplits<T>(shopId: string, fn: (manager: EntityManager) => Promise<T>) {
+    return withAdvisoryLock(this.runs.manager, `partner-split:${shopId}`, fn, {
+      busyMessage: 'Ya se está aplicando una división en este local. Probá de nuevo en unos segundos.',
+    });
   }
 
   async apply(user: AuthUser, shopId: string, incoming?: Partial<PartnerSplitConfigDto>) {
-        this.shops.assertShopAccess(user, shopId);
+    this.shops.assertShopAccess(user, shopId);
+    const { config, result } = await this.lockSplits(shopId, (manager) =>
+      this.applyLocked(manager, user, shopId, incoming),
+    );
+    // Después del COMMIT: el preview lee saldos con otra conexión.
+    const after = await this.buildPreview(user, shopId, config);
+    return { ...result, ...after };
+  }
+
+  private async applyLocked(
+    manager: EntityManager,
+    user: AuthUser,
+    shopId: string,
+    incoming?: Partial<PartnerSplitConfigDto>,
+  ) {
+    const movementsRepo = manager.getRepository(Movement);
+    const paymentsRepo = manager.getRepository(Payment);
+    const runsRepo = manager.getRepository(PartnerSplitRun);
     const preview = await this.buildPreview(
       user,
       shopId,
@@ -143,8 +181,8 @@ export class PartnerSplitsService implements OnModuleInit {
         const mode = this.generateOf(t, actions);
         if (mode === 'skip') continue;
         if (mode === 'payment') {
-          const pay = await this.payments.save(
-            this.payments.create({
+          const pay = await paymentsRepo.save(
+            paymentsRepo.create({
               shopId,
               title: `División · ${t.fromName} → ${t.toName}`,
               notes: `División de socios · sale de ${t.fromName} · entra a ${t.toName}`,
@@ -166,8 +204,8 @@ export class PartnerSplitsService implements OnModuleInit {
       } else if (!this.isComplete(t, completes)) {
         continue;
       }
-      const row = await this.movementsRepo.save(
-        this.movementsRepo.create({
+      const row = await movementsRepo.save(
+        movementsRepo.create({
           shopId,
           businessDate: today,
           fromAccountId: t.fromAccountId,
@@ -188,9 +226,9 @@ export class PartnerSplitsService implements OnModuleInit {
         'Elegí Pago o Movimiento en un pase entre socios, o Completo en un canal',
       );
     }
-    await this.saveConfig(user, shopId, preview.config);
-    const run = await this.runs.save(
-      this.runs.create({
+    await this.persistConfig(shopId, preview.config, manager);
+    const run = await runsRepo.save(
+      runsRepo.create({
         shopId,
         appliedAt: new Date(),
         appliedByUserId: user.id,
@@ -212,14 +250,15 @@ export class PartnerSplitsService implements OnModuleInit {
         },
       }),
     );
-    const after = await this.buildPreview(user, shopId, preview.config);
     return {
-      createdCount: created.length,
-      createdIds: created,
-      createdMovementCount: createdMovementIds.length,
-      createdPaymentCount: createdPaymentIds.length,
-      runId: run.id,
-      ...after,
+      config: preview.config,
+      result: {
+        createdCount: created.length,
+        createdIds: created,
+        createdMovementCount: createdMovementIds.length,
+        createdPaymentCount: createdPaymentIds.length,
+        runId: run.id,
+      },
     };
   }
 
@@ -293,6 +332,37 @@ export class PartnerSplitsService implements OnModuleInit {
     },
   ) {
     this.shops.assertShopAccess(user, shopId);
+    const { partnerAccountIds, result } = await this.lockSplits(shopId, (manager) =>
+      this.equalizeApplyLocked(manager, user, shopId, body),
+    );
+    // Después del COMMIT: el preview lee saldos con otra conexión.
+    const after = await this.buildEqualizePreview(user, shopId, {
+      amount: body.amount,
+      partnerAccountIds,
+    });
+    return { ...result, ...after };
+  }
+
+  private async equalizeApplyLocked(
+    manager: EntityManager,
+    user: AuthUser,
+    shopId: string,
+    body: {
+      amount: number;
+      partnerAccountIds?: string[];
+      transferActions?: Array<{
+        accountId?: string;
+        fromAccountId?: string;
+        toAccountId?: string;
+        generate: 'skip' | 'payment' | 'movement';
+      }>;
+      sendSurplusToDividends?: boolean;
+      sendBalancedToDividends?: boolean;
+    },
+  ) {
+    const movementsRepo = manager.getRepository(Movement);
+    const paymentsRepo = manager.getRepository(Payment);
+    const runsRepo = manager.getRepository(PartnerSplitRun);
     if (!(round2(n(body.amount)) > 0)) {
       throw new BadRequestException('Ingresá un monto mayor a cero');
     }
@@ -324,8 +394,8 @@ export class PartnerSplitsService implements OnModuleInit {
       for (const p of rows) {
         const amount = round2(p.current);
         if (!(amount > 0.004)) continue;
-        const row = await this.movementsRepo.save(
-          this.movementsRepo.create({
+        const row = await movementsRepo.save(
+          movementsRepo.create({
             shopId,
             businessDate: today,
             fromAccountId: p.accountId,
@@ -348,8 +418,8 @@ export class PartnerSplitsService implements OnModuleInit {
       for (const p of surplusRows) {
         const amount = round2(-p.difference);
         if (!(amount > 0.004)) continue;
-        const row = await this.movementsRepo.save(
-          this.movementsRepo.create({
+        const row = await movementsRepo.save(
+          movementsRepo.create({
             shopId,
             businessDate: today,
             fromAccountId: p.accountId,
@@ -379,8 +449,8 @@ export class PartnerSplitsService implements OnModuleInit {
         if (mode === 'skip') continue;
         // Destino del dinero: cuenta configurada (o Dividendos). El socio receptor queda anotado.
         if (mode === 'payment') {
-          const pay = await this.payments.save(
-            this.payments.create({
+          const pay = await paymentsRepo.save(
+            paymentsRepo.create({
               shopId,
               title: `Equilibrar · Dividendo · ${t.fromName} → ${t.toName}`,
               notes: `Al abonar va a ${dividendsName} · anotado para ${t.toName} · no le suma saldo · sale de ${t.fromName}`,
@@ -400,11 +470,11 @@ export class PartnerSplitsService implements OnModuleInit {
           distributed = round2(distributed + n(t.amount));
           continue;
         }
-        const link = await this.accountLinks.findOne({
+        const link = await manager.getRepository(LedgerAccountUser).findOne({
           where: { shopId, accountId: t.toAccountId },
         });
-        const row = await this.movementsRepo.save(
-          this.movementsRepo.create({
+        const row = await movementsRepo.save(
+          movementsRepo.create({
             shopId,
             businessDate: today,
             fromAccountId: t.fromAccountId,
@@ -434,8 +504,8 @@ export class PartnerSplitsService implements OnModuleInit {
       );
     }
 
-    const run = await this.runs.save(
-      this.runs.create({
+    const run = await runsRepo.save(
+      runsRepo.create({
         shopId,
         appliedAt: new Date(),
         appliedByUserId: user.id,
@@ -461,17 +531,15 @@ export class PartnerSplitsService implements OnModuleInit {
         },
       }),
     );
-    const after = await this.buildEqualizePreview(user, shopId, {
-      amount: body.amount,
-      partnerAccountIds: preview.partners.map((p) => p.accountId),
-    });
     return {
-      createdCount: created.length,
-      createdPaymentCount: createdPaymentIds.length,
-      createdMovementCount: createdMovementIds.length,
-      createdIds: created,
-      runId: run.id,
-      ...after,
+      partnerAccountIds: preview.partners.map((p) => p.accountId),
+      result: {
+        createdCount: created.length,
+        createdPaymentCount: createdPaymentIds.length,
+        createdMovementCount: createdMovementIds.length,
+        createdIds: created,
+        runId: run.id,
+      },
     };
   }
 

@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, IsNull, Repository } from 'typeorm';
+import { EntityManager, In, IsNull, Repository } from 'typeorm';
 import { CashClosing } from '../../entities/cash-closing.entity';
 import { Movement } from '../../entities/movement.entity';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
@@ -26,6 +26,7 @@ import {
   sameWithdrawalEconomics,
 } from './closing-movements-diff.util';
 import { ShopClosingSource } from '../../entities/shop-closing-source.entity';
+import { moneyTransaction, repoFor } from '../../common/transaction';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
@@ -49,13 +50,19 @@ export class ClosingMovementsSyncService {
   ) {}
 
   /** Anula los movimientos del cierre (p. ej. al eliminarlo) sin volver a generarlos. */
-  async removeFromClosing(closingId: string): Promise<void> {
-    await this.movements.update({ closingId }, { active: false });
-    await this.movements.softDelete({ closingId });
+  async removeFromClosing(closingId: string, manager?: EntityManager): Promise<void> {
+    const movements = repoFor(this.movements, manager);
+    await movements.update({ closingId }, { active: false });
+    await movements.softDelete({ closingId });
   }
 
-  async syncFromClosing(closing: CashClosing) {
-    const rows = await this.planFromClosing(closing);
+  /**
+   * Regenera los asientos del cierre. Con `manager`, todo (lectura de huérfanos,
+   * baja y alta) corre en la transacción del llamador.
+   */
+  async syncFromClosing(closing: CashClosing, manager?: EntityManager) {
+    const movements = repoFor(this.movements, manager);
+    const rows = await this.planFromClosing(closing, manager);
     // Huérfanos del mismo día (import Excel / libro sin closingId) que ya cubren el
     // plan: si no los sacamos, delete+recreate duplica ingresos/retiros y rompe saldos
     // (incl. socios ya drenados por dividendos).
@@ -64,10 +71,11 @@ export class ClosingMovementsSyncService {
       rows,
       closing.businessDate,
       n(closing.cashAmount),
+      manager,
     );
-    await this.movements.delete({ closingId: closing.id });
+    await movements.delete({ closingId: closing.id });
     if (rows.length) {
-      await this.movements.save(rows.map((r) => this.movements.create(r)));
+      await movements.save(rows.map((r) => movements.create(r)));
     }
   }
 
@@ -80,9 +88,11 @@ export class ClosingMovementsSyncService {
     planned: Partial<Movement>[],
     closingBusinessDate?: string,
     legacyCashAmount?: number,
+    manager?: EntityManager,
   ): Promise<void> {
     if (!planned.length) return;
-    const orphans = await this.movements.find({
+    const movements = repoFor(this.movements, manager);
+    const orphans = await movements.find({
       where: { shopId, active: true, closingId: IsNull() },
       relations: ['fromAccount'],
     });
@@ -146,15 +156,22 @@ export class ClosingMovementsSyncService {
       removeIds.push(hit.id);
     }
     if (!removeIds.length) return;
-    await this.movements.update({ id: In(removeIds) }, { active: false });
-    await this.movements.softDelete({ id: In(removeIds) });
+    await movements.update({ id: In(removeIds) }, { active: false });
+    await movements.softDelete({ id: In(removeIds) });
   }
 
   /** Arma los asientos del cierre según la config actual, sin persistir. */
-  async planFromClosing(closing: CashClosing): Promise<Partial<Movement>[]> {
-    await this.catalogSeed.ensureShopCatalogs(closing.shopId);
+  async planFromClosing(
+    closing: CashClosing,
+    manager?: EntityManager,
+  ): Promise<Partial<Movement>[]> {
+    // El seed escribe con su propia conexión: dentro de una transacción el llamador
+    // ya lo corrió antes (ver ensureCatalogs), para que el snapshot vea las cuentas.
+    if (!manager) await this.catalogSeed.ensureShopCatalogs(closing.shopId);
 
-    const accounts = await this.accounts.find({ where: { shopId: closing.shopId } });
+    const accounts = await repoFor(this.accounts, manager).find({
+      where: { shopId: closing.shopId },
+    });
     if (!accounts.length) return [];
     const byCode = new Map(accounts.map((a) => [a.code, a]));
 
@@ -162,7 +179,7 @@ export class ClosingMovementsSyncService {
     const egreso = byCode.get('EGRESO');
     if (!ingreso || !egreso) return [];
 
-    const concepts = await this.concepts.find({
+    const concepts = await repoFor(this.concepts, manager).find({
       where: { shopId: closing.shopId },
     });
     const conceptByName = new Map(
@@ -173,8 +190,8 @@ export class ClosingMovementsSyncService {
 
     const rows: Partial<Movement>[] = [];
     const date = closing.businessDate;
-    const shop = await this.shops.findOne({ where: { id: closing.shopId } });
-    const withdrawalDate = await this.resolveWithdrawalBusinessDate(closing, shop);
+    const shop = await repoFor(this.shops, manager).findOne({ where: { id: closing.shopId } });
+    const withdrawalDate = await this.resolveWithdrawalBusinessDate(closing, shop, manager);
     const closingIncomeConceptId = this.resolveClosingIncomeConceptId(
       shop,
       concepts,
@@ -189,7 +206,7 @@ export class ClosingMovementsSyncService {
     const ingresoAccount = ingreso;
 
     // Efectivo del día → cuenta destino de la cuenta del local CASH (o fallback drawer).
-    const cashSourceCfg = await this.closingSources.findOne({
+    const cashSourceCfg = await repoFor(this.closingSources, manager).findOne({
       where: { shopId: closing.shopId, role: ClosingSourceRole.CASH, active: true },
     });
     let cashDest =
@@ -813,12 +830,14 @@ export class ClosingMovementsSyncService {
   private async resolveWithdrawalBusinessDate(
     closing: CashClosing,
     shop: Shop | null,
+    manager?: EntityManager,
   ): Promise<string> {
+    const pendingWithdrawals = repoFor(this.pendingWithdrawals, manager);
     const tz = {
       timezone: shop?.timezone,
       openingTime: shop?.openingTime,
     };
-    const picked = await this.pendingWithdrawals.findOne({
+    const picked = await pendingWithdrawals.findOne({
       where: {
         closingId: closing.id,
         shopId: closing.shopId,
@@ -830,7 +849,7 @@ export class ClosingMovementsSyncService {
     if (picked?.pickedAt) {
       return resolveShopBusinessDate(new Date(picked.pickedAt), tz);
     }
-    const stillPending = await this.pendingWithdrawals.findOne({
+    const stillPending = await pendingWithdrawals.findOne({
       where: {
         closingId: closing.id,
         shopId: closing.shopId,
@@ -890,6 +909,11 @@ export class ClosingMovementsSyncService {
       if (configured) return configured.id;
     }
     return findConcept('EFECTIVO ingreso') ?? findConcept('Ingreso') ?? findConcept('Cobro');
+  }
+
+  /** Seed de cuentas/conceptos del local; correr antes de abrir una transacción que sincronice. */
+  async ensureCatalogs(shopId: string): Promise<void> {
+    await this.catalogSeed.ensureShopCatalogs(shopId);
   }
 
   async previewMissingIncomes(shopId: string) {
@@ -1022,35 +1046,39 @@ export class ClosingMovementsSyncService {
       (i) =>
         i.status === 'mismatch' && i.existingMovementId && selectedKeys && picked(i),
     );
-    if (commit && toCreate.length) {
-      await this.movements.save(
-        toCreate.map((r) =>
-          this.movements.create({
-            shopId,
-            businessDate: r.businessDate,
-            fromAccountId: r.fromAccountId,
-            toAccountId: r.toAccountId,
-            description: r.label,
-            amountUyu: money(r.amount),
-            conceptId: r.conceptId,
-            closingId: r.closingId,
-            invoiced: false,
-            active: true,
-          }),
-        ),
-      );
-    }
-    if (commit && toUpdate.length) {
-      for (const r of toUpdate) {
-        await this.movements.update(
-          { id: r.existingMovementId!, shopId },
-          {
-            amountUyu: money(r.amount),
-            description: r.label,
-            closingId: r.closingId,
-          },
-        );
-      }
+    // Altas y correcciones del lote juntas (todo o nada).
+    if (commit && (toCreate.length || toUpdate.length)) {
+      await moneyTransaction(this.movements.manager, async (manager) => {
+        const movements = manager.getRepository(Movement);
+        if (toCreate.length) {
+          await movements.save(
+            toCreate.map((r) =>
+              movements.create({
+                shopId,
+                businessDate: r.businessDate,
+                fromAccountId: r.fromAccountId,
+                toAccountId: r.toAccountId,
+                description: r.label,
+                amountUyu: money(r.amount),
+                conceptId: r.conceptId,
+                closingId: r.closingId,
+                invoiced: false,
+                active: true,
+              }),
+            ),
+          );
+        }
+        for (const r of toUpdate) {
+          await movements.update(
+            { id: r.existingMovementId!, shopId },
+            {
+              amountUyu: money(r.amount),
+              description: r.label,
+              closingId: r.closingId,
+            },
+          );
+        }
+      });
     }
 
     const extras = [
