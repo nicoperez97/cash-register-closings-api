@@ -1,4 +1,6 @@
-import { ValidationPipe } from '@nestjs/common';
+// Primero: Sentry tiene que instrumentar antes de que se carguen Express y mysql2.
+import './instrument';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
@@ -29,6 +31,7 @@ async function bootstrap() {
       next();
     },
   );
+  app.use(slowRequestLogger());
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -110,6 +113,31 @@ async function bootstrap() {
     // eslint-disable-next-line no-console
     console.log(`Legacy ES5 http://localhost:${port}/legacy/index.html`);
   }
+}
+
+/**
+ * Loguea requests que tardan más de SLOW_REQUEST_MS (default 2000): con esto se ve
+ * en producción qué pantallas conviene optimizar. Excluye los streams SSE (son largos a propósito).
+ */
+function slowRequestLogger() {
+  const logger = new Logger('SlowRequest');
+  const threshold = Math.max(200, parseInt(process.env.SLOW_REQUEST_MS ?? '2000', 10) || 2000);
+  return (
+    req: { method?: string; originalUrl?: string; url?: string },
+    res: { statusCode: number; on: (ev: 'finish', cb: () => void) => void },
+    next: () => void,
+  ) => {
+    const started = process.hrtime.bigint();
+    res.on('finish', () => {
+      const ms = Number(process.hrtime.bigint() - started) / 1e6;
+      if (ms < threshold) return;
+      // Sin query string: puede traer tokens (access_token) o datos de clientes.
+      const path = String(req.originalUrl ?? req.url ?? '').split('?')[0];
+      if (path.endsWith('/live') || path.endsWith('/events')) return;
+      logger.warn(`${req.method} ${path} ${res.statusCode} ${Math.round(ms)}ms`);
+    });
+    next();
+  };
 }
 
 void bootstrap();

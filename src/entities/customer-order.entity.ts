@@ -55,6 +55,7 @@ export type CustomerOrderLine = {
 @Index('idx_customer_orders_shop_created', ['shopId', 'createdAt'])
 @Index('idx_customer_orders_shop_code', ['shopId', 'code'], { unique: true })
 @Index('idx_customer_orders_shop_status', ['shopId', 'status'])
+@Index('idx_customer_orders_shop_table_session', ['shopId', 'tableSessionId'])
 @Index('idx_customer_orders_shop_client_req', ['shopId', 'clientRequestId'], {
   unique: true,
 })
