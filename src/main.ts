@@ -85,21 +85,27 @@ async function bootstrap() {
     app.useStaticAssets(legacyDir, { prefix: '/legacy/', index: 'index.html' });
   }
 
-  const swaggerConfig = new DocumentBuilder()
-    .setTitle('Cash Register Closings API')
-    .setDescription('API de cierres de caja multi-local')
-    .setVersion('0.1.0')
-    .addBearerAuth()
-    .build();
-  const document = SwaggerModule.createDocument(app, swaggerConfig);
-  SwaggerModule.setup('api/docs', app, document);
+  // En producción el mapa completo de endpoints solo si se pide explícitamente.
+  const swaggerEnabled = !isProd || process.env.SWAGGER_ENABLED === 'true';
+  if (swaggerEnabled) {
+    const swaggerConfig = new DocumentBuilder()
+      .setTitle('Cash Register Closings API')
+      .setDescription('API de cierres de caja multi-local')
+      .setVersion('0.1.0')
+      .addBearerAuth()
+      .build();
+    const document = SwaggerModule.createDocument(app, swaggerConfig);
+    SwaggerModule.setup('api/docs', app, document);
+  }
 
   const port = config.get<number>('api.port') ?? 3000;
   await app.listen(port);
   // eslint-disable-next-line no-console
   console.log(`CRC API http://localhost:${port}`);
-  // eslint-disable-next-line no-console
-  console.log(`Swagger http://localhost:${port}/api/docs`);
+  if (swaggerEnabled) {
+    // eslint-disable-next-line no-console
+    console.log(`Swagger http://localhost:${port}/api/docs`);
+  }
   if (existsSync(legacyDir)) {
     // eslint-disable-next-line no-console
     console.log(`Legacy ES5 http://localhost:${port}/legacy/index.html`);

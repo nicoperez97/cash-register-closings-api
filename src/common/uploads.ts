@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'fs';
-import { extname, join, resolve } from 'path';
+import { extname, join, resolve, sep } from 'path';
 import { DOCUMENT_UPLOAD_FOLDERS } from './upload-retention';
 
 const DEFAULT_DIR = join(process.cwd(), 'uploads');
@@ -90,7 +90,8 @@ export function resolveUploadPath(relativePath: string | null | undefined): stri
   if (!relativePath) return null;
   const root = uploadsRoot();
   const abs = resolve(root, relativePath.replace(/\\/g, '/'));
-  if (!abs.startsWith(root)) return null;
+  // Con separador: si no, `/app/uploads-otro/x` también "empieza con" `/app/uploads`.
+  if (!abs.startsWith(root + sep)) return null;
   if (!existsSync(abs)) return null;
   return abs;
 }
@@ -244,4 +245,31 @@ export function purgeExpiredDocumentUploads(cutoff: Date): number {
     removeEmptyDirs(base, root);
   }
   return removed;
+}
+
+/** Tipos que se pueden servir inline sin riesgo de ejecutar script en nuestro origen. */
+const SERVABLE_MIME = new Set([
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+  'image/avif',
+  'image/heic',
+  'image/heif',
+  'image/bmp',
+  'text/plain',
+  'text/csv',
+  'application/zip',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+]);
+
+/**
+ * El mime guardado viene del cliente que subió el archivo: text/html o SVG
+ * servidos (o abiertos como blob:) correrían script con la sesión de quien lo mira.
+ */
+export function servableMime(mime: string | null | undefined): string {
+  const m = String(mime ?? '').split(';')[0].trim().toLowerCase();
+  return SERVABLE_MIME.has(m) ? m : 'application/octet-stream';
 }

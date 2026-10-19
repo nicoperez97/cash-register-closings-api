@@ -1,3 +1,4 @@
+import { servableMime } from '../../common/uploads';
 import {
   Body,
   Controller,
@@ -188,7 +189,7 @@ export class MenuController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const { stream, fileName, mime } = await this.menus.adminSourceFile(user, shopId, menuId);
-    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Type', servableMime(mime));
     res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(fileName)}"`);
     res.setHeader('Cache-Control', 'private, max-age=60');
     return stream;
@@ -226,7 +227,7 @@ export class PublicMenuController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const { stream, fileName, mime } = await this.menus.publicMenuFile(slug, menuSlug);
-    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Type', servableMime(mime));
     res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(fileName)}"`);
     res.setHeader('Cache-Control', 'public, max-age=300');
     return stream;
@@ -258,7 +259,7 @@ export class PublicMenuController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const { stream, fileName, mime } = await this.menus.publicItemImage(slug, itemId, imageId);
-    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Type', servableMime(mime));
     res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(fileName)}"`);
     res.setHeader('Cache-Control', 'public, max-age=300');
     return stream;
@@ -272,7 +273,7 @@ export class PublicMenuController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const { stream, fileName, mime } = await this.menus.publicItemImage(slug, itemId);
-    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Type', servableMime(mime));
     res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(fileName)}"`);
     res.setHeader('Cache-Control', 'public, max-age=300');
     return stream;

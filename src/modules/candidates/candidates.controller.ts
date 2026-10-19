@@ -1,3 +1,4 @@
+import { servableMime } from '../../common/uploads';
 import {
   BadRequestException,
   Body,
@@ -122,7 +123,7 @@ export class CandidatesController {
       id,
       n,
     );
-    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Type', servableMime(mime));
     res.setHeader(
       'Content-Disposition',
       `inline; filename="${encodeURIComponent(fileName)}"`,
