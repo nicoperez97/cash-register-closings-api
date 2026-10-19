@@ -57,7 +57,6 @@ services:
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GROQ_MODEL: ${GROQ_MODEL:-qwen/qwen3.8-27b}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
-      DELIVERATE_WEBHOOK_SECRET: ${DELIVERATE_WEBHOOK_SECRET:-}
       # CloudFront -> nginx -> api: 1 proxy antes de nginx en X-Forwarded-For.
       TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}
       SWAGGER_ENABLED: ${SWAGGER_ENABLED:-false}

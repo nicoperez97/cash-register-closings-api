@@ -4,8 +4,10 @@ import {
   Logger,
   NotFoundException,
   OnModuleInit,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 import { Repository } from 'typeorm';
 import { AuthUser } from '../../common/decorators';
 import { ClosingSourceKind } from '../../common/enums';
@@ -101,6 +103,7 @@ export class IntegrationsService implements OnModuleInit {
 
     for (const sql of [
       `ALTER TABLE shop_integrations ADD COLUMN webhookBaseUrl VARCHAR(300) NULL`,
+      `ALTER TABLE shop_integrations ADD COLUMN webhookSecret VARCHAR(64) NULL`,
       `ALTER TABLE shop_integrations ADD COLUMN textAddress VARCHAR(255) NULL`,
       `ALTER TABLE shop_integrations ADD COLUMN closingAccountId CHAR(36) NULL`,
       `ALTER TABLE shop_integrations ADD COLUMN closingKind VARCHAR(32) NOT NULL DEFAULT 'RECORD_ONLY'`,
@@ -141,18 +144,52 @@ export class IntegrationsService implements OnModuleInit {
   }
 
   /** Webhook Deliverate de este local (config por shop, sin env global). */
-  private webhookUrlFor(row: ShopIntegration): string {
+  private webhookUrlFor(row: ShopIntegration, secretOverride?: string): string {
     const origin = this.normalizeBaseUrl(row.webhookBaseUrl);
     if (!origin) {
       throw new BadRequestException(
         'Indicá la URL pública de la API de este local para registrar el webhook',
       );
     }
-    // Si hay secreto configurado, lo registramos en la URL para que Deliverate
-    // lo devuelva y el webhook pueda verificarlo (opt-in vía env).
-    const secret = String(process.env.DELIVERATE_WEBHOOK_SECRET ?? '').trim();
+    // Secreto propio del local: Deliverate lo devuelve en cada webhook y así
+    // verificamos que el update venga de la cuenta de ese local.
+    const secret = String(secretOverride ?? row.webhookSecret ?? '').trim();
     const suffix = secret ? `?token=${encodeURIComponent(secret)}` : '';
     return `${origin}/api/v1/webhooks/deliverate${suffix}`;
+  }
+
+  /** Secreto del webhook (columna select:false): el guardado o uno nuevo. */
+  private async webhookSecretFor(row: ShopIntegration): Promise<string> {
+    if (row.webhookSecret) return row.webhookSecret;
+    return (await this.loadWebhookSecret(row.id)) || randomBytes(24).toString('base64url');
+  }
+
+  /**
+   * Verifica el ?token= contra el secreto del local del pedido.
+   * Locales registrados antes del secreto (null) se aceptan hasta que reconecten.
+   */
+  private async assertWebhookToken(shopId: string, provided: string): Promise<void> {
+    const row = await this.integrations.findOne({ where: { shopId, provider: 'deliverate' } });
+    const secret = row ? await this.loadWebhookSecret(row.id) : null;
+    if (!secret) {
+      this.logger.warn(`Webhook Deliverate sin secreto en shop=${shopId}: reconectar para verificarlo`);
+      return;
+    }
+    const a = createHash('sha256').update(String(provided ?? '')).digest();
+    const b = createHash('sha256').update(secret).digest();
+    if (!timingSafeEqual(a, b)) {
+      this.logger.warn(`Webhook Deliverate rechazado: token inválido shop=${shopId}`);
+      throw new UnauthorizedException('Webhook no autorizado');
+    }
+  }
+
+  private async loadWebhookSecret(integrationId: string): Promise<string | null> {
+    const found = await this.integrations
+      .createQueryBuilder('i')
+      .addSelect('i.webhookSecret')
+      .where('i.id = :id', { id: integrationId })
+      .getOne();
+    return String(found?.webhookSecret ?? '').trim() || null;
   }
 
   private async getOrCreate(shopId: string): Promise<ShopIntegration> {
@@ -229,6 +266,8 @@ export class IntegrationsService implements OnModuleInit {
       testMode: !!row.testMode,
       webhookBaseUrl: base,
       webhookRegisteredAt: row.webhookRegisteredAt ?? null,
+      /** false = webhook registrado sin secreto: conviene volver a Conectar. */
+      webhookVerified: !!(row.webhookSecret || (await this.loadWebhookSecret(row.id))),
       lastError: row.lastError ?? null,
       webhookUrlHint: base ? `${base}/api/v1/webhooks/deliverate` : null,
       closingAccountId: row.closingAccountId ?? null,
@@ -462,12 +501,16 @@ export class IntegrationsService implements OnModuleInit {
     this.logger.log(
       `Deliverate connect user=${auth.username ?? username} is_integration=${!!auth.is_integration} shops=[${linkedShops.join(',')}]`,
     );
-    const webhook = this.webhookUrlFor(row);
+    // El secreto se guarda solo si Deliverate aceptó la URL nueva; si no, quedaría
+    // verificando un token que Deliverate no manda.
+    const secret = await this.webhookSecretFor(row);
+    const webhook = this.webhookUrlFor(row, secret);
     const key = await this.deliverate.upsertApiKey(
       auth.id_token,
       webhook,
       `CRC shop ${row.shopId}`,
     );
+    row.webhookSecret = secret;
     row.apiToken = key.id_token || auth.id_token;
     row.webhookRegisteredAt = new Date();
     row.lastError = null;
@@ -951,7 +994,11 @@ export class IntegrationsService implements OnModuleInit {
     return this.deliverate.getDboyLocation(row.apiToken, dboyId);
   }
 
-  async handleWebhook(body: { action?: string; update?: Record<string, unknown> }) {
+  async handleWebhook(body: {
+    action?: string;
+    update?: Record<string, unknown>;
+    token?: string;
+  }) {
     const action = String(body?.action ?? '').trim();
     const update = body?.update ?? {};
     if (!action) {
@@ -960,7 +1007,7 @@ export class IntegrationsService implements OnModuleInit {
     }
 
     if (action === 'order_update') {
-      await this.applyOrderUpdate(update);
+      await this.applyOrderUpdate(update, String(body?.token ?? '').trim());
       return { ok: true };
     }
     if (action === 'order_create') {
@@ -974,7 +1021,7 @@ export class IntegrationsService implements OnModuleInit {
     return { ok: true, ignored: true };
   }
 
-  private async applyOrderUpdate(update: Record<string, unknown>) {
+  private async applyOrderUpdate(update: Record<string, unknown>, token: string) {
     const remoteId = String(update.order_id ?? '').trim();
     if (!remoteId) {
       this.logger.warn('Webhook order_update sin order_id');
@@ -996,6 +1043,7 @@ export class IntegrationsService implements OnModuleInit {
       this.logger.warn(`Webhook order_update sin pedido vinculado order_id=${remoteId}`);
       return;
     }
+    await this.assertWebhookToken(order.shopId, token);
 
     const prevMeta = (order.externalMeta ?? {}) as Record<string, unknown>;
     const prevStatus = order.status;

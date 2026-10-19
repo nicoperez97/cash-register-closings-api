@@ -107,6 +107,13 @@ export class ShopIntegration extends BaseEntity {
   @Column({ type: 'datetime', precision: 6, nullable: true })
   webhookRegisteredAt?: Date | null;
 
+  /**
+   * Secreto del webhook de este local (va como ?token= en la URL registrada).
+   * Null = registrado antes de existir el secreto: se acepta sin token hasta reconectar.
+   */
+  @Column({ type: 'varchar', length: 64, nullable: true, select: false })
+  webhookSecret?: string | null;
+
   @Column({ type: 'varchar', length: 500, nullable: true })
   lastError?: string | null;
 

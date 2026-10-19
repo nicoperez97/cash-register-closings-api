@@ -9,13 +9,11 @@ import {
   Put,
   Query,
   Req,
-  UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import type { Request } from 'express';
-import { createHash, timingSafeEqual } from 'crypto';
 import {
   AuthUser,
   CurrentUser,
@@ -26,13 +24,6 @@ import {
 import { PermissionsGuard } from '../../common/guards';
 import { UpsertDeliverateConfigDto } from './dto/deliverate.dto';
 import { IntegrationsService } from './integrations.service';
-
-/** Comparación en tiempo constante (no filtra el secreto por timing). */
-function secretsMatch(provided: string, secret: string): boolean {
-  const a = createHash('sha256').update(provided).digest();
-  const b = createHash('sha256').update(secret).digest();
-  return timingSafeEqual(a, b);
-}
 
 function requestApiOrigin(
   req: Request,
@@ -72,17 +63,6 @@ export class IntegrationsWebhookController {
     @Query('token') token?: string,
     @Headers('x-webhook-secret') headerSecret?: string,
   ) {
-    // Verificación opt-in: si DELIVERATE_WEBHOOK_SECRET está configurado, el
-    // webhook exige el token (query ?token= o header x-webhook-secret). Sin la
-    // env configurada, el comportamiento es el de siempre (compatibilidad).
-    const secret = String(process.env.DELIVERATE_WEBHOOK_SECRET ?? '').trim();
-    if (secret) {
-      const provided = String(token ?? headerSecret ?? '').trim();
-      if (!secretsMatch(provided, secret)) {
-        this.logger.warn('Deliverate webhook rechazado: token inválido o ausente');
-        throw new UnauthorizedException('Webhook no autorizado');
-      }
-    }
     const action = String(body?.action ?? '').trim();
     const rawUpdate = body?.update;
     const update =
@@ -92,7 +72,12 @@ export class IntegrationsWebhookController {
     this.logger.log(
       `Deliverate webhook action=${action || '(vacío)'} order_id=${String(update?.order_id ?? '')} state=${String(update?.state ?? '')}`,
     );
-    return this.service.handleWebhook({ action, update });
+    // El token es por local: se verifica contra el local del pedido en el service.
+    return this.service.handleWebhook({
+      action,
+      update,
+      token: String(token ?? headerSecret ?? '').trim(),
+    });
   }
 }
 
