@@ -6,7 +6,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, IsNull, Not, Repository } from 'typeorm';
+import { EntityManager, In, IsNull, Not, Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
 import { CashPendingWithdrawal } from '../../entities/cash-pending-withdrawal.entity';
 import { CashPendingWithdrawalOffset } from '../../entities/cash-pending-withdrawal-offset.entity';
@@ -33,6 +33,7 @@ import {
 import { isEntityActive } from '../../common/active.util';
 import { findCashDrawerAccount } from '../../common/catalog-seed';
 import { PickCashWithdrawalsDto } from './dto/cash-withdrawal.dto';
+import { moneyTransaction, repoFor } from '../../common/transaction';
 
 const n = (v?: number | string | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
@@ -96,17 +97,19 @@ export class CashWithdrawalsService implements OnModuleInit {
    * Tras guardar un cierre: crea/actualiza pendiente si no hay destinatario y hay monto;
    * cancela el pendiente si ya hay quién, el monto es 0, o el efectivo ya se retiró en A Retirar.
    */
-  async syncFromClosing(closing: CashClosing): Promise<void> {
+  async syncFromClosing(closing: CashClosing, manager?: EntityManager): Promise<void> {
+    const pending = repoFor(this.pending, manager);
+    const closings = repoFor(this.closings, manager);
     const hasWho = !!(closing.cashWithdrawnByUserId || closing.cashWithdrawnByEmployeeId);
     const amount = this.computeCashTake(closing);
-    const existing = await this.pending.findOne({
+    const existing = await pending.findOne({
       where: {
         closingId: closing.id,
         status: CashPendingWithdrawalStatus.PENDING,
         active: true,
       },
     });
-    const alreadyPicked = await this.pending.findOne({
+    const alreadyPicked = await pending.findOne({
       where: {
         closingId: closing.id,
         status: CashPendingWithdrawalStatus.PICKED,
@@ -117,22 +120,22 @@ export class CashWithdrawalsService implements OnModuleInit {
     // Ya retirado desde A Retirar: no recrear pendiente aunque el cierre se edite sin "quién".
     if (alreadyPicked) {
       if (existing) {
-        await this.deactivatePending(existing);
+        await this.deactivatePending(existing, manager);
       }
       if (n(closing.cashPendingPickup) !== 0) {
         closing.cashPendingPickup = money(0);
-        await this.closings.save(closing);
+        await closings.save(closing);
       }
       return;
     }
 
     if (hasWho || amount <= 0) {
       if (existing) {
-        await this.deactivatePending(existing);
+        await this.deactivatePending(existing, manager);
       }
       if (!hasWho && n(closing.cashPendingPickup) !== 0) {
         closing.cashPendingPickup = money(0);
-        await this.closings.save(closing);
+        await closings.save(closing);
       }
       return;
     }
@@ -140,10 +143,10 @@ export class CashWithdrawalsService implements OnModuleInit {
     if (existing) {
       existing.amount = money(amount);
       existing.businessDate = closing.businessDate;
-      await this.pending.save(existing);
+      await pending.save(existing);
     } else {
-      await this.pending.save(
-        this.pending.create({
+      await pending.save(
+        pending.create({
           shopId: closing.shopId,
           closingId: closing.id,
           businessDate: closing.businessDate,
@@ -156,27 +159,31 @@ export class CashWithdrawalsService implements OnModuleInit {
 
     if (n(closing.cashPendingPickup) !== amount) {
       closing.cashPendingPickup = money(amount);
-      await this.closings.save(closing);
+      await closings.save(closing);
     }
     this.live.tick(closing.shopId, 'inbox');
   }
 
-  async cancelForClosing(closingId: string): Promise<void> {
-    const rows = await this.pending.find({
+  async cancelForClosing(closingId: string, manager?: EntityManager): Promise<void> {
+    const rows = await repoFor(this.pending, manager).find({
       where: {
         closingId,
         active: true,
       },
     });
     for (const row of rows) {
-      await this.deactivatePending(row);
+      await this.deactivatePending(row, manager);
     }
   }
 
-  private async deactivatePending(row: CashPendingWithdrawal): Promise<void> {
+  private async deactivatePending(
+    row: CashPendingWithdrawal,
+    manager?: EntityManager,
+  ): Promise<void> {
+    const pending = repoFor(this.pending, manager);
     row.active = false;
-    await this.pending.save(row);
-    await this.pending.softRemove(row);
+    await pending.save(row);
+    await pending.softRemove(row);
   }
 
   async listPending(user: AuthUser, shopId: string) {
@@ -379,54 +386,85 @@ export class CashWithdrawalsService implements OnModuleInit {
     const pickBatchId = randomUUID();
     const confirmedByName = actorDisplayName(user);
     let totalAmount = 0;
-    for (const row of toPick) {
-      const computed = byId.get(row.id)!;
-      const take = computed.remainingAmount;
-      const closing = await this.closings.findOne({
-        where: { id: row.closingId, shopId, active: true },
-        relations: ['expenses', 'extraLines'],
-      });
-      if (!closing) {
-        throw new NotFoundException(`Cierre del retiro ${row.id} no encontrado`);
+    await this.closingMovements.ensureCatalogs(shopId);
+    // Todo el lote o nada: cierre + asientos + pendiente + offsets. Las filas
+    // pendientes se bloquean (FOR UPDATE) y se re-chequea el estado, así un doble
+    // clic o dos personas retirando lo mismo no generan dos retiros.
+    await moneyTransaction(this.pending.manager, async (manager) => {
+      const pendingRepo = manager.getRepository(CashPendingWithdrawal);
+      const closingsRepo = manager.getRepository(CashClosing);
+      const offsetsRepo = manager.getRepository(CashPendingWithdrawalOffset);
+      const pickIds = toPick.map((r) => r.id).sort();
+      const locked = await pendingRepo
+        .createQueryBuilder('p')
+        .setLock('pessimistic_write')
+        .where('p.id IN (:...ids)', { ids: pickIds })
+        .andWhere('p.shopId = :shopId', { shopId })
+        .orderBy('p.id', 'ASC')
+        .getMany();
+      const lockedById = new Map(locked.map((r) => [r.id, r]));
+      for (const id of pickIds) {
+        const fresh = lockedById.get(id);
+        if (
+          !fresh ||
+          fresh.status !== CashPendingWithdrawalStatus.PENDING ||
+          !isEntityActive(fresh.active)
+        ) {
+          throw new BadRequestException(
+            'Uno o más retiros ya fueron retirados por otra persona. Actualizá la lista.',
+          );
+        }
       }
 
-      closing.cashWithdrawnByUserId = picker.id;
-      closing.cashWithdrawnByName = picker.fullName;
-      closing.cashWithdrawnByEmployeeId = null;
-      closing.cashWithdrawnToAccountId = account.id;
-      closing.cashPendingPickup = money(0);
-      if (!(n(closing.cashWithdrawn) > 0)) {
-        closing.cashWithdrawn = money(take);
-      }
-      await this.closings.save(closing);
-      await this.closingMovements.syncFromClosing(closing);
-
-      row.status = CashPendingWithdrawalStatus.PICKED;
-      row.amount = money(take);
-      row.pickedByUserId = picker.id;
-      row.pickedByName = picker.fullName;
-      row.pickedToAccountId = account.id;
-      row.pickedAt = now;
-      row.pickBatchId = pickBatchId;
-      row.confirmedByUserId = user.id;
-      row.confirmedByName = confirmedByName;
-      await this.pending.save(row);
-      for (const alloc of computed.allocations) {
-        const exists = await this.offsets.findOne({
-          where: { pendingId: row.id, movementId: alloc.movementId },
+      for (const row of toPick) {
+        const computed = byId.get(row.id)!;
+        const take = computed.remainingAmount;
+        const closing = await closingsRepo.findOne({
+          where: { id: row.closingId, shopId, active: true },
+          relations: ['expenses', 'extraLines'],
         });
-        if (exists) continue;
-        await this.offsets.save(
-          this.offsets.create({
-            shopId,
-            pendingId: row.id,
-            movementId: alloc.movementId,
-            amount: money(alloc.amount),
-          }),
-        );
+        if (!closing) {
+          throw new NotFoundException(`Cierre del retiro ${row.id} no encontrado`);
+        }
+
+        closing.cashWithdrawnByUserId = picker.id;
+        closing.cashWithdrawnByName = picker.fullName;
+        closing.cashWithdrawnByEmployeeId = null;
+        closing.cashWithdrawnToAccountId = account.id;
+        closing.cashPendingPickup = money(0);
+        if (!(n(closing.cashWithdrawn) > 0)) {
+          closing.cashWithdrawn = money(take);
+        }
+        await closingsRepo.save(closing);
+        await this.closingMovements.syncFromClosing(closing, manager);
+
+        row.status = CashPendingWithdrawalStatus.PICKED;
+        row.amount = money(take);
+        row.pickedByUserId = picker.id;
+        row.pickedByName = picker.fullName;
+        row.pickedToAccountId = account.id;
+        row.pickedAt = now;
+        row.pickBatchId = pickBatchId;
+        row.confirmedByUserId = user.id;
+        row.confirmedByName = confirmedByName;
+        await pendingRepo.save(row);
+        for (const alloc of computed.allocations) {
+          const exists = await offsetsRepo.findOne({
+            where: { pendingId: row.id, movementId: alloc.movementId },
+          });
+          if (exists) continue;
+          await offsetsRepo.save(
+            offsetsRepo.create({
+              shopId,
+              pendingId: row.id,
+              movementId: alloc.movementId,
+              amount: money(alloc.amount),
+            }),
+          );
+        }
+        totalAmount += take;
       }
-      totalAmount += take;
-    }
+    });
 
     const fromAccountName = await this.cashDrawerAccountName(shopId);
     void this.notifyAdminsWithdrawalPicked(user, shopId, {

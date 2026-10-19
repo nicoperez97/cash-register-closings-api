@@ -5,7 +5,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Between, In, Repository } from 'typeorm';
+import { Between, EntityManager, In, Repository } from 'typeorm';
 import { TipDay } from '../../entities/tip-day.entity';
 import { TipAllocation } from '../../entities/tip-allocation.entity';
 import { Employee } from '../../entities/employee.entity';
@@ -15,6 +15,7 @@ import { ShopsService } from '../shops/shops.service';
 import { isEntityActive } from '../../common/active.util';
 import { detachRelations } from '../../common/detach-relations';
 import { formatMoney } from '../../common/format-money';
+import { moneyTransaction, repoFor } from '../../common/transaction';
 
 function n(v: unknown): number {
   const x = Number(v ?? 0);
@@ -243,82 +244,89 @@ export class TipsService implements OnModuleInit {
       }
     }
 
-    let day = await this.tipDays.findOne({
-      where: { shopId, businessDate },
-      withDeleted: true,
-    });
-    if (!day) {
-      day = this.tipDays.create({
-        shopId,
-        businessDate,
-        createdByUserId: user.id,
-        active: true,
-      });
-    } else {
-      day.deletedAt = null as any;
-      day.active = true;
-    }
-
-    day.cashAmount = money(cash);
-    day.transferAmount = money(transfer);
-    day.ticketsAmount = money(tickets);
-    day.receipts = receipts.length ? receipts : null;
-    day.totalAmount = money(total);
-    if (dto.notes !== undefined) day.notes = dto.notes?.trim() || null;
-    if (dto.closingId !== undefined) day.closingId = dto.closingId || null;
-    await this.tipDays.save(day);
-
-    if (dto.allocations !== undefined) {
-      const existing = await this.allocations.find({
-        where: { tipDayId: day.id },
+    // Día + reparto + tipsAmount del cierre: todo o nada. El día se bloquea
+    // (FOR UPDATE) para que dos ediciones simultáneas no mezclen repartos.
+    await moneyTransaction(this.tipDays.manager, async (manager) => {
+      const tipDaysRepo = manager.getRepository(TipDay);
+      const allocationsRepo = repoFor(this.allocations, manager);
+      let day = await tipDaysRepo.findOne({
+        where: { shopId, businessDate },
         withDeleted: true,
+        lock: { mode: 'pessimistic_write' },
       });
-      const byEmp = new Map(existing.map((a) => [a.employeeId, a]));
-      const keep = new Set(allocInputs.map((a) => a.employeeId));
+      if (!day) {
+        day = tipDaysRepo.create({
+          shopId,
+          businessDate,
+          createdByUserId: user.id,
+          active: true,
+        });
+      } else {
+        day.deletedAt = null as any;
+        day.active = true;
+      }
 
-      for (const input of allocInputs) {
-        let row = byEmp.get(input.employeeId);
-        const amount = money(Math.max(0, n(input.amount)));
-        if (!row) {
-          row = this.allocations.create({
-            tipDayId: day.id,
-            employeeId: input.employeeId,
-            amount,
-            delivered: !!input.delivered,
-            deliveredAt: input.delivered ? new Date() : null,
-            deliveredByUserId: input.delivered ? user.id : null,
-            active: true,
-          });
-        } else {
-          row.deletedAt = null as any;
-          row.active = true;
-          row.amount = amount;
-          if (input.delivered !== undefined) {
-            const next = !!input.delivered;
-            if (next && !row.delivered) {
-              row.delivered = true;
-              row.deliveredAt = new Date();
-              row.deliveredByUserId = user.id;
-            } else if (!next && row.delivered) {
-              row.delivered = false;
-              row.deliveredAt = null;
-              row.deliveredByUserId = null;
+      day.cashAmount = money(cash);
+      day.transferAmount = money(transfer);
+      day.ticketsAmount = money(tickets);
+      day.receipts = receipts.length ? receipts : null;
+      day.totalAmount = money(total);
+      if (dto.notes !== undefined) day.notes = dto.notes?.trim() || null;
+      if (dto.closingId !== undefined) day.closingId = dto.closingId || null;
+      await tipDaysRepo.save(day);
+
+      if (dto.allocations !== undefined) {
+        const existing = await allocationsRepo.find({
+          where: { tipDayId: day.id },
+          withDeleted: true,
+        });
+        const byEmp = new Map(existing.map((a) => [a.employeeId, a]));
+        const keep = new Set(allocInputs.map((a) => a.employeeId));
+
+        for (const input of allocInputs) {
+          let row = byEmp.get(input.employeeId);
+          const amount = money(Math.max(0, n(input.amount)));
+          if (!row) {
+            row = allocationsRepo.create({
+              tipDayId: day.id,
+              employeeId: input.employeeId,
+              amount,
+              delivered: !!input.delivered,
+              deliveredAt: input.delivered ? new Date() : null,
+              deliveredByUserId: input.delivered ? user.id : null,
+              active: true,
+            });
+          } else {
+            row.deletedAt = null as any;
+            row.active = true;
+            row.amount = amount;
+            if (input.delivered !== undefined) {
+              const next = !!input.delivered;
+              if (next && !row.delivered) {
+                row.delivered = true;
+                row.deliveredAt = new Date();
+                row.deliveredByUserId = user.id;
+              } else if (!next && row.delivered) {
+                row.delivered = false;
+                row.deliveredAt = null;
+                row.deliveredByUserId = null;
+              }
             }
           }
+          await allocationsRepo.save(row);
         }
-        await this.allocations.save(row);
+
+        for (const row of existing) {
+          if (!keep.has(row.employeeId) && isEntityActive(row.active) && !row.deletedAt) {
+            row.active = false;
+            await allocationsRepo.softRemove(row);
+          }
+        }
       }
 
-      for (const row of existing) {
-        if (!keep.has(row.employeeId) && isEntityActive(row.active) && !row.deletedAt) {
-          row.active = false;
-          await this.allocations.softRemove(row);
-        }
-      }
-    }
-
-    // Sync tipsAmount on closing of same day if linked or found
-    await this.syncClosingTipsAmount(shopId, businessDate, total, day);
+      // Sync tipsAmount on closing of same day if linked or found
+      await this.syncClosingTipsAmount(shopId, businessDate, total, day, manager);
+    });
 
     return this.getByDate(user, shopId, businessDate);
   }
@@ -409,17 +417,19 @@ export class TipsService implements OnModuleInit {
     businessDate: string,
     total: number,
     day: TipDay,
+    manager?: EntityManager,
   ) {
-    const closing = await this.closings.findOne({
+    const closings = repoFor(this.closings, manager);
+    const closing = await closings.findOne({
       where: { shopId, businessDate, active: true },
       order: { createdAt: 'DESC' },
     });
     if (!closing) return;
     closing.tipsAmount = money(total);
-    await this.closings.save(closing);
+    await closings.save(closing);
     if (!day.closingId) {
       day.closingId = closing.id;
-      await this.tipDays.save(day);
+      await repoFor(this.tipDays, manager).save(day);
     }
   }
 
