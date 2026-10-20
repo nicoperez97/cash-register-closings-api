@@ -10,7 +10,10 @@ RUN apt-get update \
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY . .
-RUN npm run build \
+# tsc necesita ~550 MB (tipos de TypeORM, Sentry/OpenTelemetry, Nest). En Lightsail
+# el tope por defecto de Node queda en ~450 MB y el build moría por heap. Solo
+# aplica a esta etapa; el runtime no hereda la variable.
+RUN NODE_OPTIONS=--max-old-space-size=1024 npm run build \
  && npm prune --omit=dev
 
 FROM node:22-bookworm-slim AS runtime
