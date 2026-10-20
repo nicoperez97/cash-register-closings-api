@@ -13,6 +13,15 @@ import { PosProduct } from '../../entities/pos-product.entity';
 import { PosSaleTicketLine } from '../../entities/pos-sale-ticket-line.entity';
 import { normalizeShopMenus } from '../menu/menu-parse.util';
 import { ShopsService } from '../shops/shops.service';
+import { UserShop } from '../../entities/user-shop.entity';
+import { GlobalRole } from '../../common/enums';
+import { isGlobalAdmin } from '../../common/guards';
+import { reportVisibilityForLink } from '../../common/reports-visibility';
+import {
+  normalizeReportsProductsVisibility,
+  ReportsProductsVisibility,
+} from '../../common/reports-products-visibility';
+import { redactSalesProductsSummary } from './sales-products-analytics.service';
 import type {
   SalesCategoryRow,
   SalesDayRow,
@@ -78,8 +87,21 @@ export class MenuSalesAnalyticsService {
     private readonly posLines: Repository<PosSaleTicketLine>,
     @InjectRepository(PosCategory)
     private readonly categories: Repository<PosCategory>,
+    @InjectRepository(UserShop)
+    private readonly userShops: Repository<UserShop>,
     private readonly shops: ShopsService,
   ) {}
+
+  /** Config de Reportes · Ventas del usuario en el local, como la de Ventas POS. */
+  private async salesVisibility(user: AuthUser, shopId: string): Promise<ReportsProductsVisibility> {
+    const link = await this.userShops.findOne({ where: { userId: user.id, shopId } });
+    const v = reportVisibilityForLink(
+      'sales',
+      isGlobalAdmin(user.globalRole as GlobalRole),
+      link?.reportsVisibility,
+    );
+    return normalizeReportsProductsVisibility({ ...v, import: false });
+  }
 
   async posLinkedPreview(
     user: AuthUser,
@@ -169,6 +191,14 @@ export class MenuSalesAnalyticsService {
     filters: SalesProductsFilters,
   ): Promise<SalesProductsSummary> {
     this.shops.assertShopAccess(user, shopId);
+    const full = await this.buildSummary(shopId, filters);
+    return redactSalesProductsSummary(full, await this.salesVisibility(user, shopId));
+  }
+
+  private async buildSummary(
+    shopId: string,
+    filters: SalesProductsFilters,
+  ): Promise<SalesProductsSummary> {
     const shop = await this.shops.getShopEntity(shopId);
     const tz = shop?.timezone ?? null;
 

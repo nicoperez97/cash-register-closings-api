@@ -51,6 +51,7 @@ import {
 } from '../../common/ordering-config-visibility';
 import { normalizeShopConfigVisibility } from '../../common/shop-config-visibility';
 import { normalizeReportsProductsVisibility } from '../../common/reports-products-visibility';
+import { normalizeReportsVisibility } from '../../common/reports-visibility';
 import { closingDateKey } from '../../common/soft-delete.util';
 import { saveUploadFile } from '../../common/uploads';
 import {
@@ -1064,6 +1065,9 @@ export class AuthService implements OnModuleInit {
         ),
         reportsProductsVisibility: normalizeReportsProductsVisibility(
           link?.reportsProductsVisibility as Partial<Record<string, unknown>> | null,
+        ),
+        reportsVisibility: normalizeReportsVisibility(
+          link?.reportsVisibility as Record<string, unknown> | null,
         ),
         canEditExpenses: !!link?.canEditExpenses,
         canEditPayments: !!link?.canEditPayments,

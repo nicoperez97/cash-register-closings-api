@@ -139,6 +139,16 @@ class CreateUserDto {
   @IsOptional()
   @IsObject()
   reportsProductsVisibility?: Record<string, unknown> | null;
+
+  @ApiPropertyOptional({
+    description:
+      'Visibilidad por reporte: { closings, concepts, sales, stats } con flags booleanos (+ amountMode en sales)',
+    type: 'object',
+    additionalProperties: true,
+  })
+  @IsOptional()
+  @IsObject()
+  reportsVisibility?: Record<string, unknown> | null;
   @ApiPropertyOptional({
     description: 'Si es true, puede editar y borrar gastos (solo lo asigna un super admin)',
   })
@@ -261,6 +271,16 @@ class UpdateUserDto {
   @IsOptional()
   @IsObject()
   reportsProductsVisibility?: Record<string, unknown> | null;
+
+  @ApiPropertyOptional({
+    description:
+      'Visibilidad por reporte: { closings, concepts, sales, stats } con flags booleanos (+ amountMode en sales)',
+    type: 'object',
+    additionalProperties: true,
+  })
+  @IsOptional()
+  @IsObject()
+  reportsVisibility?: Record<string, unknown> | null;
   @ApiPropertyOptional({
     description: 'Si es true, puede editar y borrar gastos (solo lo asigna un super admin)',
   })
