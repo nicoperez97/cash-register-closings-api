@@ -92,6 +92,13 @@ export class UserShop {
   @Column({ type: 'json', nullable: true })
   reportsProductsVisibility?: Record<string, string | boolean> | null;
 
+  /**
+   * Visibilidad granular de Cierres, Conceptos, Ventas (carta) y Estadísticas.
+   * { closings: {...}, concepts: {...}, sales: {...}, stats: {...} } — ver common/reports-visibility.
+   */
+  @Column({ type: 'json', nullable: true })
+  reportsVisibility?: Record<string, Record<string, string | boolean>> | null;
+
   /** Super admin le habilitó editar y borrar gastos de este local. */
   @Column({ default: false })
   canEditExpenses: boolean;

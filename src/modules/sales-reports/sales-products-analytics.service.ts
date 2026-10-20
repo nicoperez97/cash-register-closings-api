@@ -200,95 +200,8 @@ export class SalesProductsAnalyticsService {
     if (!v.import) throw new ForbiddenException('Sin permiso para importar Ventas POS');
   }
 
-  private redactSummary(
-    summary: SalesProductsSummary,
-    v: ReportsProductsVisibility,
-  ): SalesProductsSummary {
-    const seeAmount = canSeeAmount(v);
-    const seeQty = canSeeQty(v);
-    const redactMoney = (row: Record<string, unknown>): Record<string, unknown> => {
-      const next: Record<string, unknown> = { ...row };
-      if (!seeAmount) {
-        if ('amount' in next) next['amount'] = 0;
-        if ('avgTicketAmount' in next) next['avgTicketAmount'] = 0;
-        if ('ticketContribution' in next) next['ticketContribution'] = 0;
-        if ('share' in next) next['share'] = 0;
-        if ('maxTicketAmount' in next) next['maxTicketAmount'] = 0;
-        if ('minTicketAmount' in next) next['minTicketAmount'] = 0;
-        if ('top10Share' in next) next['top10Share'] = 0;
-        if ('amountDeltaPct' in next) next['amountDeltaPct'] = null;
-        if ('previousAmount' in next) next['previousAmount'] = 0;
-        if ('deltaPct' in next) next['deltaPct'] = null;
-        if ('cumulativeShare' in next) next['cumulativeShare'] = 0;
-      }
-      if (!seeQty) {
-        if ('qty' in next) next['qty'] = 0;
-        if ('dishesPerTicket' in next) next['dishesPerTicket'] = 0;
-      }
-      return next;
-    };
-
-    const products = v.tabProducts
-      ? summary.products.map((r) => redactMoney({ ...r }) as unknown as SalesProductRow)
-      : [];
-    const categories = v.tabCategories
-      ? summary.categories.map((r) => redactMoney({ ...r }) as unknown as SalesCategoryRow)
-      : [];
-    const subcategories = v.tabCategories
-      ? summary.subcategories.map((r) => redactMoney({ ...r }) as unknown as SalesSubcategoryRow)
-      : [];
-    const byDay = v.tabDays
-      ? summary.byDay.map((r) => redactMoney({ ...r }) as unknown as SalesDayRow)
-      : [];
-    const byPayment = v.charts
-      ? summary.byPayment.map((r) => redactMoney({ ...r }) as unknown as SalesPaymentRow)
-      : [];
-    const pareto = v.charts
-      ? summary.pareto.map((r) =>
-          seeAmount
-            ? r
-            : { ...r, amount: 0, cumulativeShare: 0 },
-        )
-      : [];
-    const categoryByDay = v.charts
-      ? summary.categoryByDay.map((r) => (seeAmount ? r : { ...r, amount: 0 }))
-      : [];
-    const sameWeekdayCompare = v.charts
-      ? summary.sameWeekdayCompare.map((r) =>
-          seeAmount
-            ? r
-            : { ...r, amount: 0, previousAmount: 0, deltaPct: null },
-        )
-      : [];
-
-    const totals = redactMoney({
-      ...summary.totals,
-    }) as unknown as SalesProductsSummary['totals'];
-
-    return {
-      ...summary,
-      totals: v.kpis
-        ? totals
-        : {
-            ...totals,
-            qty: 0,
-            amount: 0,
-            avgTicketAmount: 0,
-            maxTicketAmount: 0,
-            minTicketAmount: 0,
-            dishesPerTicket: 0,
-            top10Share: 0,
-            amountDeltaPct: null,
-          },
-      products,
-      categories,
-      subcategories,
-      byDay,
-      byPayment,
-      pareto,
-      categoryByDay,
-      sameWeekdayCompare,
-    };
+  private redactSummary(summary: SalesProductsSummary, v: ReportsProductsVisibility): SalesProductsSummary {
+    return redactSalesProductsSummary(summary, v);
   }
 
   async summary(
@@ -1219,3 +1132,98 @@ export function parseSalesProductsFilters(
     posMenuItemIds,
   };
 }
+
+/**
+ * Borra en el servidor lo que la config de visibilidad no deja ver (secciones y
+ * importe/cantidad). La usan Ventas POS y Ventas de carta.
+ */
+export function redactSalesProductsSummary(
+  summary: SalesProductsSummary,
+  v: ReportsProductsVisibility,
+): SalesProductsSummary {
+    const seeAmount = canSeeAmount(v);
+    const seeQty = canSeeQty(v);
+    const redactMoney = (row: Record<string, unknown>): Record<string, unknown> => {
+      const next: Record<string, unknown> = { ...row };
+      if (!seeAmount) {
+        if ('amount' in next) next['amount'] = 0;
+        if ('avgTicketAmount' in next) next['avgTicketAmount'] = 0;
+        if ('ticketContribution' in next) next['ticketContribution'] = 0;
+        if ('share' in next) next['share'] = 0;
+        if ('maxTicketAmount' in next) next['maxTicketAmount'] = 0;
+        if ('minTicketAmount' in next) next['minTicketAmount'] = 0;
+        if ('top10Share' in next) next['top10Share'] = 0;
+        if ('amountDeltaPct' in next) next['amountDeltaPct'] = null;
+        if ('previousAmount' in next) next['previousAmount'] = 0;
+        if ('deltaPct' in next) next['deltaPct'] = null;
+        if ('cumulativeShare' in next) next['cumulativeShare'] = 0;
+      }
+      if (!seeQty) {
+        if ('qty' in next) next['qty'] = 0;
+        if ('dishesPerTicket' in next) next['dishesPerTicket'] = 0;
+      }
+      return next;
+    };
+
+    const products = v.tabProducts
+      ? summary.products.map((r) => redactMoney({ ...r }) as unknown as SalesProductRow)
+      : [];
+    const categories = v.tabCategories
+      ? summary.categories.map((r) => redactMoney({ ...r }) as unknown as SalesCategoryRow)
+      : [];
+    const subcategories = v.tabCategories
+      ? summary.subcategories.map((r) => redactMoney({ ...r }) as unknown as SalesSubcategoryRow)
+      : [];
+    const byDay = v.tabDays
+      ? summary.byDay.map((r) => redactMoney({ ...r }) as unknown as SalesDayRow)
+      : [];
+    const byPayment = v.charts
+      ? summary.byPayment.map((r) => redactMoney({ ...r }) as unknown as SalesPaymentRow)
+      : [];
+    const pareto = v.charts
+      ? summary.pareto.map((r) =>
+          seeAmount
+            ? r
+            : { ...r, amount: 0, cumulativeShare: 0 },
+        )
+      : [];
+    const categoryByDay = v.charts
+      ? summary.categoryByDay.map((r) => (seeAmount ? r : { ...r, amount: 0 }))
+      : [];
+    const sameWeekdayCompare = v.charts
+      ? summary.sameWeekdayCompare.map((r) =>
+          seeAmount
+            ? r
+            : { ...r, amount: 0, previousAmount: 0, deltaPct: null },
+        )
+      : [];
+
+    const totals = redactMoney({
+      ...summary.totals,
+    }) as unknown as SalesProductsSummary['totals'];
+
+    return {
+      ...summary,
+      totals: v.kpis
+        ? totals
+        : {
+            ...totals,
+            qty: 0,
+            amount: 0,
+            avgTicketAmount: 0,
+            maxTicketAmount: 0,
+            minTicketAmount: 0,
+            dishesPerTicket: 0,
+            top10Share: 0,
+            amountDeltaPct: null,
+          },
+      products,
+      categories,
+      subcategories,
+      byDay,
+      byPayment,
+      pareto,
+      categoryByDay,
+      sameWeekdayCompare,
+    };
+  }

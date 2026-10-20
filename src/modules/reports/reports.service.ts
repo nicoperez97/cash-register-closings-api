@@ -13,6 +13,14 @@ import { PayrollService } from '../payroll/payroll.service';
 import { SalesProductsAnalyticsService } from '../sales-reports/sales-products-analytics.service';
 import { ReservationsService } from '../reservations/reservations.service';
 import { TipsService } from '../tips/tips.service';
+import { UserShop } from '../../entities/user-shop.entity';
+import { GlobalRole } from '../../common/enums';
+import { isGlobalAdmin } from '../../common/guards';
+import {
+  ReportKey,
+  ReportVisibility,
+  reportVisibilityForLink,
+} from '../../common/reports-visibility';
 import { AuthUser } from '../../common/decorators';
 import { closingStatusLabel } from '../../common/labels.es';
 import {
@@ -62,7 +70,21 @@ export class ReportsService {
     private readonly salesProducts: SalesProductsAnalyticsService,
     private readonly reservations: ReservationsService,
     private readonly tips: TipsService,
+    @InjectRepository(UserShop) private readonly userShops: Repository<UserShop>,
   ) {}
+
+  /** Config del usuario para un reporte (Usuarios → Reportes · … → Configurar). */
+  private async reportVisibility<K extends ReportKey>(
+    user: AuthUser,
+    shopId: string,
+    key: K,
+  ): Promise<ReportVisibility<K>> {
+    if (isGlobalAdmin(user.globalRole as GlobalRole)) {
+      return reportVisibilityForLink(key, true, null);
+    }
+    const link = await this.userShops.findOne({ where: { userId: user.id, shopId } });
+    return reportVisibilityForLink(key, false, link?.reportsVisibility);
+  }
 
   private async filteredRows(shopId: string, filters: ClosingListFilters) {
     const qb = this.closings
@@ -113,6 +135,40 @@ export class ReportsService {
    * Solo lectura; el import POS no escribe aquí ni en cierres/saldos.
    */
   async dashboard(user: AuthUser, shopId: string, filters: ClosingListFilters) {
+    const data = await this.dashboardFull(user, shopId, filters);
+    const v = await this.reportVisibility(user, shopId, 'stats');
+    if (!data.closings) return data;
+    const zero = <T extends object>(o: T): T =>
+      Object.fromEntries(
+        Object.entries(o).map(([k, val]) => [k, typeof val === 'number' ? 0 : val]),
+      ) as T;
+    // Las series diarias alimentan gráficos y el detalle diario: se borran solo sin ninguno.
+    const keepDays = v.charts || v.daily;
+    return {
+      ...data,
+      closings: {
+        ...data.closings,
+        totals: v.kpis ? data.closings.totals : zero(data.closings.totals),
+        byDay: keepDays ? data.closings.byDay : [],
+      },
+      pos: {
+        ...data.pos,
+        totals: v.kpis ? data.pos.totals : zero(data.pos.totals),
+        byDay: keepDays ? data.pos.byDay : [],
+      },
+      tips: {
+        ...data.tips,
+        totals: v.kpis ? data.tips.totals : zero(data.tips.totals),
+        byDay: keepDays ? data.tips.byDay : [],
+        byEmployee: v.tips ? data.tips.byEmployee : [],
+      },
+      comparison: v.kpis ? data.comparison : null,
+      paymentMix: v.charts ? data.paymentMix : null,
+      weekday: v.charts ? data.weekday : null,
+    };
+  }
+
+  private async dashboardFull(user: AuthUser, shopId: string, filters: ClosingListFilters) {
     this.shops.assertShopAccess(user, shopId);
     const from = filters.from;
     const to = filters.to;
@@ -333,17 +389,21 @@ export class ReportsService {
     });
 
     const totals = this.closingRowTotals(rows);
+    const v = await this.reportVisibility(user, shopId, 'closings');
+    const zeroTotals = Object.fromEntries(
+      Object.entries(totals).map(([k, val]) => [k, typeof val === 'number' ? 0 : val]),
+    ) as typeof totals;
 
     return {
       shopId,
       from: filters.from ?? null,
       to: filters.to ?? null,
-      count: rows.length,
-      totals,
-      expensesTotal: expensesByConcept.total,
-      expensesByConcept: expensesByConcept.items.slice(0, 15),
-      accountBalances: balances.accounts,
-      days: rows.map((r) => ({
+      count: v.kpis || v.detail ? rows.length : 0,
+      totals: v.kpis ? totals : zeroTotals,
+      expensesTotal: v.kpis || v.expenses ? expensesByConcept.total : 0,
+      expensesByConcept: v.expenses ? expensesByConcept.items.slice(0, 15) : [],
+      accountBalances: v.kpis ? balances.accounts : [],
+      days: (v.detail ? rows : []).map((r) => ({
         id: r.id,
         businessDate: r.businessDate,
         kind: r.kind ?? 'REGULAR',
@@ -376,6 +436,33 @@ export class ReportsService {
   }
 
   async conceptsAnalytics(
+    user: AuthUser,
+    shopId: string,
+    filters: {
+      from?: string;
+      to?: string;
+      kind?: 'INCOME' | 'EXPENSE' | 'TRANSFER';
+      conceptId?: string;
+    },
+  ) {
+    const data = await this.conceptsAnalyticsFull(user, shopId, filters);
+    const v = await this.reportVisibility(user, shopId, 'concepts');
+    // Un dato se borra solo si ninguna sección visible lo usa.
+    return {
+      ...data,
+      comparison: v.kpis ? data.comparison : null,
+      totals: v.kpis
+        ? data.totals
+        : (Object.fromEntries(
+            Object.entries(data.totals).map(([k, val]) => [k, typeof val === 'number' ? 0 : val]),
+          ) as typeof data.totals),
+      byKind: v.kpis || v.charts ? data.byKind : [],
+      byConcept: v.charts || v.tabConcepts ? data.byConcept : [],
+      byDay: v.charts || v.tabDays ? data.byDay : [],
+    };
+  }
+
+  private async conceptsAnalyticsFull(
     user: AuthUser,
     shopId: string,
     filters: {
@@ -463,9 +550,11 @@ export class ReportsService {
     },
   ) {
     const shop = await this.shops.findOne(user, shopId);
+    const v = await this.reportVisibility(user, shopId, 'concepts');
+    if (!v.export) throw new ForbiddenException('Sin permiso para descargar Reportes · Conceptos');
     // Siempre exportamos Ingresos y Egresos separados en tabs: ignoramos el filtro
     // de tipo (mantenemos período y concepto) para que ambos tabs vengan poblados.
-    const data = await this.conceptsAnalytics(user, shopId, {
+    const data = await this.conceptsAnalyticsFull(user, shopId, {
       from: filters.from,
       to: filters.to,
       conceptId: filters.conceptId,
