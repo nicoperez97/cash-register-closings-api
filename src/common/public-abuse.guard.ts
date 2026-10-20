@@ -23,6 +23,8 @@ export class PublicAbuseGuard implements CanActivate {
   private readonly isProd: boolean;
   private readonly allowedOrigins: Set<string>;
   private readonly originStrict: boolean;
+  /** Proxies delante de nginx que agregan su IP a X-Forwarded-For (CloudFront = 1). */
+  private readonly trustedProxyHops: number;
 
   constructor(
     private readonly reflector: Reflector,
@@ -31,6 +33,8 @@ export class PublicAbuseGuard implements CanActivate {
     this.isProd = (this.config.get<string>('environment') ?? 'development') === 'production';
     this.allowedOrigins = this.buildAllowedOrigins();
     this.originStrict = this.allowedOrigins.size > 0;
+    const hops = parseInt(String(process.env.TRUSTED_PROXY_HOPS ?? '1'), 10);
+    this.trustedProxyHops = Number.isFinite(hops) && hops >= 0 ? hops : 1;
   }
 
   canActivate(context: ExecutionContext): boolean {
@@ -69,6 +73,8 @@ export class PublicAbuseGuard implements CanActivate {
     const isPublicApi = path.includes('/public/');
     const isLogin = path.endsWith('/auth/login') && method === 'POST';
     const isDemoLogin = path.endsWith('/auth/demo') && method === 'POST';
+    const isWaiterLogin =
+      isPublicApi && method === 'POST' && /\/waiter\/login$/.test(path);
     const isAttendanceCheckIn =
       isPublicApi && method === 'POST' && path.includes('/attendance/check-in');
     const isReserve =
@@ -88,6 +94,15 @@ export class PublicAbuseGuard implements CanActivate {
       this.hit(`login:${ip}`, 8, 60_000, 'Demasiados intentos de ingreso. Probá en un minuto.');
     } else if (isDemoLogin) {
       this.hit(`demo:${ip}`, 12, 60_000, 'Demasiados ingresos a la demo. Probá en un minuto.');
+    } else if (isWaiterLogin) {
+      // PIN de 4 dígitos: límite por IP y por local para que no se pueda barrer.
+      this.hit(`waiter-login:${ip}`, 8, 60_000, 'Demasiados intentos de PIN. Probá en un minuto.');
+      this.hit(
+        `waiter-login-shop:${this.pathKey(path)}`,
+        60,
+        10 * 60_000,
+        'Demasiados intentos de PIN en este local. Esperá unos minutos.',
+      );
     } else if (isAttendanceCheckIn) {
       this.hit(
         `att-checkin:${ip}`,
@@ -223,14 +238,11 @@ export class PublicAbuseGuard implements CanActivate {
     ip?: string;
     socket?: { remoteAddress?: string };
   }): string {
-    const forwarded = this.header(req, 'x-forwarded-for');
-    if (forwarded) {
-      const first = forwarded.split(',')[0]?.trim();
-      if (first) return first.slice(0, 64);
-    }
-    const real = this.header(req, 'x-real-ip');
-    if (real) return real.slice(0, 64);
-    return String(req.ip || req.socket?.remoteAddress || 'unknown').slice(0, 64);
+    return clientIpFromForwarded(
+      this.header(req, 'x-forwarded-for'),
+      this.trustedProxyHops,
+      String(req.ip || req.socket?.remoteAddress || 'unknown'),
+    );
   }
 
   private hit(key: string, max: number, windowMs: number, message: string): void {
@@ -291,4 +303,23 @@ export class PublicAbuseGuard implements CanActivate {
     }
     return v;
   }
+}
+
+/**
+ * IP del cliente detrás de proxies. nginx agrega `$remote_addr` (el proxy anterior)
+ * al final de X-Forwarded-For; lo que esté a la izquierda de los proxies confiables
+ * lo puede inventar el cliente, así que se cuenta desde la derecha.
+ */
+export function clientIpFromForwarded(
+  forwarded: string,
+  trustedProxyHops: number,
+  fallback: string,
+): string {
+  const chain = String(forwarded ?? '')
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (!chain.length) return fallback.slice(0, 64);
+  const idx = Math.max(0, chain.length - 1 - trustedProxyHops);
+  return chain[idx].slice(0, 64);
 }

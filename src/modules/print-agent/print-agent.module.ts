@@ -9,6 +9,7 @@ import {
   ShopPrintAgentController,
   AdminPrintAgentInstallerController,
 } from './print-agent.controller';
+import { PrintAgentLiveService } from './print-agent-live.service';
 import { PrintAgentService } from './print-agent.service';
 
 @Module({
@@ -22,7 +23,7 @@ import { PrintAgentService } from './print-agent.service';
     ShopPrintAgentController,
     AdminPrintAgentInstallerController,
   ],
-  providers: [PrintAgentService],
+  providers: [PrintAgentService, PrintAgentLiveService],
   exports: [PrintAgentService],
 })
 export class PrintAgentModule {}

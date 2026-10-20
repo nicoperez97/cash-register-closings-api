@@ -20,6 +20,7 @@ export default () => {
       password: env.DB_PASSWORD ?? 'root',
       synchronize: (env.DB_SYNC ?? (isProd ? 'false' : 'true')) === 'true',
       autoLoadEntities: true,
+      slowQueryMs: Math.max(100, parseInt(env.DB_SLOW_QUERY_MS ?? '1000', 10) || 1000),
     },
     cors: {
       // Coma-separado: localhost + CloudFront + dominio custom

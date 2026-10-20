@@ -1,4 +1,4 @@
-import { Column, Entity, JoinColumn, ManyToOne } from 'typeorm';
+import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 import { BaseEntity } from './base.entity';
 import { Shop } from './shop.entity';
 import { LedgerAccount } from './ledger-account.entity';
@@ -8,6 +8,9 @@ import { Employee } from './employee.entity';
 import { User } from './user.entity';
 
 @Entity({ name: 'movements' })
+// Listado y reportes filtran por local + rango de fechas y ordenan por createdAt.
+@Index('idx_movements_shop_business_date', ['shopId', 'businessDate'])
+@Index('idx_movements_shop_created', ['shopId', 'createdAt'])
 export class Movement extends BaseEntity {
   @Column()
   shopId: string;

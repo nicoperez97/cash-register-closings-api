@@ -2,11 +2,14 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   Headers,
+  MessageEvent,
   Param,
   Post,
   Query,
   Res,
+  Sse,
   UploadedFile,
   UseGuards,
   UseInterceptors,
@@ -17,6 +20,7 @@ import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import type { Response } from 'express';
 import { memoryStorage } from 'multer';
+import { Observable } from 'rxjs';
 import {
   AuthUser,
   CurrentUser,
@@ -25,12 +29,16 @@ import {
   RequirePermissions,
 } from '../../common/decorators';
 import { PermissionsGuard } from '../../common/guards';
+import { PrintAgentLiveService } from './print-agent-live.service';
 import { PrintAgentService } from './print-agent.service';
 
 @ApiTags('print-agent')
 @Controller('print-agent')
 export class PrintAgentController {
-  constructor(private readonly service: PrintAgentService) {}
+  constructor(
+    private readonly service: PrintAgentService,
+    private readonly agentLive: PrintAgentLiveService,
+  ) {}
 
   @Public()
   @Get('session')
@@ -54,6 +62,24 @@ export class PrintAgentController {
     return this.service
       .resolveShopFromToken(authorization)
       .then((shop) => this.service.listPendingJobs(shop));
+  }
+
+  /**
+   * SSE para el agente: `jobs` cuando se encola algo del local, `ping` cada 25 s.
+   * El agente sigue pidiendo GET jobs para reservar; esto solo le avisa cuándo.
+   * Cuenta una vez en el bucket print-agent del PublicAbuseGuard (al conectar).
+   */
+  @Public()
+  @Sse('events')
+  @Header('Cache-Control', 'no-cache, no-transform')
+  @Header('Connection', 'keep-alive')
+  @Header('X-Accel-Buffering', 'no')
+  async events(
+    @Headers('authorization') authorization?: string,
+  ): Promise<Observable<MessageEvent>> {
+    // Token validado antes de abrir el stream: inválido = 401 normal, no evento de error.
+    const shop = await this.service.resolveShopFromToken(authorization);
+    return this.agentLive.stream(shop.id);
   }
 
   @Public()

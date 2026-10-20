@@ -57,6 +57,13 @@ services:
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GROQ_MODEL: ${GROQ_MODEL:-qwen/qwen3.8-27b}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      # CloudFront -> nginx -> api: 1 proxy antes de nginx en X-Forwarded-For.
+      TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}
+      SWAGGER_ENABLED: ${SWAGGER_ENABLED:-false}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0}
+      DB_SLOW_QUERY_MS: ${DB_SLOW_QUERY_MS:-1000}
+      SLOW_REQUEST_MS: ${SLOW_REQUEST_MS:-2000}
     volumes:
       - uploads-data:/app/uploads
     networks:

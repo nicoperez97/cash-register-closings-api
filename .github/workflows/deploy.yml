@@ -36,6 +36,10 @@ jobs:
       - name: Instalar dependencias
         run: npm ci --no-audit --no-fund
 
+      # Unit + e2e con mocks (sin DB). Si falla, no se despliega.
+      - name: Tests
+        run: npm test -- --ci
+
       - name: Compilar NestJS
         run: npm run build
 

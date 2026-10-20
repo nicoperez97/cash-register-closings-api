@@ -7,7 +7,7 @@ import {
   StreamableFile,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository, SelectQueryBuilder } from 'typeorm';
+import { EntityManager, In, Repository, SelectQueryBuilder } from 'typeorm';
 import { createReadStream } from 'fs';
 import * as ExcelJS from 'exceljs';
 import { Payment } from '../../entities/payment.entity';
@@ -31,6 +31,7 @@ import { deletePaymentUploads, deleteUploadIfExists, resolveUploadPath, saveUplo
 import { ocrAndParseInvoice, ParsedInvoice } from './invoice-ocr.parser';
 import { GeminiDocumentService } from '../ai/gemini-document.service';
 import { formatMoney } from '../../common/format-money';
+import { moneyTransaction } from '../../common/transaction';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
@@ -575,6 +576,19 @@ export class PaymentsService implements OnModuleInit {
 
   /** Actualiza o recrea el movimiento del pago abonado. */
   private async syncPaidMovement(user: AuthUser, shopId: string, payment: Payment) {
+    // Egreso + link del pago en una transacción: no queda un movimiento huérfano
+    // (sin movementId en el pago) ni un pago apuntando a uno que no se creó.
+    await moneyTransaction(this.payments.manager, (manager) =>
+      this.syncPaidMovementTx(user, shopId, payment, manager),
+    );
+  }
+
+  private async syncPaidMovementTx(
+    user: AuthUser,
+    shopId: string,
+    payment: Payment,
+    manager: EntityManager,
+  ) {
     if (!payment.accountId) {
       throw new BadRequestException('Indicá la cuenta con la que se paga');
     }
@@ -630,6 +644,7 @@ export class PaymentsService implements OnModuleInit {
         try {
           await this.movements.update(user, shopId, payment.movementId, payload, {
             fromPayment: true,
+            manager,
           });
           return true;
         } catch (err) {
@@ -637,10 +652,14 @@ export class PaymentsService implements OnModuleInit {
           // movimiento borrado → recrear
         }
       }
-      const movement = await this.movements.create(user, shopId, payload, { fromPayment: true });
+      const movement = await this.movements.create(user, shopId, payload, {
+        fromPayment: true,
+        manager,
+      });
       // Solo tocar movementId/paidAt por SQL: un save() de la entidad cargada
       // puede pisar accountId con la relación vieja.
-      await this.payments
+      await manager
+        .getRepository(Payment)
         .createQueryBuilder()
         .update(Payment)
         .set({ movementId: movement.id, paidAt })
@@ -1654,28 +1673,31 @@ export class PaymentsService implements OnModuleInit {
 
     const destAccountId = await this.resolvePaidDestinationAccountId(shopId, row);
 
-    // Claim atómico: evita doble egreso por doble clic / reintento.
-    const claim = await this.payments
-      .createQueryBuilder()
-      .update(Payment)
-      .set({
-        status: PaymentStatus.PAID,
-        paidAt,
-        accountId,
-        paymentMethod,
-        ...(isPartial ? { amount: money(payAmount) } : {}),
-      })
-      .where('id = :id AND shopId = :shopId AND status = :st AND active = true', {
-        id,
-        shopId,
-        st: PaymentStatus.VALIDATED,
-      })
-      .execute();
-    if (!claim.affected) {
-      throw new BadRequestException('El pago ya fue abonado o cambió de estado');
-    }
+    // Claim + egreso + link + saldo pendiente en una sola transacción: si algo falla
+    // no queda el pago PAID sin movimiento. El UPDATE condicional bloquea la fila,
+    // así un doble clic espera al primero y después ve PAID (affected = 0).
+    await moneyTransaction(this.payments.manager, async (manager) => {
+      const paymentsRepo = manager.getRepository(Payment);
+      const claim = await paymentsRepo
+        .createQueryBuilder()
+        .update(Payment)
+        .set({
+          status: PaymentStatus.PAID,
+          paidAt,
+          accountId,
+          paymentMethod,
+          ...(isPartial ? { amount: money(payAmount) } : {}),
+        })
+        .where('id = :id AND shopId = :shopId AND status = :st AND active = true', {
+          id,
+          shopId,
+          st: PaymentStatus.VALIDATED,
+        })
+        .execute();
+      if (!claim.affected) {
+        throw new BadRequestException('El pago ya fue abonado o cambió de estado');
+      }
 
-    try {
       const isDividendPay = !!row.isDividend && !!row.toAccountId;
       const createPayload: {
         businessDate: string;
@@ -1729,6 +1751,7 @@ export class PaymentsService implements OnModuleInit {
       try {
         movement = await this.movements.create(user, shopId, createPayload, {
           fromPayment: true,
+          manager,
         });
       } catch (err) {
         const msg = String((err as Error)?.message ?? err);
@@ -1737,14 +1760,14 @@ export class PaymentsService implements OnModuleInit {
             user,
             shopId,
             { ...createPayload, fromUserId: null },
-            { fromPayment: true },
+            { fromPayment: true, manager },
           );
         } else {
           throw err;
         }
       }
 
-      await this.payments
+      await paymentsRepo
         .createQueryBuilder()
         .update(Payment)
         .set({ movementId: movement.id })
@@ -1758,8 +1781,8 @@ export class PaymentsService implements OnModuleInit {
         ]
           .filter(Boolean)
           .join(' · ');
-        await this.payments.save(
-          this.payments.create({
+        await paymentsRepo.save(
+          paymentsRepo.create({
             shopId,
             title: row.title ?? null,
             notes: debtNotes || null,
@@ -1784,20 +1807,7 @@ export class PaymentsService implements OnModuleInit {
           }),
         );
       }
-    } catch (err) {
-      await this.payments.update(
-        { id, shopId },
-        {
-          status: PaymentStatus.VALIDATED,
-          paidAt: null,
-          movementId: null,
-          accountId: row.accountId ?? null,
-          paymentMethod: row.paymentMethod ?? null,
-          amount: row.amount ?? null,
-        },
-      );
-      throw err;
-    }
+    });
 
     void this.notifyAdminsPaymentPaid(user, shopId, row, paidAt).catch(() => undefined);
 
@@ -1912,24 +1922,37 @@ export class PaymentsService implements OnModuleInit {
     }
 
     if (row.status === PaymentStatus.PAID) {
-      const movementId = row.movementId;
-      if (movementId) {
-        try {
-          await this.movements.remove(user, shopId, movementId, { fromPayment: true });
-        } catch {
-          // El movimiento puede haberse borrado antes.
+      // Baja del egreso + pago a «por pagar» juntos. El claim condicional (status = PAID)
+      // bloquea la fila: un doble clic no intenta borrar dos veces.
+      await moneyTransaction(this.payments.manager, async (manager) => {
+        const claim = await manager
+          .getRepository(Payment)
+          .createQueryBuilder()
+          .update(Payment)
+          .set({
+            status: PaymentStatus.VALIDATED,
+            paidAt: null,
+            movementId: null,
+          })
+          .where('id = :id AND shopId = :shopId AND status = :st AND active = true', {
+            id,
+            shopId,
+            st: PaymentStatus.PAID,
+          })
+          .execute();
+        if (!claim.affected) {
+          throw new BadRequestException('El pago ya no está abonado');
         }
-      }
-      await this.payments
-        .createQueryBuilder()
-        .update(Payment)
-        .set({
-          status: PaymentStatus.VALIDATED,
-          paidAt: null,
-          movementId: null,
-        })
-        .where('id = :id AND shopId = :shopId', { id, shopId })
-        .execute();
+        const movementId = row.movementId;
+        if (movementId) {
+          try {
+            await this.movements.remove(user, shopId, movementId, { fromPayment: true, manager });
+          } catch (err) {
+            // El movimiento puede haberse borrado antes; cualquier otro error deshace todo.
+            if (!(err instanceof NotFoundException)) throw err;
+          }
+        }
+      });
       return this.toDto(await this.load(shopId, id));
     }
 

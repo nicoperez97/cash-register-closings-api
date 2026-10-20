@@ -46,6 +46,8 @@ export class PermissionsGuard implements CanActivate {
     ]);
     if (isPublic) return true;
 
+    assertDemoReadOnly(context.switchToHttp().getRequest());
+
     const manageUsers = this.reflector.getAllAndOverride<boolean>(MANAGE_USERS_KEY, [
       context.getHandler(),
       context.getClass(),
@@ -104,6 +106,17 @@ export class PermissionsGuard implements CanActivate {
     const ok = required.every((p) => perms.includes(p));
     if (!ok) throw new ForbiddenException('Sin permiso');
     return true;
+  }
+}
+
+const READ_ONLY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+/** Sesión demo (claim isDemo): solo lectura también en la API, no solo en el front. */
+export function assertDemoReadOnly(req: { method?: string; user?: { isDemo?: boolean } }): void {
+  if (!req?.user?.isDemo) return;
+  const method = String(req.method ?? 'GET').toUpperCase();
+  if (!READ_ONLY_METHODS.has(method)) {
+    throw new ForbiddenException('La demo es de solo lectura');
   }
 }
 

@@ -21,6 +21,8 @@ export class DatabaseService implements TypeOrmOptionsFactory {
       // DATE como 'YYYY-MM-DD'. Si mysql2 lo infla a Date UTC, TypeORM lo pasa
       // a hora local y en AR/UY queda el día anterior.
       dateStrings: ['DATE'],
+      // Loguea (warn) las queries que superan este tiempo: para medir antes de optimizar.
+      maxQueryExecutionTime: db.slowQueryMs,
     };
   }
 }

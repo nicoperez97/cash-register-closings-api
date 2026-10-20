@@ -29,6 +29,7 @@ import { AttendanceService } from '../attendance/attendance.service';
 import { countCompletedAttendanceWeeks } from '../../common/shop-open-days';
 import { AttendanceDay } from '../../entities/attendance-day.entity';
 import { ProductionAttendanceDay } from '../../entities/production-attendance-day.entity';
+import { moneyTransaction } from '../../common/transaction';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => v.toFixed(2);
@@ -584,8 +585,6 @@ export class PayrollService implements OnModuleInit {
           )
         : [];
 
-    await this.lines.delete({ periodId: period.id });
-
     const created: PayrollLine[] = [];
     for (const emp of employees) {
       const empDaysAll = days.filter((d) => d.employeeId === emp.id);
@@ -690,7 +689,13 @@ export class PayrollService implements OnModuleInit {
         );
       });
     }
-    if (created.length) await this.lines.save(created);
+    // Borrar y regenerar líneas juntos: si el insert falla no queda la liquidación vacía.
+    const periodId = period.id;
+    await moneyTransaction(this.lines.manager, async (manager) => {
+      const linesRepo = manager.getRepository(PayrollLine);
+      await linesRepo.delete({ periodId });
+      if (created.length) await linesRepo.save(created);
+    });
 
     return this.getByRange(user, shopId, range.from, range.to);
   }

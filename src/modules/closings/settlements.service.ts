@@ -21,6 +21,7 @@ import { ClosingSourceKind, ConceptKind, LedgerAccountType } from '../../common/
 import { accountCommissionOf } from '../../common/account-commission';
 import { addCalendarDays } from '../../common/business-date';
 import { SettleClosingSourcesDto } from './dto/settlement.dto';
+import { moneyTransaction } from '../../common/transaction';
 
 const n = (v?: number | string | null) => Number(v ?? 0);
 
@@ -337,36 +338,55 @@ export class SettlementsService implements OnModuleInit {
     const uniqueClosingIds = [
       ...new Set(rows.map((r) => r.closingId).filter((id): id is string => !!id)),
     ];
-    const movement = await this.movements.create(
-      user,
-      shopId,
-      {
-        businessDate,
-        fromAccountId: ingreso.id,
-        toAccountId: dest.id,
-        description: `Rendición · ${nameSummary}`,
-        amountUyu: total,
-        conceptId: concept?.id ?? fallback?.id ?? null,
-      },
-      { closingId: uniqueClosingIds.length === 1 ? uniqueClosingIds[0] : null },
-    );
-
     const now = new Date();
     const settleBatchId = randomUUID();
     const settledByName = actorDisplayName(user);
-    // Update atómico de todas las filas en un solo statement: evita que queden
-    // "a medias" si fallara a mitad del loop anterior.
-    await this.sourceAmounts.update(
-      { id: In(rows.map((r) => r.id)) },
-      {
-        settledAt: now,
-        settledToAccountId: dest.id,
-        settledByUserId: user.id,
-        settledByName,
-        settlementMovementId: movement.id,
-        settleBatchId,
-      },
-    );
+    const settleIds = rows.map((r) => r.id).sort();
+    // Ingreso + marca de rendido juntos. Las filas se bloquean (FOR UPDATE) y se
+    // re-chequea settledAt: dos rendiciones simultáneas no duplican el ingreso.
+    const movement = await moneyTransaction(this.sourceAmounts.manager, async (manager) => {
+      const sourceRepo = manager.getRepository(ClosingSourceAmount);
+      const locked = await sourceRepo
+        .createQueryBuilder('s')
+        .setLock('pessimistic_write')
+        .where('s.id IN (:...ids)', { ids: settleIds })
+        .andWhere('s.settledAt IS NULL')
+        .orderBy('s.id', 'ASC')
+        .getMany();
+      if (locked.length !== settleIds.length) {
+        throw new BadRequestException(
+          'Una o más rendiciones ya se rindieron. Actualizá la lista.',
+        );
+      }
+      const created = await this.movements.create(
+        user,
+        shopId,
+        {
+          businessDate,
+          fromAccountId: ingreso.id,
+          toAccountId: dest.id,
+          description: `Rendición · ${nameSummary}`,
+          amountUyu: total,
+          conceptId: concept?.id ?? fallback?.id ?? null,
+        },
+        {
+          closingId: uniqueClosingIds.length === 1 ? uniqueClosingIds[0] : null,
+          manager,
+        },
+      );
+      await sourceRepo.update(
+        { id: In(settleIds) },
+        {
+          settledAt: now,
+          settledToAccountId: dest.id,
+          settledByUserId: user.id,
+          settledByName,
+          settlementMovementId: created.id,
+          settleBatchId,
+        },
+      );
+      return created;
+    });
 
     this.logger.log(
       `Rendición ${settleBatchId}: ${rows.length} montos → ${dest.name} ($${total.toFixed(2)})`,

@@ -29,6 +29,7 @@ import {
 import { PrintJob, PrintJobKind, PrintJobStatus } from '../../entities/print-job.entity';
 import { Shop } from '../../entities/shop.entity';
 import { ShopLiveService } from '../shop-live/shop-live.service';
+import { PrintAgentLiveService } from './print-agent-live.service';
 import { ShopsService } from '../shops/shops.service';
 import { normalizeShopMenus, normalizeKitchenSectors, normalizeKitchenSectorIds } from '../menu/menu-parse.util';
 import { normalizeOrderingExtras } from '../../common/shop-ordering';
@@ -435,6 +436,7 @@ export class PrintAgentService implements OnModuleInit {
     @InjectRepository(Shop) private readonly shops: Repository<Shop>,
     private readonly shopsSvc: ShopsService,
     private readonly live: ShopLiveService,
+    private readonly agentLive: PrintAgentLiveService,
   ) {}
 
   async onModuleInit() {
@@ -778,6 +780,7 @@ export class PrintAgentService implements OnModuleInit {
     }
     await this.jobs.save(job);
     this.live.tick(shop.id, 'customer-orders');
+    if (job.status === 'PENDING') this.agentLive.notifyJobs(shop.id);
     return { id: job.id, status: job.status, attempts: job.attempts };
   }
 
@@ -1100,6 +1103,7 @@ export class PrintAgentService implements OnModuleInit {
       }),
     );
     this.live.tick(input.shopId, 'customer-orders');
+    this.agentLive.notifyJobs(input.shopId);
     return job;
   }
 

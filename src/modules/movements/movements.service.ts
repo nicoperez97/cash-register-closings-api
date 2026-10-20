@@ -6,8 +6,9 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { EntityManager, In, Repository } from 'typeorm';
 import { Movement } from '../../entities/movement.entity';
+import { moneyTransaction, repoFor } from '../../common/transaction';
 import { LedgerAccount } from '../../entities/ledger-account.entity';
 import { Concept } from '../../entities/concept.entity';
 import { User } from '../../entities/user.entity';
@@ -839,7 +840,8 @@ export class MovementsService implements OnModuleInit {
     user: AuthUser,
     shopId: string,
     dto: UpsertMovementDto,
-    opts?: { fromPayment?: boolean; closingId?: string | null },
+    /** `manager`: escribir dentro de la transacción del llamador (pago, rendición…). */
+    opts?: { fromPayment?: boolean; closingId?: string | null; manager?: EntityManager },
   ) {
     this.shops.assertShopAccess(user, shopId);
     const kind = dto.isDividend ? 'transfer' : dto.kind;
@@ -982,8 +984,9 @@ export class MovementsService implements OnModuleInit {
           ? dto.amountUyu / dto.usdRate
           : null;
 
-    const row = await this.movements.save(
-      this.movements.create({
+    const movementsRepo = repoFor(this.movements, opts?.manager);
+    const row = await movementsRepo.save(
+      movementsRepo.create({
         shopId,
         businessDate: dto.businessDate,
         fromAccountId,
@@ -1014,7 +1017,7 @@ export class MovementsService implements OnModuleInit {
         active: true,
       }),
     );
-    const created = await this.one(user, shopId, row.id);
+    const created = await this.one(user, shopId, row.id, opts?.manager);
     if (dto.notifyAdmins) {
       void this.notifyAdminsMovementCreated(user, shopId, created).catch(() => undefined);
     }
@@ -1102,9 +1105,9 @@ export class MovementsService implements OnModuleInit {
     };
   }
 
-  async one(user: AuthUser, shopId: string, id: string) {
+  async one(user: AuthUser, shopId: string, id: string, manager?: EntityManager) {
     this.shops.assertShopAccess(user, shopId);
-    const row = await this.movements.findOne({
+    const row = await repoFor(this.movements, manager).findOne({
       where: { id, shopId },
       relations: ['fromAccount', 'toAccount', 'fromUser', 'toUser', 'concept'],
     });
@@ -1122,10 +1125,10 @@ export class MovementsService implements OnModuleInit {
     shopId: string,
     id: string,
     dto: Partial<UpsertMovementDto>,
-    opts?: { fromPayment?: boolean },
+    opts?: { fromPayment?: boolean; manager?: EntityManager },
   ) {
     this.shops.assertShopAccess(user, shopId);
-    const row = await this.movements.findOne({
+    const row = await repoFor(this.movements, opts?.manager).findOne({
       where: { id, shopId },
       relations: ['fromAccount', 'toAccount', 'concept'],
     });
@@ -1310,11 +1313,18 @@ export class MovementsService implements OnModuleInit {
     // pisar fromAccountId/toAccountId/conceptId con el id de la entidad vieja.
     detachRelations(row, ['fromAccount', 'toAccount', 'concept']);
 
-    await this.movements.save(row);
-    if (!opts?.fromPayment) {
-      await this.syncLinkedPayment(shopId, row);
-    }
-    const saved = await this.one(user, shopId, id);
+    // Gasto + pago abonado que lo originó: se actualizan juntos o ninguno.
+    await moneyTransaction(
+      this.movements.manager,
+      async (manager) => {
+        await manager.getRepository(Movement).save(row);
+        if (!opts?.fromPayment) {
+          await this.syncLinkedPayment(shopId, row, manager);
+        }
+      },
+      opts?.manager,
+    );
+    const saved = await this.one(user, shopId, id, opts?.manager);
     if (asExpense || asIncome) {
       await this.notifyMovementChange(
         user,
@@ -1368,10 +1378,16 @@ export class MovementsService implements OnModuleInit {
     user: AuthUser,
     shopId: string,
     id: string,
-    opts?: { fromPayment?: boolean; notifyAdmins?: boolean; notifyUserIds?: string[] },
+    opts?: {
+      fromPayment?: boolean;
+      notifyAdmins?: boolean;
+      notifyUserIds?: string[];
+      manager?: EntityManager;
+    },
   ) {
     this.shops.assertShopAccess(user, shopId);
-    const row = await this.movements.findOne({
+    const movementsRepo = repoFor(this.movements, opts?.manager);
+    const row = await movementsRepo.findOne({
       where: { id, shopId },
       relations: ['fromAccount', 'toAccount', 'concept'],
     });
@@ -1430,7 +1446,7 @@ export class MovementsService implements OnModuleInit {
         opts,
       );
     }
-    await this.movements.softRemove(row);
+    await movementsRepo.softRemove(row);
     return { ok: true };
   }
 
@@ -1850,12 +1866,13 @@ export class MovementsService implements OnModuleInit {
   }
 
   /** Si el gasto nació de un pago, replica monto, cuenta, concepto y fecha. */
-  private async syncLinkedPayment(shopId: string, row: Movement) {
-    const payment = await this.payments.findOne({
+  private async syncLinkedPayment(shopId: string, row: Movement, manager?: EntityManager) {
+    const payments = repoFor(this.payments, manager);
+    const payment = await payments.findOne({
       where: { shopId, movementId: row.id, active: true },
     });
     if (!payment || payment.status !== PaymentStatus.PAID) return;
-    await this.payments
+    await payments
       .createQueryBuilder()
       .update(Payment)
       .set({

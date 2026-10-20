@@ -2150,16 +2150,19 @@ export class CustomerOrdersService implements OnModuleInit {
       take: 500,
     });
     if (!open.length) return;
-    for (const session of open) {
-      const orderCount = await this.orders.count({
-        where: { shopId, tableSessionId: session.id },
-      });
-      if (orderCount > 0) continue;
+    const withOrders = await this.sessionIdsWithOrders(
+      shopId,
+      open.map((s) => s.id),
+    );
+    const empty = open.filter((s) => !withOrders.has(s.id));
+    if (!empty.length) return;
+    const now = new Date();
+    for (const session of empty) {
       session.status = TableSessionStatus.CLOSED;
-      session.closedAt = new Date();
+      session.closedAt = now;
       session.openSalonTableId = null;
-      await this.tableSessions.save(session);
     }
+    await this.tableSessions.save(empty);
   }
 
   /** Misma regla que el mapa: abierta = OPEN con al menos un envío. */
@@ -2169,14 +2172,23 @@ export class CustomerOrdersService implements OnModuleInit {
       take: 500,
     });
     if (!open.length) return 0;
-    let n = 0;
-    for (const session of open) {
-      const orderCount = await this.orders.count({
-        where: { shopId, tableSessionId: session.id },
-      });
-      if (orderCount > 0) n += 1;
-    }
-    return n;
+    const withOrders = await this.sessionIdsWithOrders(
+      shopId,
+      open.map((s) => s.id),
+    );
+    return open.filter((s) => withOrders.has(s.id)).length;
+  }
+
+  /** Sesiones de mesa (de la lista) que tienen al menos un pedido: una sola query. */
+  private async sessionIdsWithOrders(shopId: string, sessionIds: string[]): Promise<Set<string>> {
+    if (!sessionIds.length) return new Set();
+    const rows = await this.orders
+      .createQueryBuilder('o')
+      .select('DISTINCT o.tableSessionId', 'sid')
+      .where('o.shopId = :shopId', { shopId })
+      .andWhere('o.tableSessionId IN (:...sessionIds)', { sessionIds })
+      .getRawMany<{ sid: string }>();
+    return new Set(rows.map((r) => r.sid));
   }
 
   private aggregateClosedTables(
