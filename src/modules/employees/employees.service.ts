@@ -152,6 +152,25 @@ export class EmployeesService implements OnModuleInit {
     try {
       await this.employees.query(`
         ALTER TABLE employees
+          ADD COLUMN showInComanda TINYINT NOT NULL DEFAULT 0
+      `);
+      // Solo al crear la columna: quienes tenían PIN o rol Mozo siguen listados.
+      await this.employees.query(`
+        UPDATE employees
+        SET showInComanda = 1
+        WHERE deletedAt IS NULL
+          AND showInComanda = 0
+          AND (
+            waiterPinHash IS NOT NULL
+            OR jobRoles LIKE '%WAITER%'
+          )
+      `);
+    } catch {
+      // ya existe (migración o DB_SYNC)
+    }
+    try {
+      await this.employees.query(`
+        ALTER TABLE employees
           ADD COLUMN waiterPinHash VARCHAR(64) NULL
       `);
     } catch {
@@ -242,6 +261,7 @@ export class EmployeesService implements OnModuleInit {
           : !!e.countsForAttendanceBonus,
       showInFichar:
         e.showInFichar === undefined || e.showInFichar === null ? true : !!e.showInFichar,
+      showInComanda: !!e.showInComanda,
       producesFood: !!e.producesFood,
       supervisorEmployeeId: e.supervisorEmployeeId ?? null,
       bankAlias: e.bankAlias?.trim() || null,
@@ -391,6 +411,7 @@ export class EmployeesService implements OnModuleInit {
       }> | null;
       countsForAttendanceBonus?: boolean;
       showInFichar?: boolean;
+      showInComanda?: boolean;
       producesFood?: boolean;
       jobRoles?: string[] | null;
       supervisorEmployeeId?: string | null;
@@ -441,6 +462,7 @@ export class EmployeesService implements OnModuleInit {
       countsForAttendanceBonus:
         dto.countsForAttendanceBonus === undefined ? true : !!dto.countsForAttendanceBonus,
       showInFichar: dto.showInFichar === undefined ? true : !!dto.showInFichar,
+      showInComanda: !!dto.showInComanda,
       producesFood,
       supervisorEmployeeId: producesFood ? (dto.supervisorEmployeeId ?? null) : null,
       bankAlias: dto.bankAlias?.trim() || null,
@@ -486,6 +508,7 @@ export class EmployeesService implements OnModuleInit {
       }> | null;
       countsForAttendanceBonus?: boolean;
       showInFichar?: boolean;
+      showInComanda?: boolean;
       producesFood?: boolean;
       jobRoles?: string[] | null;
       supervisorEmployeeId?: string | null;
@@ -529,6 +552,9 @@ export class EmployeesService implements OnModuleInit {
     }
     if (dto.showInFichar !== undefined) {
       row.showInFichar = !!dto.showInFichar;
+    }
+    if (dto.showInComanda !== undefined) {
+      row.showInComanda = !!dto.showInComanda;
     }
     if (dto.jobRoles !== undefined || dto.producesFood !== undefined) {
       let roles =

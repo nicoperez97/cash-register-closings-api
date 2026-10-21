@@ -29,6 +29,7 @@ import {
 import { CustomerOrdersService } from './customer-orders.service';
 import {
   CreateCustomerOrderDto,
+  PatchCustomerOrderDto,
   UpdateCustomerOrderStatusDto,
 } from './dto/customer-order.dto';
 
@@ -219,6 +220,31 @@ export class CustomerOrdersController {
     @Param('id') id: string,
   ) {
     return this.service.getStaff(user, shopId, id);
+  }
+
+  @Get(':id/audits')
+  @RequireAnyPermissions(
+    'customerOrders.read',
+    'customerOrdersHistory.read',
+    'customerOrdersMonitor.read',
+  )
+  listAudits(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+  ) {
+    return this.service.listOrderAudits(user, shopId, id);
+  }
+
+  @Patch(':id')
+  @RequirePermissions('customerOrders.manage')
+  patchOrder(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Param('id') id: string,
+    @Body() dto: PatchCustomerOrderDto,
+  ) {
+    return this.service.patchOrder(user, shopId, id, dto);
   }
 
   @Patch(':id/status')

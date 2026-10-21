@@ -17,6 +17,10 @@ import {
   CustomerOrderPaymentMethod,
   CustomerOrderStatus,
 } from '../../entities/customer-order.entity';
+import {
+  CustomerOrderAudit,
+  type CustomerOrderAuditAction,
+} from '../../entities/customer-order-audit.entity';
 import { Shop } from '../../entities/shop.entity';
 import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
@@ -93,6 +97,7 @@ import { ShopClosingSource } from '../../entities/shop-closing-source.entity';
 import { isMysqlDuplicateKey, lockEntity } from '../../common/row-lock';
 import {
   CreateCustomerOrderDto,
+  PatchCustomerOrderDto,
   UpdateCustomerOrderStatusDto,
 } from './dto/customer-order.dto';
 
@@ -113,6 +118,8 @@ export class CustomerOrdersService implements OnModuleInit {
   constructor(
     @InjectRepository(CustomerOrder)
     private readonly orders: Repository<CustomerOrder>,
+    @InjectRepository(CustomerOrderAudit)
+    private readonly orderAudits: Repository<CustomerOrderAudit>,
     @InjectRepository(Shop)
     private readonly shops: Repository<Shop>,
     @InjectRepository(UserShop)
@@ -253,6 +260,41 @@ export class CustomerOrdersService implements OnModuleInit {
     } catch {
       /* dialecto / ya aplicado */
     }
+    try {
+      await this.orders.query(`
+        CREATE TABLE IF NOT EXISTS customer_order_audits (
+          id CHAR(36) NOT NULL,
+          createdAt DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+          updatedAt DATETIME(6) NULL,
+          deletedAt DATETIME(6) NULL,
+          active TINYINT(1) NOT NULL DEFAULT 1,
+          shopId CHAR(36) NOT NULL,
+          customerOrderId CHAR(36) NOT NULL,
+          orderCode VARCHAR(40) NOT NULL,
+          action VARCHAR(16) NOT NULL,
+          lineIndex INT NULL,
+          itemName VARCHAR(200) NULL,
+          lineKind VARCHAR(16) NULL,
+          qtyBefore INT NULL,
+          qtyAfter INT NULL,
+          unitPriceBefore DECIMAL(12,2) NULL,
+          unitPriceAfter DECIMAL(12,2) NULL,
+          discountBefore DECIMAL(12,2) NULL,
+          discountAfter DECIMAL(12,2) NULL,
+          discountLabelBefore VARCHAR(40) NULL,
+          discountLabelAfter VARCHAR(40) NULL,
+          payload JSON NULL,
+          actorUserId CHAR(36) NULL,
+          actorName VARCHAR(120) NOT NULL,
+          note VARCHAR(200) NULL,
+          PRIMARY KEY (id),
+          KEY idx_co_audits_order (shopId, customerOrderId, createdAt),
+          KEY idx_co_audits_shop_created (shopId, createdAt)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+      `);
+    } catch {
+      // tabla ya existe / dialecto distinto
+    }
   }
 
   private assertShopAccess(user: AuthUser, shopId: string) {
@@ -364,7 +406,15 @@ export class CustomerOrdersService implements OnModuleInit {
     };
   }
 
-  private toDto(o: CustomerOrder) {
+  private toDto(
+    o: CustomerOrder,
+    extras?: { editCount?: number; edits?: ReturnType<CustomerOrdersService['auditToDto']>[] },
+  ) {
+    const edits = extras?.edits ?? [];
+    const editCount = Math.max(
+      Number(extras?.editCount ?? 0) || 0,
+      edits.length,
+    );
     return {
       id: o.id,
       shopId: o.shopId,
@@ -406,7 +456,30 @@ export class CustomerOrdersService implements OnModuleInit {
       cancelledAt: o.cancelledAt ?? null,
       createdAt: o.createdAt,
       updatedAt: o.updatedAt ?? null,
+      editCount,
+      edits,
     };
+  }
+
+  /** Audits por pedido (más recientes primero; hasta 12 para mostrar). */
+  private async auditsByOrderIds(
+    shopId: string,
+    orderIds: string[],
+  ): Promise<Map<string, { total: number; rows: CustomerOrderAudit[] }>> {
+    const map = new Map<string, { total: number; rows: CustomerOrderAudit[] }>();
+    const ids = [...new Set(orderIds.map((id) => String(id ?? '').trim()).filter(Boolean))];
+    if (!ids.length) return map;
+    const rows = await this.orderAudits.find({
+      where: { shopId, customerOrderId: In(ids) },
+      order: { createdAt: 'DESC' },
+    });
+    for (const row of rows) {
+      const entry = map.get(row.customerOrderId) ?? { total: 0, rows: [] };
+      entry.total += 1;
+      if (entry.rows.length < 12) entry.rows.push(row);
+      map.set(row.customerOrderId, entry);
+    }
+    return map;
   }
 
   private resolveReceiptWhatsapp(shop: Shop): string | null {
@@ -1611,7 +1684,17 @@ export class CustomerOrdersService implements OnModuleInit {
           : 200;
     qb.take(take);
     const rows = await qb.getMany();
-    return rows.map((r) => this.toDto(r));
+    const auditsMap = await this.auditsByOrderIds(
+      shopId,
+      rows.map((r) => r.id),
+    );
+    return rows.map((r) => {
+      const entry = auditsMap.get(r.id);
+      return this.toDto(r, {
+        editCount: entry?.total ?? 0,
+        edits: (entry?.rows ?? []).map((a) => this.auditToDto(a)),
+      });
+    });
   }
 
   async exportStaffExcel(
@@ -2304,7 +2387,409 @@ export class CustomerOrdersService implements OnModuleInit {
     this.assertShopAccess(user, shopId);
     const order = await this.orders.findOne({ where: { id, shopId } });
     if (!order) throw new NotFoundException('Pedido no encontrado');
-    return this.toDto(order);
+    const auditsMap = await this.auditsByOrderIds(shopId, [order.id]);
+    const entry = auditsMap.get(order.id);
+    return this.toDto(order, {
+      editCount: entry?.total ?? 0,
+      edits: (entry?.rows ?? []).map((a) => this.auditToDto(a)),
+    });
+  }
+
+  async listOrderAudits(user: AuthUser, shopId: string, id: string) {
+    this.assertShopAccess(user, shopId);
+    const order = await this.orders.findOne({ where: { id, shopId } });
+    if (!order) throw new NotFoundException('Pedido no encontrado');
+    const rows = await this.orderAudits.find({
+      where: { shopId, customerOrderId: id },
+      order: { createdAt: 'DESC' },
+      take: 100,
+    });
+    return rows.map((a) => this.auditToDto(a));
+  }
+
+  private auditToDto(a: CustomerOrderAudit) {
+    return {
+      id: a.id,
+      action: a.action,
+      lineIndex: a.lineIndex ?? null,
+      itemName: a.itemName ?? null,
+      lineKind: a.lineKind ?? null,
+      qtyBefore: a.qtyBefore ?? null,
+      qtyAfter: a.qtyAfter ?? null,
+      unitPriceBefore:
+        a.unitPriceBefore == null ? null : Number(a.unitPriceBefore),
+      unitPriceAfter: a.unitPriceAfter == null ? null : Number(a.unitPriceAfter),
+      discountBefore: a.discountBefore == null ? null : Number(a.discountBefore),
+      discountAfter: a.discountAfter == null ? null : Number(a.discountAfter),
+      discountLabelBefore: a.discountLabelBefore ?? null,
+      discountLabelAfter: a.discountLabelAfter ?? null,
+      actorUserId: a.actorUserId ?? null,
+      actorName: a.actorName,
+      note: a.note ?? null,
+      createdAt: a.createdAt,
+    };
+  }
+
+  private money2(n: number): number {
+    return Math.round(Number(n) * 100) / 100;
+  }
+
+  private lineAuditKey(l: CustomerOrderLine): string {
+    return [
+      l.kind ?? 'ITEM',
+      String(l.menuItemId ?? ''),
+      String(l.name ?? ''),
+      String(l.extraId ?? ''),
+      String(l.promoId ?? ''),
+      String(l.promoBundleKey ?? ''),
+      String(l.attachedToMenuItemId ?? ''),
+    ].join('|');
+  }
+
+  private normalizePatchLines(dto: PatchCustomerOrderDto): CustomerOrderLine[] {
+    const lines: CustomerOrderLine[] = [];
+    for (const row of dto.items ?? []) {
+      const qty = Math.max(1, Math.min(99, Math.round(Number(row.qty) || 1)));
+      const unitPrice = this.money2(Math.max(0, Number(row.unitPrice) || 0));
+      const kind =
+        row.kind === 'EXTRA' || row.kind === 'PROMO' ? row.kind : 'ITEM';
+      const name = String(row.name ?? '').trim().slice(0, 200);
+      const menuItemId = String(row.menuItemId ?? '').trim().slice(0, 40);
+      if (!name || !menuItemId) {
+        throw new BadRequestException('Cada ítem necesita nombre e id');
+      }
+      const removedIngredients = normalizeRemovableIngredients(
+        row.removedIngredients,
+      );
+      const combinesWithNames = Array.isArray(row.combinesWithNames)
+        ? [
+            ...new Set(
+              row.combinesWithNames
+                .map((n) => String(n ?? '').trim().slice(0, 120))
+                .filter(Boolean),
+            ),
+          ].slice(0, 24)
+        : [];
+      lines.push({
+        menuItemId,
+        name,
+        unitPrice,
+        qty,
+        notes: String(row.notes ?? '').trim().slice(0, 300) || null,
+        kind,
+        extraId: row.extraId ? String(row.extraId).trim().slice(0, 40) : null,
+        attachedToMenuItemId: row.attachedToMenuItemId
+          ? String(row.attachedToMenuItemId).trim().slice(0, 40)
+          : null,
+        promoId: row.promoId ? String(row.promoId).trim().slice(0, 40) : null,
+        promoBundleKey: row.promoBundleKey
+          ? String(row.promoBundleKey).trim().slice(0, 64)
+          : null,
+        removedIngredients: removedIngredients.length
+          ? removedIngredients
+          : undefined,
+        isEntrada: !!row.isEntrada,
+        combinesWithNames: combinesWithNames.length
+          ? combinesWithNames
+          : undefined,
+      });
+    }
+    if (!lines.length) throw new BadRequestException('El pedido no tiene ítems');
+    return lines;
+  }
+
+  private resolvePatchDiscount(
+    subtotal: number,
+    dto: PatchCustomerOrderDto,
+    prevAmount: number,
+    prevLabel: string | null,
+  ): { discountAmount: number; discountLabel: string | null } {
+    const pct = Number(dto.discountPercent);
+    const fixed = Number(dto.discountFixed);
+    const hasPct = Number.isFinite(pct) && pct > 0;
+    const hasFixed = Number.isFinite(fixed) && fixed > 0;
+    if (hasPct && hasFixed) {
+      throw new BadRequestException('Usá descuento en % o en monto, no ambos');
+    }
+    if (hasPct) {
+      const p = Math.min(100, pct);
+      const discountAmount = Math.min(
+        subtotal,
+        this.money2(subtotal * (p / 100)),
+      );
+      return {
+        discountAmount,
+        discountLabel: `${p % 1 === 0 ? String(p) : p.toFixed(1)}%`,
+      };
+    }
+    if (hasFixed) {
+      return {
+        discountAmount: Math.min(subtotal, this.money2(fixed)),
+        discountLabel: 'Monto',
+      };
+    }
+    if (dto.clearDiscount) {
+      return { discountAmount: 0, discountLabel: null };
+    }
+    // Sin campos de descuento: conservar el anterior (re-cap al subtotal).
+    const keep = Math.min(subtotal, this.money2(prevAmount));
+    return {
+      discountAmount: keep,
+      discountLabel: keep > 0 ? prevLabel : null,
+    };
+  }
+
+  private buildItemAudits(
+    before: CustomerOrderLine[],
+    after: CustomerOrderLine[],
+  ): Array<{
+    action: CustomerOrderAuditAction;
+    lineIndex: number;
+    itemName: string;
+    lineKind: string;
+    qtyBefore: number | null;
+    qtyAfter: number | null;
+    unitPriceBefore: number | null;
+    unitPriceAfter: number | null;
+    payload?: Record<string, unknown> | null;
+  }> {
+    type Slot = { line: CustomerOrderLine; index: number; used: boolean };
+    const beforeSlots: Slot[] = before.map((line, index) => ({
+      line,
+      index,
+      used: false,
+    }));
+    const afterSlots: Slot[] = after.map((line, index) => ({
+      line,
+      index,
+      used: false,
+    }));
+    const out: Array<{
+      action: CustomerOrderAuditAction;
+      lineIndex: number;
+      itemName: string;
+      lineKind: string;
+      qtyBefore: number | null;
+      qtyAfter: number | null;
+      unitPriceBefore: number | null;
+      unitPriceAfter: number | null;
+      payload?: Record<string, unknown> | null;
+    }> = [];
+
+    for (const a of afterSlots) {
+      const key = this.lineAuditKey(a.line);
+      const candidates = beforeSlots.filter(
+        (b) => !b.used && this.lineAuditKey(b.line) === key,
+      );
+      const exact = candidates.find(
+        (b) =>
+          Number(b.line.qty) === Number(a.line.qty) &&
+          this.money2(b.line.unitPrice) === this.money2(a.line.unitPrice),
+      );
+      const match = exact ?? candidates[0] ?? null;
+      if (!match) continue;
+      match.used = true;
+      a.used = true;
+      const qtyBefore = Number(match.line.qty) || 0;
+      const qtyAfter = Number(a.line.qty) || 0;
+      const priceBefore = this.money2(match.line.unitPrice);
+      const priceAfter = this.money2(a.line.unitPrice);
+      if (qtyBefore === qtyAfter && priceBefore === priceAfter) continue;
+      let action: CustomerOrderAuditAction = 'EDIT';
+      if (qtyBefore !== qtyAfter && priceBefore === priceAfter) action = 'QTY';
+      else if (qtyBefore === qtyAfter && priceBefore !== priceAfter)
+        action = 'PRICE';
+      out.push({
+        action,
+        lineIndex: a.index,
+        itemName: a.line.name,
+        lineKind: a.line.kind ?? 'ITEM',
+        qtyBefore,
+        qtyAfter,
+        unitPriceBefore: priceBefore,
+        unitPriceAfter: priceAfter,
+      });
+    }
+
+    for (const b of beforeSlots) {
+      if (b.used) continue;
+      out.push({
+        action: 'REMOVE',
+        lineIndex: b.index,
+        itemName: b.line.name,
+        lineKind: b.line.kind ?? 'ITEM',
+        qtyBefore: Number(b.line.qty) || 0,
+        qtyAfter: null,
+        unitPriceBefore: this.money2(b.line.unitPrice),
+        unitPriceAfter: null,
+        payload: { line: b.line },
+      });
+    }
+    for (const a of afterSlots) {
+      if (a.used) continue;
+      out.push({
+        action: 'ADD',
+        lineIndex: a.index,
+        itemName: a.line.name,
+        lineKind: a.line.kind ?? 'ITEM',
+        qtyBefore: null,
+        qtyAfter: Number(a.line.qty) || 0,
+        unitPriceBefore: null,
+        unitPriceAfter: this.money2(a.line.unitPrice),
+        payload: { line: a.line },
+      });
+    }
+    return out;
+  }
+
+  async patchOrder(
+    user: AuthUser,
+    shopId: string,
+    id: string,
+    dto: PatchCustomerOrderDto,
+  ) {
+    this.assertShopAccess(user, shopId);
+    const actorName =
+      String(user.fullName ?? '').trim().slice(0, 120) ||
+      String(user.email ?? '').trim().slice(0, 120) ||
+      'Usuario';
+    const actorUserId = String(user.id ?? '').trim() || null;
+    const note = String(dto.note ?? '').trim().slice(0, 200) || null;
+
+    const result = await this.orders.manager.transaction(async (manager) => {
+      const order = await lockEntity(
+        manager,
+        CustomerOrder,
+        'o',
+        'o.id = :id AND o.shopId = :shopId',
+        { id, shopId },
+      );
+      if (!order) throw new NotFoundException('Pedido no encontrado');
+      if (order.status === CustomerOrderStatus.CANCELLED) {
+        throw new BadRequestException('No se puede editar un pedido cancelado');
+      }
+
+      const beforeItems = [...(order.items ?? [])];
+      const beforeDiscount = this.money2(Number(order.discountAmount ?? 0));
+      const beforeLabel = order.discountLabel ?? null;
+
+      const afterItems = this.normalizePatchLines(dto);
+      let subtotal = 0;
+      for (const line of afterItems) {
+        subtotal += this.money2(line.unitPrice) * (Number(line.qty) || 0);
+      }
+      subtotal = this.money2(subtotal);
+
+      const deliveryFee = this.money2(Number(order.deliveryFee ?? 0));
+      const { discountAmount, discountLabel } = this.resolvePatchDiscount(
+        subtotal,
+        dto,
+        beforeDiscount,
+        beforeLabel,
+      );
+      const total = Math.max(
+        0,
+        this.money2(subtotal - discountAmount + deliveryFee),
+      );
+
+      const itemAudits = this.buildItemAudits(beforeItems, afterItems);
+      const discountChanged =
+        beforeDiscount !== discountAmount ||
+        String(beforeLabel ?? '') !== String(discountLabel ?? '');
+
+      if (!itemAudits.length && !discountChanged) {
+        return { order, audits: [] as CustomerOrderAudit[] };
+      }
+
+      const prevSubtotal = this.money2(Number(order.subtotal ?? 0));
+      const prevTotal = this.money2(prevSubtotal - beforeDiscount + deliveryFee);
+
+      order.items = afterItems;
+      order.subtotal = subtotal.toFixed(2);
+      order.discountAmount = discountAmount.toFixed(2);
+      order.discountLabel = discountLabel;
+      order.total = total.toFixed(2);
+
+      if (
+        order.paymentMethod === CustomerOrderPaymentMethod.CASH &&
+        order.cashAmount != null
+      ) {
+        const prevCash = this.money2(Number(order.cashAmount));
+        // Si el efectivo declarado era el total viejo (o menor al nuevo), alinearlo.
+        if (prevCash <= prevTotal + 0.009 || prevCash < total) {
+          order.cashAmount = total.toFixed(2);
+        }
+      }
+
+      const saved = await manager.getRepository(CustomerOrder).save(order);
+      const auditsRepo = manager.getRepository(CustomerOrderAudit);
+      const audits: CustomerOrderAudit[] = [];
+
+      for (const row of itemAudits) {
+        audits.push(
+          await auditsRepo.save(
+            auditsRepo.create({
+              shopId,
+              customerOrderId: saved.id,
+              orderCode: saved.code,
+              action: row.action,
+              lineIndex: row.lineIndex,
+              itemName: row.itemName,
+              lineKind: row.lineKind,
+              qtyBefore: row.qtyBefore,
+              qtyAfter: row.qtyAfter,
+              unitPriceBefore:
+                row.unitPriceBefore == null
+                  ? null
+                  : row.unitPriceBefore.toFixed(2),
+              unitPriceAfter:
+                row.unitPriceAfter == null
+                  ? null
+                  : row.unitPriceAfter.toFixed(2),
+              actorUserId,
+              actorName,
+              note,
+              payload: row.payload ?? null,
+            }),
+          ),
+        );
+      }
+      if (discountChanged) {
+        audits.push(
+          await auditsRepo.save(
+            auditsRepo.create({
+              shopId,
+              customerOrderId: saved.id,
+              orderCode: saved.code,
+              action: 'DISCOUNT',
+              discountBefore: beforeDiscount.toFixed(2),
+              discountAfter: discountAmount.toFixed(2),
+              discountLabelBefore: beforeLabel,
+              discountLabelAfter: discountLabel,
+              actorUserId,
+              actorName,
+              note,
+            }),
+          ),
+        );
+      }
+      return { order: saved, audits };
+    });
+
+    this.live.tick(shopId, 'customer-orders');
+    const audits = await this.orderAudits.find({
+      where: { shopId, customerOrderId: id },
+      order: { createdAt: 'DESC' },
+      take: 100,
+    });
+    const auditDtos = audits.map((a) => this.auditToDto(a));
+    return {
+      order: this.toDto(result.order, {
+        editCount: audits.length,
+        edits: auditDtos.slice(0, 12),
+      }),
+      audits: auditDtos,
+    };
   }
 
   private assertAllowedStatusTransition(

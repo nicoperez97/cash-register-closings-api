@@ -715,6 +715,8 @@ export class ShopBackupService {
           shiftAssignments:
             e.shiftAssignments != null ? JSON.stringify(e.shiftAssignments) : '',
           countsForAttendanceBonus: e.countsForAttendanceBonus === false ? 0 : 1,
+          showInFichar: e.showInFichar === false ? 0 : 1,
+          showInComanda: e.showInComanda ? 1 : 0,
           producesFood: e.producesFood ? 1 : 0,
           supervisorEmployeeId: e.supervisorEmployeeId ?? '',
           bankAlias: e.bankAlias ?? '',
@@ -1362,6 +1364,8 @@ export class ShopBackupService {
           jobRoles: this.parseJsonField(r.jobRoles) as any,
           shiftAssignments: this.parseJsonField(r.shiftAssignments) as any,
           countsForAttendanceBonus: this.toBool(r.countsForAttendanceBonus, true),
+          showInFichar: this.toBool(r.showInFichar, true),
+          showInComanda: this.toBool(r.showInComanda, false),
           producesFood: this.toBool(r.producesFood, false),
           supervisorEmployeeId: null,
           bankAlias: this.emptyToNull(r.bankAlias),
