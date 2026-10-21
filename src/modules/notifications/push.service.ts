@@ -146,7 +146,7 @@ export class PushService implements OnModuleInit {
     const { users } = await this.sendToAllSubscribers({
       title: 'Nueva versión',
       body: 'Hay una actualización disponible. Tocá para abrir la app.',
-      url: '/',
+      url: '/admin/',
       tag,
     });
     this.logger.log(`Broadcast app update (${tag}): ${users} usuario(s) con push`);
