@@ -182,46 +182,46 @@ export class MailService {
       type === NotificationType.STOCK_BELOW_MINIMUM ||
       type === NotificationType.STOCK_SHARED
     ) {
-      return { path: '/stock', label: 'Abrir stock alimentos' };
+      return { path: '/admin/stock', label: 'Abrir stock alimentos' };
     }
     if (
       type === NotificationType.BEVERAGE_STOCK_BELOW_MINIMUM ||
       type === NotificationType.BEVERAGE_STOCK_SHARED
     ) {
-      return { path: '/beverage-stock', label: 'Abrir stock bebidas' };
+      return { path: '/admin/beverage-stock', label: 'Abrir stock bebidas' };
     }
     if (type === NotificationType.CLOSING_CREATED) {
-      return { path: '/closings', label: 'Ver cierres' };
+      return { path: '/admin/closings', label: 'Ver cierres' };
     }
     if (type === NotificationType.CASH_WITHDRAWAL_PICKED) {
-      return { path: '/cash-withdrawals', label: 'Ver retiros' };
+      return { path: '/admin/cash-withdrawals', label: 'Ver retiros' };
     }
     if (type === NotificationType.PRODUCTION_HOURS_LOGGED) {
-      return { path: '/production-attendance', label: 'Ver producción' };
+      return { path: '/admin/production-attendance', label: 'Ver producción' };
     }
     if (
       type === NotificationType.SHORTAGE_CREATED ||
       type === NotificationType.SHORTAGE_LEVEL_LOW ||
       type === NotificationType.SHORTAGE_RESOLVED
     ) {
-      return { path: '/shortages', label: 'Abrir faltantes' };
+      return { path: '/admin/shortages', label: 'Abrir faltantes' };
     }
     if (String(type).startsWith('PAYMENT_')) {
-      return { path: '/payments/suppliers', label: 'Ver pagos' };
+      return { path: '/admin/payments/suppliers', label: 'Ver pagos' };
     }
     if (type === NotificationType.RESERVATION_REQUEST) {
-      return { path: '/reservations', label: 'Ver solicitudes' };
+      return { path: '/admin/reservations', label: 'Ver solicitudes' };
     }
     if (type === NotificationType.CUSTOMER_ORDER_CREATED) {
-      return { path: '/customer-orders', label: 'Ver pedidos online' };
+      return { path: '/admin/customer-orders', label: 'Ver pedidos online' };
     }
     if (type === NotificationType.ATTENDANCE_CHECK_IN) {
-      return { path: '/attendance', label: 'Ver presentismo' };
+      return { path: '/admin/attendance', label: 'Ver presentismo' };
     }
     if (String(type).startsWith('MOVEMENT_')) {
-      return { path: '/movements', label: 'Ver gastos' };
+      return { path: '/admin/expenses', label: 'Ver gastos' };
     }
-    return { path: '/', label: 'Abrir la app' };
+    return { path: '/admin/inicio', label: 'Abrir la app' };
   }
 
   private applyShopMailText(

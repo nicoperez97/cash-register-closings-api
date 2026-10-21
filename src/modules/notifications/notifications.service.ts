@@ -39,58 +39,58 @@ function deepLinkFor(
 ): string {
   const shop = opts.shopId ?? null;
   if (opts.closingId) {
-    return `/closings/${opts.closingId}${queryString({ shop })}`;
+    return `/admin/closings/${opts.closingId}${queryString({ shop })}`;
   }
   if (type === NotificationType.CLOSING_CREATED) {
-    return `/closings${queryString({ shop })}`;
+    return `/admin/closings${queryString({ shop })}`;
   }
   if (type === NotificationType.CASH_WITHDRAWAL_PICKED) {
-    return `/cash-withdrawals${queryString({ shop })}`;
+    return `/admin/cash-withdrawals${queryString({ shop })}`;
   }
   if (type === NotificationType.PRODUCTION_HOURS_LOGGED) {
-    return `/production-attendance${queryString({ shop })}`;
+    return `/admin/production-attendance${queryString({ shop })}`;
   }
   if (type === NotificationType.ATTENDANCE_CHECK_IN) {
-    return `/attendance${queryString({ shop })}`;
+    return `/admin/attendance${queryString({ shop })}`;
   }
   if (
     type === NotificationType.STOCK_BELOW_MINIMUM ||
     type === NotificationType.STOCK_SHARED
   ) {
-    return `/stock${queryString({ shop })}`;
+    return `/admin/stock${queryString({ shop })}`;
   }
   if (
     type === NotificationType.BEVERAGE_STOCK_BELOW_MINIMUM ||
     type === NotificationType.BEVERAGE_STOCK_SHARED
   ) {
-    return `/beverage-stock${queryString({ shop })}`;
+    return `/admin/beverage-stock${queryString({ shop })}`;
   }
   if (
     type === NotificationType.SHORTAGE_CREATED ||
     type === NotificationType.SHORTAGE_LEVEL_LOW ||
     type === NotificationType.SHORTAGE_RESOLVED
   ) {
-    return `/shortages${queryString({ shop, shortage: opts.targetId })}`;
+    return `/admin/shortages${queryString({ shop, shortage: opts.targetId })}`;
   }
   if (String(type).startsWith('PAYMENT_')) {
-    return `/payments/suppliers${queryString({ shop, payment: opts.paymentId })}`;
+    return `/admin/payments/suppliers${queryString({ shop, payment: opts.paymentId })}`;
   }
   if (type === NotificationType.RESERVATION_REQUEST) {
-    return `/reservations${queryString({ shop, request: opts.targetId })}`;
+    return `/admin/reservations${queryString({ shop, request: opts.targetId })}`;
   }
   if (type === NotificationType.CUSTOMER_ORDER_CREATED) {
-    return `/customer-orders${queryString({ shop, order: opts.targetId })}`;
+    return `/admin/customer-orders${queryString({ shop, order: opts.targetId })}`;
   }
   if (type === NotificationType.MOVEMENT_DELETED) {
-    return `/expenses${queryString({ shop })}`;
+    return `/admin/expenses${queryString({ shop })}`;
   }
   if (String(type).startsWith('MOVEMENT_')) {
-    return `/expenses${queryString({ shop, movement: opts.targetId })}`;
+    return `/admin/expenses${queryString({ shop, movement: opts.targetId })}`;
   }
   if (type === NotificationType.REIMBURSEMENT_CREATED) {
-    return `/reimbursements${queryString({ shop, reimbursement: opts.targetId })}`;
+    return `/admin/reimbursements${queryString({ shop, reimbursement: opts.targetId })}`;
   }
-  return `/${queryString({ shop })}`.replace(/\/\?/, '/?') || '/';
+  return `/admin/inicio${queryString({ shop })}`;
 }
 
 function isHttpUrl(raw?: string | null): boolean {
