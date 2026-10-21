@@ -96,6 +96,10 @@ export class Employee extends BaseEntity {
   @Column({ type: 'tinyint', default: 1 })
   showInFichar: boolean;
 
+  /** Si aparece como «Mozo a cargo» al abrir mesa en Operación → Comanda. */
+  @Column({ type: 'tinyint', default: 0 })
+  showInComanda: boolean;
+
   /** Si produce comida → aparece en asistencia de producción. */
   @Column({ type: 'tinyint', default: 0 })
   producesFood: boolean;

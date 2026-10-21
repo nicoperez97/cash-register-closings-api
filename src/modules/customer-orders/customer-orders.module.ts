@@ -1,6 +1,7 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CustomerOrder } from '../../entities/customer-order.entity';
+import { CustomerOrderAudit } from '../../entities/customer-order-audit.entity';
 import { Shop } from '../../entities/shop.entity';
 import { User } from '../../entities/user.entity';
 import { UserShop } from '../../entities/user-shop.entity';
@@ -24,6 +25,7 @@ import { CustomerOrdersService } from './customer-orders.service';
   imports: [
     TypeOrmModule.forFeature([
       CustomerOrder,
+      CustomerOrderAudit,
       Shop,
       UserShop,
       User,

@@ -236,3 +236,130 @@ export class UpdateCustomerOrderStatusDto {
   @IsEnum(CustomerOrderStatus)
   status: CustomerOrderStatus;
 }
+
+/** Línea al editar un pedido ya creado (staff). */
+export class PatchCustomerOrderItemDto {
+  @ApiProperty()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  menuItemId: string;
+
+  @ApiProperty()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  name: string;
+
+  @ApiProperty({ example: 1 })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(99)
+  qty: number;
+
+  @ApiProperty()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  unitPrice: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  notes?: string | null;
+
+  @ApiPropertyOptional({ enum: ['ITEM', 'EXTRA', 'PROMO'] })
+  @IsOptional()
+  @IsString()
+  @MaxLength(16)
+  kind?: 'ITEM' | 'EXTRA' | 'PROMO' | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  extraId?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  attachedToMenuItemId?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  promoId?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  promoBundleKey?: string | null;
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(24)
+  @IsString({ each: true })
+  @MaxLength(40, { each: true })
+  removedIngredients?: string[];
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @ToBoolean()
+  @IsBoolean()
+  isEntrada?: boolean;
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(24)
+  @IsString({ each: true })
+  @MaxLength(120, { each: true })
+  combinesWithNames?: string[];
+}
+
+/** Editar ítems y/o descuento de un pedido (no cancelado). */
+export class PatchCustomerOrderDto {
+  @ApiProperty({ type: [PatchCustomerOrderItemDto] })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(60)
+  @ValidateNested({ each: true })
+  @Type(() => PatchCustomerOrderItemDto)
+  items: PatchCustomerOrderItemDto[];
+
+  /** Descuento en % sobre el subtotal (0–100). Mutuamente excluyente con fixed. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  discountPercent?: number | null;
+
+  /** Descuento en monto fijo. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  discountFixed?: number | null;
+
+  /** Quitar descuento (si no mandás % ni monto). */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @ToBoolean()
+  @IsBoolean()
+  clearDiscount?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  note?: string | null;
+}

@@ -30,7 +30,7 @@ import {
   type ComandaLineReason,
 } from '../../entities/comanda-line-audit.entity';
 import { CustomerOrder, CustomerOrderLine } from '../../entities/customer-order.entity';
-import { Employee, EmployeeJobRole, normalizeEmployeeJobRoles } from '../../entities/employee.entity';
+import { Employee } from '../../entities/employee.entity';
 import { SalonMapObject } from '../../entities/salon-map-object.entity';
 import { SalonSector } from '../../entities/salon-sector.entity';
 import { SalonTable } from '../../entities/salon-table.entity';
@@ -772,7 +772,7 @@ export class WaiterService implements OnModuleInit {
 
   /**
    * Mozos elegibles al abrir mesa desde Operación → Comanda.
-   * Prioriza rol Mozo o PIN; si no hay, lista activos.
+   * Solo empleados con «Mostrar en Comanda» activo.
    */
   async listStaffWaiters(user: AuthUser, shopId: string) {
     this.shopsSvc.assertShopAccess(user, shopId);
@@ -781,16 +781,9 @@ export class WaiterService implements OnModuleInit {
         where: { shopId },
         order: { fullName: 'ASC' },
       })
-    ).filter((e) => isEntityActive(e.active));
+    ).filter((e) => isEntityActive(e.active) && !!e.showInComanda);
 
-    const isWaiterLike = (e: Employee) => {
-      const roles = normalizeEmployeeJobRoles(e.jobRoles);
-      return roles.includes(EmployeeJobRole.WAITER) || !!e.waiterPinHash;
-    };
-
-    const preferred = rows.filter(isWaiterLike);
-    const list = preferred.length ? preferred : rows;
-    return list.map((e) => ({ id: e.id, fullName: e.fullName }));
+    return rows.map((e) => ({ id: e.id, fullName: e.fullName }));
   }
 
   /**
@@ -1535,6 +1528,7 @@ export class WaiterService implements OnModuleInit {
         await this.sessions.save(row);
       }
     }
+    this.live.tick(shop.id, 'customer-orders');
     return this.sessionDetail(shop, row);
   }
 
@@ -1576,6 +1570,7 @@ export class WaiterService implements OnModuleInit {
         this.markSessionClosed(session);
         await manager.getRepository(TableSession).save(session);
       }
+      this.live.tick(shop.id, 'customer-orders');
       return { ok: true };
     }).catch((err) => {
       if (err instanceof NotFoundException) return { ok: true };
@@ -1876,7 +1871,7 @@ export class WaiterService implements OnModuleInit {
     }
     await manager.getRepository(TableSession).save(session);
     this.live.tick(shop.id, 'customer-orders');
-    return this.sessionDetail(shop, session);
+    return this.sessionDetail(shop, session, manager);
     });
   }
 
@@ -2078,7 +2073,7 @@ export class WaiterService implements OnModuleInit {
     }
 
     this.live.tick(shop.id, 'customer-orders');
-    return this.sessionDetail(shop, session);
+    return this.sessionDetail(shop, session, manager);
     });
   }
 
@@ -2127,7 +2122,7 @@ export class WaiterService implements OnModuleInit {
     this.denyUnless(caps.allowCloseTable, 'No está permitido cerrar mesas');
     return this.withLockedSession(shop.id, sessionId, async (session, manager) => {
     if (session.status === TableSessionStatus.CLOSED) {
-      return this.sessionDetail(shop, session);
+      return this.sessionDetail(shop, session, manager);
     }
 
     const orderRepo = manager.getRepository(CustomerOrder);
@@ -2138,7 +2133,7 @@ export class WaiterService implements OnModuleInit {
     if (!orders.length) {
       this.markSessionClosed(session);
       await manager.getRepository(TableSession).save(session);
-      return this.sessionDetail(shop, session);
+      return this.sessionDetail(shop, session, manager);
     }
 
     if (caps.requireTicketBeforeClose && !session.customerTicketPrinted) {
@@ -2169,7 +2164,7 @@ export class WaiterService implements OnModuleInit {
       }))
       .filter((p) => p.paymentMethodId && p.amount > 0);
 
-    // Compat: un solo medio sin montos.
+    // Compat: un solo medio sin montos (también ticket $0 / descuento 100%).
     if (!rawPayments.length && opts?.paymentMethodId) {
       rawPayments = [
         {
@@ -2179,8 +2174,17 @@ export class WaiterService implements OnModuleInit {
       ];
     }
 
+    // Cortesía / 100%: nada que cobrar; registrar el primer medio si no mandaron ninguno.
+    if (!rawPayments.length && nearlyEqual(toCollect, 0) && methods[0]) {
+      rawPayments = [{ paymentMethodId: methods[0].id, amount: 0 }];
+    }
+
     if (!rawPayments.length) {
-      throw new BadRequestException('Indicá al menos una forma de pago con monto');
+      throw new BadRequestException(
+        nearlyEqual(toCollect, 0)
+          ? 'Configurá al menos un medio de pago en Comandas'
+          : 'Indicá al menos una forma de pago con monto',
+      );
     }
 
     const payments: Array<{
@@ -2221,7 +2225,7 @@ export class WaiterService implements OnModuleInit {
     this.markSessionClosed(session);
     await manager.getRepository(TableSession).save(session);
     this.live.tick(shop.id, 'customer-orders');
-    return this.sessionDetail(shop, session);
+    return this.sessionDetail(shop, session, manager);
     });
   }
 
@@ -2398,7 +2402,7 @@ export class WaiterService implements OnModuleInit {
     if (session.status === TableSessionStatus.CLOSED) {
       throw new BadRequestException('La mesa ya está cerrada');
     }
-    const orders = await this.orders.find({
+    const orders = await manager.getRepository(CustomerOrder).find({
       where: { shopId: shop.id, tableSessionId: session.id },
       order: { createdAt: 'ASC' },
     });
@@ -2471,7 +2475,7 @@ export class WaiterService implements OnModuleInit {
     session.ticketTotal = String(total);
     await manager.getRepository(TableSession).save(session);
     this.live.tick(shop.id, 'customer-orders');
-    return this.sessionDetail(shop, session);
+    return this.sessionDetail(shop, session, manager);
     });
   }
 
@@ -2513,18 +2517,35 @@ export class WaiterService implements OnModuleInit {
     return { promoBreakdown, sessionSubtotal };
   }
 
-  private async sessionDetail(shop: Shop, session: TableSession) {
-    const table = await this.resolveSessionTable(shop.id, session);
+  /**
+   * Detalle de mesa. Si se llama dentro de `withLockedSession`, pasar `manager`
+   * para leer pedidos/auditoría en la misma transacción (si no, el cliente recibe
+   * índices/qty viejos y el próximo +/- falla con «Línea inválida»).
+   */
+  private async sessionDetail(
+    shop: Shop,
+    session: TableSession,
+    manager?: EntityManager,
+  ) {
+    const tablesRepo = manager?.getRepository(SalonTable) ?? this.tables;
+    const employeesRepo = manager?.getRepository(Employee) ?? this.employees;
+    const ordersRepo = manager?.getRepository(CustomerOrder) ?? this.orders;
+    const auditsRepo = manager?.getRepository(ComandaLineAudit) ?? this.lineAudits;
+
+    const tableId = String(session.salonTableId ?? '').trim();
+    const table = tableId
+      ? await tablesRepo.findOne({ where: { id: tableId, shopId: shop.id } })
+      : null;
     const waiterEmp = session.waiterEmployeeId
-      ? await this.employees.findOne({
+      ? await employeesRepo.findOne({
           where: { id: session.waiterEmployeeId, shopId: shop.id },
         })
       : null;
-    const orders = await this.orders.find({
+    const orders = await ordersRepo.find({
       where: { shopId: shop.id, tableSessionId: session.id },
       order: { createdAt: 'ASC' },
     });
-    const audits = await this.lineAudits.find({
+    const audits = await auditsRepo.find({
       where: { shopId: shop.id, tableSessionId: session.id },
       order: { createdAt: 'DESC' },
       take: 200,

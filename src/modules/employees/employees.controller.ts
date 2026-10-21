@@ -103,6 +103,12 @@ class CreateEmployeeDto {
   @IsOptional()
   @ToBoolean() @IsBoolean()
   showInFichar?: boolean;
+  @ApiPropertyOptional({
+    description: 'Si aparece como Mozo a cargo al abrir mesa en Operación → Comanda',
+  })
+  @IsOptional()
+  @ToBoolean() @IsBoolean()
+  showInComanda?: boolean;
   @ApiPropertyOptional({ description: 'Si produce comida (asistencia en producción)' })
   @IsOptional()
   @ToBoolean() @IsBoolean()
@@ -189,6 +195,12 @@ class UpdateEmployeeDto {
   @IsOptional()
   @ToBoolean() @IsBoolean()
   showInFichar?: boolean;
+  @ApiPropertyOptional({
+    description: 'Si aparece como Mozo a cargo al abrir mesa en Operación → Comanda',
+  })
+  @IsOptional()
+  @ToBoolean() @IsBoolean()
+  showInComanda?: boolean;
   @ApiPropertyOptional()
   @IsOptional()
   @ToBoolean() @IsBoolean()
