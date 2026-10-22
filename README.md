@@ -21,6 +21,17 @@ Con `DB_SYNC=true` la API crea tablas y siembra:
 
 Swagger: http://localhost:3000/api/docs
 
+## Deploy (Lightsail, blue/green)
+
+El workflow `.github/workflows/deploy.yml` publica la imagen en GHCR y en el servidor:
+
+1. Levanta el slot **inactivo** (`api-blue` / `api-green`) con la imagen nueva.
+2. Espera `GET /api/v1/health` (DB OK).
+3. Reescribe `nginx/upstream.conf` y hace `nginx -s reload`.
+4. Recién ahí baja el slot viejo.
+
+La API en tráfico no se corta mientras la nueva no esté healthy. Script: `scripts/deploy-blue-green.sh`.
+
 ## Scripts SQL (opcionales)
 
 Orden en `database/`:

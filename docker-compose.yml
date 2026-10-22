@@ -1,5 +1,64 @@
 name: crc
 
+x-api: &api
+  # API_IMAGE lo setea Actions (GHCR). Sin variable: build local (fallback).
+  image: ${API_IMAGE:-crc-api:local}
+  build:
+    context: ./api
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  depends_on:
+    db:
+      condition: service_healthy
+  environment:
+    NODE_ENV: production
+    PORT: 3000
+    DB_HOST: db
+    DB_PORT: 3306
+    DB_NAME: ${DB_NAME}
+    DB_USER: ${DB_USER}
+    DB_PASSWORD: ${DB_PASSWORD}
+    DB_SYNC: ${DB_SYNC}
+    JWT_SECRET: ${JWT_SECRET}
+    CORS_ORIGIN: ${CORS_ORIGIN}
+    PUBLIC_APP_ORIGIN: ${PUBLIC_APP_ORIGIN:-https://cierres.perezcompany.com.ar}
+    VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY}
+    VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY}
+    VAPID_SUBJECT: ${VAPID_SUBJECT:-https://cierres.perezcompany.com.ar}
+    UPLOADS_DIR: /app/uploads
+    UPLOADS_RETENTION_DAYS: ${UPLOADS_RETENTION_DAYS:-365}
+    UPLOADS_PURGE_CRON: "${UPLOADS_PURGE_CRON:-0 5 * * *}"
+    UPLOADS_PURGE_TZ: ${UPLOADS_PURGE_TZ:-America/Argentina/Buenos_Aires}
+    GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
+    GEMINI_FALLBACK_MODELS: ${GEMINI_FALLBACK_MODELS:-gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-flash-latest}
+    GROQ_API_KEY: ${GROQ_API_KEY:-}
+    GROQ_MODEL: ${GROQ_MODEL:-qwen/qwen3.8-27b}
+    GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+    # CloudFront -> nginx -> api: 1 proxy antes de nginx en X-Forwarded-For.
+    TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}
+    SWAGGER_ENABLED: ${SWAGGER_ENABLED:-false}
+    SENTRY_DSN: ${SENTRY_DSN:-}
+    SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0}
+    DB_SLOW_QUERY_MS: ${DB_SLOW_QUERY_MS:-1000}
+    SLOW_REQUEST_MS: ${SLOW_REQUEST_MS:-2000}
+  volumes:
+    - uploads-data:/app/uploads
+  networks:
+    - internal
+  healthcheck:
+    test:
+      [
+        "CMD",
+        "node",
+        "-e",
+        "require('http').get('http://127.0.0.1:3000/api/v1/health',(r)=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+      ]
+    interval: 10s
+    timeout: 5s
+    retries: 12
+    start_period: 90s
+
 services:
   db:
     image: mysql:8.0
@@ -22,52 +81,14 @@ services:
       retries: 10
         # 3306 solo escucha en 127.0.0.1 (loopback) del host, para tunel SSH. No es accesible publicamente.
 
-  api:
-    # API_IMAGE lo setea Actions (GHCR). Sin variable: build local (fallback).
-    image: ${API_IMAGE:-crc-api:local}
-    build:
-      context: ./api
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
-    environment:
-      NODE_ENV: production
-      PORT: 3000
-      DB_HOST: db
-      DB_PORT: 3306
-      DB_NAME: ${DB_NAME}
-      DB_USER: ${DB_USER}
-      DB_PASSWORD: ${DB_PASSWORD}
-      DB_SYNC: ${DB_SYNC}
-      JWT_SECRET: ${JWT_SECRET}
-      CORS_ORIGIN: ${CORS_ORIGIN}
-      PUBLIC_APP_ORIGIN: ${PUBLIC_APP_ORIGIN:-https://cierres.perezcompany.com.ar}
-      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY}
-      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY}
-      VAPID_SUBJECT: ${VAPID_SUBJECT:-https://cierres.perezcompany.com.ar}
-      UPLOADS_DIR: /app/uploads
-      UPLOADS_RETENTION_DAYS: ${UPLOADS_RETENTION_DAYS:-365}
-      UPLOADS_PURGE_CRON: "${UPLOADS_PURGE_CRON:-0 5 * * *}"
-      UPLOADS_PURGE_TZ: ${UPLOADS_PURGE_TZ:-America/Argentina/Buenos_Aires}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
-      GEMINI_FALLBACK_MODELS: ${GEMINI_FALLBACK_MODELS:-gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-flash-latest}
-      GROQ_API_KEY: ${GROQ_API_KEY:-}
-      GROQ_MODEL: ${GROQ_MODEL:-qwen/qwen3.8-27b}
-      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
-      # CloudFront -> nginx -> api: 1 proxy antes de nginx en X-Forwarded-For.
-      TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}
-      SWAGGER_ENABLED: ${SWAGGER_ENABLED:-false}
-      SENTRY_DSN: ${SENTRY_DSN:-}
-      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0}
-      DB_SLOW_QUERY_MS: ${DB_SLOW_QUERY_MS:-1000}
-      SLOW_REQUEST_MS: ${SLOW_REQUEST_MS:-2000}
-    volumes:
-      - uploads-data:/app/uploads
-    networks:
-      - internal
+  # Blue/green: solo uno recibe tráfico (nginx/upstream.conf). El otro se levanta en el deploy.
+  api-blue:
+    <<: *api
+    container_name: crc-api-blue
+
+  api-green:
+    <<: *api
+    container_name: crc-api-green
 
   nginx:
     image: nginx:1.27-alpine
@@ -76,11 +97,12 @@ services:
       - "80:80"
     volumes:
       - ./nginx/default.conf:/etc/nginx/templates/default.conf.template:ro
+      - ./nginx/upstream.conf:/etc/nginx/conf.d/00-upstream.conf:ro
     environment:
       ORIGIN_VERIFY: ${ORIGIN_VERIFY}
     depends_on:
-      api:
-        condition: service_started
+      db:
+        condition: service_healthy
     networks:
       - internal
 
