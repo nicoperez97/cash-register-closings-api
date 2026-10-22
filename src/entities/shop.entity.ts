@@ -222,7 +222,12 @@ export class Shop extends BaseEntity {
 
   /** Sectores (Cocina, Pizzería…) para ruteo de comandas. */
   @Column({ type: 'simple-json', nullable: true })
-  kitchenSectors?: Array<{ id: string; name: string; showEntradas?: boolean }> | null;
+  kitchenSectors?: Array<{
+    id: string;
+    name: string;
+    showEntradas?: boolean;
+    combinesWithSectorIds?: string[];
+  }> | null;
 
   /** Cartas publicadas (una o varias: menú, vinos, etc.). */
   @Column({ type: 'simple-json', nullable: true })

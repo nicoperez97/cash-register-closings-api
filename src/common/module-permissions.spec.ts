@@ -138,6 +138,7 @@ describe('sanitizeModulePermissions', () => {
         'comanda.manage',
         'comandaReceiptsHistory.manage',
         'comandaMonitor.read',
+        'comandaMonitor.amounts',
       ]),
     );
   });
@@ -153,9 +154,16 @@ describe('sanitizeModulePermissions', () => {
         'comanda.read',
         'comandaReceiptsHistory.read',
         'comandaMonitor.read',
+        'comandaMonitor.amounts',
       ]),
     );
     expect(perms).not.toContain('comanda.manage');
+  });
+
+  it('comandaMonitor basic → read sin montos', () => {
+    const perms = expandModulePermissions({ comandaMonitor: 'basic' });
+    expect(perms).toContain('comandaMonitor.read');
+    expect(perms).not.toContain('comandaMonitor.amounts');
   });
 
   it('accounts/concepts/users/carta/promos: Ver otorga .read sin .manage', () => {

@@ -1184,6 +1184,17 @@ export class WaiterService implements OnModuleInit {
     });
     const sessionIds = openSessions.map((s) => s.id);
 
+    // Cierres del turno (por closedAt).
+    const closedSessions = await this.sessions.find({
+      where: {
+        shopId: shop.id,
+        status: TableSessionStatus.CLOSED,
+        closedAt: And(MoreThanOrEqual(ownership.from), LessThan(ownership.to)),
+      },
+      order: { closedAt: 'DESC' },
+      take: 80,
+    });
+
     // Envíos del turno (también de mesas ya cerradas).
     const shiftOrders = await this.orders
       .createQueryBuilder('o')
@@ -1197,14 +1208,17 @@ export class WaiterService implements OnModuleInit {
       .take(60)
       .getMany();
 
-    const openSessionOrders = sessionIds.length
+    const allSessionIdsForOrders = [
+      ...new Set([...sessionIds, ...closedSessions.map((s) => s.id)]),
+    ];
+    const sessionOrdersLoaded = allSessionIdsForOrders.length
       ? await this.orders.find({
-          where: { shopId: shop.id, tableSessionId: In(sessionIds) },
+          where: { shopId: shop.id, tableSessionId: In(allSessionIdsForOrders) },
           order: { createdAt: 'DESC' },
         })
       : [];
     const ordersBySession = new Map<string, CustomerOrder[]>();
-    for (const o of openSessionOrders) {
+    for (const o of sessionOrdersLoaded) {
       const sid = String(o.tableSessionId ?? '');
       if (!sid) continue;
       const list = ordersBySession.get(sid) ?? [];
@@ -1212,19 +1226,36 @@ export class WaiterService implements OnModuleInit {
       ordersBySession.set(sid, list);
     }
 
-    const closedSessionIds = [
+    const allSessionsForLabels = [...openSessions, ...closedSessions];
+    const sessionById = new Map(allSessionsForLabels.map((s) => [s.id, s]));
+    const missingSessionIds = [
       ...new Set(
         shiftOrders
-          .map((o) => String(o.tableSessionId ?? ''))
-          .filter((id) => id && !sessionIds.includes(id)),
+          .map((o) => String(o.tableSessionId ?? '').trim())
+          .filter((id) => id && !sessionById.has(id)),
       ),
     ];
-    const closedSessions = closedSessionIds.length
-      ? await this.sessions.find({
-          where: { shopId: shop.id, id: In(closedSessionIds) },
-        })
-      : [];
-    const allSessionsForLabels = [...openSessions, ...closedSessions];
+    if (missingSessionIds.length) {
+      const extra = await this.sessions.find({
+        where: { shopId: shop.id, id: In(missingSessionIds) },
+      });
+      for (const s of extra) {
+        sessionById.set(s.id, s);
+        allSessionsForLabels.push(s);
+      }
+      const extraOrders = await this.orders.find({
+        where: { shopId: shop.id, tableSessionId: In(missingSessionIds) },
+        order: { createdAt: 'DESC' },
+      });
+      for (const o of extraOrders) {
+        const sid = String(o.tableSessionId ?? '');
+        if (!sid) continue;
+        const list = ordersBySession.get(sid) ?? [];
+        list.push(o);
+        ordersBySession.set(sid, list);
+      }
+    }
+
     const allTableIds = [
       ...new Set(
         allSessionsForLabels
@@ -1232,12 +1263,12 @@ export class WaiterService implements OnModuleInit {
           .filter((id): id is string => !!String(id ?? '').trim()),
       ),
     ];
-    const tables = allTableIds.length
+    const salonTables = allTableIds.length
       ? await this.tables.find({ where: { shopId: shop.id, id: In(allTableIds) } })
       : [];
-    const tableById = new Map(tables.map((t) => [t.id, t]));
+    const tableById = new Map(salonTables.map((t) => [t.id, t]));
     const sectorIds = [
-      ...new Set(tables.map((t) => t.sectorId).filter(Boolean) as string[]),
+      ...new Set(salonTables.map((t) => t.sectorId).filter(Boolean) as string[]),
     ];
     const sectors = sectorIds.length
       ? await this.sectors.find({ where: { id: In(sectorIds) } })
@@ -1256,7 +1287,6 @@ export class WaiterService implements OnModuleInit {
       ? await this.employees.find({ where: { shopId: shop.id, id: In(waiterIds) } })
       : [];
     const waiterName = new Map(waiters.map((e) => [e.id, e.fullName]));
-    const sessionById = new Map(allSessionsForLabels.map((s) => [s.id, s]));
 
     const compactLines = (items: CustomerOrderLine[], max = 14) => {
       const rows: Array<{ qty: number; name: string; extra: boolean }> = [];
@@ -1271,69 +1301,109 @@ export class WaiterService implements OnModuleInit {
       return rows;
     };
 
-    const tableDtos = openSessions
-      .map((session) => {
-        const sessionOrders = ordersBySession.get(session.id) ?? [];
-        if (!sessionOrders.length) return null;
-        const table = session.salonTableId
-          ? tableById.get(session.salonTableId)
-          : undefined;
-        const sid = table?.sectorId ?? null;
-        const newest = sessionOrders[0];
-        const oldestFirst = [...sessionOrders].sort(
-          (a, b) => a.createdAt.getTime() - b.createdAt.getTime(),
-        );
-        const lines: Array<{ qty: number; name: string; extra: boolean }> = [];
-        for (const o of oldestFirst) {
-          for (const row of compactLines(o.items ?? [], 40)) {
-            lines.push(row);
-            if (lines.length >= 16) break;
-          }
+    const sessionNet = (session: TableSession, sessionOrders: CustomerOrder[]) => {
+      const stored = Number(session.ticketTotal);
+      if (session.ticketTotal != null && Number.isFinite(stored) && stored >= 0) {
+        return Math.round(stored * 100) / 100;
+      }
+      if (sessionOrders.length) {
+        const { sessionSubtotal } = this.resolveSessionPromo(shop, session, sessionOrders);
+        const discount = Math.max(0, Number(session.ticketDiscountAmount) || 0);
+        return Math.round(Math.max(0, sessionSubtotal - discount) * 100) / 100;
+      }
+      return 0;
+    };
+
+    const buildSessionDto = (
+      session: TableSession,
+      opts?: { includeEmpty?: boolean },
+    ) => {
+      const sessionOrders = ordersBySession.get(session.id) ?? [];
+      if (!sessionOrders.length && !opts?.includeEmpty) return null;
+      const table = session.salonTableId
+        ? tableById.get(session.salonTableId)
+        : undefined;
+      const sid = table?.sectorId ?? null;
+      const newest = sessionOrders[0];
+      const oldestFirst = [...sessionOrders].sort(
+        (a, b) => a.createdAt.getTime() - b.createdAt.getTime(),
+      );
+      const lines: Array<{ qty: number; name: string; extra: boolean }> = [];
+      for (const o of oldestFirst) {
+        for (const row of compactLines(o.items ?? [], 40)) {
+          lines.push(row);
           if (lines.length >= 16) break;
         }
-        const total = sessionOrders.reduce((s, o) => s + (Number(o.total) || 0), 0);
-        return {
-          sessionId: session.id,
-          tableId: session.salonTableId ?? null,
-          tableLabel: this.sessionTableLabel(table),
-          sectorName: session.salonTableId
-            ? sid
-              ? sectorName.get(sid) ?? 'Sector'
-              : table?.area === 'OUTSIDE'
-                ? 'Afuera'
-                : 'Adentro'
-            : COUNTER_SESSION_LABEL,
-          covers: Number(session.covers) || (session.salonTableId ? 2 : 1),
-          waiterName:
-            (session.waiterEmployeeId && waiterName.get(session.waiterEmployeeId)) ||
-            '—',
-          openedAt: session.createdAt,
-          orderCount: sessionOrders.length,
-          customerTicketPrinted: !!session.customerTicketPrinted,
-          lastOrderAt: newest?.createdAt ?? session.createdAt,
-          lastOrderCode: newest?.code ?? null,
-          total: Math.round(total * 100) / 100,
-          lines,
-        };
-      })
-      .filter((row): row is NonNullable<typeof row> => !!row);
+        if (lines.length >= 16) break;
+      }
+      const discountAmount = Math.round((Number(session.ticketDiscountAmount) || 0) * 100) / 100;
+      return {
+        sessionId: session.id,
+        tableId: session.salonTableId ?? null,
+        channel: (session.salonTableId ? 'TABLE' : 'COUNTER') as 'TABLE' | 'COUNTER',
+        tableLabel: this.sessionTableLabel(table),
+        sectorName: session.salonTableId
+          ? sid
+            ? sectorName.get(sid) ?? 'Sector'
+            : table?.area === 'OUTSIDE'
+              ? 'Afuera'
+              : 'Adentro'
+          : COUNTER_SESSION_LABEL,
+        covers: Number(session.covers) || (session.salonTableId ? 2 : 1),
+        waiterName:
+          (session.waiterEmployeeId && waiterName.get(session.waiterEmployeeId)) ||
+          '—',
+        openedAt: session.createdAt,
+        closedAt: session.closedAt ?? null,
+        orderCount: sessionOrders.length,
+        customerTicketPrinted: !!session.customerTicketPrinted,
+        lastOrderAt: newest?.createdAt ?? session.createdAt,
+        lastOrderCode: newest?.code ?? null,
+        total: sessionNet(session, sessionOrders),
+        discountAmount,
+        discountLabel: session.ticketDiscountLabel ?? null,
+        lines,
+      };
+    };
 
-    const recentOrders = shiftOrders.slice(0, 40).map((o) => {
+    const openDtos = openSessions
+      .map((s) => buildSessionDto(s))
+      .filter((row): row is NonNullable<typeof row> => !!row);
+    const closedDtos = closedSessions
+      .map((s) => buildSessionDto(s, { includeEmpty: true }))
+      .filter((row): row is NonNullable<typeof row> => !!row)
+      .filter((row) => row.orderCount > 0 || row.total > 0);
+
+    const tables = openDtos.filter((t) => t.channel === 'TABLE');
+    const counters = openDtos.filter((t) => t.channel === 'COUNTER');
+    const closedTables = closedDtos.filter((t) => t.channel === 'TABLE').slice(0, 40);
+    const closedCounters = closedDtos.filter((t) => t.channel === 'COUNTER').slice(0, 40);
+
+    const orderRows = shiftOrders.map((o) => {
       const session = sessionById.get(String(o.tableSessionId ?? ''));
       const table =
         session?.salonTableId ? tableById.get(session.salonTableId) : undefined;
+      const sessionOrders = session ? ordersBySession.get(session.id) ?? [o] : [o];
+      const net = session ? sessionNet(session, sessionOrders) : Number(o.total) || 0;
+      const ordersSum = sessionOrders.reduce((s, x) => s + (Number(x.total) || 0), 0);
+      const orderShare =
+        session && ordersSum > 0
+          ? Math.round(((Number(o.total) || 0) / ordersSum) * net * 100) / 100
+          : Number(o.total) || 0;
       return {
         id: o.id,
         code: o.code,
+        channel: (session?.salonTableId ? 'TABLE' : 'COUNTER') as 'TABLE' | 'COUNTER',
         tableLabel: this.sessionTableLabel(table),
         waiterName:
           (session?.waiterEmployeeId && waiterName.get(session.waiterEmployeeId)) ||
           '—',
         createdAt: o.createdAt,
-        total: Number(o.total) || 0,
+        total: orderShare,
         items: compactLines(o.items ?? [], 8),
       };
     });
+    const recentOrders = orderRows.slice(0, 40);
 
     const audits = await this.lineAudits.find({
       where: {
@@ -1344,21 +1414,45 @@ export class WaiterService implements OnModuleInit {
       take: 80,
     });
 
-    const openCovers = tableDtos.reduce((s, t) => s + (Number(t.covers) || 0), 0);
-    const openTotal = Math.round(
-      tableDtos.reduce((s, t) => s + (Number(t.total) || 0), 0) * 100,
-    ) / 100;
-    const sendsTotal = Math.round(
-      shiftOrders.reduce((s, o) => s + (Number(o.total) || 0), 0) * 100,
-    ) / 100;
-    const ticketsPrinted = tableDtos.filter((t) => t.customerTicketPrinted).length;
+    const sessionsWithChanges = new Set(
+      audits.map((a) => String(a.tableSessionId ?? '').trim()).filter(Boolean),
+    );
+    const openCovers = tables.reduce((s, t) => s + (Number(t.covers) || 0), 0);
+    const closedCovers = closedTables.reduce((s, t) => s + (Number(t.covers) || 0), 0);
+    const openTotal =
+      Math.round(openDtos.reduce((s, t) => s + (Number(t.total) || 0), 0) * 100) / 100;
+    const closedTotal =
+      Math.round(closedDtos.reduce((s, t) => s + (Number(t.total) || 0), 0) * 100) / 100;
+    const sendsTotal =
+      Math.round(orderRows.reduce((s, o) => s + (Number(o.total) || 0), 0) * 100) / 100;
+    const ticketsPrinted =
+      openDtos.filter((t) => t.customerTicketPrinted).length +
+      closedDtos.filter((t) => t.customerTicketPrinted).length;
+
+    const shopPerms = user.shopPermissions?.[shop.id] ?? user.permissions ?? [];
+    const canSeeAmounts =
+      shopPerms.includes('comandaMonitor.amounts') ||
+      shopPerms.includes('shops.manage');
+
+    const redactSession = <T extends { total: number; discountAmount: number; discountLabel: string | null }>(
+      row: T,
+    ) =>
+      canSeeAmounts
+        ? row
+        : { ...row, total: 0, discountAmount: 0, discountLabel: null };
+    const redactOrder = <T extends { total: number }>(row: T) =>
+      canSeeAmounts ? row : { ...row, total: 0 };
 
     return {
       shopName: shop.name,
       shiftName: shift?.name ?? null,
       businessDate,
-      tables: tableDtos,
-      recentOrders,
+      showAmounts: canSeeAmounts,
+      tables: tables.map(redactSession),
+      counters: counters.map(redactSession),
+      closedTables: closedTables.map(redactSession),
+      closedCounters: closedCounters.map(redactSession),
+      recentOrders: recentOrders.map(redactOrder),
       recentAudits: audits.map((a) => ({
         id: a.id,
         action: a.action,
@@ -1367,10 +1461,16 @@ export class WaiterService implements OnModuleInit {
         lineKind: a.lineKind,
         qtyBefore: a.qtyBefore,
         qtyAfter: a.qtyAfter,
-        unitPriceBefore:
-          a.unitPriceBefore == null ? null : Number(a.unitPriceBefore) || 0,
-        unitPriceAfter:
-          a.unitPriceAfter == null ? null : Number(a.unitPriceAfter) || 0,
+        unitPriceBefore: canSeeAmounts
+          ? a.unitPriceBefore == null
+            ? null
+            : Number(a.unitPriceBefore) || 0
+          : null,
+        unitPriceAfter: canSeeAmounts
+          ? a.unitPriceAfter == null
+            ? null
+            : Number(a.unitPriceAfter) || 0
+          : null,
         relatedLines: a.relatedLines ?? [],
         actorName: a.actorName,
         actorTyp: a.actorTyp,
@@ -1379,13 +1479,23 @@ export class WaiterService implements OnModuleInit {
         reasonNote: a.reasonNote ?? null,
         createdAt: a.createdAt,
         tableLabel: a.tableLabel ?? null,
+        tableSessionId: a.tableSessionId ?? null,
       })),
       summary: {
-        openTables: tableDtos.length,
+        openTables: tables.length,
         openCovers,
-        openTotal,
+        openCounter: counters.length,
+        closedTables: closedTables.length,
+        closedCovers,
+        closedCounter: closedCounters.length,
+        tablesWithChanges: sessionsWithChanges.size,
+        openTotal: canSeeAmounts ? openTotal : 0,
+        closedTotal: canSeeAmounts ? closedTotal : 0,
+        shiftTotal: canSeeAmounts
+          ? Math.round((openTotal + closedTotal) * 100) / 100
+          : 0,
         sends: shiftOrders.length,
-        sendsTotal,
+        sendsTotal: canSeeAmounts ? sendsTotal : 0,
         ticketsPrinted,
         audits: audits.length,
       },
@@ -1708,6 +1818,7 @@ export class WaiterService implements OnModuleInit {
       reason: 'TABLE',
       tableLabel: this.sessionTableLabel(table),
       waiterName: sessionWaiter?.fullName?.trim() || waiter.name,
+      covers: table ? Number(session.covers) || null : null,
     });
     return { ok: true, ...result };
   }
@@ -1755,6 +1866,7 @@ export class WaiterService implements OnModuleInit {
           printCustomerTicket: false,
           tableLabel,
           waiterName,
+          covers: session.salonTableId ? Number(session.covers) || null : null,
           kitchenItemsMode: 'MAINS_PENDING',
           kitchenBanner: '>>> PRINCIPALES',
           kitchenSourceSuffix: `fire${Date.now().toString(36)}`,
@@ -1790,6 +1902,33 @@ export class WaiterService implements OnModuleInit {
       printedOrders: printed,
       ...(await this.sessionDetail(shop, session)),
     };
+  }
+
+  /** Actualiza comensales de una mesa abierta (no aplica a mostrador). */
+  async patchSessionCovers(
+    slug: string,
+    waiter: WaiterAuthPayload,
+    sessionId: string,
+    coversRaw: number,
+  ) {
+    assertWaiterShopSlug(waiter, slug);
+    const shop = await this.requireShop(slug);
+    const covers = Math.round(Number(coversRaw));
+    if (!Number.isFinite(covers) || covers < 1 || covers > 30) {
+      throw new BadRequestException('Indicá entre 1 y 30 comensales');
+    }
+    return this.withLockedSession(shop.id, sessionId, async (session, manager) => {
+      if (session.status !== TableSessionStatus.OPEN) {
+        throw new BadRequestException('La mesa ya está cerrada');
+      }
+      if (!String(session.salonTableId ?? '').trim()) {
+        throw new BadRequestException('El mostrador no usa comensales');
+      }
+      session.covers = covers;
+      await manager.getRepository(TableSession).save(session);
+      this.live.tick(shop.id, 'customer-orders');
+      return this.sessionDetail(shop, session, manager);
+    });
   }
 
   /** Asigna promos matchables (multi) y cupo por promo a la mesa. */

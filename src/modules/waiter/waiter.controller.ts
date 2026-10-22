@@ -130,6 +130,15 @@ class OpenSessionDto {
   waiterEmployeeId?: string | null;
 }
 
+class PatchSessionCoversDto {
+  @ApiProperty({ example: 2 })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(30)
+  covers: number;
+}
+
 class CloseSessionPaymentDto {
   @ApiProperty()
   @IsString()
@@ -425,6 +434,18 @@ export class WaiterController {
     @Param('orderId') orderId: string,
   ) {
     return this.waiter.reprintSessionKitchen(slug, waiter, id, orderId);
+  }
+
+  @Public()
+  @UseGuards(WaiterAuthGuard)
+  @Patch('sessions/:id/covers')
+  patchSessionCovers(
+    @Param('slug') slug: string,
+    @CurrentWaiter() waiter: WaiterAuthPayload,
+    @Param('id') id: string,
+    @Body() dto: PatchSessionCoversDto,
+  ) {
+    return this.waiter.patchSessionCovers(slug, waiter, id, dto.covers);
   }
 
   @Public()

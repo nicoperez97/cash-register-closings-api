@@ -163,6 +163,8 @@ export type KitchenSector = {
   name: string;
   /** En otras comandas del pedido, avisar en chico las entradas de este envío. */
   showEntradas?: boolean;
+  /** Otros sectores con los que Combina se marca solo en comanda. */
+  combinesWithSectorIds?: string[];
 };
 
 export type ShopMenuSection = {
@@ -564,7 +566,12 @@ export function newKitchenSectorId(): string {
 
 export function normalizeKitchenSectors(raw: unknown): KitchenSector[] {
   if (!Array.isArray(raw)) return [];
-  const out: KitchenSector[] = [];
+  const draft: Array<{
+    id: string;
+    name: string;
+    showEntradas: boolean;
+    combinesWithRaw: unknown;
+  }> = [];
   const seen = new Set<string>();
   for (const row of raw) {
     const id = String((row as { id?: string })?.id ?? '').trim().slice(0, 40) || newKitchenSectorId();
@@ -573,9 +580,42 @@ export function normalizeKitchenSectors(raw: unknown): KitchenSector[] {
     const name = String((row as { name?: string })?.name ?? '').trim().slice(0, 60);
     if (!name) continue;
     const showEntradas = !!(row as { showEntradas?: unknown })?.showEntradas;
-    out.push({ id, name, showEntradas });
+    draft.push({
+      id,
+      name,
+      showEntradas,
+      combinesWithRaw: (row as { combinesWithSectorIds?: unknown })?.combinesWithSectorIds,
+    });
   }
-  return out;
+  const knownIds = new Set(draft.map((s) => s.id));
+  const links = new Map<string, Set<string>>();
+  for (const s of draft) {
+    const set = new Set<string>();
+    const rawLinks = Array.isArray(s.combinesWithRaw) ? s.combinesWithRaw : [];
+    for (const v of rawLinks) {
+      const sid = String(v ?? '').trim().slice(0, 40);
+      if (!sid || sid === s.id || !knownIds.has(sid)) continue;
+      set.add(sid);
+    }
+    links.set(s.id, set);
+  }
+  // Ida y vuelta: A→B implica B→A.
+  for (const [a, set] of links) {
+    for (const b of set) {
+      const back = links.get(b) ?? new Set<string>();
+      back.add(a);
+      links.set(b, back);
+    }
+  }
+  return draft.map((s) => {
+    const combinesWithSectorIds = [...(links.get(s.id) ?? [])];
+    return {
+      id: s.id,
+      name: s.name,
+      showEntradas: s.showEntradas,
+      ...(combinesWithSectorIds.length ? { combinesWithSectorIds } : {}),
+    };
+  });
 }
 
 /** Normaliza sectores del ítem; migra kitchenSectorId legacy → array. */

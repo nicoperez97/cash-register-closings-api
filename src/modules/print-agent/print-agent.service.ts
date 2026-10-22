@@ -28,6 +28,7 @@ import {
 } from '../../entities/customer-order.entity';
 import { PrintJob, PrintJobKind, PrintJobStatus } from '../../entities/print-job.entity';
 import { Shop } from '../../entities/shop.entity';
+import { TableSession } from '../../entities/table-session.entity';
 import { ShopLiveService } from '../shop-live/shop-live.service';
 import { PrintAgentLiveService } from './print-agent-live.service';
 import { ShopsService } from '../shops/shops.service';
@@ -434,6 +435,7 @@ export class PrintAgentService implements OnModuleInit {
   constructor(
     @InjectRepository(PrintJob) private readonly jobs: Repository<PrintJob>,
     @InjectRepository(Shop) private readonly shops: Repository<Shop>,
+    @InjectRepository(TableSession) private readonly tableSessions: Repository<TableSession>,
     private readonly shopsSvc: ShopsService,
     private readonly live: ShopLiveService,
     private readonly agentLive: PrintAgentLiveService,
@@ -810,6 +812,8 @@ export class PrintAgentService implements OnModuleInit {
       printKitchen?: boolean;
       tableLabel?: string | null;
       waiterName?: string | null;
+      /** Comensales de la mesa (comanda: Mesa: X · N comensales). */
+      covers?: number | null;
       /** Sufijo para reimprimir ticket cliente (ej. close). */
       customerSourceSuffix?: string;
       /** Sufijo para reimprimir cocina (fuerza nuevo job). */
@@ -863,6 +867,21 @@ export class PrintAgentService implements OnModuleInit {
     const tableLabel = opts?.tableLabel?.trim() || null;
     const waiterName = opts?.waiterName?.trim() || null;
     const banner = String(opts?.kitchenBanner ?? '').trim() || null;
+    let covers: number | null = null;
+    const coversRaw = opts?.covers;
+    if (coversRaw != null && Number.isFinite(Number(coversRaw))) {
+      const n = Math.round(Number(coversRaw));
+      if (n >= 1 && n <= 30) covers = n;
+    } else if (tableLabel && order.tableSessionId) {
+      const session = await this.tableSessions.findOne({
+        where: { id: order.tableSessionId, shopId: shop.id },
+        select: ['id', 'covers', 'salonTableId'],
+      });
+      if (session?.salonTableId) {
+        const n = Math.round(Number(session.covers) || 0);
+        if (n >= 1 && n <= 30) covers = n;
+      }
+    }
     const base = {
       kind: 'CUSTOMER_ORDER' as const,
       shopName: shop.name,
@@ -885,6 +904,7 @@ export class PrintAgentService implements OnModuleInit {
       acceptedAt: order.acceptedAt ?? null,
       tableLabel,
       waiterName,
+      covers,
       salonTableId: order.salonTableId ?? null,
       tableSessionId: order.tableSessionId ?? null,
       kitchenBanner: banner,
@@ -948,7 +968,12 @@ export class PrintAgentService implements OnModuleInit {
   async reprintKitchenForOrder(
     shop: Shop,
     order: CustomerOrder,
-    opts?: { tableLabel?: string | null; waiterName?: string | null; reason?: 'TABLE' | 'COUNTER' | 'ACCEPTED' },
+    opts?: {
+      tableLabel?: string | null;
+      waiterName?: string | null;
+      covers?: number | null;
+      reason?: 'TABLE' | 'COUNTER' | 'ACCEPTED';
+    },
   ) {
     if (!shop.printAgentTokenHash) {
       throw new BadRequestException(
@@ -967,6 +992,7 @@ export class PrintAgentService implements OnModuleInit {
         printCustomerTicket: false,
         tableLabel: opts?.tableLabel ?? null,
         waiterName: opts?.waiterName ?? null,
+        covers: opts?.covers ?? null,
         kitchenSourceSuffix: `r${Date.now().toString(36)}`,
       });
       if (!job) {
@@ -982,6 +1008,7 @@ export class PrintAgentService implements OnModuleInit {
       printCustomerTicket: false,
       tableLabel: opts?.tableLabel ?? null,
       waiterName: opts?.waiterName ?? null,
+      covers: opts?.covers ?? null,
     });
     if (!job) {
       throw new BadRequestException('No se pudo encolar la comanda');

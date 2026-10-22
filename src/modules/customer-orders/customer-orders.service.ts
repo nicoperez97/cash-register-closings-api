@@ -81,6 +81,8 @@ import {
 import {
   allowedUnitPrices,
   menuItemCountsAsUnitsMap,
+  normalizeKitchenSectorIds,
+  normalizeKitchenSectors,
   normalizeRemovableIngredients,
   normalizeShopMenus,
   resolveItemUnitPrice,
@@ -750,6 +752,7 @@ export class CustomerOrdersService implements OnModuleInit {
       );
     }
     const menus = normalizeShopMenus(shop.menu);
+    const kitchenSectors = normalizeKitchenSectors(shop.kitchenSectors);
     const soldOut = await this.safeSoldOutIds(shop.id, menus);
     return {
       enabled: true,
@@ -762,6 +765,11 @@ export class CustomerOrdersService implements OnModuleInit {
         accentSecondary: shop.accentSecondary ?? null,
         currency: shop.currency || 'ARS',
       },
+      kitchenSectors: kitchenSectors.map((s) => ({
+        id: s.id,
+        name: s.name,
+        combinesWithSectorIds: s.combinesWithSectorIds ?? [],
+      })),
       extras: normalizeOrderingExtras(shop.orderingExtras)
         .filter((e) => e.available !== false)
         .map((e) => ({
@@ -806,6 +814,7 @@ export class CustomerOrdersService implements OnModuleInit {
                 id: img.id,
                 url: img.url,
               }));
+              const kitchenSectorIds = normalizeKitchenSectorIds(it);
               return {
                 id: it.id,
                 name: it.name,
@@ -818,6 +827,7 @@ export class CustomerOrdersService implements OnModuleInit {
                 removableIngredients: it.removableIngredients ?? [],
                 imageUrl: it.imageUrl ?? images[0]?.url ?? null,
                 images,
+                kitchenSectorIds,
               };
             }),
         })),
