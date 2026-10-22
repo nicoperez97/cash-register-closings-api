@@ -502,7 +502,8 @@ export const MODULE_DEFS: ModuleDef[] = [
     label: 'Monitor comanda',
     levels: [
       { value: 'none', label: 'Ninguno' },
-      { value: 'read', label: 'Ver' },
+      { value: 'basic', label: 'Ver sin montos' },
+      { value: 'read', label: 'Ver con montos' },
     ],
   },
   {
@@ -808,7 +809,10 @@ export function expandModulePermissions(
   pair('orderingCatalog', 'orderingCatalog.read', 'orderingCatalog.manage');
   pair('promos', 'promos.read', 'promos.manage');
   pair('comanda', 'comanda.read', 'comanda.manage');
-  if (modules.comandaMonitor === 'read') add(set, 'comandaMonitor.read');
+  if (modules.comandaMonitor === 'basic' || modules.comandaMonitor === 'read') {
+    add(set, 'comandaMonitor.read');
+  }
+  if (modules.comandaMonitor === 'read') add(set, 'comandaMonitor.amounts');
   pair(
     'comandaReceiptsHistory',
     'comandaReceiptsHistory.read',
@@ -1044,7 +1048,11 @@ export function deriveModulesFromRole(role: GlobalRole): ModulePermissionsMap {
             ? 'read'
             : 'none',
     comanda: level('comanda.read', 'comanda.manage'),
-    comandaMonitor: has('comandaMonitor.read') ? 'read' : 'none',
+    comandaMonitor: has('comandaMonitor.read')
+      ? has('comandaMonitor.amounts')
+        ? 'read'
+        : 'basic'
+      : 'none',
     comandaReceiptsHistory: level(
       'comandaReceiptsHistory.read',
       'comandaReceiptsHistory.manage',

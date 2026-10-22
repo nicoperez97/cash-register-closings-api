@@ -255,7 +255,15 @@ export class MenuService {
   async saveAdmin(
     user: AuthUser,
     shopId: string,
-    body: { menus?: ShopMenu[]; kitchenSectors?: Array<{ id?: string; name?: string; showEntradas?: boolean }> } | ShopMenu,
+    body: {
+      menus?: ShopMenu[];
+      kitchenSectors?: Array<{
+        id?: string;
+        name?: string;
+        showEntradas?: boolean;
+        combinesWithSectorIds?: string[];
+      }>;
+    } | ShopMenu,
   ) {
     this.shops.assertOrderingCatalogManage(user, shopId);
     const shop = await this.shopsRepo.findOne({ where: { id: shopId } });
