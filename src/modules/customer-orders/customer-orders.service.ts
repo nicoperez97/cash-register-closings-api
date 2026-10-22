@@ -76,6 +76,7 @@ import {
 } from '../../common/shop-ordering';
 import {
   isPromoInSchedule,
+  normalizePromoSelections,
   normalizeShopPromos,
 } from '../../common/shop-promos';
 import {
@@ -677,6 +678,69 @@ export class CustomerOrdersService implements OnModuleInit {
           menuItemIds: e.menuItemIds ?? [],
         })),
       discountPresets: normalizeDiscountPresets(shop.discountPresets),
+      promos: (() => {
+        const itemById = new Map<
+          string,
+          {
+            id: string;
+            name: string;
+            description: string | null;
+            price: number | null;
+            imageUrl: string | null;
+            images: Array<{ id: string; url: string }>;
+          }
+        >();
+        for (const m of menus) {
+          for (const sec of m.sections ?? []) {
+            for (const it of sec.items ?? []) {
+              const id = String(it.id ?? '').trim();
+              if (!id || soldOut.has(id)) continue;
+              if (opts.paymentsChannel === 'counter') {
+                if (it.active === false) continue;
+              } else if (it.available === false) {
+                continue;
+              }
+              if (it.price == null) continue;
+              const images = (it.images ?? []).map((img) => ({
+                id: img.id,
+                url: `/public/shops/${shop.slug}/menu-items/${encodeURIComponent(id)}/images/${encodeURIComponent(img.id)}`,
+              }));
+              const first =
+                images[0]?.url ??
+                (it.imageUrl
+                  ? `/public/shops/${shop.slug}/menu-items/${encodeURIComponent(id)}/image`
+                  : null);
+              itemById.set(id, {
+                id,
+                name: String(it.name ?? '').trim() || 'Ítem',
+                description: it.description ?? null,
+                price: Number(it.price) || 0,
+                imageUrl: first,
+                images,
+              });
+            }
+          }
+        }
+        const isStaff = opts.paymentsChannel === 'counter';
+        return normalizeShopPromos(shop.promos)
+          .filter((p) => {
+            if (!p.available || !p.forPedidos) return false;
+            if (!isStaff && !p.showOnPublicOrdering) return false;
+            if (!isPromoInSchedule(p, now, shop.timezone)) return false;
+            return p.poolItemIds.some((id) => itemById.has(id));
+          })
+          .map((p) => ({
+            id: p.id,
+            name: p.name,
+            description: p.description ?? null,
+            fixedPrice: p.fixedPrice,
+            packQty: p.packQty,
+            poolItems: p.poolItemIds
+              .map((id) => itemById.get(id))
+              .filter((x): x is NonNullable<typeof x> => !!x),
+          }))
+          .filter((p) => p.poolItems.length > 0);
+      })(),
       menus: menus.map((m) => ({
         id: m.id,
         slug: m.slug,
@@ -740,6 +804,8 @@ export class CustomerOrdersService implements OnModuleInit {
       bypassHours: true,
       response: 'public',
       allowDiscount: false,
+      promoSales: dto.promos,
+      promoChannel: 'pedidos',
     });
   }
 
@@ -783,17 +849,19 @@ export class CustomerOrdersService implements OnModuleInit {
         (m) => m.active !== false,
       ),
       promos: normalizeShopPromos(shop.promos)
-        .filter((p) => p.available && (p.sellable || p.tableMatchable))
+        .filter((p) => p.available && p.forComanda)
         .map((p) => ({
           id: p.id,
           name: p.name,
           description: p.description ?? null,
           fixedPrice: p.fixedPrice,
-          sellable: p.sellable,
+          sellable: p.forComanda,
           tableMatchable: p.tableMatchable,
+          forComanda: p.forComanda,
+          packQty: p.packQty,
+          poolItemIds: p.poolItemIds,
           inSchedule: isPromoInSchedule(p, new Date(), shop.timezone),
           items: p.items,
-          specialName: p.specialName ?? null,
         })),
       menus: menus.map((m) => ({
         id: m.id,
@@ -852,7 +920,11 @@ export class CustomerOrdersService implements OnModuleInit {
         qty: number;
         attachedToMenuItemId?: string | null;
       }>;
-      promos?: Array<{ promoId: string; qty: number }>;
+      promos?: Array<{
+        promoId: string;
+        qty: number;
+        selections: Array<{ menuItemId: string; qty: number }>;
+      }>;
       customerNotes?: string | null;
       salonTableId?: string | null;
       tableSessionId: string;
@@ -872,6 +944,7 @@ export class CustomerOrdersService implements OnModuleInit {
         fulfillment: CustomerOrderFulfillment.TABLE,
         items: input.items,
         extras: input.extras,
+        promos: input.promos,
         firstName: isCounter ? 'Mostrador' : 'Mesa',
         lastName: tableLabel || (isCounter ? '' : '—'),
         phone: '',
@@ -898,6 +971,7 @@ export class CustomerOrdersService implements OnModuleInit {
         response: input.response === 'guest' ? 'guest' : 'waiter',
         allowDiscount: false,
         promoSales: input.promos,
+        promoChannel: 'comanda',
       },
     );
   }
@@ -920,6 +994,8 @@ export class CustomerOrdersService implements OnModuleInit {
         bypassHours: true,
         response: 'staff',
         allowDiscount: true,
+        promoSales: dto.promos,
+        promoChannel: 'pedidos',
       },
     );
   }
@@ -938,7 +1014,13 @@ export class CustomerOrdersService implements OnModuleInit {
       bypassHours: boolean;
       response: 'public' | 'staff' | 'waiter' | 'guest';
       allowDiscount: boolean;
-      promoSales?: Array<{ promoId: string; qty: number }>;
+      promoSales?: Array<{
+        promoId: string;
+        qty: number;
+        selections?: Array<{ menuItemId: string; qty: number }>;
+      }>;
+      /** comanda = ítems a precio de carta (matching); pedidos = ITEM $0 + línea PROMO. */
+      promoChannel?: 'comanda' | 'pedidos';
     },
   ) {
     const clientRequestId = this.normalizeClientRequestId(dto.clientRequestId);
@@ -1089,57 +1171,71 @@ export class CustomerOrdersService implements OnModuleInit {
     }
 
     if (opts.promoSales?.length) {
+      const channel = opts.promoChannel ?? 'pedidos';
       const promosById = new Map(
         normalizeShopPromos(shop.promos).map((p) => [p.id, p] as const),
       );
       for (const sale of opts.promoSales) {
         const promo = promosById.get(String(sale.promoId ?? '').trim());
-        if (!promo || !promo.available || !promo.sellable) {
+        const channelOk =
+          channel === 'comanda' ? !!promo?.forComanda : !!promo?.forPedidos;
+        if (!promo || !promo.available || !channelOk) {
           throw new BadRequestException(`Promo no disponible: ${sale.promoId}`);
         }
         if (!isPromoInSchedule(promo, now, shop.timezone)) {
           throw new BadRequestException(`Promo fuera de horario: ${promo.name}`);
         }
         const packs = Math.max(1, Math.min(99, Math.round(Number(sale.qty) || 1)));
+        const selections = normalizePromoSelections(promo, packs, sale.selections);
+        if (!selections) {
+          throw new BadRequestException(
+            `Elegí ${promo.packQty * packs} ítem(s) de la promo «${promo.name}»`,
+          );
+        }
+        const bundleKey = `pb_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 
-        // Con composición: mismos ítems de carta que una carga manual (matching de mesa).
-        if (promo.items.length) {
-          for (const it of promo.items) {
+        if (channel === 'comanda') {
+          // Ítems a precio de carta; el matching de mesa arma el pack.
+          for (const it of selections) {
             const found = catalog.get(it.menuItemId);
             if (!found) {
               throw new BadRequestException(
                 `Ítem de promo no disponible: ${it.menuItemId}`,
               );
             }
-            const qty = it.qty * packs;
             const unitPrice = Number(found.price) || 0;
             lines.push({
               menuItemId: String(found.id),
               name: found.name,
               unitPrice,
-              qty,
+              qty: it.qty,
               notes: null,
               kind: 'ITEM',
             });
-            subtotal += unitPrice * qty;
+            subtotal += unitPrice * it.qty;
           }
           continue;
         }
 
-        // Sin composición (evento): línea PROMO + ítem especial a $0.
-        const bundleKey = `pb_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
-        const note = `Promo: ${promo.name}`;
-        const special = String(promo.specialName || promo.name).trim();
-        lines.push({
-          menuItemId: promo.id,
-          name: special,
-          unitPrice: 0,
-          qty: packs,
-          notes: note,
-          kind: 'ITEM',
-          promoId: promo.id,
-          promoBundleKey: bundleKey,
-        });
+        // Pedidos: ítems a $0 (cocina) + línea PROMO al precio fijo.
+        for (const it of selections) {
+          const found = catalog.get(it.menuItemId);
+          if (!found) {
+            throw new BadRequestException(
+              `Ítem de promo no disponible: ${it.menuItemId}`,
+            );
+          }
+          lines.push({
+            menuItemId: String(found.id),
+            name: found.name,
+            unitPrice: 0,
+            qty: it.qty,
+            notes: `Promo: ${promo.name}`,
+            kind: 'ITEM',
+            promoId: promo.id,
+            promoBundleKey: bundleKey,
+          });
+        }
         subtotal += promo.fixedPrice * packs;
         lines.push({
           menuItemId: promo.id,

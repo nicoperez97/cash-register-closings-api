@@ -12,6 +12,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
 import {
   And,
+  Brackets,
   EntityManager,
   In,
   IsNull,
@@ -69,7 +70,9 @@ import {
 import {
   normalizeShopShifts,
   resolveCurrentShift,
+  shiftRunsOnWeekday,
   shopShiftOwnershipRangeUtc,
+  weekdayFromIsoDate,
   type ShopShift,
 } from '../../common/shop-shifts';
 import {
@@ -1153,7 +1156,11 @@ export class WaiterService implements OnModuleInit {
   }
 
   /** Tablero de monitoreo staff: mesas abiertas, últimos envíos y cambios del turno. */
-  async staffMonitor(user: AuthUser, shopId: string) {
+  async staffMonitor(
+    user: AuthUser,
+    shopId: string,
+    opts?: { from?: string; to?: string; shiftIds?: string[] },
+  ) {
     this.shopsSvc.assertShopAccess(user, shopId);
     const shop = await this.shops.findOne({ where: { id: shopId, active: true as any } });
     if (!shop) throw new NotFoundException('Local no encontrado');
@@ -1164,49 +1171,125 @@ export class WaiterService implements OnModuleInit {
     }
 
     const shifts = normalizeShopShifts(shop.shifts as ShopShift[] | null, shop.openingTime);
-    const businessDate = resolveShopBusinessDate(new Date(), {
+    const today = resolveShopBusinessDate(new Date(), {
       timezone: shop.timezone,
       openingTime: shop.openingTime,
     });
-    const shift = resolveCurrentShift(shifts, new Date(), shop.timezone);
-    const ownership = shopShiftOwnershipRangeUtc(businessDate, shift, shifts, {
-      timezone: shop.timezone,
-    });
+    const shiftIds = [
+      ...new Set(
+        (opts?.shiftIds ?? [])
+          .map((id) => String(id ?? '').trim())
+          .filter(Boolean),
+      ),
+    ];
+    const hasPeriod =
+      !!(opts?.from && /^\d{4}-\d{2}-\d{2}$/.test(opts.from)) ||
+      !!(opts?.to && /^\d{4}-\d{2}-\d{2}$/.test(opts.to)) ||
+      shiftIds.length > 0;
 
-    // Solo mesas abiertas en este turno (evita sesiones viejas colgadas).
-    const openSessions = await this.sessions.find({
-      where: {
-        shopId: shop.id,
-        status: TableSessionStatus.OPEN,
-        createdAt: And(MoreThanOrEqual(ownership.from), LessThan(ownership.to)),
-      },
-      order: { createdAt: 'ASC' },
-    });
+    let ranges: Array<{ from: Date; to: Date }> = [];
+    let businessDate = today;
+    let shiftName: string | null = null;
+
+    if (!hasPeriod) {
+      const shift = resolveCurrentShift(shifts, new Date(), shop.timezone);
+      const ownership = shopShiftOwnershipRangeUtc(businessDate, shift, shifts, {
+        timezone: shop.timezone,
+      });
+      ranges = [ownership];
+      shiftName = shift?.name ?? null;
+    } else {
+      let from =
+        opts?.from && /^\d{4}-\d{2}-\d{2}$/.test(opts.from) ? opts.from : today;
+      let to = opts?.to && /^\d{4}-\d{2}-\d{2}$/.test(opts.to) ? opts.to : from;
+      if (to < from) {
+        const tmp = from;
+        from = to;
+        to = tmp;
+      }
+      businessDate = from === to ? from : `${from}…${to}`;
+      const selected = shiftIds.length
+        ? shifts.filter((s) => shiftIds.includes(s.id))
+        : shifts;
+      shiftName =
+        selected.length === 1
+          ? selected[0].name
+          : selected.length > 1
+            ? `${selected.length} turnos`
+            : null;
+      let day = from;
+      let dayCount = 0;
+      const maxDays = 62;
+      while (day <= to && dayCount < maxDays) {
+        const weekday = weekdayFromIsoDate(day);
+        if (weekday != null) {
+          for (const s of selected) {
+            if (!shiftRunsOnWeekday(s, weekday)) continue;
+            ranges.push(
+              shopShiftOwnershipRangeUtc(day, s, shifts, {
+                timezone: shop.timezone,
+              }),
+            );
+          }
+        }
+        day = nextCalendarDate(day);
+        dayCount += 1;
+      }
+    }
+
+    const applyCreatedRanges = <T extends { andWhere: Function }>(
+      qb: T,
+      column: string,
+      prefix: string,
+    ): T => {
+      if (!ranges.length) {
+        qb.andWhere('1 = 0');
+        return qb;
+      }
+      qb.andWhere(
+        new Brackets((b) => {
+          ranges.forEach((r, i) => {
+            const fromKey = `${prefix}From${i}`;
+            const toKey = `${prefix}To${i}`;
+            b.orWhere(`${column} >= :${fromKey} AND ${column} < :${toKey}`, {
+              [fromKey]: r.from,
+              [toKey]: r.to,
+            });
+          });
+        }),
+      );
+      return qb;
+    };
+
+    // Mesas abiertas abiertas en el período (evita sesiones viejas colgadas).
+    const openQb = this.sessions
+      .createQueryBuilder('s')
+      .where('s.shopId = :shopId', { shopId: shop.id })
+      .andWhere('s.status = :openSt', { openSt: TableSessionStatus.OPEN })
+      .orderBy('s.createdAt', 'ASC');
+    applyCreatedRanges(openQb, 's.createdAt', 'open');
+    const openSessions = await openQb.getMany();
     const sessionIds = openSessions.map((s) => s.id);
 
-    // Cierres del turno (por closedAt).
-    const closedSessions = await this.sessions.find({
-      where: {
-        shopId: shop.id,
-        status: TableSessionStatus.CLOSED,
-        closedAt: And(MoreThanOrEqual(ownership.from), LessThan(ownership.to)),
-      },
-      order: { closedAt: 'DESC' },
-      take: 80,
-    });
+    // Cierres del período (por closedAt).
+    const closedQb = this.sessions
+      .createQueryBuilder('s')
+      .where('s.shopId = :shopId', { shopId: shop.id })
+      .andWhere('s.status = :closedSt', { closedSt: TableSessionStatus.CLOSED })
+      .orderBy('s.closedAt', 'DESC')
+      .take(200);
+    applyCreatedRanges(closedQb, 's.closedAt', 'closed');
+    const closedSessions = await closedQb.getMany();
 
-    // Envíos del turno (también de mesas ya cerradas).
-    const shiftOrders = await this.orders
+    // Envíos del período (también de mesas ya cerradas).
+    const ordersQb = this.orders
       .createQueryBuilder('o')
       .where('o.shopId = :shopId', { shopId: shop.id })
       .andWhere('o.tableSessionId IS NOT NULL')
-      .andWhere('o.createdAt >= :from AND o.createdAt < :to', {
-        from: ownership.from,
-        to: ownership.to,
-      })
       .orderBy('o.createdAt', 'DESC')
-      .take(60)
-      .getMany();
+      .take(120);
+    applyCreatedRanges(ordersQb, 'o.createdAt', 'ord');
+    const shiftOrders = await ordersQb.getMany();
 
     const allSessionIdsForOrders = [
       ...new Set([...sessionIds, ...closedSessions.map((s) => s.id)]),
@@ -1283,10 +1366,10 @@ export class WaiterService implements OnModuleInit {
           .filter((id): id is string => !!String(id ?? '').trim()),
       ),
     ];
-    const waiters = waiterIds.length
+    const waiterEmployees = waiterIds.length
       ? await this.employees.find({ where: { shopId: shop.id, id: In(waiterIds) } })
       : [];
-    const waiterName = new Map(waiters.map((e) => [e.id, e.fullName]));
+    const waiterName = new Map(waiterEmployees.map((e) => [e.id, e.fullName]));
 
     const compactLines = (items: CustomerOrderLine[], max = 14) => {
       const rows: Array<{ qty: number; name: string; extra: boolean }> = [];
@@ -1337,6 +1420,7 @@ export class WaiterService implements OnModuleInit {
         if (lines.length >= 16) break;
       }
       const discountAmount = Math.round((Number(session.ticketDiscountAmount) || 0) * 100) / 100;
+      const wid = String(session.waiterEmployeeId ?? '').trim() || null;
       return {
         sessionId: session.id,
         tableId: session.salonTableId ?? null,
@@ -1350,9 +1434,8 @@ export class WaiterService implements OnModuleInit {
               : 'Adentro'
           : COUNTER_SESSION_LABEL,
         covers: Number(session.covers) || (session.salonTableId ? 2 : 1),
-        waiterName:
-          (session.waiterEmployeeId && waiterName.get(session.waiterEmployeeId)) ||
-          '—',
+        waiterEmployeeId: wid,
+        waiterName: (wid && waiterName.get(wid)) || '—',
         openedAt: session.createdAt,
         closedAt: session.closedAt ?? null,
         orderCount: sessionOrders.length,
@@ -1390,35 +1473,56 @@ export class WaiterService implements OnModuleInit {
         session && ordersSum > 0
           ? Math.round(((Number(o.total) || 0) / ordersSum) * net * 100) / 100
           : Number(o.total) || 0;
+      const wid = String(session?.waiterEmployeeId ?? '').trim() || null;
       return {
         id: o.id,
         code: o.code,
         channel: (session?.salonTableId ? 'TABLE' : 'COUNTER') as 'TABLE' | 'COUNTER',
         tableLabel: this.sessionTableLabel(table),
-        waiterName:
-          (session?.waiterEmployeeId && waiterName.get(session.waiterEmployeeId)) ||
-          '—',
+        waiterEmployeeId: wid,
+        waiterName: (wid && waiterName.get(wid)) || '—',
         createdAt: o.createdAt,
         total: orderShare,
         items: compactLines(o.items ?? [], 8),
       };
     });
-    const recentOrders = orderRows.slice(0, 40);
+    const recentOrders = orderRows.slice(0, 80);
 
-    const audits = await this.lineAudits.find({
-      where: {
-        shopId: shop.id,
-        createdAt: And(MoreThanOrEqual(ownership.from), LessThan(ownership.to)),
-      },
-      order: { createdAt: 'DESC' },
-      take: 80,
-    });
+    const auditsQb = this.lineAudits
+      .createQueryBuilder('a')
+      .where('a.shopId = :shopId', { shopId: shop.id })
+      .orderBy('a.createdAt', 'DESC')
+      .take(120);
+    applyCreatedRanges(auditsQb, 'a.createdAt', 'aud');
+    const audits = await auditsQb.getMany();
 
     const sessionsWithChanges = new Set(
       audits.map((a) => String(a.tableSessionId ?? '').trim()).filter(Boolean),
     );
     const openCovers = tables.reduce((s, t) => s + (Number(t.covers) || 0), 0);
     const closedCovers = closedTables.reduce((s, t) => s + (Number(t.covers) || 0), 0);
+    const coversTotal = openCovers + closedCovers;
+
+    const waitersById = new Map<string, string>();
+    for (const row of [...openDtos, ...closedDtos, ...orderRows]) {
+      const id = String(row.waiterEmployeeId ?? '').trim();
+      if (!id) continue;
+      if (!waitersById.has(id)) {
+        waitersById.set(id, String(row.waiterName ?? '').trim() || '—');
+      }
+    }
+    const waiters = [...waitersById.entries()]
+      .map(([id, fullName]) => ({ id, fullName }))
+      .sort((a, b) => a.fullName.localeCompare(b.fullName, 'es'));
+
+    const linkedStaff = (
+      await this.employees.find({ where: { shopId: shop.id, userId: user.id } })
+    ).filter((e) => isEntityActive(e.active));
+    const selfWaiterEmployeeId =
+      String(
+        (linkedStaff.find((e) => !!e.waiterPinHash) ?? linkedStaff[0])?.id ?? '',
+      ).trim() || null;
+
     const openTotal =
       Math.round(openDtos.reduce((s, t) => s + (Number(t.total) || 0), 0) * 100) / 100;
     const closedTotal =
@@ -1445,9 +1549,11 @@ export class WaiterService implements OnModuleInit {
 
     return {
       shopName: shop.name,
-      shiftName: shift?.name ?? null,
+      shiftName,
       businessDate,
       showAmounts: canSeeAmounts,
+      selfWaiterEmployeeId,
+      waiters,
       tables: tables.map(redactSession),
       counters: counters.map(redactSession),
       closedTables: closedTables.map(redactSession),
@@ -1484,9 +1590,10 @@ export class WaiterService implements OnModuleInit {
       summary: {
         openTables: tables.length,
         openCovers,
+        closedCovers,
+        coversTotal,
         openCounter: counters.length,
         closedTables: closedTables.length,
-        closedCovers,
         closedCounter: closedCounters.length,
         tablesWithChanges: sessionsWithChanges.size,
         openTotal: canSeeAmounts ? openTotal : 0,
@@ -1707,7 +1814,11 @@ export class WaiterService implements OnModuleInit {
         qty: number;
         attachedToMenuItemId?: string | null;
       }>;
-      promos?: Array<{ promoId: string; qty: number }>;
+      promos?: Array<{
+        promoId: string;
+        qty: number;
+        selections: Array<{ menuItemId: string; qty: number }>;
+      }>;
       customerNotes?: string | null;
       printKitchen?: boolean;
       printCustomerTicket?: boolean;
@@ -1771,7 +1882,14 @@ export class WaiterService implements OnModuleInit {
       let changed = false;
       for (const sale of dto.promos) {
         const promo = byId.get(String(sale.promoId ?? '').trim());
-        if (!promo?.tableMatchable || !promo.items.length || !promo.available) continue;
+        if (
+          !promo?.tableMatchable ||
+          !promo.poolItemIds?.length ||
+          !promo.available ||
+          !promo.forComanda
+        ) {
+          continue;
+        }
         if (seen.has(promo.id)) continue;
         current.push({ promoId: promo.id, maxCount: null });
         seen.add(promo.id);

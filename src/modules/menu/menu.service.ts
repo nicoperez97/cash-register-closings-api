@@ -693,8 +693,9 @@ export class MenuService {
         name: p.name,
         description: p.description ?? null,
         fixedPrice: p.fixedPrice,
+        poolItemIds: p.poolItemIds,
+        packQty: p.packQty,
         items: p.items,
-        specialName: p.specialName ?? null,
       }));
     return {
       shop: this.publicShop(shop),

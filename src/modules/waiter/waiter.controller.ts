@@ -246,6 +246,21 @@ class PatchSessionLineDto {
   reasonNote?: string | null;
 }
 
+class WaiterOrderPromoSelectionDto {
+  @ApiProperty()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  menuItemId: string;
+
+  @ApiProperty({ example: 1 })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(99)
+  qty: number;
+}
+
 class WaiterOrderPromoDto {
   @ApiProperty()
   @IsString()
@@ -259,6 +274,17 @@ class WaiterOrderPromoDto {
   @Min(1)
   @Max(99)
   qty: number;
+
+  @ApiProperty({
+    type: [WaiterOrderPromoSelectionDto],
+    description: 'Ítems del pool elegidos; suma de qty = packQty × qty',
+  })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(40)
+  @ValidateNested({ each: true })
+  @Type(() => WaiterOrderPromoSelectionDto)
+  selections: WaiterOrderPromoSelectionDto[];
 }
 
 class PatchSessionPromoDto {
