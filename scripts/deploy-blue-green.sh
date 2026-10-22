@@ -149,10 +149,13 @@ compose up -d db || die "No se pudo levantar db"
 
 log "Preparar imagen para api-${next}"
 if [ -n "${API_IMAGE:-}" ]; then
-  # Pull directo (más fiable que compose pull con el default crc-api:local).
   sudo docker pull "${API_IMAGE}" || die "docker pull ${API_IMAGE} falló (¿login GHCR?)"
+  sudo docker tag "${API_IMAGE}" crc-api:local || true
 else
-  log "Sin API_IMAGE: se usa la imagen ya buildeada (fallback local)"
+  log "Sin API_IMAGE: se usa crc-api:local (build fallback)"
+  if ! sudo docker image inspect crc-api:local >/dev/null 2>&1; then
+    die "No hay imagen crc-api:local ni API_IMAGE — corré compose build api-blue antes"
+  fi
 fi
 
 log "Levantar api-${next} (sin tocar el slot activo)"

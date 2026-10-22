@@ -159,7 +159,6 @@ jobs:
         id: ssh_deploy
         uses: appleboy/ssh-action@v1.2.0
         env:
-          API_IMAGE: ${{ needs.build-image.outputs.api_image }}
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -170,7 +169,7 @@ jobs:
           timeout: 2m
           command_timeout: 20m
           script_stop: true
-          envs: API_IMAGE,GHCR_USER,GHCR_TOKEN
+          envs: GHCR_USER,GHCR_TOKEN
           script: |
             set -euo pipefail
             export COMPOSE_BAKE=0
@@ -185,12 +184,11 @@ jobs:
             echo "Deploy Backend — pull GHCR + blue/green"
             echo "========================================"
 
-            # appleboy inyecta envs; validar antes de tocar el servidor.
-            API_IMAGE="${API_IMAGE:-}"
+            # Interpolado en el runner (appleboy envs a veces no pasa API_IMAGE).
+            export API_IMAGE='${{ needs.build-image.outputs.api_image }}'
             if [ -z "${API_IMAGE}" ] || ! echo "${API_IMAGE}" | grep -q '^ghcr.io/'; then
               die "API_IMAGE vacía o inválida (${API_IMAGE:-<vacía>}). ¿Falló el job Build imagen?"
             fi
-            export API_IMAGE
             echo "API_IMAGE=${API_IMAGE}"
 
             echo ""
@@ -218,7 +216,7 @@ jobs:
             fi
             [ -f nginx/upstream.conf ] || die "Falta nginx/upstream.conf"
             [ -f api/scripts/deploy-blue-green.sh ] || die "Falta scripts/deploy-blue-green.sh"
-            # Si .env local pisaba la imagen con crc-api, forzar la de GHCR en el deploy.
+            # Evitar que un .env viejo force crc-api sin registry.
             if [ -f .env ]; then
               grep -v '^API_IMAGE=' .env > .env.deploy-tmp || true
               mv .env.deploy-tmp .env
@@ -230,6 +228,8 @@ jobs:
             echo "${GHCR_TOKEN}" | sudo docker login ghcr.io -u "${GHCR_USER}" --password-stdin \
               || die "docker login ghcr.io falló"
             sudo docker pull "${API_IMAGE}" || die "docker pull ${API_IMAGE} falló"
+            # Alias local: si compose pierde API_IMAGE, igual tiene la imagen.
+            sudo docker tag "${API_IMAGE}" crc-api:local || die "docker tag crc-api:local falló"
 
             echo ""
             echo ">>> [4/5] Blue/green (vieja sigue hasta health de la nueva)"
