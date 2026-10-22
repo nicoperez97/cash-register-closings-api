@@ -34,7 +34,10 @@ aws s3 cp "$OUT_FILE" "s3://${BACKUP_BUCKET}/mysql/$(basename "$OUT_FILE")"
 # Archivos subidos (comprobantes, facturas, CVs, logos): viven en el volumen
 # uploads-data y la DB solo guarda el path. Sin esto un restore deja links rotos.
 UPLOADS_FILE="$OUT_DIR/crc_uploads_${TS}.tar.gz"
-docker compose -f /opt/crc/docker-compose.yml exec -T api \
+# Blue/green: el slot activo está en /opt/crc/.api-slot (blue|green).
+SLOT="$(tr -d '[:space:]' </opt/crc/.api-slot 2>/dev/null || true)"
+case "${SLOT}" in blue|green) ;; *) SLOT=blue ;; esac
+docker compose -f /opt/crc/docker-compose.yml exec -T "api-${SLOT}" \
 tar czf - -C /app/uploads . > "$UPLOADS_FILE"
 aws s3 cp "$UPLOADS_FILE" "s3://${BACKUP_BUCKET}/uploads/$(basename "$UPLOADS_FILE")"
 
