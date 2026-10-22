@@ -101,6 +101,7 @@ describe('PrintAgentService avisa al agente', () => {
       jobs as never,
       {} as never,
       {} as never,
+      {} as never,
       shopLive as never,
       agentLive as never,
     );
