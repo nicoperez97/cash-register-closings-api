@@ -2405,6 +2405,18 @@ export class WaiterService implements OnModuleInit {
       : [];
     const tableLabel = new Map(tables.map((t) => [t.id, t.label]));
 
+    const waiterIds = [
+      ...new Set(
+        closed
+          .map((s) => s.waiterEmployeeId)
+          .filter((id): id is string => !!String(id ?? '').trim()),
+      ),
+    ];
+    const waiterRows = waiterIds.length
+      ? await this.employees.find({ where: { shopId: shop.id, id: In(waiterIds) } })
+      : [];
+    const waiterName = new Map(waiterRows.map((e) => [e.id, e.fullName]));
+
     const sessionIds = closed.map((s) => s.id);
     const orderSumBySession = new Map<string, number>();
     if (sessionIds.length) {
@@ -2480,12 +2492,15 @@ export class WaiterService implements OnModuleInit {
           ) / 100;
         const hasActivity =
           ticketTotal > 0 || tipAmount > 0 || payments.length > 0 || fromOrders > 0;
+        const wid = String(s.waiterEmployeeId ?? '').trim() || null;
         return {
           sessionId: s.id,
           tableLabel: s.salonTableId
             ? tableLabel.get(s.salonTableId) ?? '—'
             : COUNTER_SESSION_LABEL,
           covers: Number(s.covers) || 0,
+          waiterEmployeeId: wid,
+          waiterName: wid ? waiterName.get(wid) ?? '—' : null,
           openedAt: s.createdAt,
           closedAt: s.closedAt,
           ticketTotal,
@@ -2505,22 +2520,38 @@ export class WaiterService implements OnModuleInit {
       Math.round(sessions.reduce((a, s) => a + s.ticketTotal, 0) * 100) / 100;
     const coversTotal = sessions.reduce((a, s) => a + s.covers, 0);
 
+    const waitersById = new Map<string, string>();
+    for (const s of sessions) {
+      const id = String(s.waiterEmployeeId ?? '').trim();
+      if (!id) continue;
+      if (!waitersById.has(id)) {
+        waitersById.set(id, s.waiterName?.trim() || '—');
+      }
+    }
+    const waiters = [...waitersById.entries()]
+      .map(([id, fullName]) => ({ id, fullName }))
+      .sort((a, b) => a.fullName.localeCompare(b.fullName, 'es'));
+
     return {
       businessDate,
       shift: { id: shift.id, name: shift.name },
       from: ownership.from.toISOString(),
       to: ownership.to.toISOString(),
+      selfWaiterEmployeeId: waiterEmployeeIdOrNull(waiter),
       tipTotal,
       ticketTotal,
       coversTotal,
       tippedTables: withTip.length,
       closedTables: sessions.length,
+      waiters,
       recent: withTip.slice(0, 20).map((s) => ({
         sessionId: s.sessionId,
         tableLabel: s.tableLabel,
         tipAmount: s.tipAmount,
         tipLabel: s.tipLabel,
         closedAt: s.closedAt,
+        waiterEmployeeId: s.waiterEmployeeId,
+        waiterName: s.waiterName,
       })),
       sessions: sessions.map(({ hasActivity: _h, ...rest }) => rest),
     };
