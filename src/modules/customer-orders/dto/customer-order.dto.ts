@@ -102,6 +102,47 @@ export class CreateCustomerOrderExtraDto {
   attachedToMenuItemId?: string | null;
 }
 
+export class CreateCustomerOrderPromoSelectionDto {
+  @ApiProperty()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  menuItemId: string;
+
+  @ApiProperty({ example: 1 })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(99)
+  qty: number;
+}
+
+export class CreateCustomerOrderPromoDto {
+  @ApiProperty()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  promoId: string;
+
+  @ApiProperty({ example: 1, description: 'Cantidad de packs' })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(99)
+  qty: number;
+
+  @ApiProperty({
+    type: [CreateCustomerOrderPromoSelectionDto],
+    description: 'Ítems elegidos del pool; la suma de qty debe ser packQty × qty',
+  })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(40)
+  @ValidateNested({ each: true })
+  @Type(() => CreateCustomerOrderPromoSelectionDto)
+  selections: CreateCustomerOrderPromoSelectionDto[];
+}
+
 export class CreateCustomerOrderDto {
   @ApiProperty({ enum: CustomerOrderFulfillment })
   @IsEnum(CustomerOrderFulfillment)
@@ -109,7 +150,7 @@ export class CreateCustomerOrderDto {
 
   @ApiProperty({ type: [CreateCustomerOrderItemDto] })
   @IsArray()
-  @ArrayMinSize(1)
+  @ArrayMinSize(0)
   @ArrayMaxSize(40)
   @ValidateNested({ each: true })
   @Type(() => CreateCustomerOrderItemDto)
@@ -122,6 +163,14 @@ export class CreateCustomerOrderDto {
   @ValidateNested({ each: true })
   @Type(() => CreateCustomerOrderExtraDto)
   extras?: CreateCustomerOrderExtraDto[];
+
+  @ApiPropertyOptional({ type: [CreateCustomerOrderPromoDto] })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @ValidateNested({ each: true })
+  @Type(() => CreateCustomerOrderPromoDto)
+  promos?: CreateCustomerOrderPromoDto[];
 
   @ApiProperty()
   @IsString()

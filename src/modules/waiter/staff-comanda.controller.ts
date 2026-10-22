@@ -137,10 +137,26 @@ export class StaffComandaController {
     return this.waiter.removeStaffReceipt(user, shopId, sessionId);
   }
 
-  /** Tablero de monitoreo: mesas abiertas, envíos y cambios del turno. */
+  /** Tablero de monitoreo: mesas abiertas, envíos y cambios del turno (o período). */
   @Get('monitor')
   @RequireAnyPermissions('comandaMonitor.read', 'shops.manage')
-  monitor(@CurrentUser() user: AuthUser, @Param('shopId') shopId: string) {
-    return this.waiter.staffMonitor(user, shopId);
+  monitor(
+    @CurrentUser() user: AuthUser,
+    @Param('shopId') shopId: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('shiftIds') shiftIds?: string,
+  ) {
+    const parsedShiftIds = shiftIds
+      ? shiftIds
+          .split(',')
+          .map((id) => id.trim())
+          .filter(Boolean)
+      : undefined;
+    return this.waiter.staffMonitor(user, shopId, {
+      from: from?.trim() || undefined,
+      to: to?.trim() || undefined,
+      shiftIds: parsedShiftIds,
+    });
   }
 }

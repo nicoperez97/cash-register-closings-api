@@ -49,6 +49,7 @@ import {
 import {
   normalizeOrderingConfigVisibility,
 } from '../../common/ordering-config-visibility';
+import { normalizeShopPromos } from '../../common/shop-promos';
 import { normalizeShopConfigVisibility } from '../../common/shop-config-visibility';
 import { normalizeReportsProductsVisibility } from '../../common/reports-products-visibility';
 import { normalizeReportsVisibility } from '../../common/reports-visibility';
@@ -434,22 +435,22 @@ export class AuthService implements OnModuleInit {
       dirty = true;
     }
     if (!shop.promos || !shop.promos.length) {
-      shop.promos = [
+      shop.promos = normalizeShopPromos([
         {
           id: 'pr_demo_combo',
           name: 'Combo demo',
-          description: 'Sandwich + bebida',
+          description: '2 ítems a elección (milanesa o agua)',
           available: true,
           showOnPublicMenu: true,
-          sellable: true,
+          forComanda: true,
+          forPedidos: true,
+          showOnPublicOrdering: true,
           tableMatchable: true,
           fixedPrice: 15000,
-          items: [
-            { menuItemId: 'mi_demo_milanesa', qty: 1 },
-            { menuItemId: 'mi_demo_agua', qty: 1 },
-          ],
+          poolItemIds: ['mi_demo_milanesa', 'mi_demo_agua'],
+          packQty: 2,
         },
-      ];
+      ]);
       dirty = true;
     }
     if (!shop.emailMessageTemplates || !Object.keys(shop.emailMessageTemplates).length) {

@@ -4,6 +4,7 @@ import {
   type OrderingHoursByWeekday,
 } from './shop-ordering';
 
+/** @deprecated Prefer poolItemIds + packQty. Kept for legacy payloads. */
 export type ShopPromoItem = {
   menuItemId: string;
   qty: number;
@@ -14,19 +15,40 @@ export type ShopPromo = {
   name: string;
   description?: string | null;
   available: boolean;
-  showOnPublicMenu: boolean;
-  sellable: boolean;
-  tableMatchable: boolean;
   fixedPrice: number;
-  /** 1 pack = estos ítems de carta (vacío = ítem especial de evento). */
+  /** Ítems elegibles (mín. 1). */
+  poolItemIds: string[];
+  /** Unidades del pool que forman 1 pack (mín. 1). */
+  packQty: number;
+  /** Canal comanda: vender en comanda + matching de mesa. */
+  forComanda: boolean;
+  /** Canal pedidos: staff /pedir y (si se publica) página pública. */
+  forPedidos: boolean;
+  /** Si forPedidos: aparece en la sección Promos de /pedir público. */
+  showOnPublicOrdering: boolean;
+  /** Matching automático en ticket de mesa (comanda). */
+  tableMatchable: boolean;
+  /** Informativo en carta /m. */
+  showOnPublicMenu: boolean;
+  /**
+   * Alias de lectura: vender pack en comanda (= forComanda).
+   * Se mantiene para callers legacy.
+   */
+  sellable: boolean;
+  /**
+   * Alias de lectura derivado del pool (cada ítem qty 1) para UI legacy.
+   * El matching usa poolItemIds + packQty.
+   */
   items: ShopPromoItem[];
-  /** Si no hay composición: nombre de la línea de cocina. */
+  /** @deprecated Eventos sin pool ya no se aceptan. */
   specialName?: string | null;
   /** Ventanas por día de semana; null/vacío = sin límite semanal. */
   schedule?: OrderingHoursByWeekday | null;
   /** Fechas puntuales YYYY-MM-DD (modo “solo hoy” / fechas). */
   validDates?: string[] | null;
 };
+
+export type PromoSelectionLine = { menuItemId: string; qty: number };
 
 /** Promo asignada a una mesa (cupo null = ilimitado). */
 export type SessionPromoAssignment = {
@@ -75,52 +97,141 @@ export function localDateKey(now: Date, timezone?: string): string {
   return `${y}-${m}-${d}`;
 }
 
+function normalizePoolAndPackQty(r: Record<string, unknown>): {
+  poolItemIds: string[];
+  packQty: number;
+} | null {
+  const poolItemIds: string[] = [];
+  const seen = new Set<string>();
+  const rawPool = r.poolItemIds;
+  if (Array.isArray(rawPool)) {
+    for (const row of rawPool.slice(0, 40)) {
+      const id = String(row ?? '').trim().slice(0, 40);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      poolItemIds.push(id);
+    }
+  }
+
+  let packQty = Math.round(Number(r.packQty));
+  if (!Number.isFinite(packQty) || packQty < 1) packQty = 0;
+
+  // Legacy items: [{ menuItemId, qty }] → pool + suma de qtys.
+  const legacyItems = Array.isArray(r.items) ? r.items : [];
+  if (!poolItemIds.length && legacyItems.length) {
+    let sumQty = 0;
+    for (const it of legacyItems.slice(0, 40)) {
+      if (!it || typeof it !== 'object') continue;
+      const menuItemId = String((it as ShopPromoItem).menuItemId ?? '')
+        .trim()
+        .slice(0, 40);
+      if (!menuItemId) continue;
+      const qty = Math.round(Number((it as ShopPromoItem).qty));
+      if (!Number.isFinite(qty) || qty < 1) continue;
+      sumQty += Math.min(99, qty);
+      if (!seen.has(menuItemId)) {
+        seen.add(menuItemId);
+        poolItemIds.push(menuItemId);
+      }
+    }
+    if (!packQty && sumQty > 0) packQty = Math.min(99, sumQty);
+  }
+
+  if (!poolItemIds.length) return null;
+  if (!packQty) packQty = 1;
+  packQty = Math.min(99, Math.max(1, packQty));
+  return { poolItemIds, packQty };
+}
+
 export function normalizeShopPromos(raw: unknown): ShopPromo[] {
   if (!Array.isArray(raw)) return [];
   const used = new Set<string>();
   const out: ShopPromo[] = [];
   for (const row of raw.slice(0, 80)) {
     if (!row || typeof row !== 'object') continue;
-    const r = row as Partial<ShopPromo>;
+    const r = row as Record<string, unknown>;
     const name = String(r.name ?? '').trim().slice(0, 120);
     if (!name) continue;
     let id = String(r.id ?? '').trim().slice(0, 40);
     if (!id || used.has(id)) id = newPromoId();
     used.add(id);
-    const items: ShopPromoItem[] = [];
-    const seenItems = new Set<string>();
-    if (Array.isArray(r.items)) {
-      for (const it of r.items.slice(0, 40)) {
-        if (!it || typeof it !== 'object') continue;
-        const menuItemId = String((it as ShopPromoItem).menuItemId ?? '').trim().slice(0, 40);
-        if (!menuItemId || seenItems.has(menuItemId)) continue;
-        const qty = Math.round(Number((it as ShopPromoItem).qty));
-        if (!Number.isFinite(qty) || qty < 1) continue;
-        seenItems.add(menuItemId);
-        items.push({ menuItemId, qty: Math.min(99, qty) });
-      }
-    }
-    const specialName = String(r.specialName ?? '').trim().slice(0, 120) || null;
-    if (!items.length && !specialName) continue;
+
+    const pool = normalizePoolAndPackQty(r);
+    if (!pool) continue;
+
     let fixedPrice = Number(r.fixedPrice);
     if (!Number.isFinite(fixedPrice) || fixedPrice < 0) fixedPrice = 0;
     fixedPrice = Math.round(fixedPrice * 100) / 100;
+
+    const hasForComanda = r.forComanda !== undefined;
+    const hasSellable = r.sellable !== undefined;
+    const hasTable = r.tableMatchable !== undefined;
+    const tableMatchable = hasTable ? r.tableMatchable !== false : true;
+    const forComanda = hasForComanda
+      ? r.forComanda !== false
+      : hasSellable
+        ? r.sellable !== false || tableMatchable
+        : true;
+    const forPedidos = r.forPedidos === true;
+    const showOnPublicOrdering = forPedidos && r.showOnPublicOrdering === true;
+
+    const items: ShopPromoItem[] = pool.poolItemIds.map((menuItemId) => ({
+      menuItemId,
+      qty: 1,
+    }));
+
     out.push({
       id,
       name,
       description: String(r.description ?? '').trim().slice(0, 400) || null,
       available: r.available !== false,
-      showOnPublicMenu: !!r.showOnPublicMenu,
-      sellable: r.sellable !== false,
-      tableMatchable: r.tableMatchable !== false,
       fixedPrice,
+      poolItemIds: pool.poolItemIds,
+      packQty: pool.packQty,
+      forComanda,
+      forPedidos,
+      showOnPublicOrdering,
+      tableMatchable: forComanda && tableMatchable,
+      showOnPublicMenu: !!r.showOnPublicMenu,
+      sellable: forComanda,
       items,
-      specialName: items.length ? null : specialName,
+      specialName: null,
       schedule: normalizeOrderingHoursByWeekday(r.schedule ?? null),
       validDates: normalizePromoValidDates(r.validDates ?? null),
     });
   }
   return out;
+}
+
+/** Valida selections de un pack (o N packs): ⊆ pool y suma === packQty * packs. */
+export function normalizePromoSelections(
+  promo: ShopPromo,
+  packsRaw: number,
+  selectionsRaw: unknown,
+): PromoSelectionLine[] | null {
+  const packs = Math.max(1, Math.min(99, Math.round(Number(packsRaw) || 1)));
+  const need = packs * Math.max(1, promo.packQty);
+  const pool = new Set(promo.poolItemIds);
+  if (!pool.size) return null;
+  if (!Array.isArray(selectionsRaw)) return null;
+  const byId = new Map<string, number>();
+  for (const row of selectionsRaw.slice(0, 40)) {
+    if (!row || typeof row !== 'object') continue;
+    const menuItemId = String((row as PromoSelectionLine).menuItemId ?? '')
+      .trim()
+      .slice(0, 40);
+    if (!menuItemId || !pool.has(menuItemId)) return null;
+    const qty = Math.round(Number((row as PromoSelectionLine).qty));
+    if (!Number.isFinite(qty) || qty < 1) return null;
+    byId.set(menuItemId, (byId.get(menuItemId) ?? 0) + Math.min(99, qty));
+  }
+  const selections = [...byId.entries()].map(([menuItemId, qty]) => ({
+    menuItemId,
+    qty: Math.min(99, qty),
+  }));
+  const sum = selections.reduce((s, x) => s + x.qty, 0);
+  if (sum !== need) return null;
+  return selections;
 }
 
 /** Lee sessionPromos JSON o migra desde promoId/promoMaxCount legacy. */
@@ -189,6 +300,7 @@ export function autoAssignPromosAtOpen(
   return promos.filter(
     (p) =>
       p.available &&
+      p.forComanda &&
       p.tableMatchable &&
       promoHasTimeRestriction(p) &&
       isPromoInSchedule(p, now, timezone),
@@ -278,25 +390,33 @@ function applyOnePromoToPool(
   promo: ShopPromo,
   promoMaxCount: number | null | undefined,
 ): PromoBreakdownApplied | null {
-  const req = promo.items ?? [];
-  if (!req.length) return null;
-  let possible = Infinity;
-  for (const r of req) {
-    const have = remainingByItem.get(r.menuItemId)?.qty ?? 0;
-    possible = Math.min(possible, Math.floor(have / r.qty));
+  const poolIds = (promo.poolItemIds ?? []).filter(Boolean);
+  const packQty = Math.max(1, Math.round(Number(promo.packQty) || 1));
+  if (!poolIds.length) return null;
+
+  let have = 0;
+  for (const id of poolIds) {
+    have += remainingByItem.get(id)?.qty ?? 0;
   }
-  let packs = Number.isFinite(possible) ? Math.max(0, possible) : 0;
+  let packs = Math.floor(have / packQty);
   const max =
     promoMaxCount == null || !Number.isFinite(Number(promoMaxCount))
       ? null
       : Math.max(0, Math.floor(Number(promoMaxCount)));
   if (max != null) packs = Math.min(packs, max);
   if (packs <= 0) return null;
-  for (const r of req) {
-    const cur = remainingByItem.get(r.menuItemId);
-    if (!cur) continue;
-    cur.qty = Math.max(0, cur.qty - packs * r.qty);
+
+  let toConsume = packs * packQty;
+  const ordered = [...poolIds].sort((a, b) => a.localeCompare(b));
+  for (const id of ordered) {
+    if (toConsume <= 0) break;
+    const cur = remainingByItem.get(id);
+    if (!cur || cur.qty <= 0) continue;
+    const take = Math.min(cur.qty, toConsume);
+    cur.qty = Math.max(0, cur.qty - take);
+    toConsume -= take;
   }
+
   const packPrice = money2(promo.fixedPrice);
   return {
     promoId: promo.id,
@@ -406,9 +526,8 @@ export function computeMultiPromoBreakdown(
 
   for (const a of assignments) {
     const promo = a.promo;
-    if (!promo?.available || !promo.tableMatchable) continue;
-    // Ya asignada a la sesión: no cortar packs si la ventana expiró después de abrir.
-    if (!promo.items?.length) continue;
+    if (!promo?.available || !promo.forComanda || !promo.tableMatchable) continue;
+    if (!promo.poolItemIds?.length) continue;
     const hit = applyOnePromoToPool(remainingByItem, promo, a.maxCount);
     if (hit) applied.push(hit);
   }
