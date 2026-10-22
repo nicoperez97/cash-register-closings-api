@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Deploy del backend en la instancia Lightsail.
-# git pull + docker compose build/up. Se invoca via SSH:
-# manualmente, desde el systemd timer, o desde GitHub Actions (deploy.yml)
+# Compat: timers / deploys viejos. Delega al blue/green (api-blue / api-green).
+# Preferí el workflow de GitHub Actions (pull GHCR). Este script hace build local.
 set -euo pipefail
 
 cd /opt/crc/api
@@ -13,18 +12,8 @@ cp -f /opt/crc/api/docker-compose.yml /opt/crc/docker-compose.yml
 cp -rf /opt/crc/api/nginx/. /opt/crc/nginx/
 
 cd /opt/crc
-docker compose pull --ignore-pull-failures || true
-docker compose build api
-
-# Evitar "Conflict. The container name ... is already in use" tras recreates fallidos.
-docker compose stop api 2>/dev/null || true
-conflict_ids="$(docker ps -aq --filter name=crc-api 2>/dev/null || true)"
-if [ -n "${conflict_ids}" ]; then
-  # shellcheck disable=SC2086
-  docker rm -f ${conflict_ids} || true
-fi
-
-docker compose up -d --remove-orphans --force-recreate api
-docker image prune -f
+unset API_IMAGE || true
+sudo COMPOSE_BAKE=0 DOCKER_BUILDKIT=1 docker compose build api-blue api-green
+bash /opt/crc/api/scripts/deploy-blue-green.sh
 
 echo "Deploy OK: $(date -u +%FT%TZ)"
