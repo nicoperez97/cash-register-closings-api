@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
 # Blue/green en /opt/crc: levanta el slot inactivo, espera health, cambia nginx, baja el viejo.
-# Uso (en el servidor, con API_IMAGE exportada si aplica):
+# Uso (en el servidor, con API_IMAGE=ghcr.io/... exportada si aplica):
 #   bash /opt/crc/api/scripts/deploy-blue-green.sh
 set -euo pipefail
 
 ROOT="${CRC_ROOT:-/opt/crc}"
 SLOT_FILE="${ROOT}/.api-slot"
 UPSTREAM_FILE="${ROOT}/nginx/upstream.conf"
-if [ -n "${API_IMAGE:-}" ]; then
-  COMPOSE=(sudo env "API_IMAGE=${API_IMAGE}" COMPOSE_BAKE=0 DOCKER_BUILDKIT=1 docker compose)
-else
-  COMPOSE=(sudo env COMPOSE_BAKE=0 DOCKER_BUILDKIT=1 docker compose)
-fi
+
+# Compose siempre con API_IMAGE explícita si viene (evita caer en crc-api:local del default).
+compose() {
+  if [ -n "${API_IMAGE:-}" ]; then
+    sudo env "API_IMAGE=${API_IMAGE}" COMPOSE_BAKE=0 DOCKER_BUILDKIT=1 docker compose "$@"
+  else
+    sudo env COMPOSE_BAKE=0 DOCKER_BUILDKIT=1 docker compose "$@"
+  fi
+}
 
 die() {
   echo "::error title=Deploy Backend::$1"
@@ -20,9 +24,12 @@ die() {
 
 log() { echo ">>> $*"; }
 
+# No usar `compose ps <svc>` con pipefail: si el servicio no existe, compose sale 1.
 svc_running() {
   local svc="$1"
-  "${COMPOSE[@]}" ps "$svc" 2>/dev/null | grep -qE 'Up|running|healthy'
+  local out
+  out="$(compose ps --status running --services 2>/dev/null || true)"
+  echo "${out}" | grep -qx "${svc}"
 }
 
 container_running() {
@@ -35,7 +42,7 @@ wait_api_health() {
   local i
   log "Esperando health en ${svc} (hasta ~3 min)…"
   for i in $(seq 1 60); do
-    if "${COMPOSE[@]}" exec -T "$svc" node -e "
+    if compose exec -T "$svc" node -e "
       require('http').get('http://127.0.0.1:3000/api/v1/health', (r) => {
         let d = '';
         r.on('data', (c) => (d += c));
@@ -66,7 +73,7 @@ EOF
 
 nginx_uses_crc_upstream() {
   local conf
-  conf="$("${COMPOSE[@]}" exec -T nginx sh -c 'cat /etc/nginx/conf.d/default.conf 2>/dev/null' || true)"
+  conf="$(compose exec -T nginx sh -c 'cat /etc/nginx/conf.d/default.conf 2>/dev/null' || true)"
   echo "${conf}" | grep -q 'crc_api'
 }
 
@@ -75,19 +82,19 @@ ensure_nginx() {
   write_upstream "${slot}"
   if ! svc_running nginx && ! container_running crc-nginx-1 && ! container_running crc-nginx; then
     log "Nginx no está arriba; lo levanto"
-    "${COMPOSE[@]}" up -d --no-deps nginx || die "No se pudo levantar nginx"
+    compose up -d --no-deps nginx || die "No se pudo levantar nginx"
     sleep 2
     return 0
   fi
   # El template default.conf solo se regenera al crear el contenedor.
   if ! nginx_uses_crc_upstream; then
     log "Migrando nginx al upstream blue/green (recreate una vez)"
-    "${COMPOSE[@]}" up -d --no-deps --force-recreate nginx || die "recreate nginx falló"
+    compose up -d --no-deps --force-recreate nginx || die "recreate nginx falló"
     sleep 2
     return 0
   fi
-  "${COMPOSE[@]}" exec -T nginx nginx -t || die "nginx -t falló (upstream inválido?)"
-  "${COMPOSE[@]}" exec -T nginx nginx -s reload || die "nginx -s reload falló"
+  compose exec -T nginx nginx -t || die "nginx -t falló (upstream inválido?)"
+  compose exec -T nginx nginx -s reload || die "nginx -s reload falló"
 }
 
 cd "${ROOT}" || die "No existe ${ROOT}"
@@ -96,6 +103,12 @@ cd "${ROOT}" || die "No existe ${ROOT}"
 mkdir -p nginx
 [ -f nginx/default.conf ] || die "Falta nginx/default.conf"
 [ -f nginx/upstream.conf ] || write_upstream blue
+
+if [ -n "${API_IMAGE:-}" ]; then
+  log "API_IMAGE=${API_IMAGE}"
+else
+  log "Sin API_IMAGE → imagen local crc-api:local (fallback build)"
+fi
 
 # Detectar slot activo
 active=""
@@ -113,7 +126,7 @@ if [ "${active}" != "blue" ] && [ "${active}" != "green" ]; then
 fi
 
 legacy=false
-if svc_running api || container_running crc-api || container_running crc-api-1; then
+if container_running crc-api || container_running crc-api-1; then
   legacy=true
 fi
 
@@ -132,22 +145,23 @@ else
 fi
 
 log "Asegurar DB"
-"${COMPOSE[@]}" up -d db || die "No se pudo levantar db"
+compose up -d db || die "No se pudo levantar db"
 
-log "Pull / preparar imagen para api-${next}"
+log "Preparar imagen para api-${next}"
 if [ -n "${API_IMAGE:-}" ]; then
-  "${COMPOSE[@]}" pull "api-${next}" || die "docker compose pull api-${next} falló"
+  # Pull directo (más fiable que compose pull con el default crc-api:local).
+  sudo docker pull "${API_IMAGE}" || die "docker pull ${API_IMAGE} falló (¿login GHCR?)"
 else
   log "Sin API_IMAGE: se usa la imagen ya buildeada (fallback local)"
 fi
 
 log "Levantar api-${next} (sin tocar el slot activo)"
-"${COMPOSE[@]}" up -d --no-deps --force-recreate --no-build "api-${next}" \
+compose up -d --no-deps --force-recreate --no-build "api-${next}" \
   || die "docker compose up api-${next} falló"
 
 if ! wait_api_health "api-${next}"; then
   echo "---- Logs api-${next} ----"
-  "${COMPOSE[@]}" logs --tail=100 "api-${next}" || true
+  compose logs --tail=100 "api-${next}" || true
   die "api-${next} no pasó /api/v1/health — se deja el slot viejo en tráfico"
 fi
 
@@ -158,27 +172,20 @@ echo "${next}" >"${SLOT_FILE}"
 
 if [ -n "${prev}" ] && [ "${prev}" != "${next}" ]; then
   log "Bajar slot viejo api-${prev}"
-  "${COMPOSE[@]}" stop "api-${prev}" 2>/dev/null || true
-  "${COMPOSE[@]}" rm -f "api-${prev}" 2>/dev/null || true
+  compose stop "api-${prev}" 2>/dev/null || true
+  compose rm -f "api-${prev}" 2>/dev/null || true
 fi
 
 if [ "${legacy}" = true ]; then
-  log "Retirar servicio legacy 'api'"
-  "${COMPOSE[@]}" stop api 2>/dev/null || true
-  "${COMPOSE[@]}" rm -f api 2>/dev/null || true
+  log "Retirar contenedores legacy crc-api*"
   for name in crc-api crc-api-1; do
-    if container_running "${name}"; then
-      sudo docker rm -f "${name}" || true
+    if container_running "${name}" || sudo docker ps -aq --filter "name=^${name}$" 2>/dev/null | grep -q .; then
+      sudo docker rm -f "${name}" 2>/dev/null || true
     fi
   done
 fi
 
-# Limpieza de nombres viejos del slot inactivo
-other="blue"
-[ "${next}" = "blue" ] && other="green"
-# nada más
-
 log "Estado final"
-"${COMPOSE[@]}" ps db "api-${next}" nginx || true
+compose ps db "api-${next}" nginx || true
 echo "Slot activo: ${next}"
 echo "Deploy blue/green OK"

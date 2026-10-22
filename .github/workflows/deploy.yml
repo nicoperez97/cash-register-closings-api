@@ -175,7 +175,6 @@ jobs:
             set -euo pipefail
             export COMPOSE_BAKE=0
             export DOCKER_BUILDKIT=1
-            export API_IMAGE
 
             die() {
               echo "::error title=Deploy Backend::$1"
@@ -185,6 +184,13 @@ jobs:
             echo "========================================"
             echo "Deploy Backend — pull GHCR + blue/green"
             echo "========================================"
+
+            # appleboy inyecta envs; validar antes de tocar el servidor.
+            API_IMAGE="${API_IMAGE:-}"
+            if [ -z "${API_IMAGE}" ] || ! echo "${API_IMAGE}" | grep -q '^ghcr.io/'; then
+              die "API_IMAGE vacía o inválida (${API_IMAGE:-<vacía>}). ¿Falló el job Build imagen?"
+            fi
+            export API_IMAGE
             echo "API_IMAGE=${API_IMAGE}"
 
             echo ""
@@ -212,11 +218,18 @@ jobs:
             fi
             [ -f nginx/upstream.conf ] || die "Falta nginx/upstream.conf"
             [ -f api/scripts/deploy-blue-green.sh ] || die "Falta scripts/deploy-blue-green.sh"
+            # Si .env local pisaba la imagen con crc-api, forzar la de GHCR en el deploy.
+            if [ -f .env ]; then
+              grep -v '^API_IMAGE=' .env > .env.deploy-tmp || true
+              mv .env.deploy-tmp .env
+            fi
+            echo "API_IMAGE=${API_IMAGE}" >> .env
 
             echo ""
-            echo ">>> [3/5] Login GHCR"
+            echo ">>> [3/5] Login GHCR + pull imagen"
             echo "${GHCR_TOKEN}" | sudo docker login ghcr.io -u "${GHCR_USER}" --password-stdin \
               || die "docker login ghcr.io falló"
+            sudo docker pull "${API_IMAGE}" || die "docker pull ${API_IMAGE} falló"
 
             echo ""
             echo ">>> [4/5] Blue/green (vieja sigue hasta health de la nueva)"
