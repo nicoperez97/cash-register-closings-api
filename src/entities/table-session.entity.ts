@@ -24,6 +24,17 @@ export class TableSession extends BaseEntity {
   @Column({ type: 'varchar', length: 36, nullable: true })
   waiterEmployeeId?: string | null;
 
+  /**
+   * A cargo cuando la abre un usuario de backoffice sin empleado vinculado
+   * (Operación → Comanda). Solo se usa si waiterEmployeeId es null.
+   */
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  waiterUserId?: string | null;
+
+  /** Snapshot del nombre de ese usuario al abrir la mesa. */
+  @Column({ type: 'varchar', length: 160, nullable: true })
+  waiterUserName?: string | null;
+
   @Column({ type: 'varchar', length: 16, default: TableSessionStatus.OPEN })
   status: TableSessionStatus;
 
