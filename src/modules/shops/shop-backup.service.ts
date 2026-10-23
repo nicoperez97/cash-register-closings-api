@@ -2135,6 +2135,7 @@ export class ShopBackupService {
       'payerUserId',
       'validatorUserId',
       'validatedByUserId',
+      'waiterUserId',
       'appliedByUserId',
     ];
     const errors: string[] = [];

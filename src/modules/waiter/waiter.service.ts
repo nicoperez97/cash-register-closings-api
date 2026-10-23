@@ -53,6 +53,12 @@ import {
   WaiterAuthPayload,
 } from './waiter-auth';
 import {
+  STAFF_SELF_WAITER,
+  sessionWaiterKey,
+  sessionWaiterName,
+  waiterFilterWhere,
+} from './session-waiter';
+import {
   normalizeTablePaymentMethods,
   classifyPaymentMethodKind,
   resolvePaymentMethodKind,
@@ -88,6 +94,15 @@ function hashPin(pin: string): string {
 
 /** Etiqueta de sesión sin mesa (mostrador). */
 const COUNTER_SESSION_LABEL = 'Mostrador';
+
+/** Descuento del ticket de una mesa cerrada (monto + etiqueta), para historiales. */
+function sessionDiscount(s: Pick<TableSession, 'ticketDiscountAmount' | 'ticketDiscountLabel'>) {
+  const discountAmount = Math.round((Number(s.ticketDiscountAmount) || 0) * 100) / 100;
+  return {
+    discountAmount,
+    discountLabel: discountAmount > 0 ? s.ticketDiscountLabel?.trim() || null : null,
+  };
+}
 
 function calcTicketDiscount(
   subtotal: number,
@@ -258,6 +273,20 @@ export class WaiterService implements OnModuleInit {
       );
     } catch {
       /* already nullable / dialect */
+    }
+    try {
+      await this.sessions.query(
+        `ALTER TABLE table_sessions ADD COLUMN waiterUserId VARCHAR(36) NULL`,
+      );
+    } catch {
+      /* already exists */
+    }
+    try {
+      await this.sessions.query(
+        `ALTER TABLE table_sessions ADD COLUMN waiterUserName VARCHAR(160) NULL`,
+      );
+    } catch {
+      /* already exists */
     }
     try {
       await this.sessions.query(
@@ -573,6 +602,7 @@ export class WaiterService implements OnModuleInit {
       employeeId: employee?.id ?? '',
       slug: shop.slug,
       name: employee?.fullName ?? user.fullName ?? user.email,
+      userId: user.id,
     };
     const token = await this.jwt.signAsync(payload, { expiresIn: '12h' });
     return {
@@ -837,7 +867,7 @@ export class WaiterService implements OnModuleInit {
     };
     if (channel === 'COUNTER') where.salonTableId = IsNull();
     else if (channel === 'TABLE') where.salonTableId = Not(IsNull());
-    if (waiterEmployeeId) where.waiterEmployeeId = waiterEmployeeId;
+    if (waiterEmployeeId) Object.assign(where, waiterFilterWhere(waiterEmployeeId));
 
     const closed = await this.sessions.find({
       where: where as any,
@@ -927,12 +957,15 @@ export class WaiterService implements OnModuleInit {
           channel: channelKind as 'TABLE' | 'COUNTER',
           tableLabel: label,
           covers: Number(s.covers) || 0,
-          waiterEmployeeId: s.waiterEmployeeId ?? null,
-          waiterName:
-            (s.waiterEmployeeId && waiterName.get(s.waiterEmployeeId)) || null,
+          waiterEmployeeId: sessionWaiterKey(s),
+          waiterName: sessionWaiterName(
+            s,
+            s.waiterEmployeeId ? waiterName.get(s.waiterEmployeeId) : null,
+          ),
           openedAt: s.createdAt,
           closedAt: s.closedAt,
           ticketTotal,
+          ...sessionDiscount(s),
           tipAmount,
           tipLabel: s.tipLabel ?? null,
           payments,
@@ -973,12 +1006,15 @@ export class WaiterService implements OnModuleInit {
 
     const ticketSum = Math.round(rows.reduce((a, r) => a + r.ticketTotal, 0) * 100) / 100;
     const tipSum = Math.round(rows.reduce((a, r) => a + r.tipAmount, 0) * 100) / 100;
+    const discountSum =
+      Math.round(rows.reduce((a, r) => a + r.discountAmount, 0) * 100) / 100;
     return {
       from,
       to,
       count: rows.length,
       ticketTotal: ticketSum,
       tipTotal: tipSum,
+      discountTotal: discountSum,
       rows,
     };
   }
@@ -1062,6 +1098,8 @@ export class WaiterService implements OnModuleInit {
       { header: 'Personas', key: 'personas', width: 10 },
       { header: 'Mozo', key: 'mozo', width: 22 },
       { header: 'Pago', key: 'pago', width: 24 },
+      { header: 'Descuento', key: 'descuento', width: 12 },
+      { header: 'Detalle descuento', key: 'descuentoDetalle', width: 18 },
       { header: 'Propina', key: 'propina', width: 12 },
       { header: 'Ticket', key: 'ticket', width: 12 },
       { header: 'Apertura', key: 'apertura', width: 18 },
@@ -1093,11 +1131,14 @@ export class WaiterService implements OnModuleInit {
         personas: r.channel === 'COUNTER' ? '' : r.covers || '',
         mozo: r.waiterName ?? '',
         pago: r.paymentLabel || '',
+        descuento: Number(r.discountAmount) || 0,
+        descuentoDetalle: r.discountAmount > 0 ? r.discountLabel ?? '' : '',
         propina: Number(r.tipAmount) || 0,
         ticket: Number(r.ticketTotal) || 0,
         apertura: fmtDate(r.openedAt),
       });
     }
+    ws.getColumn('descuento').numFmt = '#,##0.00';
     ws.getColumn('propina').numFmt = '#,##0.00';
     ws.getColumn('ticket').numFmt = '#,##0.00';
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());
@@ -1420,7 +1461,8 @@ export class WaiterService implements OnModuleInit {
         if (lines.length >= 16) break;
       }
       const discountAmount = Math.round((Number(session.ticketDiscountAmount) || 0) * 100) / 100;
-      const wid = String(session.waiterEmployeeId ?? '').trim() || null;
+      const wid = sessionWaiterKey(session);
+      const empId = String(session.waiterEmployeeId ?? '').trim();
       return {
         sessionId: session.id,
         tableId: session.salonTableId ?? null,
@@ -1435,7 +1477,7 @@ export class WaiterService implements OnModuleInit {
           : COUNTER_SESSION_LABEL,
         covers: Number(session.covers) || (session.salonTableId ? 2 : 1),
         waiterEmployeeId: wid,
-        waiterName: (wid && waiterName.get(wid)) || '—',
+        waiterName: sessionWaiterName(session, empId ? waiterName.get(empId) : null) || '—',
         openedAt: session.createdAt,
         closedAt: session.closedAt ?? null,
         orderCount: sessionOrders.length,
@@ -1473,14 +1515,15 @@ export class WaiterService implements OnModuleInit {
         session && ordersSum > 0
           ? Math.round(((Number(o.total) || 0) / ordersSum) * net * 100) / 100
           : Number(o.total) || 0;
-      const wid = String(session?.waiterEmployeeId ?? '').trim() || null;
+      const wid = sessionWaiterKey(session);
+      const empId = String(session?.waiterEmployeeId ?? '').trim();
       return {
         id: o.id,
         code: o.code,
         channel: (session?.salonTableId ? 'TABLE' : 'COUNTER') as 'TABLE' | 'COUNTER',
         tableLabel: this.sessionTableLabel(table),
         waiterEmployeeId: wid,
-        waiterName: (wid && waiterName.get(wid)) || '—',
+        waiterName: sessionWaiterName(session, empId ? waiterName.get(empId) : null) || '—',
         createdAt: o.createdAt,
         total: orderShare,
         items: compactLines(o.items ?? [], 8),
@@ -1499,9 +1542,18 @@ export class WaiterService implements OnModuleInit {
     const sessionsWithChanges = new Set(
       audits.map((a) => String(a.tableSessionId ?? '').trim()).filter(Boolean),
     );
+    // Todas las mesas cerradas del turno (closedTables se recorta a 40 para la lista).
+    const allClosedTables = closedDtos.filter((t) => t.channel === 'TABLE');
     const openCovers = tables.reduce((s, t) => s + (Number(t.covers) || 0), 0);
-    const closedCovers = closedTables.reduce((s, t) => s + (Number(t.covers) || 0), 0);
+    const closedCovers = allClosedTables.reduce((s, t) => s + (Number(t.covers) || 0), 0);
     const coversTotal = openCovers + closedCovers;
+    // Ticket promedio por persona: solo mesas (el mostrador no tiene comensales).
+    const tablesAmount =
+      Math.round(
+        [...tables, ...allClosedTables].reduce((s, t) => s + (Number(t.total) || 0), 0) * 100,
+      ) / 100;
+    const perCoverAvg =
+      coversTotal > 0 ? Math.round((tablesAmount / coversTotal) * 100) / 100 : 0;
 
     const waitersById = new Map<string, string>();
     for (const row of [...openDtos, ...closedDtos, ...orderRows]) {
@@ -1603,6 +1655,8 @@ export class WaiterService implements OnModuleInit {
           : 0,
         sends: shiftOrders.length,
         sendsTotal: canSeeAmounts ? sendsTotal : 0,
+        tablesAmount: canSeeAmounts ? tablesAmount : 0,
+        perCoverAvg: canSeeAmounts ? perCoverAvg : 0,
         ticketsPrinted,
         audits: audits.length,
       },
@@ -1630,13 +1684,22 @@ export class WaiterService implements OnModuleInit {
     }
 
     let waiterEmployeeId = waiterEmployeeIdOrNull(waiter);
+    let waiterUserId: string | null = null;
+    let waiterUserName: string | null = null;
     if (waiter.typ === 'waiter_staff') {
       const caps = this.caps(shop, waiter);
       const override = String(waiterEmployeeIdRaw ?? '').trim();
       if (caps.requireWaiterOnOpen && !override) {
         throw new BadRequestException('Elegí el mozo a cargo');
       }
-      if (override) {
+      if (override === STAFF_SELF_WAITER) {
+        // El usuario logueado: su empleado vinculado o, si no tiene, el propio usuario.
+        waiterEmployeeId = waiterEmployeeIdOrNull(waiter);
+        if (!waiterEmployeeId) {
+          waiterUserId = String(waiter.userId ?? '').trim() || null;
+          waiterUserName = String(waiter.name ?? '').trim().slice(0, 160) || null;
+        }
+      } else if (override) {
         const emp = await this.employees.findOne({
           where: { id: override, shopId: shop.id },
         });
@@ -1672,6 +1735,8 @@ export class WaiterService implements OnModuleInit {
         }
         open.covers = covers;
         open.waiterEmployeeId = waiterEmployeeId;
+        open.waiterUserId = waiterUserId;
+        open.waiterUserName = waiterUserName;
         open.openSalonTableId = table.id;
         await repo.save(open);
         return { session: open, created: false as const };
@@ -1682,6 +1747,8 @@ export class WaiterService implements OnModuleInit {
             shopId: shop.id,
             salonTableId: table.id,
             waiterEmployeeId,
+            waiterUserId,
+            waiterUserName,
             status: TableSessionStatus.OPEN,
             openSalonTableId: table.id,
             covers,
@@ -1851,13 +1918,17 @@ export class WaiterService implements OnModuleInit {
     if (!caps.allowPrintCustomerTicket) printCustomerTicket = false;
     // Se puede agregar a la mesa sin imprimir (sin cocina ni ticket).
 
-    const sessionWaiterId = session.waiterEmployeeId ?? waiterEmployeeIdOrNull(waiter);
+    // Mesa a cargo de un usuario sin legajo: el envío no se atribuye al empleado de quien manda.
+    const sessionWaiterId =
+      session.waiterEmployeeId ??
+      (session.waiterUserId ? null : waiterEmployeeIdOrNull(waiter));
     const sessionWaiter = sessionWaiterId
       ? await this.employees.findOne({
           where: { id: sessionWaiterId, shopId: shop.id },
         })
       : null;
-    const waiterName = sessionWaiter?.fullName?.trim() || waiter.name;
+    const waiterName =
+      sessionWaiter?.fullName?.trim() || session.waiterUserName?.trim() || waiter.name;
 
     const order = await this.customerOrders.createTableOrder(shop, {
       items: dto.items ?? [],
@@ -1935,7 +2006,8 @@ export class WaiterService implements OnModuleInit {
     const result = await this.printAgent.reprintKitchenForOrder(shop, order, {
       reason: 'TABLE',
       tableLabel: this.sessionTableLabel(table),
-      waiterName: sessionWaiter?.fullName?.trim() || waiter.name,
+      waiterName:
+        sessionWaiter?.fullName?.trim() || session.waiterUserName?.trim() || waiter.name,
       covers: table ? Number(session.covers) || null : null,
     });
     return { ok: true, ...result };
@@ -1965,7 +2037,8 @@ export class WaiterService implements OnModuleInit {
             where: { id: session.waiterEmployeeId, shopId: shop.id },
           })
         : null;
-      const waiterName = sessionWaiter?.fullName?.trim() || waiter.name;
+      const waiterName =
+        sessionWaiter?.fullName?.trim() || session.waiterUserName?.trim() || waiter.name;
       const tableLabel = this.sessionTableLabel(table);
       let printedOrders = 0;
       let pendingBefore = 0;
@@ -2610,7 +2683,8 @@ export class WaiterService implements OnModuleInit {
           ) / 100;
         const hasActivity =
           ticketTotal > 0 || tipAmount > 0 || payments.length > 0 || fromOrders > 0;
-        const wid = String(s.waiterEmployeeId ?? '').trim() || null;
+        const wid = sessionWaiterKey(s);
+        const empId = String(s.waiterEmployeeId ?? '').trim();
         return {
           sessionId: s.id,
           tableLabel: s.salonTableId
@@ -2618,10 +2692,13 @@ export class WaiterService implements OnModuleInit {
             : COUNTER_SESSION_LABEL,
           covers: Number(s.covers) || 0,
           waiterEmployeeId: wid,
-          waiterName: wid ? waiterName.get(wid) ?? '—' : null,
+          waiterName: wid
+            ? sessionWaiterName(s, empId ? waiterName.get(empId) : null) ?? '—'
+            : null,
           openedAt: s.createdAt,
           closedAt: s.closedAt,
           ticketTotal,
+          ...sessionDiscount(s),
           tipAmount,
           tipLabel: s.tipLabel ?? null,
           payments,
@@ -2703,7 +2780,8 @@ export class WaiterService implements OnModuleInit {
           where: { id: session.waiterEmployeeId, shopId: shop.id },
         })
       : null;
-    const waiterName = sessionWaiter?.fullName?.trim() || waiter.name;
+    const waiterName =
+      sessionWaiter?.fullName?.trim() || session.waiterUserName?.trim() || waiter.name;
     const { promoBreakdown, sessionSubtotal: subtotal } = this.resolveSessionPromo(
       shop,
       session,
@@ -2921,7 +2999,9 @@ export class WaiterService implements OnModuleInit {
         ? { id: waiterEmp.id, fullName: waiterEmp.fullName }
         : session.waiterEmployeeId
           ? { id: session.waiterEmployeeId, fullName: '—' }
-          : { id: '', fullName: 'Cliente' },
+          : session.waiterUserName
+            ? { id: sessionWaiterKey(session) ?? '', fullName: session.waiterUserName }
+            : { id: '', fullName: 'Cliente' },
       orders: orders.map((o) => ({
         id: o.id,
         code: o.code,

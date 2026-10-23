@@ -16,6 +16,8 @@ export type WaiterAuthPayload = {
   employeeId: string;
   slug: string;
   name: string;
+  /** Usuario de backoffice (solo waiter_staff); tokens viejos no lo traen. */
+  userId?: string;
 };
 
 export function waiterEmployeeIdOrNull(waiter: WaiterAuthPayload): string | null {
