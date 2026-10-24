@@ -89,8 +89,9 @@ export class CommissionsController {
     @Param('shopId') shopId: string,
     @Query('from') from: string,
     @Query('to') to: string,
+    @Query('source') source?: string,
   ) {
-    return this.commissions.calculate(user, shopId, from, to);
+    return this.commissions.calculate(user, shopId, from, to, source);
   }
 
   @Get('export.xlsx')
@@ -100,6 +101,7 @@ export class CommissionsController {
     @Param('shopId') shopId: string,
     @Query('from') from: string,
     @Query('to') to: string,
+    @Query('source') source: string | undefined,
     @Res() res: Response,
   ) {
     const { buffer, filename } = await this.commissions.exportExcel(
@@ -107,6 +109,7 @@ export class CommissionsController {
       shopId,
       from,
       to,
+      source,
     );
     res.setHeader(
       'Content-Type',

@@ -195,6 +195,14 @@ export class MenuSalesAnalyticsService {
     return redactSalesProductsSummary(full, await this.salesVisibility(user, shopId));
   }
 
+  /**
+   * Resumen de Ventas para otros módulos (Comisiones, Estadísticas) que ya validaron
+   * acceso y permisos propios: sin recorte de visibilidad del reporte.
+   */
+  summaryForShop(shopId: string, filters: SalesProductsFilters): Promise<SalesProductsSummary> {
+    return this.buildSummary(shopId, { ...filters, includePosSales: false, posMenuItemIds: null });
+  }
+
   private async buildSummary(
     shopId: string,
     filters: SalesProductsFilters,

@@ -11,6 +11,7 @@ import { ConceptsService } from '../concepts/concepts.service';
 import { displaySoftDeletedLabel, looksSoftDeletedLabel } from '../../common/soft-delete.util';
 import { PayrollService } from '../payroll/payroll.service';
 import { SalesProductsAnalyticsService } from '../sales-reports/sales-products-analytics.service';
+import { MenuSalesAnalyticsService } from '../sales-reports/menu-sales-analytics.service';
 import { ReservationsService } from '../reservations/reservations.service';
 import { TipsService } from '../tips/tips.service';
 import { UserShop } from '../../entities/user-shop.entity';
@@ -68,6 +69,7 @@ export class ReportsService {
     private readonly conceptsService: ConceptsService,
     private readonly payroll: PayrollService,
     private readonly salesProducts: SalesProductsAnalyticsService,
+    private readonly menuSales: MenuSalesAnalyticsService,
     private readonly reservations: ReservationsService,
     private readonly tips: TipsService,
     @InjectRepository(UserShop) private readonly userShops: Repository<UserShop>,
@@ -131,7 +133,7 @@ export class ReportsService {
   }
 
   /**
-   * Dashboard mixto: cierres + ventas POS + reservas + propinas.
+   * Dashboard mixto: cierres + Ventas (pedidos y comanda) + Ventas POS + reservas + propinas.
    * Solo lectura; el import POS no escribe aquí ni en cierres/saldos.
    */
   async dashboard(user: AuthUser, shopId: string, filters: ClosingListFilters) {
@@ -151,6 +153,12 @@ export class ReportsService {
         totals: v.kpis ? data.closings.totals : zero(data.closings.totals),
         byDay: keepDays ? data.closings.byDay : [],
       },
+      sales: {
+        ...data.sales,
+        totals: v.kpis ? data.sales.totals : zero(data.sales.totals),
+        byDay: keepDays ? data.sales.byDay : [],
+      },
+      combined: v.kpis ? data.combined : zero(data.combined),
       pos: {
         ...data.pos,
         totals: v.kpis ? data.pos.totals : zero(data.pos.totals),
@@ -178,6 +186,7 @@ export class ReportsService {
         from: from ?? null,
         to: to ?? null,
         closings: null,
+        sales: null,
         pos: null,
         reservations: null,
         tips: null,
@@ -188,16 +197,24 @@ export class ReportsService {
     }
 
     const prev = previousPeriod(from, to);
-    const [rows, pos, reservations, tips, prevRows, prevPos, prevTips] =
+    const [rows, pos, sales, reservations, tips, prevRows, prevPos, prevSales, prevTips] =
       await Promise.all([
         this.filteredRows(shopId, { from, to, kind: 'regular' }),
         this.salesProducts.summary(user, shopId, { from, to }),
+        this.menuSales.summary(user, shopId, { from, to }),
         this.safeReservationsSummary(user, shopId, from, to),
         this.tips.summary(user, shopId, from, to),
         this.filteredRows(shopId, { from: prev.from, to: prev.to, kind: 'regular' }),
         this.salesProducts.summary(user, shopId, { from: prev.from, to: prev.to }),
+        this.menuSales.summary(user, shopId, { from: prev.from, to: prev.to }),
         this.tips.summary(user, shopId, prev.from, prev.to),
       ]);
+    // Ventas totales = Ventas (pedidos + comanda) + Ventas POS; cada una se informa aparte.
+    const salesAmount = n(sales.totals.amount);
+    const posAmount = n(pos.totals.amount);
+    const combinedAmount = Math.round((salesAmount + posAmount) * 100) / 100;
+    const prevCombinedAmount =
+      Math.round((n(prevSales.totals.amount) + n(prevPos.totals.amount)) * 100) / 100;
 
     const closingsTotals = this.closingRowTotals(rows);
     const prevClosingsTotals = this.closingRowTotals(prevRows);
@@ -216,12 +233,17 @@ export class ReportsService {
       other: closingsTotals.other,
     };
 
+    // Por día de semana: Ventas + Ventas POS del mismo día (un día cuenta una vez).
+    const amountByDate = new Map<string, number>();
+    for (const d of [...pos.byDay, ...sales.byDay]) {
+      amountByDate.set(d.date, (amountByDate.get(d.date) ?? 0) + n(d.amount));
+    }
     const weekdayMap = new Map<number, { amount: number; count: number }>();
-    for (const d of pos.byDay) {
-      const dt = new Date(`${d.date}T12:00:00.000Z`);
+    for (const [date, amount] of amountByDate) {
+      const dt = new Date(`${date}T12:00:00.000Z`);
       const wd = dt.getUTCDay();
       const cur = weekdayMap.get(wd) ?? { amount: 0, count: 0 };
-      cur.amount += n(d.amount);
+      cur.amount += amount;
       cur.count += 1;
       weekdayMap.set(wd, cur);
     }
@@ -268,6 +290,26 @@ export class ReportsService {
             0,
         })),
       },
+      sales: {
+        totals: {
+          amount: sales.totals.amount,
+          qty: sales.totals.qty,
+          ticketCount: sales.totals.ticketCount,
+          productCount: sales.totals.productCount,
+          avgTicketAmount: sales.totals.avgTicketAmount,
+        },
+        byDay: sales.byDay.map((d) => ({
+          businessDate: d.date,
+          amount: d.amount,
+          qty: d.qty,
+          ticketCount: d.ticketCount,
+        })),
+      },
+      combined: {
+        salesAmount,
+        posAmount,
+        amount: combinedAmount,
+      },
       pos: {
         totals: {
           amount: pos.totals.amount,
@@ -296,6 +338,10 @@ export class ReportsService {
             pos.totals.amount > 0
               ? Math.round((tips.totals.total / pos.totals.amount) * 1000) / 10
               : null,
+          tipsToSalesRatio:
+            combinedAmount > 0
+              ? Math.round((tips.totals.total / combinedAmount) * 1000) / 10
+              : null,
         },
         byDay: tips.byDay,
         byEmployee: tips.byEmployee,
@@ -306,6 +352,8 @@ export class ReportsService {
         previousFrom: prev.from,
         previousTo: prev.to,
         posAmountDeltaPct: pctDelta(pos.totals.amount, prevPos.totals.amount),
+        salesAmountDeltaPct: pctDelta(sales.totals.amount, prevSales.totals.amount),
+        combinedAmountDeltaPct: pctDelta(combinedAmount, prevCombinedAmount),
         boxDeclaredDeltaPct: pctDelta(
           closingsTotals.declared,
           prevClosingsTotals.declared,
@@ -314,6 +362,7 @@ export class ReportsService {
         tipsDeltaPct: pctDelta(tips.totals.total, prevTips.totals.total),
         previous: {
           posAmount: prevPos.totals.amount,
+          salesAmount: prevSales.totals.amount,
           boxDeclared: prevClosingsTotals.declared,
           covers: prevClosingsTotals.covers,
           tipsTotal: prevTips.totals.total,

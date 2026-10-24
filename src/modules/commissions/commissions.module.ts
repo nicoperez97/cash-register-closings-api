@@ -4,6 +4,7 @@ import { EmployeeCommissionRule } from '../../entities/employee-commission-rule.
 import { Employee } from '../../entities/employee.entity';
 import { PosSaleTicketLine } from '../../entities/pos-sale-ticket-line.entity';
 import { ShopsModule } from '../shops/shops.module';
+import { SalesReportsModule } from '../sales-reports/sales-reports.module';
 import { CommissionsController } from './commissions.controller';
 import { CommissionsService } from './commissions.service';
 
@@ -11,6 +12,7 @@ import { CommissionsService } from './commissions.service';
   imports: [
     TypeOrmModule.forFeature([EmployeeCommissionRule, Employee, PosSaleTicketLine]),
     ShopsModule,
+    SalesReportsModule,
   ],
   controllers: [CommissionsController],
   providers: [CommissionsService],
