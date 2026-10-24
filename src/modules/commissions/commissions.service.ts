@@ -11,6 +11,15 @@ import { EmployeeCommissionRule } from '../../entities/employee-commission-rule.
 import { Employee } from '../../entities/employee.entity';
 import { PosSaleTicketLine } from '../../entities/pos-sale-ticket-line.entity';
 import { ShopsService } from '../shops/shops.service';
+import { MenuSalesAnalyticsService } from '../sales-reports/menu-sales-analytics.service';
+import {
+  SALES_SOURCE_LABEL,
+  SalesSource,
+  combineSourceAmounts,
+  normalizeSalesSource,
+  sourceIncludesPos,
+  sourceIncludesSales,
+} from '../../common/sales-source';
 
 const n = (v?: string | number | null) => Number(v ?? 0);
 const money = (v: number) => Number(v.toFixed(2));
@@ -22,6 +31,62 @@ function normCat(s: string): string {
     .trim()
     .toUpperCase()
     .replace(/\s+/g, ' ');
+}
+
+export type CommissionSalesRow = {
+  category: string;
+  /** Ventas (pedidos + comanda). */
+  salesAmount: number;
+  salesQty: number;
+  /** Ventas POS importadas. */
+  posAmount: number;
+  posQty: number;
+  /** Base de la comisión según el origen elegido. */
+  amount: number;
+  qty: number;
+};
+
+/**
+ * Une ventas por rubro de ambos orígenes (mismo rubro aunque cambien tildes o
+ * mayúsculas) y calcula la base según el origen elegido.
+ */
+export function mergeCommissionSales(
+  source: SalesSource,
+  sales: Array<{ category: string; amount: number; qty: number }>,
+  pos: Array<{ category: string; amount: number; qty: number }>,
+): CommissionSalesRow[] {
+  const byKey = new Map<
+    string,
+    { category: string; salesAmount: number; salesQty: number; posAmount: number; posQty: number }
+  >();
+  const add = (row: { category: string; amount: number; qty: number }, kind: 'sales' | 'pos') => {
+    const category = String(row.category ?? '').trim() || 'Sin rubro';
+    const key = normCat(category);
+    const cur = byKey.get(key) ?? {
+      category,
+      salesAmount: 0,
+      salesQty: 0,
+      posAmount: 0,
+      posQty: 0,
+    };
+    if (kind === 'sales') {
+      cur.salesAmount += n(row.amount);
+      cur.salesQty += n(row.qty);
+    } else {
+      cur.posAmount += n(row.amount);
+      cur.posQty += n(row.qty);
+    }
+    byKey.set(key, cur);
+  };
+  for (const r of sales) add(r, 'sales');
+  for (const r of pos) add(r, 'pos');
+  return [...byKey.values()]
+    .map((r) => ({ category: r.category, ...combineSourceAmounts(source, r) }))
+    .filter((r) => r.salesAmount !== 0 || r.posAmount !== 0)
+    .sort(
+      (a, b) =>
+        b.amount - a.amount || b.salesAmount + b.posAmount - (a.salesAmount + a.posAmount),
+    );
 }
 
 export interface CreateCommissionRuleDto {
@@ -49,6 +114,7 @@ export class CommissionsService {
     @InjectRepository(PosSaleTicketLine)
     private readonly lines: Repository<PosSaleTicketLine>,
     private readonly shops: ShopsService,
+    private readonly menuSales: MenuSalesAnalyticsService,
   ) {}
 
   async listRules(user: AuthUser, shopId: string, employeeId?: string | null) {
@@ -147,33 +213,33 @@ export class CommissionsService {
     return { ok: true };
   }
 
-  async calculate(user: AuthUser, shopId: string, from: string, to: string) {
+  async calculate(
+    user: AuthUser,
+    shopId: string,
+    from: string,
+    to: string,
+    sourceRaw?: string | null,
+  ) {
     this.shops.assertShopAccess(user, shopId);
     if (!from || !to) throw new BadRequestException('from y to son obligatorios');
+    const source = normalizeSalesSource(sourceRaw);
 
-    const salesRaw = await this.lines
-      .createQueryBuilder('l')
-      .innerJoin('l.ticket', 't')
-      .select("COALESCE(NULLIF(TRIM(l.category), ''), 'Sin rubro')", 'category')
-      .addSelect('SUM(l.amount)', 'amount')
-      .addSelect('SUM(l.qty)', 'qty')
-      .where('t.shopId = :shopId', { shopId })
-      .andWhere('t.active = 1')
-      .andWhere('l.active = 1')
-      .andWhere('t.businessDate BETWEEN :from AND :to', { from, to })
-      .groupBy("COALESCE(NULLIF(TRIM(l.category), ''), 'Sin rubro')")
-      .orderBy('amount', 'DESC')
-      .getRawMany();
-
-    const salesByCategory = salesRaw.map((r) => ({
-      category: String(r.category),
-      amount: money(n(r.amount)),
-      qty: n(r.qty),
+    // Siempre se leen ambos orígenes para mostrar el desglose; la base usa `source`.
+    const [posByCategory, salesSummary] = await Promise.all([
+      this.posSalesByCategory(shopId, from, to),
+      this.menuSales.summaryForShop(shopId, { from, to }),
+    ]);
+    const salesByCategoryCarta = salesSummary.categories.map((c) => ({
+      category: c.category,
+      amount: money(n(c.amount)),
+      qty: n(c.qty),
     }));
-    const salesMap = new Map(
-      salesByCategory.map((s) => [normCat(s.category), s]),
-    );
+
+    const salesByCategory = mergeCommissionSales(source, salesByCategoryCarta, posByCategory);
+    const salesMap = new Map(salesByCategory.map((s) => [normCat(s.category), s]));
     const salesTotal = money(salesByCategory.reduce((a, s) => a + s.amount, 0));
+    const ventasTotal = money(salesByCategory.reduce((a, s) => a + s.salesAmount, 0));
+    const posTotal = money(salesByCategory.reduce((a, s) => a + s.posAmount, 0));
 
     const rules = await this.rules.find({
       where: { shopId, active: true },
@@ -189,7 +255,11 @@ export class CommissionsService {
         lines: Array<{
           ruleId: string;
           category: string;
+          /** Base de la comisión (según origen). */
           salesAmount: number;
+          /** Desglose: Ventas y Ventas POS del rubro. */
+          ventasAmount: number;
+          posAmount: number;
           ratePercent: number;
           commissionAmount: number;
         }>;
@@ -212,12 +282,16 @@ export class CommissionsService {
       }
       const sales = salesMap.get(normCat(rule.category));
       const salesAmount = sales?.amount ?? 0;
+      const ventasAmount = sales?.salesAmount ?? 0;
+      const posAmount = sales?.posAmount ?? 0;
       const ratePercent = n(rule.ratePercent);
       const commissionAmount = money((salesAmount * ratePercent) / 100);
       bucket.lines.push({
         ruleId: rule.id,
         category: rule.category,
         salesAmount,
+        ventasAmount,
+        posAmount,
         ratePercent,
         commissionAmount,
       });
@@ -233,12 +307,18 @@ export class CommissionsService {
       shopId,
       from,
       to,
+      source,
+      sourceLabel: SALES_SOURCE_LABEL[source],
+      includesSales: sourceIncludesSales(source),
+      includesPos: sourceIncludesPos(source),
       salesTotal,
+      ventasTotal,
+      posTotal,
       salesByCategory,
       employees,
       grandTotal,
       unmatchedRules: rules
-        .filter((r) => r.employee?.active && !salesMap.has(normCat(r.category)))
+        .filter((r) => r.employee?.active && !salesMap.get(normCat(r.category))?.amount)
         .map((r) => ({
           employeeName: r.employee?.fullName ?? null,
           category: r.category,
@@ -247,8 +327,34 @@ export class CommissionsService {
     };
   }
 
-  async exportExcel(user: AuthUser, shopId: string, from: string, to: string) {
-    const data = await this.calculate(user, shopId, from, to);
+  private async posSalesByCategory(shopId: string, from: string, to: string) {
+    const raw = await this.lines
+      .createQueryBuilder('l')
+      .innerJoin('l.ticket', 't')
+      .select("COALESCE(NULLIF(TRIM(l.category), ''), 'Sin rubro')", 'category')
+      .addSelect('SUM(l.amount)', 'amount')
+      .addSelect('SUM(l.qty)', 'qty')
+      .where('t.shopId = :shopId', { shopId })
+      .andWhere('t.active = 1')
+      .andWhere('l.active = 1')
+      .andWhere('t.businessDate BETWEEN :from AND :to', { from, to })
+      .groupBy("COALESCE(NULLIF(TRIM(l.category), ''), 'Sin rubro')")
+      .getRawMany();
+    return raw.map((r) => ({
+      category: String(r.category),
+      amount: money(n(r.amount)),
+      qty: n(r.qty),
+    }));
+  }
+
+  async exportExcel(
+    user: AuthUser,
+    shopId: string,
+    from: string,
+    to: string,
+    source?: string | null,
+  ) {
+    const data = await this.calculate(user, shopId, from, to, source);
     const wb = new ExcelJS.Workbook();
     wb.creator = 'Cash Register Closings';
     const moneyFmt = '$#,##0.00';
@@ -257,7 +363,9 @@ export class CommissionsService {
     ws.columns = [
       { header: 'Empleado', key: 'employee', width: 28 },
       { header: 'Rubro', key: 'category', width: 24 },
-      { header: 'Ventas', key: 'sales', width: 14 },
+      { header: 'Ventas', key: 'ventas', width: 14 },
+      { header: 'Ventas POS', key: 'pos', width: 14 },
+      { header: `Base (${data.sourceLabel})`, key: 'sales', width: 22 },
       { header: '%', key: 'rate', width: 10 },
       { header: 'Comisión', key: 'commission', width: 14 },
     ];
@@ -266,6 +374,8 @@ export class CommissionsService {
         ws.addRow({
           employee: emp.employeeName,
           category: line.category,
+          ventas: line.ventasAmount,
+          pos: line.posAmount,
           sales: line.salesAmount,
           rate: line.ratePercent,
           commission: line.commissionAmount,
@@ -283,23 +393,32 @@ export class CommissionsService {
     ws.addRow({
       employee: 'TOTAL GENERAL',
       category: '',
+      ventas: data.ventasTotal,
+      pos: data.posTotal,
       sales: data.salesTotal,
       rate: null,
       commission: data.grandTotal,
     });
-    ws.getColumn('sales').numFmt = moneyFmt;
-    ws.getColumn('commission').numFmt = moneyFmt;
+    for (const key of ['ventas', 'pos', 'sales', 'commission']) ws.getColumn(key).numFmt = moneyFmt;
 
     const wsS = wb.addWorksheet('Ventas por rubro');
     wsS.columns = [
       { header: 'Rubro', key: 'category', width: 28 },
+      { header: 'Ventas', key: 'ventas', width: 14 },
+      { header: 'Ventas POS', key: 'pos', width: 14 },
+      { header: `Base (${data.sourceLabel})`, key: 'amount', width: 22 },
       { header: 'Cantidad', key: 'qty', width: 12 },
-      { header: 'Importe', key: 'amount', width: 14 },
     ];
     for (const s of data.salesByCategory) {
-      wsS.addRow({ category: s.category, qty: s.qty, amount: s.amount });
+      wsS.addRow({
+        category: s.category,
+        ventas: s.salesAmount,
+        pos: s.posAmount,
+        amount: s.amount,
+        qty: s.qty,
+      });
     }
-    wsS.getColumn('amount').numFmt = moneyFmt;
+    for (const key of ['ventas', 'pos', 'amount']) wsS.getColumn(key).numFmt = moneyFmt;
 
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());
     return {
